@@ -37,11 +37,6 @@ void front_progress(const char *title, long done, long total);
 extern void (*front_progress_hook)(const char *title, long done, long total);
 #include <stdint.h>
 #include <stddef.h>
-// Text input box (for the software keyboard swkbd): the main thread shows a native input box and the calling thread blocks until the user confirms / cancels.
-// All text is UTF-8; max_chars is the maximum character count (0 = unlimited, only a hint for the front end; truncation is done uniformly by the caller hle_swkbd.c in UTF-16 units).
-// Confirm returns 1 and writes the result into out (including the terminating 0); cancel returns 0;
-// with no window (front_metal_layer() == NULL) nothing is shown and -1 is returned.
-int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap);
 // Controller applet prompt (hle_hid.c ctrl_support, ctrl_prompt.h; GitHub issue #1640): the game wants min to max players (max <= 0: no maximum) and sees fewer. The main thread shows a
 // prompt over the game while controllers join and the calling thread blocks until it closes. 1: done (A or Return with the minimum in, the maximum in, or nobody left to join);
 // 0: closed (B, Escape); -1 with no window: nothing shown, the caller answers as the player closing it
@@ -76,21 +71,6 @@ void front_save_failed(int err);
 // The Mac front end leaves full screen, says why in an alert and quits with exit status 70; without a window it ends the run as the default weak implementation (nvn_mtl.m) does, which the iOS
 // front end keeps: a FATAL line and an abort. Called on Metal's feedback queue; the front end switches to the main thread itself and must not block
 void front_gpu_lost(void);
-
-// Offline HTML pages (the web applet's offline pages; hle_web.c): a web view over the game picture (web_apple.m, Mac and iPhone). Called from guest threads; the front end works on its main
-// thread. front_web_open: dir = the folder the document path is relative to (an HtmlDocument's html-document), path = the document path with its query, callback = the URL prefix whose
-// loading ends the page (exit reason 3, the URL as the last URL), hidden = loaded without being shown until front_web_show. 0 = opened; -1 = no web view (no window): the caller's
-// stand-in answers. front_web_send hands the page a content message (its nx "message" event); front_web_close removes the page. The defaults (hle_web.c, weak) have no web view
-typedef struct { uint32_t repeat_delay, repeat_pulse; } dm_web_opts;   // key repeat in frames (the argument's SetKeyRepeatFrame); 0 = the browser's default
-int front_web_open(const char *dir, const char *path, const char *callback, int hidden, const dm_web_opts *opts);
-void front_web_show(void);
-void front_web_send(const char *msg, size_t n);
-void front_web_close(void);
-void front_web_shot(const char *path);
-// The front end's reports (any thread): a content message from the page (nx.sendMessage); the page ended (exit reason 0 end, 1 back, 3 callback URL; url NULL = none); it could not be loaded
-void dm_web_message(const char *msg, size_t n);
-void dm_web_ended(uint32_t reason, const char *url);
-void dm_web_failed(const char *why);
 
 // The program an oe::ExecuteProgram or oe::RequestToRelaunchApplication recorded starts at the app's next start (the iOS app, DM_EXEC_OUT, hle_oe.c): called on the guest thread after the record is
 // written and before the graceful exit. index = the program, name = its profile's name. The iOS front end names it on screen for about 1.5 s and schedules a local notification that opens the app

@@ -192,7 +192,6 @@ HLE_FORCE("_ZN2nn4pctl28IsFreeCommunicationAvailableEv", "parental controls · w
 HLE_FORCE("_ZN2nn4pctl33CheckAgcPermissionUnderMinimumAgeERKNS_7account3UidE", "parental controls · a user's permission under the minimum age (SDK 22), networking out of scope; never", unsigned, h_pctl_CheckAgc, const void *uid) { (void)uid; return 0; }
 HLE_FORCE("_ZN2nn4pctl27CheckStereoVisionPermissionEb", "parental controls · stereoscopic 3D permission; the host has no VR display, not permitted", unsigned, h_pctl_Stereo, unsigned show_ui) { (void)show_ui; return 0; }
 
-// swkbd software keyboard: see hle_swkbd.c
 
 // ---------- streamplay: GameShare / GameChat streaming (Switch 2 SDKs) ----------
 // Donkey Kong Bananza initializes it at boot (main+0x5471c0) through the stpl:u service, which the host does not serve. The host streams to nobody: the library is ready, no session is open

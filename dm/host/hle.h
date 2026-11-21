@@ -40,7 +40,7 @@ extern __thread uint64_t dm_clock_reads;   // the calling thread's guest reads o
 // Used only for the service-layer nn:: (service clients of fs/oe/aoc/pctl...); the SDK's libc++ and nn::os internals do not go into this table.
 // Every entry must state the reason for the takeover; an entry in the table that no module references makes loading report a failure and abort (a wrong list must fail loudly).
 // The implementation runs on this thread's big host stack (hle_bigstack.c), not on the stack of the game thread that calls it: a game thread's stack can be as small as 8 KB, and host
-// code is written for host stacks (a path buffer sized by PATH_MAX, one log line's formatting, a file open, a WebKit or AudioUnit call). What is registered is a stub generated at
+// code is written for host stacks (a path buffer sized by PATH_MAX, one log line's formatting, a file open, an AudioUnit call). What is registered is a stub generated at
 // compile time, local to its file as the implementation is (the implementation's address goes into x16, then a jump to dm_bigstack_enter); a call already off the guest stacks goes straight through. The register arguments
 // and the first 64 bytes of stack arguments are carried over, so at most 16 parameters (8 in registers, 8 stack slots; a struct passed by value counts as the registers it takes);
 // not for variadic functions. Each take-over moved here one by one after it crashed on a small stack (the file system on Super Mario 3D World's save thread, add-on content,

@@ -47,11 +47,6 @@ enum { DM_JOYMOUSE_CONNECTED = 1u << 0, DM_JOYMOUSE_ON_SURFACE = 1u << 1 };
 void dm_joy_mouse(int pad, int side, int32_t dx, int32_t dy, uint32_t state);
 int dm_joy_mouse_wanted(void);   // 1 once the game has set up the mouse sensors or pointer (InitializeJcms / InitializeNmouse): a front end turns a Joy-Con's sensor on only then. Any thread
 uint32_t dm_player_npad(int player);  // the npad id the game reads player p + 1 on: Handheld (0x20) or No1 (0) for player 1, No n (id n - 1) for player n
-// A library applet in front of the game (the offline web page, hle_web.c / web_apple.m): while held, the game reads no buttons and centred sticks on every npad, as an application
-// out of focus does, and presses made meanwhile are dropped when the hold ends. dm_input_peek reads what the applet sees: every path ORed (any controller drives it), each stick
-// axis the most deflected one, plus the presses since the last peek (a tap between two peeks is reported once). Any thread
-void dm_input_hold(int on);
-void dm_input_peek(uint64_t *buttons, int32_t axes[4]);
 
 // Optional diagnostic DM_HID_RECEIPT_LOG=<writable JSONL path>: received samples of real GetNpadState returns.
 // Fields read_start_ns/time_ns use the same host now_ns(); the front-end publish window must use the same helper, and a read interval that spans a publish must not be force-matched.

@@ -60,8 +60,7 @@ static void screen_refresh(NSScreen *screen) {   // main thread: refresh capabil
     g_screen_variable_refresh = screen.minimumRefreshInterval > 0 && screen.maximumRefreshInterval > screen.minimumRefreshInterval;
 }
 static _Atomic int g_fullscreen;   // the window is in fullscreen (set when it has entered and when it has left)
-// The software keyboard input box is up (front_text_input). The game window is not key then, which is not a focus change the game should see: on hardware the inline keyboard is drawn inside
-// the game, which keeps its focus, and ShowKeyboard's applet sends its own out-of-focus / in-focus pair (DM_APPLET). Monster Hunter Rise dropped the hunter's name after the round trip and asked again. Main thread only
+// A modal box of the host is up (the user selector, front_user_select). The game window is not key then, which is not a focus change the game should see
 static int g_text_box;
 int front_fullscreen(void) { return g_fullscreen; }   // nvn_mtl.m link_latency: frame latency 2 in variable-refresh fullscreen
 // The screen's refresh rate matched to the game's frame rate in fullscreen (front_screen_match, from PR #79; DM_SCREEN_MATCH=0 turns it off). 60 fps on a 144 Hz screen cannot be paced
@@ -959,12 +958,6 @@ void front_progress(const char *title, long done, long total) {
     });
 }
 
-// Offline HTML pages (web_apple.m): the page's view covers the game view and resizes with it; it is the first responder while shown (front_web_show), and the game view again after
-void front_web_attach(NSView *box) { NSView *v = g_win.contentView; box.frame = v.bounds; [v addSubview:box]; }
-void front_web_detach(NSView *box) { if (box.window && box.window.firstResponder != box.window.contentView) [box.window makeFirstResponder:box.window.contentView]; }
-
-// Software keyboard input box (front.h): the main thread shows an NSAlert + text field and the guest thread waits synchronously for the result. Not shown in windowless mode (returns -1, the caller treats it as cancel)
-extern int g_swkbd_min_chars;   // hle_swkbd.c: this input's minimum length from ShowKeyboardArg; the applet keeps OK disabled until the text is long enough
 int front_user_select(const front_user *users, int count, int allow_create, int allow_skip) {
     if (!g_layer) return FRONT_USER_CANCEL;
     __block int result = FRONT_USER_CANCEL;
@@ -976,39 +969,6 @@ int front_user_select(const front_user *users, int count, int allow_create, int 
     });
     return result;
 }
-int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
-    if (!g_layer) return -1;
-    __block int r = 0;
-    __block NSString *text = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        // The box takes the keyboard and the mouse, so the game window never sees the key-up of the button or the touch-up of the click that opened it: nothing may stay pressed
-        // while it is up, or the game reads the stuck button / touch the moment the box closes (Stardew Valley's character creation re-opened the keyboard endlessly)
-        g_btn = 0; g_w = g_a = g_s = g_d = 0; g_rl = g_ru = g_rr = g_rd = 0; push();
-        dm_touch_set(NULL, 0);
-        int min_chars = g_swkbd_min_chars > 0 ? g_swkbd_min_chars : 0;
-        NSString *info = [NSString stringWithFormat:@"%s%s%s", sub ? sub : "", sub && *sub && guide && *guide ? "\n" : "", guide ? guide : ""];
-        for (;;) {
-            NSAlert *a = [NSAlert new];
-            a.messageText = title && *title ? @(title) : @"Input";
-            a.informativeText = info;
-            [a addButtonWithTitle:@"OK"]; [a addButtonWithTitle:@"Cancel"];
-            NSTextField *f = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)];
-            f.stringValue = text ?: (initial ? @(initial) : @"");
-            if (guide && *guide) f.placeholderString = @(guide);
-            a.accessoryView = f; a.window.initialFirstResponder = f;
-            g_text_box = 1; r = [a runModal] == NSAlertFirstButtonReturn; g_text_box = 0;
-            text = f.stringValue;
-            if (!r || (int)text.length >= min_chars) break;
-            // On hardware the applet would not have accepted the shorter text (OK stayed disabled); a game that rejects it re-opens the keyboard for ever, so the box comes back with the rule instead
-            info = [info stringByAppendingFormat:@"\nAt least %d characters are needed here.", min_chars];
-        }
-    });
-    if (!r) return 0;
-    (void)max_chars;                              // Truncation is done uniformly in hle_swkbd.c in UTF-16 units
-    snprintf(out, out_cap, "%s", text.UTF8String);
-    return 1;
-}
-
 // GPU lost (front.h): macOS runs none of the game's GPU work any more and nothing is drawn again. In full screen the frozen game held the whole screen (#1326: WindowServer froze for 40 s
 // and its watchdog killed it), so the window leaves full screen first and the alert comes once it has, or after 3 s if it has not. Then the app quits with exit status 70
 // (EX_SOFTWARE), so a launcher or script that runs it sees a failed run: exit() runs the same atexit handlers as ⌘Q's terminate (the one will-terminate
