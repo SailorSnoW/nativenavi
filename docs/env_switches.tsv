@@ -104,7 +104,6 @@ DM_NVN_ARENA_SHARE	switch	`0` gives each submission per-frame arena blocks of it
 DM_NVN_ARENA_TRIM	switch	`0` keeps every per-frame arena block of 32 MB or less for the rest of the run, as before; by default one the GPU is done with goes once no submission has used it for 600 submissions, down to 4 blocks
 DM_NVN_BARRIER	switch	How draw passes are ordered: `full` (default) waits for all earlier GPU work, `game` only for the previous pass's fragment stage unless the game set a barrier, `ab` alternates with the `DM_AB` phases
 DM_NVN_BC_ALIAS	diagnostic	Set 0 to send copies to an uncompressed alias instead of its block-compressed storage, for an A/B check; default 1
-DM_NVN_BF_WANT	path	`=<file>`: appends the key of each fragment shader whose passes could not be merged for lack of a readable-tile version to that file, once per key
 DM_NVN_BLEND_ZERO	switch	`0` leaves a NaN or Inf colour under a zero blend weight to Apple's blender, which stores NaN; by default a pixel shader returns it as 0 where the draw's blend state gives its source colour a zero weight on a floating-point target, as NVIDIA's blender does with the option NVN's driver sets
 DM_NVN_BORDER_KEEP	diagnostic	1 keeps the border corrections in every pipeline, as before the DMSH_BORDER_FC specialization: a wrong border colour with the specialization, or its cost (ab with DM_AB)
 DM_NVN_CAPTURE	diagnostic	`=<frame>:1:<path>` writes that frame (from its first submit to its present) to one file: pool bytes, registries, program keys, the textures whose content lives only in Metal, each submission's records with pointers relocatable, and the presented frame's SHA-256 and pixels; `dm/gfx/tests/nvn_replay` replays it ([development.md](development.md#frame-capture-and-replay))
@@ -140,17 +139,6 @@ DM_NVN_FB_TILE	switch	`0` makes such draws that sample the attachment at their o
 DM_NVN_FB_TILE_EARLY	switch	`0` makes such a draw that opens its render pass take a snapshot, as it did before; by default it reads the tile of the pass it opens, whose formats were learned from the first such draw of its program on those targets
 DM_NVN_FLUSH_FILL	switch	`0` starts a new GPU texture in a CPU-writable pool as zeros; by default one whose storage the game flushed before its first use is filled from that storage once
 DM_NVN_FRAMES	diagnostic	`=<N>` prints the NVN call table frame by frame for the first N frames (default 3)
-DM_NVN_GEOMETRY_COLOR	switch	full retains inactive geometry color attachments; default omits them only when attachment bounds and state prove equivalence.
-DM_NVN_GEOMETRY_COMPUTE	diagnostic	split ends the geometry compute encoder after each stage for comparison; default combines compatible stages.
-DM_NVN_GEOMETRY_CUT	switch	0 disables extra segment-cut checks at geometry encoder boundaries; default obeys the existing draw threshold and safety gates there.
-DM_NVN_GEOMETRY_INDEX_CACHE	switch	0 disables exact-byte CPU primitive-map caching; default bounds it to 32 MiB and 4096 entries.
-DM_NVN_GEOMETRY_PACK	diagnostic	legacy uses the serial block-prefix scan for comparison; default fuses small draws and scans large block totals in parallel.
-DM_NVN_GEOMETRY_QUERY_RUN	switch	0 prevents geometry runs across samples-passed query reports/resets; default retains independent captures while queries replay at their raster positions.
-DM_NVN_GEOMETRY_WAIT	diagnostic	always drains before indexed geometry preparation for comparison; default waits only for possible writes to CPU assembly inputs.
-DM_NVN_GEO_HOIST	switch	`0` draws each geometry draw's capture and kernel at its own place, ending the render pass; by default a run of lean geometry draws is prepared before the pass opens and only their rasters are drawn in it (`geo_run_walk`)
-DM_NVN_GEO_LEAN	switch	`0` draws passthrough geometry shaders through their full kernel and reader, as before; by default a lean kernel culls and the program's own vertex shader draws (`nvn_geometry.inc`)
-DM_NVN_GEO_MESH	switch	`0` draws passthrough geometry pairs that have a mesh library (the prewarm list's `G` rows, `geo_mesh.tsv`) through the compute path; by default they are mesh draws in the render pass (`geo_mesh_draw`)
-DM_NVN_GEO_MESH_RUN	switch	`0` dispatches every mesh geometry draw on its own; by default consecutive mesh draws of one pair whose result does not depend on their order are drawn as one dispatch (`geo_mesh_take`)
 DM_NVN_GPUPROF	diagnostic	`=<f>`, `<f1>-<f2>` or `every:<n>`: logs the GPU start and duration of every encoder of those frames (`[gpuprof]` lines from Metal 4 counter heap timestamps)
 DM_NVN_GPU_STORAGE	switch	`0` stops what the GPU writes into a texture in storage the CPU can read (a GPU texture, or one uploaded from its storage) from being written into that storage on the GPU (on by default; `gsb_target`, `gsb_store`), to measure it
 DM_NVN_GPU_TS	switch	`segment_submit_gaps`, `segment_gaps` or `submission`: what timestamp reports record instead of the default `segment` (the GPU start / end of the segment holding each report, without the GPU's idle time between the submission's command buffers, nor its wait between submissions for the host's translation of one the game had submitted already): segment times with the wait between submissions (the earlier default), segment times with both idle times, or one time for the whole submission
@@ -169,7 +157,6 @@ DM_NVN_PARTIAL_UPLOAD	switch	`0` reads a texture whole from its storage at every
 DM_NVN_PASSDUMP	diagnostic	`=<f>`, `<f1>-<f2>` or `every:<n>`: logs every render pass of those frames (attachments, clears, shader keys, bindings, draw state, presents, and the host function and line that ended each pass) for the `tbdr_*.py` tools
 DM_NVN_PASSDUMP_ALL	diagnostic	`=1` makes `DM_NVN_PASSDUMP` record every draw and binding change, not only the first per pass and stage, including copies and inline uniform updates
 DM_NVN_PASSGPU	diagnostic	`=<file>` writes the GPU time of each render and compute pass from stage-boundary timestamp counters (off under Metal 4); also gives each dispatch its own encoder
-DM_NVN_PASSGPU_SERIAL	diagnostic	`=1` makes each encoder on the main command buffer wait until all earlier work has finished, so `DM_NVN_PASSGPU` times read each pass's exclusive time (totals read high)
 DM_NVN_PASS_SPLIT	switch	`=<draws>` (default 256, `0` off): a render pass is ended and its segment committed after this many draws while the GPU has no segment left, so the GPU starts a long pass (a G-buffer) before it is all translated; its attachments are stored and loaded again
 DM_NVN_PASS_SPLIT_MAX	switch	`=<n>` (default 2, `0` no limit): the most splits of one render pass (`DM_NVN_PASS_SPLIT`), as each stores and loads its attachments
 DM_NVN_POOL_CHUNKS	switch	`0` wraps a memory pool of 512 MB or more whole in one buffer, as before; by default it is wrapped in overlapping 16 MB chunks made as draws reach them, so only the parts in use are wired
@@ -207,17 +194,11 @@ DM_NVN_SUB_IDLE_FB	switch	`1` holds submissions while the commit feedback's coun
 DM_NVN_SUB_MERGE	switch	`0` commits every submission in a command buffer of its own again (with `DM_NVN_ENC_THREAD`; by default a submission that ends while the GPU still runs an earlier command buffer is held, and the held ones are committed together when the GPU or the recorded work runs out, or before anything else goes to the queue); `ab` alternates with the `DM_AB` phases, to measure it
 DM_NVN_T2T_FROM	diagnostic	`=<frame>`: `DM_NVN_T2T_TRACE` records copies only from that frame on (default 0)
 DM_NVN_T2T_TRACE	diagnostic	`=<W>x<H>:<file>`: after each copy into an RGBA16F texture of that size, copies the result into a trace buffer on the GPU timeline; 240 entries are written to the file
-DM_NVN_TESS_BUDGET	diagnostic	`=<entries>` the most two-triangle entries one tessellated draw may expand to (4096 to 16M, default 2M); patches past it are dropped whole and counted in the tessellation log line
-DM_NVN_TESS_LEVEL	diagnostic	`=<N>` gives every edge and inside of every tessellated patch level N (1 to 64) instead of its hull's factors, in the domain's own mode and spacing (`nvn_tess.inc`; culled patches stay culled); for A/B comparisons
-DM_NVN_TESS_MAX	diagnostic	`=<level>` the highest tessellation level (even, 2 to 64, default 64; fractional_odd spacing one less); higher hull factors are clamped to it
-DM_NVN_TESS_ONLY	diagnostic	`=<hull key>,...` replays only the tessellated draws of those hull shaders (the first 16 hex digits of a key) and skips the others with a [RED] line; to tell their effects apart
-DM_NVN_TESS_STAGES	diagnostic	`=1` / `=2` stops a tessellated draw after the vertex capture / after the hull (and expansion) kernel, skipping the domain draw; to time the stages (default 3, all)
 DM_NVN_TEXCPU	diagnostic	`=1` logs non-packaged (non-swizzled) textures in CPU-visible pools
 DM_NVN_TEXDUMP	diagnostic	`=<frame>:<path>`, `size=<W>x<H>:<path>` or `layers=<n>:<path>`: saves every colour render target of that frame as PNG (`%d` = serial × 100 + layer × 10 + level)
 DM_NVN_TEXINFO	diagnostic	`=<W>x<H>` logs storage and description of every texture of that size on first use, registration and initialization (pool, flags, packaged, non-zero bytes, swizzles)
 DM_NVN_TEXRAW	diagnostic	`=<serial>,…` or `info` (the textures `DM_NVN_TEXINFO` picked out): saves those textures' raw bytes at the `DM_NVN_TEXDUMP` frame, with a text header line
 DM_NVN_TEXSNAP	diagnostic	`=<in-frame pass index>,…`: with `DM_NVN_TEXDUMP`, copies those passes' colour attachments as they end and saves them with the end-of-frame dump
-DM_NVN_TF_CPU	switch	`0` sends every transform feedback capture through the `tf_prepare` dispatch in a render pass of its own, as before; by default the capture state is kept on the CPU from a begin until a resume or a geometry capture takes it from the GPU, and captures that follow each other share one pass, behind barriers inside it where one may touch what another read or wrote
 DM_NVN_TILE_SMALL	switch	`0` opens every draw pass with the tiles Metal picks; on by default, a pass whose 32x32 tiles, times its layers, number fewer than four per GPU core takes 16x16 tiles, so its fragment work spreads over more cores; `ab` alternates with the `DM_AB` phases
 DM_NVN_TREG_ID	diagnostic	`=<n>` logs every registration of texture ID n: what it holds from then on, and the frame being recorded
 DM_NVN_TSV	diagnostic	`=<path>` writes the per-frame NVN call table and timing rows (frame, metric, value) to a TSV, read by `scripts/bench.py`
@@ -350,17 +331,12 @@ DM_TEST_BORDER	test	Path to the native t_border executable that test_dmsh_border
 DM_TEST_BUILD	test	Build folder of `dm/host/tests` whose `t_svc_memory` `test_memory_profile.py` runs (default `build`; `make asan` sets `build/asan`)
 DM_TEST_FS_FAIL	diagnostic	`=write:<n>[:<errno>]` makes the nth save write fail with that errno (default ENOSPC), which refuses the save transaction's commit
 DM_TEST_FS_FAILAT	diagnostic	`=<point>[:<count>][,…]` makes steps of the save transaction (`mountclone`, `reclone`, `guestname`, `renameback`) fail with ENOSPC
-DM_TEST_GEOMETRY	test	Path of the native `t_geometry` executable; `test_dmsh_geometry.py` runs its native geometry emitter checks only when it is set
-DM_TEST_GEOMETRY_PRIMITIVE_ID	test	Path to the native t_geometry_primitive_id replay executable used by test_dmsh_geometry.py with DMSH_TEST_GPU=1.
 DM_TEST_GPU_LOST	diagnostic	`=<n>` imitates the GPU access macOS revoked from the nth submission on: each submission's feedback reports `MTL4CommandQueueErrorAccessRevoked` and the GPU does not signal its fence, so the host stops presenting and the front end ends the game
 DM_TEST_KEYRACE	diagnostic	`=<n>` creates up to n (at most 512) pthread keys on a thread of its own while the host starts up
 DM_TEST_KILL_AT	diagnostic	`=write:<n>` exits the process (`_exit(9)`) at the nth save write, imitating a kill mid-write
-DM_TEST_LEAK_GPU	diagnostic	`=1` allocates and keeps a 1 MB shared Metal buffer every 100 ticks: a GPU memory leak on demand
 DM_TEST_LINK_STALL	diagnostic	`=<start s>,<duration s>`: counting from the first present, pauses the display link at that point for that long, to check the present fallback
 DM_TEST_PRESENT_LAG	diagnostic	`=<every n>,<ms>[,<in a row>][;…]` sleeps that long before every nth present (and the ones after it in the run): a slow frame on demand
 DM_TEST_STUCK_DRAW	test	In t_pso_archive's SIGTERM and hand-over cases, holds a draw in the graphics layer (dm_gfx_enter with no leave) so the graceful exit's drain never returns
-DM_TEST_TESS	test	Path to the native t_tess executable that test_dmsh_tess.py runs the tessellation layout and expansion kernel through on the GPU (`make check_t_tess` sets it)
-DM_TEST_TRANSFORM_FEEDBACK	test	Path to the native t_transform_feedback executable used by the Python feedback tests
 DM_TEST_UP_LOST	diagnostic	`=<batch index>` treats that batch of uploads as dropped, to exercise the re-upload path
 DM_THERMAL_CAP	switch	`0` turns off the thermal cap, which holds the frame step at 30 fps while the front end reports a serious or critical thermal state (on by default; the Mac front end reports none, so it is idle here: `dm_thermal_now` in `hle_nvn.c`)
 DM_THR	diagnostic	`=1` logs each SVC (except `SleepThread`) with its first four arguments, and each `CreateThread` with entry, stack, priority and core
