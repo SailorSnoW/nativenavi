@@ -234,6 +234,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [`nn::codec` AV1 decoder taken over](../../../docs/reference/movies.md#nncodec-av1-decoder-taken-over): its 26 movies (`Event/Movie/*.webm`) are all AV1 with no sound track, so the host decodes AV1 only and refuses the VP9, VP8 and H.264 decoders its movie library imports and never calls. Current.
 - [Small passes shaded on a few cores](../../../docs/reference/rendering.md#small-passes-shaded-on-a-few-cores): the 128x128 face of its environment cube map, 202-245 draws a frame.
 - [An upscaler that runs as a chain of dispatches drawn by MetalFX](../../../docs/reference/rendering.md#an-upscaler-that-runs-as-a-chain-of-dispatches-drawn-by-metalfx): the launcher's MetalFX choice did nothing for its `agl_ndsr_vr` chain.
 - [A dynamic resolution threshold above one vsync holds 30 fps](../../../docs/reference/frame-rate.md#a-dynamic-resolution-threshold-above-one-vsync-holds-30-fps): its handheld threshold of 105 units, 21 ms.
@@ -433,7 +434,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 - [Render targets that move with the dynamic resolution get new Metal memory each time](../../../docs/reference/rendering.md#render-targets-that-move-with-the-dynamic-resolution-get-new-metal-memory-each-time): the targets in the 305 MB pool, recycled since #1831.
 - [Pixel shader inputs the mesh shader does not write](../../../docs/reference/shaders.md#pixel-shader-inputs-the-mesh-shader-does-not-write): the foliage point meshes' pipelines (pixel shaders reading generic attribute 5 that no mesh output writes).
 - [Mesh outputs as wide as their pixel shaders read](../../../docs/reference/shaders.md#mesh-outputs-as-wide-as-their-pixel-shaders-read): the foliage mesh `626fbf48041cb82b`, padded to 35,840 bytes of mesh output, past Metal's 32 KB.
-- [AV1 movies stop an M1 iPad with SIGILL in dav1d](../../../docs/reference/movies.md#av1-movies-stop-an-m1-ipad-with-sigill-in-dav1d): the title movie on an M1 iPad Pro.
+- AV1 movies stop an M1 iPad with SIGILL in dav1d: the title movie on an M1 iPad Pro.
 - [`nn::codec` packets decoded inside the submission](../../../docs/reference/movies.md#nncodec-packets-decoded-inside-the-submission): resolved, movies stuttering at a steady 60 fps; its player feeds the decoder and gives the shown pictures back on one thread.
 - [VideoToolbox session invalidation consumes the rest of a movie](../../../docs/reference/movies.md#videotoolbox-session-invalidation-consumes-the-rest-of-a-movie): reproduced on iPhone 18 Pro Max, iOS 27.2, installed build `34ada0283e7d`: a full background/foreground round trip during the opening gave `-12903`, then end of stream after 840 pictures despite 9,255 decoded packets. The host restores the decoder's reference state from compressed input for every game, without a profile key or skipped pictures. Candidate H.264/AV1 codec and worker tests passed on this phone in the synthetic Decoder Check app. Open: full-game movie/narration synchronization after recovery; a panel-only inactive/active transition passed in the same baseline run.
 - [dav1d decoded one frame at a time](../../../docs/reference/movies.md#dav1d-decoded-one-frame-at-a-time): resolved, the title movie's heavy packets on an M2 Pro; and the drain that must go to its end.

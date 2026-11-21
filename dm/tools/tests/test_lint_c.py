@@ -110,7 +110,7 @@ class ClangTidyOutput(unittest.TestCase):
             f'{REPO}/dm/host/hle_hid.c:303:54: warning: \'signed char\' to \'int\' conversion [bugprone-signed-char-misuse,cert-str34-c]',
             f'{REPO}/dm/host/hle_hid.c:10:1: warning: unused variable \'x\' [clang-diagnostic-unused-variable]',
             f'{REPO}/dm/host/hle_hid.c:11:1: error: unknown type name \'foo\' [clang-diagnostic-error]',
-            f'{REPO}/dm/third_party/libvpx/vpx/vpx_decoder.h:5:1: warning: Dereference of null pointer [clang-analyzer-core.NullDereference]',
+            f'{REPO}/dm/third_party/dav1d/include/dav1d/dav1d.h:5:1: warning: Dereference of null pointer [clang-analyzer-core.NullDereference]',
             '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/stdio.h:1:1: warning: x [bugprone-foo]',
         ])
         self.assertEqual(lint.parse_diags(out), [
@@ -136,7 +136,7 @@ class CompileDatabase(unittest.TestCase):
     def test_first_command_of_a_source_wins_and_third_party_is_left_out(self):
         def e(f, flag): return {'directory': str(REPO), 'file': str(REPO / f), 'arguments': ['clang', flag, '-c', str(REPO / f)]}
         db = lint.merge_entries([e('dm/host/loader.c', '-DHOST'), e('dm/gfx/vk/hle_vk.m', '-DHOST'), e('dm/host/loader.c', '-DTEST'),
-                                 e('dm/third_party/libvpx/vpx_dsp/x.c', '-DHOST'), e('dm/host/gen/profile.c', '-DHOST'), e('dm/host/tests/t_fs.c', '-DTEST')])
+                                 e('dm/third_party/dav1d/src/x.c', '-DHOST'), e('dm/host/gen/profile.c', '-DHOST'), e('dm/host/tests/t_fs.c', '-DTEST')])
         self.assertEqual([(lint.rel(x['file']), x['arguments'][1]) for x in db],
                          [('dm/gfx/vk/hle_vk.m', '-DHOST'), ('dm/host/loader.c', '-DHOST'), ('dm/host/tests/t_fs.c', '-DTEST')])
 

@@ -955,18 +955,18 @@ HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/te
 def build_mac_host(repo, out, env, logs, g):
     """The Mac host for the profile, built into out: dm/host's per-game host (make gen/<id>/dmhost: one object per source on every core, kept for the next build) copied with its dSYM,
     since make takes no target path with spaces and dm/host/dmhost may be another build's.
-    Reused when the compile lines and their inputs (the source files of HOST_DIRS, the chain header dm/gfx/nvn/dmsh_chain.h among them, the profile header make generates, libvpx, dav1d and the third-party headers, the compiler
+    Reused when the compile lines and their inputs (the source files of HOST_DIRS, the chain header dm/gfx/nvn/dmsh_chain.h among them, the profile header make generates, dav1d and its headers, the compiler
     and the macOS SDK) are as at the last build into out"""
     host = repo / 'dm/host'
-    run(['make', '-s', f'GAME={g.id}', f'gen/{g.id}/game_profile.h', 'gen/vpx/libvpx.a', 'gen/dav1d/libdav1d.a', 'host_msl'], logs / 'mac_host_make.log', env=env, cwd=host)
+    run(['make', '-s', f'GAME={g.id}', f'gen/{g.id}/game_profile.h', 'gen/dav1d/libdav1d.a', 'host_msl'], logs / 'mac_host_make.log', env=env, cwd=host)
     built = host / f'gen/{g.id}/dmhost'
     dry = subprocess.run(['make', '-n', '-B', f'GAME={g.id}', f'gen/{g.id}/dmhost'], env=env, cwd=host, capture_output=True, text=True)
     cmd = [l for l in dry.stdout.splitlines() if l.startswith('clang') and f' -o gen/{g.id}/' in l]   # the host's compiles and its link, not the libraries'
     if not any(f' -o gen/{g.id}/dmhost ' in l for l in cmd): raise BuildError(f'make -n gave no link line for the Mac host: {dry.stderr.strip()[-500:]}')
     kf, tp = out.with_name(out.name + '.key'), repo / 'dm/third_party'
     srcs = [p for d in HOST_DIRS if (repo / d).is_dir() for p in sorted((repo / d).iterdir()) if p.is_file() and p.suffix in ('.c', '.m', '.h', '.S', '.inc')]
-    key = fingerprint(fingerprint(cmd, ('files', [host / f'gen/{g.id}/game_profile.h', host / 'gen/msl-macosx/host_msl_gen.h', host / 'gen/vpx/libvpx.a', host / 'gen/dav1d/libdav1d.a', tp / 'stb_vorbis/stb_vorbis.c']),
-                                  ('tree', tp / 'libvpx/vpx'), ('tree', tp / 'dav1d/include'), ('cmd', ['clang', '--version']), ('cmd', ['xcrun', '--show-sdk-build-version']), env=env),
+    key = fingerprint(fingerprint(cmd, ('files', [host / f'gen/{g.id}/game_profile.h', host / 'gen/msl-macosx/host_msl_gen.h', host / 'gen/dav1d/libdav1d.a']),
+                                  ('tree', tp / 'dav1d/include'), ('cmd', ['clang', '--version']), ('cmd', ['xcrun', '--show-sdk-build-version']), env=env),
                       ('files', srcs))
     if out.is_file() and reused(kf, key) is not None: return out
     rmtree(kf); out.parent.mkdir(parents=True, exist_ok=True)

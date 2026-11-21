@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 typedef struct mav1 mav1;
-// What one decode gave: an NV12 picture of w x h in the decoder's memory, valid until the next call, its matrix as vpx_color_space_t's values (BT.601 = 1, BT.709 = 2, BT.2020 = 5),
+// What one decode gave: an NV12 picture of w x h in the decoder's memory, valid until the next call, its matrix (BT.601 = 1, BT.709 = 2, BT.2020 = 5),
 // and the time its temporal unit came with: dav1d decodes several frames at once, so a picture can come out calls after its unit went in
 typedef struct { const uint8_t *y, *uv; size_t ystride, uvstride; int w, h, matrix, full_range; int64_t ts; } mav1_picture;
 

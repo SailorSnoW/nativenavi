@@ -3870,8 +3870,8 @@ static void write_texels(const tex_t *t, const view_t *v, const NVNcopyRegion *r
     unsigned level = v && v->set_levels ? (unsigned)v->base_level : 0, layer0 = v && v->set_layers ? (unsigned)v->min_layer : 0;
     int is3d = t->d.target == NVN_TEXTURE_TARGET_3D, nz = r->depth ? r->depth : 1;
     // A linear texture (LINEAR or LINEAR_RENDER_TARGET) is one 2D level of rows of its stride, written by rows as ReadTexels reads it (mtl_read_texels) and the upload reads it (gsb_geom).
-    // The block-linear writes below refuse its layout (nvn_deswizzle_geom), and the whole-level path dropped the write: a movie decoded into a LINEAR | VIDEO_DECODE texture (the host's
-    // native-texture output, nvn_host_write_texture) drew black (Tsukihime's title backdrop, 1920x1080 RGBA8, nxnative PR #1983)
+    // The block-linear writes below refuse its layout (nvn_deswizzle_geom), and the whole-level path dropped the write: a movie decoded into a LINEAR | VIDEO_DECODE texture drew black
+    // (Tsukihime's title backdrop, 1920x1080 RGBA8, nxnative PR #1983)
     if (t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)) {
         size_t srow = tex_linear_row(t), wb = (size_t)r->width * (size_t)bpb, hb = (size_t)r->height, x0 = (size_t)r->xoffset * (size_t)bpb, y0 = (size_t)r->yoffset, row0 = row ? row : wb;
         if (t->d.target != NVN_TEXTURE_TARGET_2D || level || layer0 || r->zoffset || nz != 1 || bw != 1 || bh != 1 || r->xoffset < 0 || r->yoffset < 0 || r->width < 0 || r->height < 0
@@ -3925,17 +3925,6 @@ int nvn_tex_level_range(const tex_t *t, unsigned level, unsigned layer, uint64_t
     if (b <= a || b > t->L.layer_size || (uint64_t)layer * t->L.layer_size + b > t->L.size) return -1;
     *lo = (uint64_t)layer * t->L.layer_size + a; *hi = (uint64_t)layer * t->L.layer_size + b;
     return 0;
-}
-// The movie decoder's native-texture output (DecoderMode 2, hle_movie.c): a whole frame into level 0 of the client texture, as WriteTexels does; returns the texture format, or −1 when the object is not a texture
-int nvn_host_write_texture(const void *nvntex, const void *src, int w, int h, size_t row, int *tw, int *th) {
-    const tex_t *t = nvntex;
-    uint32_t mg = 0; vm_size_t got = 0;   // the value the client gives is not necessarily a pointer: test-read first
-    if (!t || (uintptr_t)t & 7 || vm_read_overwrite(mach_task_self(), (vm_address_t)t, 4, (vm_address_t)&mg, &got) != KERN_SUCCESS || got != 4) return -1;
-    if (t->magic != MAGIC('T', 'E', 'X', 0)) return -1;
-    if (tw) *tw = (int)t->d.width;
-    if (th) *th = (int)t->d.height;
-    if (src) { NVNcopyRegion r = {0, 0, 0, w, h, 1}; write_texels(t, NULL, &r, src, row, 0); }
-    return (int)t->d.format;
 }
 // work the host finished on the CPU: the sync object counts as signalled at once (fence 0 is always complete)
 int nvn_host_signal_sync(void *nvnsync) {

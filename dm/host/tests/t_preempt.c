@@ -195,7 +195,7 @@ static void *scope_any_yield(void *arg) {   // waits on event 1, then yields to 
     while (!atomic_load(&scope_release)) { uint64_t r[32] = {(uint64_t)-2}; svc_thread(0x0B, r); }
     thread_exit(t); return NULL;
 }
-static pthread_mutex_t scope_mu = PTHREAD_MUTEX_INITIALIZER;   // a host lock the signaller holds across its signal (hle_movie.c: the decoder's dmu)
+static pthread_mutex_t scope_mu = PTHREAD_MUTEX_INITIALIZER;   // a host lock the signaller holds across its signal (as a movie decoder's lock)
 static void *scope_host_lock(void *arg) {   // waits on event 1, then waits for the host lock, finishes its payload and exits
     thr_t *t = arg; pthread_setspecific(g_keythr, t);
     scope_wait(1);

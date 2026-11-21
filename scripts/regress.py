@@ -685,7 +685,7 @@ def host_for(tree, g, jobs):
     say(f'  {g.id}: building the host of {tree.id}')
     log = game_root(g) / 'tmp' / f'host-{tree.id}-{g.id}.log'; log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, 'w') as f:
-        for target in (['gen/vpx/libvpx.a', f'-j{jobs}'], ['dmhost']):
+        for target in (['gen/dav1d/libdav1d.a', f'-j{jobs}'], ['dmhost']):
             r = subprocess.run(['make', f'GAME={g.id}', *target], cwd=hd, env=env, stdout=f, stderr=subprocess.STDOUT)
             if r.returncode: raise HarnessError(f'{g.id}: the host of {tree.id} does not build (see {log})')
     dst.parent.mkdir(parents=True, exist_ok=True)

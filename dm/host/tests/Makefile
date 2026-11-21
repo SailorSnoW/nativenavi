@@ -13,7 +13,7 @@ GAME ?= 0400486024DEC000
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
 $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../romfs_image.h
 GAME_H = ../gen/$(GAME)/game_profile.h
-run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_friends $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_output_stream $(B)/t_audio_spsc $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pollwait $(B)/t_clockwait $(B)/t_pause $(B)/t_pause_stress $(B)/t_pctl $(B)/t_sf $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_pad_hid $(B)/t_switch2
+run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_friends $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_output_stream $(B)/t_audio_spsc $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pollwait $(B)/t_clockwait $(B)/t_pause $(B)/t_pause_stress $(B)/t_pctl $(B)/t_sf $(B)/t_time $(B)/t_shared_font $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_pad_hid $(B)/t_switch2
 	$(B)/t_language
 	$(B)/t_heap_size
 	$(B)/t_touch
@@ -51,12 +51,8 @@ run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B
 	$(B)/t_sync_wait $(QUIET)
 	$(B)/t_shared_font
 	$(B)/t_system_event
-	$(B)/t_vorbis
-	$(B)/t_vorbis_divides
-	$(B)/t_movie_vpx
 	$(B)/t_codec_opus
 	$(B)/t_codec_video
-	$(B)/t_movie_avc
 	$(B)/t_nv
 	$(B)/t_objmap
 	$(B)/t_vi_history $(QUIET)
@@ -311,27 +307,13 @@ PAUSE_STRESS_SECONDS ?= 30
 pause-stress: $(B)/t_pause_stress
 	$(B)/t_pause_stress --seconds $(PAUSE_STRESS_SECONDS)
 run: $(B)/t_preempt
-# the Vorbis tests build their own packets and need no game profile (they build without GAME)
-$(B)/t_vorbis: t_vorbis.c ../../third_party/stb_vorbis/stb_vorbis.c | $(B)
-	$(CLANG) -O1 -g -Wno-unused-function -Wno-tautological-compare -o $@ t_vorbis.c
-$(B)/t_vorbis_divides: t_vorbis.c ../../third_party/stb_vorbis/stb_vorbis.c | $(B)
-	$(CLANG) -O1 -g -DSTB_VORBIS_DIVIDES_IN_RESIDUE -Wno-unused-function -Wno-tautological-compare -o $@ t_vorbis.c
-run: $(B)/t_movie_vpx
 run: $(B)/t_codec_opus
 run: $(B)/t_codec_video
-run: $(B)/t_movie_avc
-$(B)/t_movie_avc: t_movie_avc.c ../hle_movie.c ../hle_movie_avc.c ../hle_movie_avc.h ../hle_movie_vt.h $(GAME_H) ../gen/vpx/libvpx.a | $(B)
-	$(CLANG) -O1 -g -Wno-unused-function -Wno-tautological-compare $(GINC) -I../../third_party/libvpx -I../../third_party/libvpx/config -I../../third_party/stb_vorbis -Wl,-dead_strip -o $@ t_movie_avc.c ../gen/vpx/libvpx.a \
-		-framework AudioToolbox -framework CoreAudio -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation
-$(B)/t_movie_vpx: t_movie_vpx.c ../hle_movie.c $(GAME_H) ../gen/vpx/libvpx.a | $(B)
-	$(CLANG) -O1 -g -Wno-unused-function -Wno-tautological-compare $(GINC) -I../../third_party/libvpx -I../../third_party/libvpx/config -I../../third_party/stb_vorbis -Wl,-dead_strip -o $@ t_movie_vpx.c ../gen/vpx/libvpx.a -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_codec_opus: t_codec_opus.c ../hle_codec.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_codec_opus.c
-$(B)/t_codec_video: t_codec_video.c movie_vt_data.h ../hle_codec_video.c ../hle_movie.c ../hle_movie_avc.c ../hle_movie_avc.h ../hle_movie_av1.c ../hle_movie_av1.h ../hle_movie_vt.h ../hle_movie_yuv.h $(GAME_H) ../gen/vpx/libvpx.a ../gen/dav1d/libdav1d.a | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-tautological-compare -fsanitize=address,undefined $(GINC) -I../../third_party/libvpx -I../../third_party/libvpx/config -I../../third_party/dav1d/include -I../../third_party/stb_vorbis -o $@ t_codec_video.c ../gen/vpx/libvpx.a ../gen/dav1d/libdav1d.a \
-		-framework AudioToolbox -framework CoreAudio -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation
-../gen/vpx/libvpx.a: FORCE
-	$(MAKE) -C .. GAME=$(GAME) gen/vpx/libvpx.a
+$(B)/t_codec_video: t_codec_video.c movie_vt_data.h ../hle_codec_video.c ../hle_movie.c ../hle_movie_av1.c ../hle_movie_av1.h ../hle_movie_vt.h $(GAME_H) ../gen/dav1d/libdav1d.a | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-tautological-compare -fsanitize=address,undefined $(GINC) -I../../third_party/dav1d/include -o $@ t_codec_video.c ../gen/dav1d/libdav1d.a \
+		-framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation
 ../gen/dav1d/libdav1d.a: FORCE
 	$(MAKE) -C .. GAME=$(GAME) gen/dav1d/libdav1d.a
 .PHONY: FORCE

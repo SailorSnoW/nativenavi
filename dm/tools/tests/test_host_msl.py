@@ -34,7 +34,6 @@ class HostMSL(unittest.TestCase):
             dst = self.root / name
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO / name, dst)
-        (self.root / 'dm/third_party/libvpx').mkdir(parents=True)
         self.source = self.root / 'dm/gfx/msl/clear.metal'
         self.source.parent.mkdir(parents=True)
         self.source.write_text('kernel void clear() {}\n')

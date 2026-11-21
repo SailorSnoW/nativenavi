@@ -10,7 +10,7 @@ endif
 endif
 GAME_H = gen/$(GAME)/game_profile.h
 include ../mac/min_os.mk
-# -O2 as the other native code here (libvpx, dav1d, the launcher). Not -O3 (no measured gain over -O2) and not -flto, which moves
+# -O2 as the other native code here (dav1d, the launcher). Not -O3 (no measured gain over -O2) and not -flto, which moves
 # hle_bigstack.c's inline-assembly entry apart from its return path (SIGBUS in dm_bigstack_enter on Breath of the Wild, PR #556)
 CFLAGS=-O2 -g -Wall -Wno-unused-function -mmacosx-version-min=$(MACOS_MIN)
 # One job per core unless the command line sets -j: the host and the libraries below build one object per source (GNU make 3.81, the system's, takes -j from MAKEFLAGS set here)
@@ -22,16 +22,6 @@ SRC=main.c loader.c hle.c crash.c probe.c thread.c memstat.m haptics_apple.m aud
 # NVN null device + nn::vi + the Vulkan layer (dm/gfx/)
 # Sources under dm/gfx, dm/gfx/nvn and dm/gfx/tex are included by wildcard (tests/ and metal/ do not go into the host): adding a file does not touch this line
 GFX=$(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m))
-# Third party: libvpx ships the VP8 and VP9 decoder sources (movie decoding, hle_movie.c), with its configuration headers in config/ (arm64). Built separately into a static library, file by file, so host changes do not recompile it
-VPX=../third_party/libvpx
-VPX_SRC=$(sort $(shell find $(VPX) -name '*.c'))
-VPX_OBJ=$(patsubst $(VPX)/%.c,gen/vpx/%.o,$(VPX_SRC))
-VPX_LIB=gen/vpx/libvpx.a
-gen/vpx/%.o: $(VPX)/%.c $(wildcard $(VPX)/config/*.h) ../mac/min_os.mk
-	@mkdir -p $(dir $@)
-	clang -O2 -g -mmacosx-version-min=$(MACOS_MIN) -I$(VPX) -I$(VPX)/config -c $< -o $@
-$(VPX_LIB): $(VPX_OBJ)
-	rm -f $@; ar rcs $@ $^
 # Third party: dav1d, the AV1 decoder where VideoToolbox has none (hle_movie_av1.c), with its arm64 NEON assembly and its configuration in config/. Its *_tmpl.c files are built
 # through the per-bit-depth wrappers in config/tmpl, and the assembly files other assembly files include (*_tmpl.S, util.S) are not built on their own: the list meson builds
 DAV1D=../third_party/dav1d
@@ -68,7 +58,7 @@ FORCE:
 # the same flags (as clang's one-step compile and link gives each of its jobs the whole line) and its dSYM made from the objects, as clang does after its own link. Each object
 # lists the headers its source read (-MMD; -MP: a removed header is no error), so an edit rebuilds the objects that include it and the link; the Makefile (CFLAGS, these lines)
 # rebuilds them all. The generated headers come first (order-only: the dependency files name them for the sources that read them). The NSP script builds gen/<id>/dmhost and takes it
-HOST_CFLAGS = $(CFLAGS) -I../gfx/nvn/include -I$(dir $(MSL_H)) -I$(dir $(GAME_H)) -I$(VPX) -I$(DAV1D)/include -I../third_party/stb_vorbis -fobjc-arc
+HOST_CFLAGS = $(CFLAGS) -I../gfx/nvn/include -I$(dir $(MSL_H)) -I$(dir $(GAME_H)) -I$(DAV1D)/include -fobjc-arc
 HOST_FRAMEWORKS = -framework Cocoa -framework UserNotifications -framework QuartzCore -framework Metal -framework MetalFX -framework GameController -framework CoreBluetooth -framework IOBluetooth -framework CoreHaptics -framework IOKit -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework CoreFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework ImageIO -framework UniformTypeIdentifiers
 HOST_SRC = $(SRC) $(GFX)
 ifneq ($(filter ../%,$(filter-out ../gfx/%,$(HOST_SRC))),)
@@ -83,8 +73,8 @@ $(OBJ_DIR)/host/%.o: % Makefile ../mac/min_os.mk | $(GAME_H) $(MSL_H)
 $(OBJ_DIR)/gfx/%.o: ../gfx/% Makefile ../mac/min_os.mk | $(GAME_H) $(MSL_H)
 	@mkdir -p $(dir $@)
 	clang $(HOST_CFLAGS) -MMD -MP -c $< -o $@
-$(HOST_BIN): $(HOST_OBJ) $(VPX_LIB) $(DAV1D_LIB) Makefile ../mac/min_os.mk
-	clang $(HOST_CFLAGS) -o $@ $(HOST_OBJ) $(VPX_LIB) $(DAV1D_LIB) $(HOST_FRAMEWORKS)
+$(HOST_BIN): $(HOST_OBJ) $(DAV1D_LIB) Makefile ../mac/min_os.mk
+	clang $(HOST_CFLAGS) -o $@ $(HOST_OBJ) $(DAV1D_LIB) $(HOST_FRAMEWORKS)
 	dsymutil $@
 ifneq ($(strip $(GAME)),)
 -include $(HOST_OBJ:.o=.d)
@@ -93,6 +83,6 @@ endif
 # an older build's (make's whole-second times could not tell two games' builds in one second apart)
 dmhost: $(HOST_BIN) FORCE
 	@cmp -s $(HOST_BIN) $@ || { rm -rf $@ $@.dSYM && cp $(HOST_BIN) $@ && cp -R $(HOST_BIN).dSYM $@.dSYM; }
-clean:   # the host and everything make generates for it (gen/: the profile headers, each game's objects and host, and the libvpx and dav1d builds; dmhost_* and *.dSYM beside them, as in .gitignore)
+clean:   # the host and everything make generates for it (gen/: the profile headers, each game's objects and host, and the dav1d build; dmhost_* and *.dSYM beside them, as in .gitignore)
 	rm -rf gen dmhost dmhost_* *.dSYM
 .PHONY: clean
