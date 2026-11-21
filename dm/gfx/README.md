@@ -113,7 +113,6 @@ The scripts in `tools/`; usage is written in each file's header:
 | `dmsh_fetch.py` | Generates the "readable tile" versions of fragment shaders |
 | `c1_guard.py` | Generates `c1_full.tsv` |
 | `cb_extent.py` | Generates `cb_extent.tsv` |
-| `dmsh_dryrun.py` | Dry-run conversion of the whole library, measuring only "can it be converted" |
 | `gen_protos.py` | Generates `nvn_protos.h` / the thunks |
 | `tbdr_budget.py`, `tbdr_load_dead.py`, `tbdr_store_dead.py`, `tbdr_pass_merge.py` | Read the `DM_NVN_PASSDUMP` log and analyze the load / store volume of each render pass's attachments per frame |
 | `passgpu_top.py` | Reads the `DM_NVN_PASSGPU` output and lists GPU time by pass |

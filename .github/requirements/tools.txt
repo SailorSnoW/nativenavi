@@ -1,6 +1,7 @@
-# What the repository's tools import beyond the standard library, pinned: the rewriter (capstone, lz4), the fonts (fonttools) and the analysis tools (numpy).
-# One environment serves every game: python3 -m venv <drive with the games>/venv && <that>/bin/pip install -r .github/requirements/tools.txt
+# What the repository's tools import beyond the standard library, pinned: the rewriter (capstone, lz4), the fonts (fonttools), the game's ZBIC archives (zbic) and the analysis tools (numpy).
+# python3 -m venv <drive with the game>/venv && <that>/bin/pip install -r .github/requirements/tools.txt
 capstone==5.0.9
 fonttools==4.68.0
 lz4==4.4.5
 numpy==2.5.4
+zbic==1.0.1.post1

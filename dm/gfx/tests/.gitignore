@@ -5,6 +5,3 @@ t_*
 *.dSYM/
 # Tools built here that are not tests
 nvn_replay
-.precommit.err
-.precommit_snap/
-t_tile_small
