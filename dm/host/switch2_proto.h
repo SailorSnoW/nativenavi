@@ -1,8 +1,8 @@
 // Nintendo Switch 2 controllers over Bluetooth LE (Pro Controller 2, Joy-Con 2 left and right): the protocol and the state a pad is made of. Pure C, no platform headers, so
-// tests/t_switch2.c checks it on any machine; pad_switch2_apple.m is the CoreBluetooth transport the Mac and iOS front ends share.
+// tests/t_switch2.c checks it on any machine; pad_switch2_apple.m is the CoreBluetooth transport of the Mac front end.
 //
 // Where it comes from: the GATT identifiers, command framing and report layout are the community's reverse engineering of the controllers (Peter Sharma's "Finally the Controller
-// Works", ndeadly/switch2_controller_research, trevlars/switch2-controllers-linux, Nadeflore/switch2-controllers and others; the same protocol seedds/nxnative PR 645 uses on iOS).
+// Works", ndeadly/switch2_controller_research, trevlars/switch2-controllers-linux, Nadeflore/switch2-controllers and others; the same protocol seedds/nxnative PR 645 used on iOS).
 // This code was written from those notes; none of it is copied from them.
 // Observed here on real hardware (a left and a right Joy-Con 2, macOS 27): the Joy-Con 2s advertise product ids 0x2067 (left) and 0x2066 (right) with Nintendo's company id
 // 0x0553; they use the same three characteristics as the Pro Controller 2 (input, command, command reply); after the same handshake they send the same 63-byte input report; a
@@ -86,7 +86,7 @@ static inline int s2_advert_parse(const uint8_t *d, size_t n, s2_advert *a) {
     a->pairing = 1; for (int i = 10; i < 16; i++) { a->host[i - 10] = d[i]; if (d[i]) a->pairing = 0; }
     return a->vid == S2_VENDOR_ID && (a->pid == S2_PID_PRO || a->pid == S2_PID_JOYCON_L || a->pid == S2_PID_JOYCON_R);
 }
-// What the host does with an advertisement. host: this host's Bluetooth address (little endian), NULL when it cannot be known (iOS has no API for it).
+// What the host does with an advertisement. host: this host's Bluetooth address (little endian), NULL when it cannot be known (pad_switch2_apple.m could not read the Mac's address).
 // In pairing mode the controller is bonded to this host (S2_ADV_PAIR), or used without bonding when the address is unknown (S2_ADV_TAKE: it needs Sync again next time).
 // A wake toward this host is connected (S2_ADV_WAKE). A wake toward another host (a nearby Switch 2) is left alone, and nothing is written to it.
 enum { S2_ADV_IGNORE, S2_ADV_WAKE, S2_ADV_PAIR, S2_ADV_TAKE };

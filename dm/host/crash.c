@@ -1,5 +1,5 @@
 // Crash state: prints the faulting address, pc, lr (converted to module-relative offsets) and the registers; dispatches page fault hooks.
-// Only signal handling itself lives here: diagnostic features (probes / UI messages / sampling) are in diag.c, and this file does not depend on them (the graphics unit tests link only this file).
+// Only signal handling itself lives here: the probes are in probe.c, and this file does not depend on them (the graphics unit tests link only this file).
 #include "dm.h"
 #include <signal.h>
 #include <dlfcn.h>
@@ -64,7 +64,7 @@ static void *watchdog_main(void *arg) {
     }
     return NULL;
 }
-void crash_off(const char *tag, uint64_t a) {   // Also used by diag.c
+void crash_off(const char *tag, uint64_t a) {
 #define off crash_off
 
     module_t *m = module_of((void *)a);
@@ -106,12 +106,12 @@ void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len)) {
 // Called before the host itself writes guest memory (read() straight into a guest buffer, etc.): for a system call a write-protected page does not trigger a page fault but returns EFAULT
 void dm_guest_write_prepare(void *addr, size_t len) { for (int i = 0; i < g_nwrite_prep; i++) g_write_prep[i](addr, len); }
 
-// The diagnostics module (the probes in diag.c) and the thread state dump (hle_thread.c) each register themselves here: a unit test that links only this file does not depend on them
+// The thread state dump (hle_thread.c svc_thread_dump, registered by main.c) and the graphics layer's wait points (nvn_mtl.m) are registered here: a unit test that links only this file does not depend on them
 static int (*g_trap_hook)(ucontext_t *uc);
 void crash_set_trap_hook(int (*fn)(ucontext_t *uc)) { g_trap_hook = fn; }
 void crash_set_dump_hook(void (*fn)(void)) { g_dump_hook = fn; }
 void crash_set_wait_dump(void (*fn)(void)) { g_wait_dump = fn; }
-// Dump the current state on demand (without exiting): the iOS app has no no-progress watchdog, so when the smoke test fails it sends dump through DM_LOG_PORT to trigger this -- what each guest thread is waiting on + the graphics-side wait points, the same thing the watchdog prints
+// Dump the current state on demand (without exiting): DM_CTL's "dump" line triggers this (hle_hid.c; scripts/regress.py sends it before it stops a hung game) -- what each guest thread is waiting on + the graphics-side wait points, the same thing the watchdog prints
 void crash_dump_now(const char *why) { fprintf(stderr, "[dm] state dump (%s)\n", why); if (g_dump_hook) g_dump_hook(); if (g_wait_dump) g_wait_dump(); }
 // Only the first crashing thread prints its state: when several threads crash at once (Unity's job threads often do), the dumps used to interleave and the process hung in the dump without exiting.
 // Later threads stop in pause() until the process exits; the first thread re-entering (crashing again while printing, or the SIGALRM of the 15 s safety below) exits at once.
@@ -223,7 +223,7 @@ void crash_install(void) {
     struct sigaction sa = {.sa_sigaction = on_crash, .sa_flags = SA_SIGINFO | SA_ONSTACK};
     sigaction(SIGALRM, &sa, 0);
     // Both watchdogs are turned on only when a test explicitly sets DM_WATCH / DM_WATCH_STALL: the product (the player launches from the desktop, no environment variables) turns on neither.
-    // Found by reading the code: iOS main.m did setenv DM_WATCH=30 by default → the player's launch was killed by SIGALRM at 30 s; the no-progress watchdog defaulted to 15 s → the pause menu (ticks stopped) was killed at 15 s
+    // Found by reading the code: nxnative's iOS main.m did setenv DM_WATCH=30 by default → the player's launch was killed by SIGALRM at 30 s; the no-progress watchdog defaulted to 15 s → the pause menu (ticks stopped) was killed at 15 s
     const char *watch = getenv("DM_WATCH"), *stall = getenv("DM_WATCH_STALL");
     if (watch) alarm(atoi(watch));
     if (watch || stall) {

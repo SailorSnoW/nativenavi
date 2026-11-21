@@ -1,5 +1,5 @@
-// Memory accounting: when DM_MEMSTAT=<tsv path> is set, one line is logged per second (common to Mac / iOS).
-//   Totals: phys_footprint (task_info TASK_VM_INFO, which the iOS memory limit is based on), os_proc_available_memory (iOS only), Metal currentAllocatedSize
+// Memory accounting: when DM_MEMSTAT=<tsv path> is set, one line is logged per second.
+//   Totals: phys_footprint (task_info TASK_VM_INFO), the available-memory column (always 0: os_proc_available_memory was iOS only), Metal currentAllocatedSize
 //   Breakdown: walk this process's VM regions (vm_region_recurse_64, VM_REGION_SUBMAP_INFO_64), classify by region, and for each class record
 //         virtual = address space size (reserved-only counts too), resident = pages_resident, charged = dirty pages + compressed/swapped-out pages, deduplicated by VM object (≈ the part that goes into phys_footprint)
 //         dedup key = (object id, offset within the object); reason for dedup: Metal wraps the guest memory pool with "no copy", so the same object is mapped in several places (share_mode TRUESHARED, ref_count>1), and summing region by region would double count;
@@ -52,8 +52,8 @@ static void dump_regions(const char *path) {
 }
 
 // The address-space census the crash handler writes after every crash and abort (crash.c on_crash): how much of the process's address space each class holds, the largest free gaps
-// between the lowest and highest address the task may use (TASK_VM_INFO min / max_address) and the thread count. An iPhone without the extended-virtual-addressing entitlement has
-// a few GB of address space (docs/reference/memory.md): a thread's stack, a realloc or a Metal heap that finds no room aborts there with the footprint far below the memory limit
+// between the lowest and highest address the task may use (TASK_VM_INFO min / max_address) and the thread count. Made for the iPhone, which without the extended-virtual-addressing entitlement had
+// a few GB of address space: a thread's stack, a realloc or a Metal heap that found no room aborted there with the footprint far below the memory limit
 // (GitHub issue #2444). Regions inside a submap (the dyld shared cache) are "system" here and never a gap. Only mach calls and fprintf: it runs in the signal handler
 void dm_vm_census(FILE *f) {
     enum { C_SYS = NC, NCC };
@@ -150,9 +150,9 @@ static void memstat_start(void) {
     pthread_t th; pthread_create(&th, NULL, memstat_thread, path); pthread_detach(th);
 }
 
-// ---------- Per-thread CPU: DM_THRCPU=<tsv path>[,interval in seconds (default 10)] (common to Mac / iOS; on iOS a relative name → the container's Documents) ----------
+// ---------- Per-thread CPU: DM_THRCPU=<tsv path>[,interval in seconds (default 10)] ----------
 // Every interval, walk all threads of this process (task_threads), take the thread name and user + system CPU time (ns) from THREAD_EXTENDED_INFO, and difference them by thread id:
-// each line is "seconds, thread id, thread name, CPU% (100 = one core)"; the last line is "seconds, -, total, CPU%". Used for heat attribution (which thread eats CPU); enable together with DM_HEAT to compare against thermal state.
+// each line is "seconds, thread id, thread name, CPU% (100 = one core)"; the last line is "seconds, -, total, CPU%". Used for heat attribution (which thread eats CPU).
 #include <mach/thread_info.h>
 #define THR_MAX 512
 static void *thrcpu_thread(void *p) {
@@ -188,8 +188,8 @@ static void thrcpu_start(void) {
     char *spec = strdup(p);
     pthread_t th; pthread_create(&th, NULL, thrcpu_thread, spec); pthread_detach(th);
 }
-// DM_MEMSTAT and DM_THRCPU, started once by the host's loading (main.c host_preload), not by a constructor: on iOS a constructor runs before the app's main() sets what Documents/env.txt
-// holds, so either switch set there did nothing (GitHub issue #1184)
+// DM_MEMSTAT and DM_THRCPU, started once by the host's loading (main.c host_load), not by a constructor: on iOS a constructor ran before the app's main() set what Documents/env.txt
+// held, so either switch set there did nothing (GitHub issue #1184)
 void dm_diag_samplers_start(void) {
     static atomic_int once;
     if (atomic_exchange(&once, 1)) return;

@@ -205,7 +205,7 @@ int main(void) {
     motion_fill(&s, acc, gyro, ang, dir);
     CHECK(near(-dir[2], sinf(r), 0.02f), "primed from the first sample's gravity");
 
-    // A phone held upright starts with gravity on -y, parallel to the old heading reference.
+    // A source held upright (found on a phone) starts with gravity on -y, parallel to the old heading reference.
     // All six axis-aligned poses must map their measured gravity to world down on the first sample.
     for (int axis = 0; axis < 3; axis++) for (int sign = -1; sign <= 1; sign += 2) {
         float a[3] = {0}, w[3] = {0}; a[axis] = (float)sign;
@@ -233,14 +233,6 @@ int main(void) {
     for (int i = 0; i < 25000; i++) { float a[3] = {0, 0, -1}, w[3] = {0.7f * sinf(i * 0.01f), 1.3f, -0.4f}; motion_update(&s, &id, a, w, 1 / 250.f, 0.5f); }
     float d01 = s.R[0][0] * s.R[0][1] + s.R[1][0] * s.R[1][1] + s.R[2][0] * s.R[2][1], n0 = s.R[0][0] * s.R[0][0] + s.R[1][0] * s.R[1][0] + s.R[2][0] * s.R[2][0];
     CHECK(near(d01, 0, 1e-4f) && near(n0, 1, 1e-4f), "orientation stays orthonormal");
-
-    // the phone's own sensors: held upright in landscape, screen toward the player, gravity is toward the bottom of the picture (Switch -y) whichever way it is turned
-    float up3[3] = {-1, 0, 0}, up4[3] = {1, 0, 0}, flat[3] = {0, 0, -1}, o[3];
-    motion_phone_to_switch(3, up3, o); CHECK(near(o[0], 0, 1e-6f) && near(o[1], -1, 1e-6f) && near(o[2], 0, 1e-6f), "landscape right upright: gravity to the picture's bottom");
-    motion_phone_to_switch(4, up4, o); CHECK(near(o[0], 0, 1e-6f) && near(o[1], -1, 1e-6f), "landscape left upright: gravity to the picture's bottom");
-    motion_phone_to_switch(3, flat, o); CHECK(near(o[2], -1, 1e-6f), "flat face up stays face up");
-    // turning the phone (landscape right) about its own long side, which is the picture's x axis: rotation about phone -y becomes rotation about Switch +x
-    float rl[3] = {0, -1, 0}; motion_phone_to_switch(3, rl, o); CHECK(near(o[0], 1, 1e-6f) && near(o[1], 0, 1e-6f), "rotation axes follow the picture");
 
     invalid_samples();
     rest_checks();

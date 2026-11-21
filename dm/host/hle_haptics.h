@@ -1,4 +1,4 @@
-// Game vibration state, before adapting it to a phone or controller. Players use dm_input.h's slots.
+// Game vibration state, before adapting it to a controller. Players use dm_input.h's slots.
 #pragma once
 #include "dm_input.h"
 

@@ -3,10 +3,10 @@
 #include "hle.h"
 #include <dirent.h>
 
-// ---------- aoc add-on content (the DLC NSPs in the player's folder) / ec shop (excluded) ----------
+// ---------- aoc add-on content (the DLC packages in the player's NUP) / ec shop (excluded) ----------
 // Owned add-on content indices (ascending), fixed at the first query:
-//   numeric subdirectories of DM_AOC_DIR: each is one DLC's RomFS, which the packing script extracts only from DLC NSPs really in the player's folder (title ID = base + 0x1000 + index).
-//     Engage: F001 → 1 (E0), F002 → 2 (H0); the content itself is in the 2.0.0 update's RomFS and each DLC package holds one empty marker file; the game calls MountAddOnContent for each index ListAddOnContent returns (hle_fs.c).
+//   numeric subdirectories of DM_AOC_DIR: each is one DLC's RomFS, which the packing script packs only from DLC packages really in the player's NUP (title ID = base + 0x1000 + index).
+//     Engage: F001 → 1 (E0), F002 → 2 (H0); the content itself is in the 2.0.0 update's RomFS and each DLC package holds one empty marker file. The host only counts and lists the indices: no module of Ocarina of Time names MountAddOnContent, and the host has none.
 //   No DM_AOC_DIR: none (on a Switch 2 Mario 1.2.1 uses it to tell whether the upgrade pack is owned, and the user has no Mario add-on content files).
 //   DM_AOC_OWNED=0: always none (test switch, for runs without the DLC).
 // Room for every index the scan accepts (1..2000): Super Smash Bros. Ultimate has 99 DLC, and a cap below the folder count dropped whichever readdir returned last (fighters among them).

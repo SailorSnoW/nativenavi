@@ -12,15 +12,13 @@
 #define SWITCH_ALIAS UINT64_C(0x1000000000)   // a Switch's alias region: 64 GB
 // Reserve one whole block of guest address space, partitioned the Horizon way (address values are the real addresses returned by the host's mmap).
 // It only takes address space, not memory.
-// Size 5 GB: the game needs the first 1 GB (alias region, stacks) + one whole heap block (application memory pool of 3285 MiB, see APP_POOL below),
-// about 4.2 GB in total; on iOS without the "extended virtual addressing" entitlement a single reservation can be at most 6 GB
-// (read on a real device: 6 GB succeeds, 7 GB fails), so it cannot be made any wider --
-// with an 8 GB reservation, builds from developer accounts that cannot sign that entitlement (free accounts) would exit at this step.
-#define RESERVE DM_GAME_MEM_RESERVE   // SMBW: the heap needs only 1.47 GB, so the block stays at 5 GB (the total proven on a real device; a single 6 GB block can be reserved, but Metal etc. still need address space)
+// Its size is the profile's mem_reserve, with the alias region in use in place of the profile's mem_alias (g_reserve, mem_init_once). In nxnative Super Mario Bros. Wonder's profile
+// had 5 GB, sized for an iPhone: without the "extended virtual addressing" entitlement a single reservation there could be at most 6 GB (read on a real device: 6 GB succeeded, 7 GB failed).
+#define RESERVE DM_GAME_MEM_RESERVE   // game profile mem_reserve
 static uint8_t *g_as;              // ASLR region base = the whole block
 static size_t g_reserve;           // its size: RESERVE less the profile's alias region plus the one in use (mem_init_once)
 static uint8_t *g_heap; static _Atomic size_t g_heap_cur; static size_t g_heap_cap;
-// The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (used where guest memory is read every tick, such as diag.c tk_rd)
+// The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (its caller, a per-tick reader of guest memory, is gone: tests/t_heap_size.c checks it against SetHeapSize)
 int dm_guest_heap_readable(uint64_t a, size_t n) { uint64_t b = (uint64_t)(uintptr_t)g_heap; size_t cur = g_heap_cur; return g_heap && a >= b && n <= cur && a - b <= cur - n; }
 // The opened heap span for callers that address guest memory by region (probe.c), like dmnt's heap extents: the
 // reservation's base (guest address) and the length the game has actually opened with SetHeapSize right now, which grows and
@@ -46,9 +44,9 @@ static void mem_init_once(void) {
         DM_GAME_MEM_STACK > RESERVE - 0x10000000 - DM_GAME_MEM_ALIAS ||
         ((RESERVE | DM_GAME_MEM_ALIAS | DM_GAME_MEM_STACK) & (pg - 1)))
         die("guest address-space profile has invalid native boundaries");
-    // The alias region is the Switch's 64 GB on the Mac (or the profile's, when larger): games lay their regions out for that much, and what the profile can give an iPhone (one
+    // The alias region is the Switch's 64 GB (or the profile's, when larger): games lay their regions out for that much, and a profile's smaller one (sized in nxnative for an iPhone's one
     // reservation of at most 6 GB) crashed Trails in the Sky 1st Chapter at launch and Just Dance within a minute. It is address space, not memory: the application pool bounds
-    // what is mapped. DM_ALIAS_SIZE=<bytes> sets another size, the heap and stacks as they are; the profile's value reproduces an iPhone's address space on the Mac (the NSP script's heap check)
+    // what is mapped. DM_ALIAS_SIZE=<bytes> sets another size, the heap and stacks as they are; the profile's value keeps the heap and stacks at lower addresses (the 2^39 line below)
     size_t alias = DM_GAME_MEM_ALIAS > SWITCH_ALIAS ? DM_GAME_MEM_ALIAS : SWITCH_ALIAS;
     const char *as = getenv("DM_ALIAS_SIZE");
     if (as && *as) { alias = (size_t)strtoull(as, NULL, 0); if (alias < 0x10000000 || (alias & (pg - 1))) die("DM_ALIAS_SIZE %s: at least 256 MB, in whole host pages", as); }
@@ -337,8 +335,8 @@ static void *alias_windows_thread(void *arg) {
 // ---- Address regions ----
 // The SDK's VammManager hands out the alias region as address regions. The rewriter's observation gates in the sdk (patch_nso.py "Address regions", placed by its symbols in any
 // build) show each one: its size, where the request returns to in the game (the first return address outside the sdk on the frame chain: the function that asked, or its caller
-// when it tail-called the SDK API, whose frame is gone by then), the SDK API it came through (such as StandardAllocator) and its address. With the page bitmaps that gives how much of each region a game uses, which decides how its reservations can fit an iPhone's alias region.
-// A region of 256 MB or more is logged when made; DM_REGIONS=<file> writes the live table every 2 s (the NSP script's heap check reads it, with a Switch-sized DM_ALIAS_SIZE)
+// when it tail-called the SDK API, whose frame is gone by then), the SDK API it came through (such as StandardAllocator) and its address. With the page bitmaps that gives how much of each region a game uses.
+// A region of 256 MB or more is logged when made; DM_REGIONS=<file> writes the live table every 2 s
 typedef struct { uint64_t off, size, via; char who[40]; } region_t;   // via: the outermost sdk return address on the way (the SDK API the request came through)
 static region_t *g_rgn; static int g_nrgn, g_rgn_cap; static pthread_mutex_t g_rgn_lock = PTHREAD_MUTEX_INITIALIZER;   // grows as needed: Unity 6 takes all its memory as regions
 static _Thread_local uint64_t t_rgn_size, t_rgn_via; static _Thread_local char t_rgn_who[40];
@@ -387,7 +385,7 @@ static void region_free(uint64_t *r, int param) {
 // games pass sizes made for the Switch's 64 GB alias region: Pokémon Legends: Z-A 12 GB, Pokémon Scarlet 12 GB, Paper Mario: The Thousand-Year Door 62 GB, Absolum 40 GB. Where the
 // size is more than the alias region has room for, the request would fail (an nn::diag abort in nninitStartup), so the gate at the function's entry (patch_nso.py) gives it the room
 // instead: the alias region less the regions already made (at least the SDK's 62 MB node area) and 256 MB for regions made later, in 32 MB steps. The SDK lays the region out from that size, so it holds; the pool, not the region, bounds what the heap
-// can map. A workaround for the iPhone's address space, not the game: with room for the request (the Mac's 64 GB) nothing changes. Found by symbol in every sdk
+// can map. A workaround for an alias region smaller than a Switch's (an iPhone's in nxnative; DM_ALIAS_SIZE here), not for the game: with room for the request (the Mac's 64 GB) nothing changes. Found by symbol in every sdk
 #define STDALLOC_LATER 0x10000000ull
 // What the alias region has room for in one more region: past the end of the regions made so far, less STDALLOC_LATER for those made later, in 32 MB steps (0 = none)
 static uint64_t alias_room(void) {
@@ -656,7 +654,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         }
         if (commit && changed) alias_initialize(off, size);
         if (g_flag.svc) LOG("%sPhysicalMemory %p+%#zx", commit ? "Map" : "Unmap", (void *)a, size);
-        // how deep the alias region is used (one line per 256 MB crossed): for sizing the reservation and alias region (iOS caps a single reservation at 6 GB)
+        // how deep the alias region is used (one line per 256 MB crossed): for sizing the reservation and alias region
         if (num == 0x2C) { _Atomic uint64_t *hw = &g_alias_hw; uint64_t end = off + size, old = atomic_load(hw);
             while (end > old && !atomic_compare_exchange_weak(hw, &old, end)) {}
             if (end > old && end >> 28 != old >> 28) LOG("[mem] alias region mapped up to +%.2f GB (alias region %.2f GB)", end / 1073741824.0, g_alias_cap / 1073741824.0); }

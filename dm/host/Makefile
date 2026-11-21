@@ -1,7 +1,7 @@
 # Game profile (dm/games/<id>/): the host is built for one, Ocarina of Time's unless GAME names another (a derived profile's title ID). game_profile.h is generated from game.tsv into gen/<id>/; the chain version header dmsh_chain.h lives in dm/gfx/nvn
 GAME ?= 0400486024DEC000
-# A profile outside the repository (DM_GAMES_DIR, e.g. the NSP script's provisional profile) is reached through the symlink gen/<id>/profile: make cannot take paths with spaces.
-# DM_GAMES_FIRST=1 (the NSP script's --provisional) takes it even when dm/games has the game
+# A profile outside the repository (DM_GAMES_DIR: the packing script's derived profile of a version the profile here does not register) is reached through the symlink gen/<id>/profile: make cannot take paths with spaces.
+# DM_GAMES_FIRST=1 (the packing script sets it for a derived profile) takes it even when dm/games has the game
 ifneq ($(strip $(GAME)),)
 GAME_DIR := $(if $(and $(wildcard ../games/$(GAME)/game.tsv),$(if $(DM_GAMES_FIRST),,1)),../games/$(GAME),$(shell python3 ../games/game.py link $(GAME) gen/$(GAME)/profile >&2 && echo gen/$(GAME)/profile))
 ifeq ($(GAME_DIR),)
@@ -57,7 +57,7 @@ FORCE:
 # The host: one object per source in gen/<id>/obj (dm.h includes the profile header, so every game has its own), compiled on every core, then linked into gen/<id>/dmhost with
 # the same flags (as clang's one-step compile and link gives each of its jobs the whole line) and its dSYM made from the objects, as clang does after its own link. Each object
 # lists the headers its source read (-MMD; -MP: a removed header is no error), so an edit rebuilds the objects that include it and the link; the Makefile (CFLAGS, these lines)
-# rebuilds them all. The generated headers come first (order-only: the dependency files name them for the sources that read them). The NSP script builds gen/<id>/dmhost and takes it
+# rebuilds them all. The generated headers come first (order-only: the dependency files name them for the sources that read them). The packing script builds gen/<id>/dmhost and takes it
 HOST_CFLAGS = $(CFLAGS) -I../gfx/nvn/include -I$(dir $(MSL_H)) -I$(dir $(GAME_H)) -I$(DAV1D)/include -fobjc-arc
 HOST_FRAMEWORKS = -framework Cocoa -framework UserNotifications -framework QuartzCore -framework Metal -framework MetalFX -framework GameController -framework CoreBluetooth -framework IOBluetooth -framework CoreHaptics -framework IOKit -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework CoreFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework ImageIO -framework UniformTypeIdentifiers
 HOST_SRC = $(SRC) $(GFX)

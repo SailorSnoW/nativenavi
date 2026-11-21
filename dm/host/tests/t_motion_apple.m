@@ -33,7 +33,7 @@ int main(void) { @autoreleasepool {
     unsetenv("DM_MOTION"); dm_motion_attach((id)c, 2);
     assert(m.sensorsActive && m.valueChangedHandler);
     m.valueChangedHandler((id)m); m.valueChangedHandler((id)m);
-    assert(!samples);   // An advertised sensor with zero-only reports must not suppress the phone or the flat pose.
+    assert(!samples);   // An advertised sensor with zero-only reports must not suppress the flat pose.
     m.hasGravityAndUserAcceleration = YES;
     m.gravity = (GCAcceleration){0, 0, -1}; m.userAcceleration = (GCAcceleration){0.25, 0, 0};
     for (int i = 0; i < 4; i++) m.valueChangedHandler((id)m);

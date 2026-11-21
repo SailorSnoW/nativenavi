@@ -179,7 +179,7 @@ int main(void) {
     printf("released %d/3 in order=%d after %d signals\n", got, order_ok, seen);
     if (!order_ok || got != 3) return 1;
 
-    // Scenario 2: the real audio output sink (PCM all 0, inaudible) plays 6 blocks of 100 ms each, pausing at 150 ms (app to background / incoming call) and resuming at 350 ms.
+    // Scenario 2: the real audio output sink (PCM all 0, inaudible) plays 6 blocks of 100 ms each, pausing at 150 ms (dm_audio_suspend: the window minimized) and resuming at 350 ms.
     // During the pause the silent sink takes over. Release events must let the reader reclaim all six blocks in order at real-time pace.
     setenv("DM_AUDIO", "1", 1);
     if (test_output_lifetime()) return 1;
@@ -202,7 +202,7 @@ int main(void) {
     printf("suspend / resume: released %d/6 in order=%d after %d signals, total duration lower bound 520 ms, got %.0f ms %s\n", got2, order_ok, seen2, total, ok2 ? "✓" : "✗");
     if (!ok2) return 1;
 
-    // Scenario 3: the device stops calling back while the output plays (iOS does this when another audio session takes over, without telling the AudioUnit). 20 blocks of 100 ms; at 150 ms the AudioUnit is stopped behind the host's back.
+    // Scenario 3: the device stops calling back while the output plays (found on iOS, which did this when another audio session took over, without telling the AudioUnit). 20 blocks of 100 ms; at 150 ms the AudioUnit is stopped behind the host's back.
     // Expected: the watchdog sees no callback for 200 ms, the silent sink takes over (all 20 blocks still released in order, about 2 s plus the 200-250 ms gap), and the AudioUnit is restarted 1 s later and calls back again
     // Allow 5 s for scheduling and AudioUnit stop/start delays on virtual CI Macs; buffer order, the playback lower bound and resumed callbacks still have to hold.
     // The virtual output of a CI Mac can also pause by itself for more than 200 ms after the restart: the watchdog then rightly stands the silent sink in again and retries 1 s later, which can fall after the

@@ -1,5 +1,5 @@
 // System service takeovers: oe (CPU boost, display version, active time) / time (UTC calendar, the network clock task) / pl (shared fonts) / nfp (amiibo) / vi (the vsync event) /
-// diag (log, abort) / settings (available language codes).
+// diag (log, abort).
 // On the real device all of these go through Horizon system services (IPC); the host gives values directly or makes them "unavailable".
 #include "hle.h"
 #include <fcntl.h>
@@ -46,7 +46,7 @@ HLE_FORCE("_ZN2nn4time39AsyncEnsureNetworkClockAvailabilityTask9GetResultEv", "n
 //   type 5 holds button icons at the original private-use code points (make_ext_font.py; U+E0E0 = A button). A game sizes each nn::fontll engine's work memory for Nintendo's font of the type it loads,
 //   and Arial Unicode as it is needs more than that (Mario Tennis Fever's 50 KB engine: 56-60 KB, LoadFont 201, then nro0+0xaef8a8 crashed on a null pointer); the cuts fit, on the game's own buffers
 //   (docs/reference/services.md, "Shared font stand-ins sized for the game's font engines"). DM_SHARED_FONT (one font for types 0-4) and DM_SHARED_FONT_EXT (type 5) override the folder.
-//   A type with no file takes the standard font, and that one macOS's Arial Unicode as it is, with a yellow line: some games' engines cannot load it (that path does not exist on iOS; the app ships dm/font/).
+//   A type with no file takes the standard font, and that one macOS's Arial Unicode as it is, with a yellow line: some games' engines cannot load it.
 //   Without the extension font button icons draw as "?", everything else works.
 // The game's own text uses the fonts in its RomFS; shared fonts are only used in a few places such as system names and button icons.
 // Format: each font is BFTTF - an 8-byte header + the TTF (obfuscated by per-word XOR in the system archive). Wonder calls nn::fontll::ScalableFontEngineHelper::Decode(address, size) on the address

@@ -124,7 +124,7 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
 }
 
 // The unit's channel count for this output and route. A six-channel output (front-left front-right center LFE back-left back-right) goes as six
-// when the route offers six (dm_audio_output_channels: HDMI or a multichannel interface, or the iOS session on such a route), otherwise as stereo, downmixed in pull_device.
+// when the route offers six (dm_audio_output_channels: HDMI or a multichannel interface), otherwise as stereo, downmixed in pull_device.
 // Every other output goes as the guest writes it
 static int unit_channels(const aout *a, int route) { return a->sink_pcm || a->ch == 6 ? route : a->ch; }
 // A six-channel output on a stereo unit is downmixed with the audio renderer's default Q15 coefficients (hle_audren.c): Core Audio's own 6 → 2 mapping keeps only
@@ -194,8 +194,8 @@ static void dm_audio_route_changed(void);   // the output route changed: recreat
 static void route_check(void *unused) { (void)unused; atomic_store(&g_route_queued, 0); dm_audio_route_changed(); }
 static void route_queue(void) { if (!atomic_exchange(&g_route_queued, 1)) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), NULL, route_check); }
 // Mac DefaultOutput's default 512 device frames can exceed the PCM a game has queued, producing zero-filled gaps.
-// Request about 5 ms of device frames, as front_ios.m asks of the iOS audio session; reapply on device or output-rate changes within the supported range.
-// DM_DBG_AU_FRAMES=N asks N frames instead (1024 = the iOS default, which reproduces the crackling)
+// Request about 5 ms of device frames; reapply on device or output-rate changes within the supported range.
+// DM_DBG_AU_FRAMES=N asks N frames instead (1024, the iOS audio session's default, reproduced the crackling found there)
 static void au_buffer(AudioUnit au, const char *why) {
     AudioDeviceID device = kAudioObjectUnknown; UInt32 sz = sizeof device;
     if (AudioUnitGetProperty(au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, &sz) || device == kAudioObjectUnknown) return;
@@ -364,7 +364,7 @@ static void au_open(aout *a) {
     if (pthread_create(&t, NULL, au_create_th, a) || dm_host_thread_join(t, &r)) die("AudioUnit setup: cannot start its thread");
     OSStatus st = (OSStatus)(intptr_t)r; if (st) die("AudioUnit setup failed (status %d)", (int)st);
 }
-// Silent sink: consumes in real time at 48 kHz every 5 ms. When more than 100 ms behind (iOS suspended the whole process in the background, SIGSTOP on the Mac), restart the count from now and do not make up the missed time --
+// Silent sink: consumes in real time at 48 kHz every 5 ms. When more than 100 ms behind (the whole process was stopped: SIGSTOP), restart the count from now and do not make up the missed time --
 // making it up would pull hundreds of times in one go (seconds' worth), releasing all of the game's buffers and logging hundreds of underruns; a suspended console does not play that stretch either
 _Static_assert(DM_AUDIO_SINK_CHANNELS >= 6, "the silent sink's block holds the widest output: the renderer's, and no fewer than a guest output's six (au_channels_ok)");
 static void *null_sink(void *p) {
@@ -438,7 +438,7 @@ static void au_request_start(aout *a) {
     a->start_phase = AU_STARTING;
     dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), a, au_start_device);
 }
-// Watchdog (real output only): an AudioUnit that is started while the app is in focus must keep calling back. iOS stops calling back without telling the AudioUnit when another audio session takes over
+// Watchdog (real output only): an AudioUnit that is started while the app is in focus must keep calling back. Found on iOS, which stopped calling back without telling the AudioUnit when another audio session took over
 // (Siri, an alarm, a call) or the media services reset; the output's buffers were then never released, and a game whose audio thread waits for them (Wwise's poll-only output, FMOD) stayed silent for good.
 // After 200 ms without a callback the silent sink takes over (the game's audio keeps its real-time pace) and the AudioUnit is retried after 1, 2, 4, 8 s. A late wake-up of the watchdog itself (the whole process was stopped) only restarts the count.
 // The time is read under g_aos_lock: the startup helper stamps wd_t under it too, and a watchdog time read before the lock was older than the stamp of an AudioUnit the return from the background had just
@@ -840,8 +840,8 @@ void dm_pcmout_close(void *k) { au_close(k, NULL); free(k); }   // stop, take it
 int dm_pcmout_append(void *k, void *b) { return (int)h_au_Append(k, b); }
 void *dm_pcmout_released(void *k) { return h_au_Released(k); }
 
-// Front-end lifecycle / audio session interruption: suspend real audio output, with the silent sink taking over real-time consumption meanwhile (pacing unbroken); switch back to the AudioUnit on resume.
-// The front end calls with 1 on going to background / interruption began, and with 0 on returning to foreground / interruption ended (shouldResume).
+// Front-end lifecycle: suspend real audio output, with the silent sink taking over real-time consumption meanwhile (pacing unbroken); switch back to the AudioUnit on resume.
+// The front end calls with 1 when the window is minimized and with 0 when it comes back (front_mac.m); the graceful exit calls with 1 (hle_lifecycle.c), and DM_OE_SCRIPT's bg with both (hle_oe.c).
 void dm_audio_suspend(int on) {
     pthread_mutex_lock(&g_aos_lock);
     if (g_suspended != on) {
@@ -856,7 +856,7 @@ void dm_audio_suspend(int on) {
                 if (a->backend == BK_NONE && atomic_load(&a->state) == STATE_STARTED) null_start(a);
             } else if (a->backend == BK_NULL) au_request_start(a);
         }
-        LOG("audio %s", on ? "suspended (background / interruption)" : "resumed (foreground / interruption ended)");
+        LOG("audio %s", on ? "suspended (background)" : "resumed (foreground)");
     }
     pthread_mutex_unlock(&g_aos_lock);
 }
@@ -878,8 +878,8 @@ static void au_remake(aout *a, int route) {
 // Route change: a six-channel output whose unit takes a different count from what the route takes now gets a new unit at that count. Without this a unit keeps the count of the route
 // it was opened on: moved from HDMI 5.1 to the speakers or headphones, Core Audio's own 6 → 2 mapping keeps only the front pair (the center and the back channels go silent);
 // moved the other way, the host's stereo downmix plays on the front pair of the 5.1 system. An output whose new unit could not be made gets another try. Under g_aos_lock, with
-// the route read under it too, so of two checks the later read is the one applied; not while suspended (iOS may refuse a unit in the background or during an interruption, and
-// the resume syncs instead). Outputs the guest opened with another count keep it: a game that wants six on the new route reopens its output after
+// the route read under it too, so of two checks the later read is the one applied; not while suspended (the resume syncs instead; found on iOS, which could refuse a unit
+// in the background or during an interruption). Outputs the guest opened with another count keep it: a game that wants six on the new route reopens its output after
 // GetActiveAudioDeviceChannelCountForOutput says so, and host DeviceSink blocks already contain both representations (hle_audren.c)
 static void route_sync(int route) {
     if (g_suspended) return;
@@ -894,7 +894,7 @@ static void route_sync(int route) {
 }
 static void dm_audio_route_changed(void) {
     pthread_mutex_lock(&g_aos_lock);
-    int route = dm_audio_output_channels();   // a Core Audio / audio session read (it logs a change), as au_create makes under the lock too
+    int route = dm_audio_output_channels();   // a Core Audio read (it logs a change), as au_create makes under the lock too
     route_sync(route);
     pthread_mutex_unlock(&g_aos_lock);
 }

@@ -79,7 +79,7 @@ static inline void motion_update(motion_state *s, const motion_map *m, const flo
             if (n > 0.5f && n < 1.5f) {
                 // world down (0,0,-1) = R g_body  ->  R's third row = -g_body / |g|
                 float z[3] = {-a[0] / n, -a[1] / n, -a[2] / n}, y0[3] = {0, 1, 0};
-                // Upright phones have gravity along y: choose another heading reference before projecting it onto the level plane.
+                // A source held upright (found on a phone) has gravity along y: choose another heading reference before projecting it onto the level plane.
                 if (fabsf(z[1]) > 0.99f) { y0[0] = 1; y0[1] = 0; }
                 float d = y0[0] * z[0] + y0[1] * z[1] + y0[2] * z[2];
                 float y[3] = {y0[0] - d * z[0], y0[1] - d * z[1], y0[2] - d * z[2]};
@@ -122,18 +122,6 @@ static inline void motion_update(motion_state *s, const motion_map *m, const flo
 static inline void motion_fill(const motion_state *s, float acc[3], float gyro[3], float angle[3], float dir[9]) {
     for (int i = 0; i < 3; i++) { acc[i] = s->acc[i]; gyro[i] = s->gyro[i]; angle[i] = s->angle[i]; }
     for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) dir[3 * i + j] = s->R[j][i];
-}
-// The phone's own sensors (CoreMotion: x to the right of the screen in portrait, y to its top, z out of the screen) in the Switch frame for how the screen is turned, so a phone
-// held like a Switch in handheld (or mounted in a controller) is the console: x to the right of the picture, y to its top, z toward the player. orient = UIInterfaceOrientation:
-// 1 portrait, 2 upside down, 3 landscape right (home indicator right: the phone's top to the left), 4 landscape left (the phone's top to the right). Proper rotations only,
-// so the same map serves acceleration and rotation rate
-static inline void motion_phone_to_switch(int orient, const float in[3], float out[3]) {
-    switch (orient) {
-    case 3: out[0] = -in[1]; out[1] = in[0]; out[2] = in[2]; break;
-    case 4: out[0] = in[1]; out[1] = -in[0]; out[2] = in[2]; break;
-    case 2: out[0] = -in[0]; out[1] = -in[1]; out[2] = in[2]; break;
-    default: out[0] = in[0]; out[1] = in[1]; out[2] = in[2]; break;
-    }
 }
 // Gyro rest offset of a controller the host receives raw rotation from (GameController: a DualSense at rest read 0.34, 0.20, -0.66 deg/s in Nintendo Switch Sports Resort's
 // session): a window of about MOTION_REST_S of samples in which the gyro varies by under MOTION_REST_GYRO_SPAN rad/s and the acceleration by under MOTION_REST_ACC_SPAN G per
