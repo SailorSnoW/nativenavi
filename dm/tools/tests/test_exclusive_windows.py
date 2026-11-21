@@ -52,23 +52,20 @@ class ExclusiveWindows(unittest.TestCase):
 
     def rewrite(self, functions):
         sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from test_nso_match import image
+        from test_nso_match import image, nso_file
 
         raw = image(functions)
-        raw[0x1100:0x111c] = raw[0x20:0x3c]
+        raw[0x1100:0x111c] = raw[0x20:0x3c]   # MOD0 in ro, as the game's modules have it
+        raw[0x20:0x3c] = bytes(0x1c)
         struct.pack_into('<I', raw, 4, 0x1100)
         struct.pack_into('<ii', raw, 0x1110, 0x3000 - 0x1100, 0x300c + 8 * len(functions) - 0x1100)
-        raw[0x10:0x14] = b'NRO0'
-        struct.pack_into('<I', raw, 0x18, len(raw))
-        struct.pack_into('<6I', raw, 0x20, 0, 0x1000, 0x1000, 0x2000, 0x3000, 0x1000)
-        struct.pack_into('<I', raw, 0x38, 0)
         with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / 'input.nro'
-            src.write_bytes(raw)
-            run = subprocess.run([sys.executable, str(TOOLS / 'patch_nso.py'), str(src), tmp, 'nro0'],
+            src = Path(tmp) / 'input.nso'
+            src.write_bytes(nso_file(raw))
+            run = subprocess.run([sys.executable, str(TOOLS / 'patch_nso.py'), str(src), tmp, 'mod0'],
                                  env=os.environ | {'DM_GAME': '', 'DM_REWRITE_J': '1'},
                                  capture_output=True, text=True)
-            sites = Path(tmp) / 'nro0.sites.tsv'
+            sites = Path(tmp) / 'mod0.sites.tsv'
             rows = [line.split('\t') for line in sites.read_text().splitlines()] if sites.exists() else []
             return run, rows
 

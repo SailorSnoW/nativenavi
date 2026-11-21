@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Fuzz dm/tools/nso.py's load, the one loader of NSO and NRO modules that every tool reads a game's modules through (shader_split.nso_image, uepak.nso_image, patch_nso.py and
-the others call it).
-Seeds: an NSO0 with three small segments, text LZ4-compressed, ro and data stored (and the same with every segment compressed), and an NRO0 of three one-page segments.
+"""Fuzz dm/tools/nso.py's load, the one loader of NSO modules that every tool reads the game's modules through (shader_split.nso_image, patch_nso.py and the others call it).
+Seeds: an NSO0 with three small segments, text LZ4-compressed, ro and data stored, and the same with every segment compressed.
 Clean rejection: nso.Error (a ValueError), which load raises for every module it does not read. The loaded image must have the length its segments lay out (the data segment's
 offset + size): a shorter or longer one means segments were laid out at the wrong place. Any other exception, a wrong length, or an allocation beyond fuzzlib.allowed() (a
 segment size or offset far past what the file can hold) is a finding. Usage: see fuzzlib.py"""
@@ -29,20 +28,10 @@ def nso(segments, compress):
     return bytes(head + body)
 
 
-def nro(segments):
-    """NRO0 (the image itself): +0x10 magic, +0x18 module size, +0x20 + 8 i {offset, size} of text, ro, data (whole pages, end to end), +0x38 bss, +0x40 build ID"""
-    d = bytearray(b''.join(s.ljust((len(s) + 0xfff) & ~0xfff, b'\0') for s in segments))
-    d[0x10:0x14] = b'NRO0'; struct.pack_into('<I', d, 0x18, len(d)); at = 0
-    for i, s in enumerate(segments):
-        n = (len(s) + 0xfff) & ~0xfff; struct.pack_into('<II', d, 0x20 + 8 * i, at, n); at += n
-    struct.pack_into('<I', d, 0x38, 0x1000); d[0x40:0x60] = bytes(range(32))
-    return bytes(d)
-
-
 def seeds():
     text = bytes.fromhex('fd7bbfa9fd030091') * 32 + bytes.fromhex('c0035fd6')   # stp / mov / ret
     ro, data = b'fuzz ro segment\0' * 8, struct.pack('<4Q', 1, 2, 3, 4)
-    return {'text-lz4': nso([text, ro, data], (1, 0, 0)), 'all-lz4': nso([text, ro, data], (1, 1, 1)), 'nro': nro([bytes(0x80) + text, ro, data])}
+    return {'text-lz4': nso([text, ro, data], (1, 0, 0)), 'all-lz4': nso([text, ro, data], (1, 1, 1))}
 
 
 def check(data):

@@ -361,7 +361,7 @@ class Driver(unittest.TestCase):
 
     def rewrite(self, incoming=None, byte_table=False):
         sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from test_nso_match import image
+        from test_nso_match import image, nso_file
         words = [ADRP(11, 0x100, self.TABLE), ADDI(11, 11, self.TABLE & 0xfff), ldr_w(15), and_w(13, 15, 3), tbnz(15, 2, 0x10c, 0x128), ldrsw(13, 11, 13), ADDR(18, 13, 11),
                  BR(18), RET, RET, RET, RET, RET]
         functions = {0x100: words}
@@ -371,15 +371,13 @@ class Driver(unittest.TestCase):
         raw = image(functions)
         for i, target in enumerate([0x100, 0x120, 0x124, 0x128]): struct.pack_into('<i', raw, self.TABLE + 4 * i, target - self.TABLE)
         struct.pack_into('<i', raw, self.TABLE + 16, 0x1000)
-        raw[0x1100:0x111c] = raw[0x20:0x3c]; struct.pack_into('<I', raw, 4, 0x1100)
+        raw[0x1100:0x111c] = raw[0x20:0x3c]; raw[0x20:0x3c] = bytes(0x1c); struct.pack_into('<I', raw, 4, 0x1100)   # MOD0 in ro, as the game's modules have it
         struct.pack_into('<ii', raw, 0x1110, 0x3000 - 0x1100, 0x300c + 8 * len(functions) - 0x1100)
-        raw[0x10:0x14] = b'NRO0'; struct.pack_into('<I', raw, 0x18, len(raw))
-        struct.pack_into('<6I', raw, 0x20, 0, 0x1000, 0x1000, 0x2000, 0x3000, 0x1000); struct.pack_into('<I', raw, 0x38, 0)
         with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / 'input.nro'; src.write_bytes(raw)
-            run = subprocess.run([sys.executable, str(TOOLS / 'patch_nso.py'), str(src), tmp, 'nro0'],
-                                 env=os.environ | {'DM_GAME': '010015100B514000', 'DM_REWRITE_J': '1'}, capture_output=True, text=True)
-            path = Path(tmp) / 'nro0.sites.tsv'
+            src = Path(tmp) / 'input.nso'; src.write_bytes(nso_file(raw))
+            run = subprocess.run([sys.executable, str(TOOLS / 'patch_nso.py'), str(src), tmp, 'mod0'],
+                                 env=os.environ | {'DM_GAME': '', 'DM_REWRITE_J': '1'}, capture_output=True, text=True)
+            path = Path(tmp) / 'mod0.sites.tsv'
             rows = [line.split('\t') for line in path.read_text().splitlines()] if path.exists() else []
         return run, [[int(t, 0) for t in row[2].split()] for row in rows if row[1] == 'T']
 

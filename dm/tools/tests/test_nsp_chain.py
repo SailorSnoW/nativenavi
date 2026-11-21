@@ -255,7 +255,7 @@ class TranslatorKey(Base):   # the shader step's key takes the translator by its
         def reused(_kf, key): keys.append(key); raise self.Keyed
         g = types.SimpleNamespace(id='0100000000000000', table=lambda n: self.tmp / 'profile' / n)
         with mock.patch.multiple(nsp, reused=reused, chain_of=lambda repo: '0123456789ab', chain_files=lambda repo: [], toolchain=lambda repo, env=None: (),
-                                 shader_profile_key=lambda *a: ('shader inputs', g.id, 'digest')), mock.patch.object(nsp.shader_cache, 'adopt'):
+                                 shader_profile_key=lambda *a: ('shader inputs', g.id, 'digest')):
             with self.assertRaises(self.Keyed): nsp.build_shaders(sys.executable, xlate.parents[4], self.tmp / 'sh', xlate, {}, self.tmp / 'logs', g, pkg_key='pkg')
         return keys[0]
 

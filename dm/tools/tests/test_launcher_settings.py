@@ -76,11 +76,10 @@ class LauncherSettingsTests(unittest.TestCase):
 
     def test_meta_fields_and_the_schema_version(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US', 'ja']):
-            (Path(tmp) / 'main.fixups.tsv').write_text('# RENDER_SCALE\t1\n')   # the render scale row's condition
             listed = settings.build(OOT, tmp, Path(tmp) / 'control.nacp')
         rows = {s['env']: s for s in listed['settings']}
         self.assertEqual(listed['schema'], 1)
-        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_FULLSCREEN', 'DM_RUMBLE'])
+        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_OPMODE', 'DM_LANG', 'DM_FULLSCREEN', 'DM_RUMBLE'])
         self.assertEqual(rows['DM_RUMBLE_GAIN']['needs'], 'DM_RUMBLE=1')
         self.assertFalse({'level', 'needs'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
 
@@ -111,29 +110,6 @@ class LauncherSettingsTests(unittest.TestCase):
         row = {'env': 'DM_X', 'kind': 'toggle', 'section': 'Picture', 'label': 'X', 'note': '', 'default': '1', 'on': '1', 'off': '0'}
         self.assertEqual(conforms({'schema': 1, 'game': OOT, 'settings': [row]}, schema, schema), [])
         self.assertNotEqual(conforms({'schema': 1, 'game': OOT, 'settings': [{**row, 'kind': 'slider'}]}, schema, schema), [])
-
-    def test_render_base_goes_into_the_render_scale_row(self):
-        schema = json.loads((ROOT / 'docs/launcher.schema.json').read_text(encoding='utf-8'))
-        for gid, base in [(OOT, None)]:   # Ocarina of Time's profile has no render_base
-            with self.subTest(gid=gid), tempfile.TemporaryDirectory() as tmp, \
-                    patch.object(settings.nacp, 'languages', return_value=['en-US']):
-                (Path(tmp) / 'main.fixups.tsv').write_text('# RENDER_SCALE\t1\n')   # the render scale row's condition
-                listed = settings.build(gid, tmp, Path(tmp) / 'control.nacp')
-            self.assertEqual({s['env']: s for s in listed['settings']}['DM_RENDER_SCALE'].get('base'), base)
-            self.assertEqual(conforms(listed, schema, schema), [])
-        for bad in ('1600x900', '1600x900 1280', 'big small', '1600x900x3 1280x720', 'a1600x900 1280x720', '1600x900 1280x720 640x360'):
-            with self.subTest(bad=bad):
-                profile = type('Profile', (), {'id': OOT, 'get': lambda self, key, default='', bad=bad: bad})()
-                with self.assertRaises(SystemExit): settings.render_base(profile)
-
-    def test_render_scale_reaches_the_stubs_largest_scale(self):
-        """The rewriter writes a render-scale stub's largest scale as RENDER_SCALE: 1 keeps the table's range (a stub that only lowers the size), 3 raises its top (Hades II)"""
-        for value, top in (('1', 1.0), ('3', 3.0)):
-            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp, \
-                    patch.object(settings.nacp, 'languages', return_value=['en-US']):
-                (Path(tmp) / 'main.fixups.tsv').write_text(f'# RENDER_SCALE\t{value}\n')
-                row = {s['env']: s for s in settings.build(OOT, tmp, Path(tmp) / 'control.nacp')['settings']}['DM_RENDER_SCALE']
-            self.assertEqual((row['min'], row['max']), (0.5, top))
 
     def test_table_format_is_strict(self):
         good = 'DM_X\ttoggle\t-\t0\talways\tGame\tX\n'

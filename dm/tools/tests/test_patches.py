@@ -115,16 +115,14 @@ class Registry(unittest.TestCase):
                 self.assertEqual((p.name, module), ('patches.py', 'main'), f'{p}')
                 self.assertTrue(rules); self.assertEqual(len({r['name'] for r in rules}), 1, f'{p}: a main has one frame step')
                 for rule in rules:
-                    if 'fps_required' in rule:
-                        self.assertEqual(kind, 'MATCH_STUBS'); self.assertIsInstance(rule['fps_required'], bool)
-                    validate_stub({k: v for k, v in rule.items() if k != 'fps_required'})
+                    validate_stub(rule)
                     if 'calls' in rule:   # anchored: with each reviewed result of its find, the stub writes at the function's start plus the offset it found
                         for found in rule['reviewed']:
-                            sites, _, _, _ = docs_patches.frame_step_sites(rule['stub'], base=0x100000, found=found)
+                            sites, _, _ = docs_patches.frame_step_sites(rule['stub'], base=0x100000, found=found)
                             self.assertTrue(sites, f'{p}: {rule["name"]} writes no site')
                             self.assertTrue(all(0x100000 <= off < 0x100000 + 0x100000 for off, _ in sites), f'{p}: {rule["name"]} writes outside its function')
                         continue
-                    sites, _, in_others, _ = docs_patches.frame_step_sites(rule['stub'], base=0x100000, others=rule.get('others', {}))
+                    sites, in_others, _ = docs_patches.frame_step_sites(rule['stub'], base=0x100000, others=rule.get('others', {}))
                     self.assertTrue(sites, f'{p}: {rule["name"]} writes no site')
                     for off, why in sites: self.assertTrue(0x100000 <= off < 0x100000 + rule['size'], f'{p}: {rule["name"]} site {off:#x} outside its function')
                     for label, got in in_others.items():   # a function named only as a precondition (its fields read) has no site
@@ -132,10 +130,9 @@ class Registry(unittest.TestCase):
                     if rule.get('others'):   # none found: the stub leaves those parts out
                         rest = []
                         ctx = docs_patches.types.SimpleNamespace(here=lambda: 0x8000000, emit=lambda w: None, site=lambda off, orig: None, put=lambda off, words, why, rest=rest: rest.append(off),
-                                                                 state=0x9000000, render_scale=0, step_max=0, base=0x100000, others={label: None for label in rule['others']}, capabilities=set(), fps_ready=False)
+                                                                 state=0x9000000, step_max=0, base=0x100000, others={label: None for label in rule['others']}, capabilities=set())
                         rule['stub'](ctx)
                         self.assertTrue(all(0x100000 <= off < 0x100000 + rule['size'] for off in rest), f'{p}: {rule["name"]} writes outside its function without its others')
-                        if rule.get('fps_required'): self.assertFalse(ctx.fps_ready, f'{p}: incomplete correction enables a native frame target')
 
     def test_ocarina_movie_player_takes_two_pictures_a_frame(self):
         # its movie player advances at most the pictures a frame its constructor sets (1 for the game's one caller), so a frame of two vsyncs left the picture behind the sound for
@@ -173,17 +170,15 @@ class Registry(unittest.TestCase):
             self.assertLess(delta + 8, fn['size'])
         self.assertTrue(any(e['what'].startswith('movie frame') for e in m.BINDING))
 
-    def test_sdk_wide_rules_change_what_their_names_say(self):
-        # the rules were taken from registered SDK cuts, and the builds they reproduce exactly have no row any more: each cut replaces the constant its rule names (0x3fe00000, the node
-        # area; 0x400000, 0x2000000 and 0x40000000, the alignments of the 4 MB, 32 MB and 1 GB classes; as movz or orr from wzr) with the reviewed one (62 MB; SDK 20's 2 MB) in the same register
+    def test_sdk_rule_changes_what_its_name_says(self):
+        # each cut replaces the constant the rule names (0x3fe00000, the node area) with the reviewed one (62 MB) in the same register
         m = MODS[REPO / 'dm/tools/sdk_patches.py']
-        words = {m.node_area: ({'08fca752', '09fca752', 'e8230b32', 'e9230b32'}, {'087ca052', '097ca052'}),
-                 m.alignment: ({'0808a052', 'e8030a32', '0b40a052', 'eb030732', '0a00a852', 'ea030232'}, {'0804a052', '0b04a052', '0a04a052'})}
-        for rule in m.MATCH_CUTS['sdk']:
-            old_words, new_words = words[rule['name']]
-            for delta, old, new, why in rule['cuts']:
-                self.assertIn(old, old_words, why); self.assertIn(new, new_words, why)
-                self.assertEqual(int(old[:2], 16) & 31, int(new[:2], 16) & 31, why)
+        rule, = m.MATCH_CUTS['sdk']
+        self.assertEqual(rule['name'], m.node_area)
+        for delta, old, new, why in rule['cuts']:
+            self.assertIn(old, {'08fca752', '09fca752'}, why); self.assertIn(new, {'087ca052', '097ca052'}, why)
+            self.assertEqual(int(old[:2], 16) & 31, int(new[:2], 16) & 31, why)
+            self.assertLess(delta, rule['size'])
 
     def test_game_files_name_their_own_builds(self):
         for p, m in MODS.items():

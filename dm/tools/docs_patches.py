@@ -142,15 +142,15 @@ OTHER_BASE = 0x8000000   # where the dry run puts a MATCH_FRAME_STEP rule's othe
                           # within a b's reach (128 MB) of a main's sites below it and of up to six other functions above
 
 
-def frame_step_sites(fn, base=0, others=(), found=None):   # (offset, reason) of each site a FRAME_STEP function (or a MATCH_FRAME_STEP stub, its function at base) writes, whether it marks a
-    pos, puts = [0x6000000], []                    # render-scale stub, the sites in each of the rule's other functions ({label: [(offset, reason)]}) and the capabilities it declares
+def frame_step_sites(fn, base=0, others=(), found=None):   # (offset, reason) of each site a FRAME_STEP function (or a MATCH_FRAME_STEP stub, its function at base) writes,
+    pos, puts = [0x6000000], []                    # the sites in each of the rule's other functions ({label: [(offset, reason)]}) and the capabilities it declares
     def emit(w): pos[0] += 4
     at = {label: OTHER_BASE + i * 0x1000000 for i, label in enumerate(others)}
-    ctx = types.SimpleNamespace(here=lambda: pos[0], emit=emit, site=lambda off, orig: None, put=lambda off, words, why: puts.append((off, why)), state=0x9000000, render_scale=0, step_max=0, base=base,
-                                others=at, found=found, capabilities=set(), fps_ready=False, address=lambda off, lo_off=None: 0)
+    ctx = types.SimpleNamespace(here=lambda: pos[0], emit=emit, site=lambda off, orig: None, put=lambda off, words, why: puts.append((off, why)), state=0x9000000, step_max=0, base=base,
+                                others=at, found=found, capabilities=set(), address=lambda off, lo_off=None: 0)
     fn(ctx)
     in_others = {label: sorted((off - a, why) for off, why in puts if a <= off < a + 0x1000000) for label, a in at.items()}
-    return sorted((off, why) for off, why in puts if off < OTHER_BASE), ctx.render_scale, in_others, sorted(ctx.capabilities)
+    return sorted((off, why) for off, why in puts if off < OTHER_BASE), in_others, sorted(ctx.capabilities)
 
 
 def host_files():   # the host's tracked sources without its tests: what the build-ID scan below and the title-ID check (test_architecture.py) read
@@ -265,12 +265,11 @@ def page():
             for off, ob, nb, why in cuts.get(bid, []): lines.append(f'  - cut `+{off:#x}`: {why}')
             for off, gate, word, why in obs.get(bid, []): lines.append(f'  - gate {gate} at `+{off:#x}`: {why}')
             if bid in fs:
-                sites, scale, _, fs_caps = frame_step_sites(fs[bid]); n_fs += len(sites)
+                sites, _, fs_caps = frame_step_sites(fs[bid]); n_fs += len(sites)
                 fold = len(sites) > 12   # a long list (ASTRAL CHAIN's) folds
                 if fold: lines += [f'  <details><summary>{len(sites)} frame-step sites</summary>', '']
                 for off, why in sites: lines.append(f'  - frame step `+{off:#x}`: {why}')
                 if fold: lines += ['', '  </details>', '']
-                if scale: lines.append('  - render scale stub (the launcher offers DM_RENDER_SCALE)')
             if bid in st:
                 st_sites = frame_step_sites(st[bid])[0]; n_fs += len(st_sites)
                 for off, why in st_sites: lines.append(f'  - stub `+{off:#x}`: {why}')
@@ -283,12 +282,12 @@ def page():
         for module, rules in mfs.items():
             for i, r in enumerate(rules):
                 if 'calls' in r:   # anchored: its sites on the reviewed builds
-                    got = [frame_step_sites(r['stub'], found=f) for f in r['reviewed']]; n_fs += len(got[0][0]) * (i == 0); caps_a = got[0][3]
+                    got = [frame_step_sites(r['stub'], found=f) for f in r['reviewed']]; n_fs += len(got[0][0]) * (i == 0); caps_a = got[0][2]
                     lines.append(f'- **anchored frame step** (`{module}` of builds without FRAME_STEP): {r["name"]}: the one function that calls `{r["calls"]}`, its sites checked in each build\'s code; '
                                  + 'on the reviewed builds ' + '; '.join(', '.join(f'`+{off:#x}`' for off, _ in g[0]) for g in got) + ' in it'
                                  + (f'; launcher capabilities: {", ".join(caps_a)}' if caps_a else ''))
                     continue
-                sites, _, in_others, fs_caps = frame_step_sites(r['stub'], others=r.get('others', {})); n_fs += (len(sites) + sum(map(len, in_others.values()))) * (i == 0)
+                sites, in_others, fs_caps = frame_step_sites(r['stub'], others=r.get('others', {})); n_fs += (len(sites) + sum(map(len, in_others.values()))) * (i == 0)
                 lines.append(f'- **function-matched frame step** (`{module}` of builds without FRAME_STEP): {r["name"]}: a function of {r["size"]:#x} bytes, '
                              + ', '.join(f'`+{off:#x}`' for off, _ in sites) + ' in it'
                              + ''.join(f'; {label}, a function of {r["others"][label]["size"]:#x} bytes, ' + ', '.join(f'`+{off:#x}`' for off, _ in got) + ' in it'
@@ -302,11 +301,10 @@ def page():
                     lines.append(f'- **anchored stub** (`{module}` of builds without STUBS): {r["name"]}: the one function that calls `{r["calls"]}`, '
                                  + 'on the reviewed builds ' + '; '.join(', '.join(f'`+{off:#x}`' for off, _ in g[0]) for g in got) + ' in it')
                     continue
-                sites, _, in_others, _ = frame_step_sites(r['stub'], others=r.get('others', {}))
+                sites, in_others, _ = frame_step_sites(r['stub'], others=r.get('others', {}))
                 n_fs += (len(sites) + sum(map(len, in_others.values()))) * (i == 0)
                 lines.append(f'- **function-matched stub** (`{module}` of builds without STUBS): {r["name"]}: a function of {r["size"]:#x} bytes, '
-                             + ', '.join(f'`+{off:#x}`' for off, _ in sites) + ' in it'
-                             + ('; native frame targets require the complete correction' if r.get('fps_required') else ''))
+                             + ', '.join(f'`+{off:#x}`' for off, _ in sites) + ' in it')
         sections += lines + ['']
         n_host = sum(len(host.get(b, [])) for b in bids)
         kinds = {}
@@ -344,8 +342,8 @@ def page():
     for line in block.split('\n')[1:]:
         s = line.strip()
         if s.startswith('#'): comment = (comment + ' ' if comment else '') + s.lstrip('# ')
-        elif s.startswith(('node(', 'align(')):
-            rule_lines.append(f'- {"node area 1 GB → 62 MB" if s.startswith("node(") else "regions of 4 MB and more aligned to 2 MB, as SDK 20"}: {comment}'); comment = ''
+        elif s.startswith('node('):
+            rule_lines.append(f'- node area 1 GB → 62 MB: {comment}'); comment = ''
         elif s.startswith(']}'): break
     n_rules = sum(len(v) for v in getattr(sdk, 'MATCH_CUTS', {}).values())
     assert len(rule_lines) == n_rules, f'sdk_patches.py MATCH_CUTS: {len(rule_lines)} commented rules of {n_rules}'
@@ -379,12 +377,11 @@ def page():
          *summary, '',
          '## Games', '', *sections,
          '## SDK cuts', '',
-         f'Cuts of Nintendo SDK `sdk` builds ({link(SDK)}), applied to every game that ships the build. They fit the SDK\'s address-space layout into an iPhone\'s guest block. The '
-         'games listed are those whose profile registers the build.', '',
+         f'Cuts of the game\'s Nintendo SDK module, `sdk` ({link(SDK)}). They fit the SDK\'s address-space layout into the host\'s alias region.', '',
          *[f'- **{arrow(e)}**, {e["purpose"]}, {status(e)}, {checked(e)}: {e["what"]}. {reason(e)}' for e in sdk_bind], '',
          *sdk_lines, '',
-         '### SDK-wide function-matched rules', '',
-         'Applied to the `sdk` of any build without CUTS, found by function fingerprint ([function-matched cuts](../reference/rewriter.md#function-matched-cuts-for-unregistered-builds)):', '',
+         '### Function-matched rules', '',
+         'Applied to an `sdk` build without CUTS, found by function fingerprint ([function-matched cuts](../reference/rewriter.md#function-matched-cuts-for-unregistered-builds)):', '',
          *rule_lines, '',
          *(['## Host rows of builds no profile registers', '', 'Dead code unless such a build is run; a candidate for removal, or for a build row in its profile.', '', *orphans, ''] if orphans else []),
          '## Translator rules keyed by a shader\'s code', '',

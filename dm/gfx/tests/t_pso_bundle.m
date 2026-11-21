@@ -1,4 +1,4 @@
-// The pipeline archive made offline and bundled with the app (DM_PSO_BUNDLE, pso_bundle_open / pso_bundle_covers in nvn_mtl.m), made here as build_ipa.sh makes it: tiny shader
+// The pipeline archive made offline and bundled with the app (DM_PSO_BUNDLE, pso_bundle_open / pso_bundle_covers in nvn_mtl.m), made here as the packing script makes it (mac_pso in scripts/build_app.py): tiny shader
 // libraries and their reflection, a pair list, then dm/gfx/tools/pso_offline.py (metal-tt) for this Mac's GPU. Checks: the archive for this GPU opens and comes first among the files of
 // bases without a vertex layout; with a matching stamp the prebuild builds only the pairs left to the device (a function with constants) and takes nothing from the compiler otherwise,
 // and a draw of a covered pair takes its base from the bundle and captures nothing for the device's own archive;
@@ -63,9 +63,9 @@ int main(void) { @autoreleasepool {
     setenv("DM_PSO_ARCHIVE", arch.UTF8String, 1); setenv("DM_PSO_MANIFEST", "off", 1);
     mtl_init();
     NSString *gpu = g_dev.architecture.name;
-    // the archive as build_ipa.sh makes it (the tool's own folder: this file is dm/gfx/tests/t_pso_bundle.m)
+    // the archive as the packing script makes it (the tool's own folder: this file is dm/gfx/tests/t_pso_bundle.m)
     NSString *tool = [[@(__FILE__) stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"../tools/pso_offline.py"];
-    if (sh([NSString stringWithFormat:@"python3 %@ --platform macos --gpu %@ --msl %@ --pairs %@/shader_pairs.tsv --shader-map %@/shader_map.tsv --out %@ --work %@/work > %@/pso_offline.log 2>&1",
+    if (sh([NSString stringWithFormat:@"python3 %@ --gpu %@ --msl %@ --pairs %@/shader_pairs.tsv --shader-map %@/shader_map.tsv --out %@ --work %@/work > %@/pso_offline.log 2>&1",
             tool, gpu, msl, tables, tables, bundle, root, root])) {
         NSString *log = [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"pso_offline.log"] encoding:NSUTF8StringEncoding error:nil];
         if ([log containsString:@"metal-tt is not available"]) { printf("t_pso_bundle: no metal-tt (xcodebuild -downloadComponent MetalToolchain), GPU checks not run; %d file checks failed\n", failed); return failed != 0; }
@@ -136,7 +136,7 @@ int main(void) { @autoreleasepool {
     }
     // A separate output forces one base per compiler invocation, then metal-pack merges both for this GPU.
     NSString *batched = [root stringByAppendingPathComponent:@"batched"];
-    if (sh([NSString stringWithFormat:@"python3 %@ --platform macos --gpu %@ --msl %@ --pairs %@/shader_pairs.tsv --out %@ --work %@/batch-work --batch-size 1 > %@/pso_batched.log 2>&1",
+    if (sh([NSString stringWithFormat:@"python3 %@ --gpu %@ --msl %@ --pairs %@/shader_pairs.tsv --out %@ --work %@/batch-work --batch-size 1 > %@/pso_batched.log 2>&1",
             tool, gpu, msl, tables, batched, root, root])) {
         NSString *log = [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"pso_batched.log"] encoding:NSUTF8StringEncoding error:nil];
         fprintf(stderr, "batched pso_offline.py failed:\n%s\n", log.UTF8String); return 1;
@@ -171,7 +171,7 @@ int main(void) { @autoreleasepool {
         put([msl stringByAppendingPathComponent:@"vb_b.json"], [NSString stringWithFormat:@"{\"chain\": \"%s\", \"entry\": \"main0\", \"entry_z\": \"main0_z\", \"pull\": {}, \"vertex_inputs\": []}", DMSH_CHAIN]);
         put([tables stringByAppendingPathComponent:@"border.tsv"], @"vb\tf1\n");
         NSString *zero = [root stringByAppendingPathComponent:@"zero"];
-        int rc = sh([NSString stringWithFormat:@"python3 %@ --platform macos --gpu %@ --msl %@ --pairs %@/border.tsv --out %@ --work %@/zero-work --depth zero --no-compute > %@/pso_zero.log 2>&1",
+        int rc = sh([NSString stringWithFormat:@"python3 %@ --gpu %@ --msl %@ --pairs %@/border.tsv --out %@ --work %@/zero-work --depth zero --no-compute > %@/pso_zero.log 2>&1",
                      tool, gpu, msl, tables, zero, root, root]);
         EXPECT("border constant in main0_z: pso_offline.py made the archive", 0, rc);
         if (rc) fprintf(stderr, "%s\n", [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"pso_zero.log"] encoding:NSUTF8StringEncoding error:nil].UTF8String);
@@ -285,7 +285,7 @@ int main(void) { @autoreleasepool {
             atomic_store(&g_depth_zero, 0);
             put([tables stringByAppendingPathComponent:@"names.tsv"], @"vn\tf1\n");
             NSString *named = [root stringByAppendingPathComponent:@"named"];
-            int rc = sh([NSString stringWithFormat:@"python3 %@ --platform macos --gpu %@ --msl %@ --pairs %@/names.tsv --out %@ --work %@/named-work --no-compute > %@/pso_named.log 2>&1",
+            int rc = sh([NSString stringWithFormat:@"python3 %@ --gpu %@ --msl %@ --pairs %@/names.tsv --out %@ --work %@/named-work --no-compute > %@/pso_named.log 2>&1",
                          tool, gpu, msl, tables, named, root, root]);
             EXPECT("named: pso_offline.py made the archive", 0, rc);
             if (rc) fprintf(stderr, "%s\n", [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"pso_named.log"] encoding:NSUTF8StringEncoding error:nil].UTF8String);

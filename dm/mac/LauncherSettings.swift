@@ -7,8 +7,6 @@ struct Setting: Decodable, Identifiable {
     let section: String?   // heading on the settings screen; absent in older bundles
     let needs: String?     // "<VAR>=<value>": a sub-setting, drawn only while that setting has that value
     let level: String?     // "basic": shown first (the Mac window's Basic settings); any other or none: Advanced settings
-    let base: Base?        // render scale: the 3D views' size at 1.0, docked and handheld, for the size in pixels (the Mac window)
-    struct Base: Decodable { let docked, handheld: [Int] }
     let options: [[String]]?   // choice: [value, label]
     let min, max, step: Double?   // range
     let on, off: String?   // toggle: the values the variable takes (1 / 0 when not given)
@@ -30,7 +28,7 @@ struct Setting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, base, options, min, max, step, on, off }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, options, min, max, step, on, off }
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
@@ -81,14 +79,8 @@ final class LauncherModel: ObservableObject {
         settings.filter { $0.basic == basic }.reduce(into: []) { if !$0.contains($1.sectionTitle) { $0.append($1.sectionTitle) } }
     }
     func rows(in section: String, basic: Bool) -> [Setting] { rows(in: section).filter { $0.basic == basic } }
-    // A range's label: its percentage, with the size in pixels for the chosen console mode when the list has the base size (the render scale)
-    func rangeLabel(_ s: Setting, _ v: Double) -> String {
-        let p = "\(Int((v * 100).rounded())) %"
-        guard let b = s.base else { return p }
-        let size = (values["DM_OPMODE"] ?? "1") == "0" ? b.handheld : b.docked
-        guard size.count == 2 else { return p }
-        return "\(Int((Double(size[0]) * v).rounded())) × \(Int((Double(size[1]) * v).rounded())) (\(p))"
-    }
+    // A range's label: its percentage
+    func rangeLabel(_ s: Setting, _ v: Double) -> String { "\(Int((v * 100).rounded())) %" }
     var changed: Bool { settings.contains { !fixed.contains($0.env) && !$0.isDefault(values[$0.env] ?? $0.def) } }
 
     // Reset every launcher choice to the game's defaults on the screen; values fixed by an env file or at launch stay. The saved choices are forgotten when Play applies

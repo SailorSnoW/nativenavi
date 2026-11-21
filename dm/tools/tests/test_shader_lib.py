@@ -148,34 +148,6 @@ class Write(Base):   # dmsh_build.py writes the image from functions that read i
             self.assertFalse(self.image.exists())
 
 
-class LeaveOutPulling(Base):
-    def names(self): return sorted(p.name for p in shader_lib.view(self.lib).iterdir())
-
-    def test_from_a_folder(self):
-        self.folder(k_b__metallib=b'lib', k_bp__metallib=b'pull')
-        self.assertTrue(shader_lib.pack(self.lib, self.said.append, leave_out=True))
-        self.assertEqual(self.names(), ['_bp_left_out', 'inputs.tsv', 'k_b.metallib'])
-        self.assertTrue(shader_lib.left_out_pulling(self.lib))
-
-    def test_from_an_image_that_has_them(self):   # the image alone: nothing is built again
-        self.folder(k_b__metallib=b'lib', k_bp__metallib=b'pull'); self.pack()
-        self.assertFalse(shader_lib.left_out_pulling(self.lib))
-        shader_lib.pack(self.lib, self.said.append, leave_out=True)
-        self.assertEqual(self.names(), ['_bp_left_out', 'inputs.tsv', 'k_b.metallib'])
-        self.assertEqual((shader_lib.view(self.lib) / 'k_b.metallib').read_bytes(), b'lib')
-
-    def test_an_image_without_them_is_not_written_again(self):   # what keeps the IPA's copy of it reusable
-        self.folder(k_b__metallib=b'lib', k_bp__metallib=b'pull'); shader_lib.pack(self.lib, self.said.append, leave_out=True)
-        before = self.image.stat().st_ino, self.image.stat().st_mtime_ns
-        self.assertTrue(shader_lib.pack(self.lib, self.said.append, leave_out=True))
-        self.assertEqual((self.image.stat().st_ino, self.image.stat().st_mtime_ns), before)
-
-    def test_a_full_build_that_wants_them_drops_the_marker(self):
-        self.folder(k_b__metallib=b'lib', k_bp__metallib=b'pull'); shader_lib.pack(self.lib, self.said.append, leave_out=True)
-        self.folder(k_b__metallib=b'lib', k_bp__metallib=b'pull'); self.pack()
-        self.assertFalse(shader_lib.left_out_pulling(self.lib)); self.assertIn('k_bp.metallib', self.names())
-
-
 class AppSubset(Base):
     def test_only_what_the_host_reads(self):
         self.folder(k_b__metallib=b'lib', k_b__json=b'{}', k_b__metal=b'src', k_bp__metallib=b'pull', _b_build__json=b'[]', _b_cas__txt=b'd')
@@ -184,7 +156,6 @@ class AppSubset(Base):
             out = self.root / f'app{packed}.img'
             self.assertEqual(shader_lib.subset(self.lib, out), 4)
             self.assertEqual(sorted(romfs.Path(out).iterdir()), sorted(romfs.Path(out) / n for n in ('inputs.tsv', 'k_b.json', 'k_b.metallib', 'k_bp.metallib')))
-            self.assertEqual(shader_lib.subset(self.lib, out, ('_bp.metallib',)), 3)
 
     def test_refuses_a_library_with_no_shaders(self):
         self.folder(k_b__json=b'{}')

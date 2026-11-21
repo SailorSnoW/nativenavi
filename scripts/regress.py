@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# A regression harness for changes to the translation chain, the host or the tools, run on every game this Mac has a build of (GitHub issue #272: one chain and one host serve every
-# profile, each contributor owns only some games, and CI has no game files and no Metal 4). It compares a BASELINE revision with a CANDIDATE and writes a report that holds only numbers,
+# A regression harness for changes to the translation chain, the host or the tools, run on the builds of the game this Mac has (GitHub issue #272: CI has no game files and no
+# Metal 4). It compares a BASELINE revision with a CANDIDATE and writes a report that holds only numbers,
 # hashes, shader keys, normalized [RED] texts and timings (no screenshots, game data or keys), so it can go into a pull request.
 #
 # Usage: python3 scripts/regress.py check    [--baseline REV] [--candidate REV|worktree] [--quick] [--games ID,...] [--no-smoke] [--out DIR]
@@ -18,42 +18,42 @@
 #   The report is saved before recording, so a metadata write failure leaves the test evidence intact. Commit the file with the pull request.
 #   REV: any git revision of this repository; worktree = this checkout as it is, uncommitted and untracked files included. check: baseline = the merge base of HEAD and main,
 #   candidate = worktree; baseline: --rev main. Each revision is checked out once into <root>/trees/<id> (git worktree), and the chain, host and rewriter come from there.
-#   --root (REGRESS_ROOT; no default, required): source trees and public reports; game-derived files stay in <NSP folder>/<id>-work/regress/.
-#   --games-dir (REGRESS_GAMES; no default, required): the NSP folders "<name> [<title ID>]", each with the
-#   <id>_build of scripts/build_app.py --platform mac. A game takes part when it has that build and, for the runs, a route dm/games/<id>/smoke.tsv (read from this checkout).
+#   --root (REGRESS_ROOT; no default, required): source trees and public reports; game-derived files stay in <game folder>/<id>-work/regress/.
+#   --games-dir (REGRESS_GAMES; no default, required): the folder of the game folders, each with the <id>_build of scripts/build_app.py --platform mac (the game's NUP beside it).
+#   A build takes part when its title has a profile in dm/games and, for the runs, a route dm/games/<id>/smoke.tsv (read from this checkout).
 #   REGRESS_SKIP=ID,...: games left out unless --games names them (a game another agent works on).
 #   --lock FILE (DM_MEASURE_LOCK): the measuring lock bench.py --lock shares, held only while a game runs.
 #
 # What it checks, per game:
 # 1. Chain (static): the game's shaders translated by each revision's chain (dmsh_build.py through own_compilers.py), compared shader by shader: built or failed
-#    (newly failing by the rule of dm/gfx/tools/shader_regressions.py, which the NSP script applies to one game's previous build; a new shader that fails is listed apart),
+#    (newly failing by the rule of dm/gfx/tools/shader_regressions.py, which the packing script applies to the game's previous build; a new shader that fails is listed apart),
 #    the SHA-256 of the MSL (<key>_b.metal), of the reflection (<key>_b.json without its chain fields) and of the variant libraries (_bf, _bv, _bp, _bg*). A build is kept per chain version,
-#    shader package, profile inputs and compilers (<NSP folder>/<id>-work/regress/chain/<key>/; only the few used last stay, prune_chains), so a revision whose chain did not change costs nothing, and dmsh_build.py uses a bounded per-game regression cache with read-only reuse of the player's cache (DMSH_CAS), so MSL
+#    shader package, profile inputs and compilers (<game folder>/<id>-work/regress/chain/<key>/; only the few used last stay, prune_chains), so a revision whose chain did not change costs nothing, and dmsh_build.py uses a bounded per-game regression cache with read-only reuse of the player's cache (DMSH_CAS), so MSL
 #    that did not change is not compiled again. Then the vertex / pixel interface of every pipeline base pso_offline.py would put into the pipeline archive (shader_pairs.tsv and
 #    pso_pairs.tsv): a pixel shader input [[user(locnN)]] the vertex shader does not write, or writes with another type, makes metal-tt refuse the whole archive (GitHub issue #283).
 # 2. Smoke (runtime): the game in the Mac host (window, no audio), from a copy of the route's save, with the route's buttons, under a watchdog: the frame it must reach, crash (exit status,
 #    the host's CRASH line, a DiagnosticReports file), hang (no frame for `hang` seconds once frames came; before stopping the host the harness asks for its state dump, DM_CTL
 #    "dump", into the log and samples every host thread into the run folder's hang_sample.txt), the prepare step's time, [RED] lines (numbers, addresses and paths normalized; a shader
-#    the chain build does not hold counts as one kind, MISSING_LIB, whatever its name) that the baseline did not print, frame times (bench.py's DM_NVN_TSV rows; a Vulkan / GL game: presents counted from the log), peak memory footprint, and perceptual hashes of
+#    the chain build does not hold counts as one kind, MISSING_LIB, whatever its name) that the baseline did not print, frame times (bench.py's DM_NVN_TSV rows), peak memory footprint, and perceptual hashes of
 #    screenshots at fixed times. The full mode first runs the pipeline prebuild (the host's DM_PSO_PREBUILD=tool, the step the Mac app's "Preparing pipelines" runs) under a watchdog
 #    and starts the game on its archive; --quick runs the chain checks and a 60 s boot without the prebuild (DM_PSO_PREBUILD=0).
-#    A route, dm/games/<id>/smoke.tsv, key <TAB> value lines: save (a folder relative to the NSP folder, `run` = <id>_build/run/save, `new` = empty), keys (DM_KEYS), secs (full run),
+#    A route, dm/games/<id>/smoke.tsv, key <TAB> value lines: save (a folder relative to the game folder, `run` = <id>_build/run/save, `new` = empty), keys (DM_KEYS), secs (full run),
 #    quick (quick run, default 60), reach (<frame>@<seconds>: the frame number the game must have presented by then), window (<start> <TAB> <length>: the frame-time window),
-#    shots (comma-separated seconds), hang (seconds without a frame, default 20), prebuild (on / off: the full mode's prebuild, default on for an NVN game), capture (the frame `capture` records).
-# 4. Replay (`replay`, an NVN game with a capture; GPU, no game run): the game's current capture (DM_NVN_CAPTURE, made by `capture` from the route's `capture` frame with the wall clock,
+#    shots (comma-separated seconds), hang (seconds without a frame, default 20), prebuild (on / off: the full mode's prebuild, default on), capture (the frame `capture` records).
+# 4. Replay (`replay`, a game with a capture; GPU, no game run): the game's current capture (DM_NVN_CAPTURE, made by `capture` from the route's `capture` frame with the wall clock,
 #    DM_PSO_HYBRID=0 and no prebuild) replayed --repeat times by each revision's dm/gfx/tests/nvn_replay, with that revision's shader libraries (DM_MSL_DIR, DM_NVN_SHMAP on the replayer's
 #    command line, so a capture made on another chain still replays while every program's bindings match). `capture` stores the frame's noise beside it in
-#    <NSP folder>/<id>-work/regress/captures/ (<tree>-f<frame>.nvncap and .json, current.json names the one in use): the most pixels any of --repeat fresh replays differs from the live frame.
+#    <game folder>/<id>-work/regress/captures/ (<tree>-f<frame>.nvncap and .json, current.json names the one in use): the most pixels any of --repeat fresh replays differs from the live frame.
 #    A candidate replay beyond the tolerance (TOL replay_noise_x times the noise; none for an exact capture) while the baseline's stay within it is a REGRESSION, a capture a revision cannot replay
 #    (record layout or shader bindings changed: nvn_replay exits 2) is an ERROR asking for a new capture. report.json: games.<id>.replay = {"capture": {frame, tree, chain, noise_px, date},
 #    "baseline" / "candidate": {"exit", "secs", "busy", "red", "replays": [{"digest" (16 hex), "same", "pixels", "largest", "box"}]}}; capture: games.<id>.capture.
-# 3. Baselines: `baseline` records the runs of a revision in <NSP folder>/<id>-work/regress/baselines/<commit>/; `check` compares with the one of the baseline revision and records it first when there is none.
+# 3. Baselines: `baseline` records the runs of a revision in <game folder>/<id>-work/regress/baselines/<commit>/; `check` compares with the one of the baseline revision and records it first when there is none.
 #
 # report.json (beside report.md, in --out, default <root>/reports/<date-time>-<command>/):
 #   {"schema": "nxnative-regress/1", "command", "mode": "quick"|"full", "status", "exit", "started", "secs", "machine": {model, gpu, macos, xcode},
 #    "baseline": {"rev", "sha"}, "candidate": {"rev", "sha", "dirty"},
 #    "games": {<title ID>: {"name", "status", "reasons": [text], "known": [text], "secs": {"chain", "smoke"},
-#       "chain": {"kind": "nvn"|"vk"|"gl", "baseline": BUILD, "candidate": BUILD, "newly_failing": [{"key", "status", "error"}], "added_failing": [same],
+#       "chain": {"kind": "nvn", "baseline": BUILD, "candidate": BUILD, "newly_failing": [{"key", "status", "error"}], "added_failing": [same],
 #                 "newly_passing": [key],
 #                 "changed": {"msl", "reflection", "variants", "shaders", "keys": [key, at most 200]}, "added": n, "removed": n,
 #                 "interface": {"baseline": n, "candidate": n, "new": [PAIR], "known": [PAIR, at most 50]}},
@@ -64,12 +64,12 @@
 #   RUN = {"exit": code or -signal or null (stopped by the harness), "crash": {"line", "type", "signal"} or null, "hang_at_s", "hang_sample" (file name or null), "hang_dump" (the log holds the host's state dump), "first_frame_s", "max_frame", "reached",
 #          "prepare_s", "prebuild": {"secs", "pairs", "built", "archived", "failed", "done", "hang"}, "fps", "frame_p50", "frame_p99", "frame_max", "dropped", "over_budget",
 #          "peak_footprint_mb", "red": {normalized text: count}, "shots": {<s>: {"dhash"}}, "secs", "modules", "host",
-#          "pipeline": {"depth_profile": "gl"|"zero", "depth_runtime": ["gl"|"zero"], "stamp_mismatch": bool} (NVN only; no depth observation = [])}
+#          "pipeline": {"depth_profile": "gl"|"zero", "depth_runtime": ["gl"|"zero"], "stamp_mismatch": bool} (no depth observation = [])}
 #   status per game, worst first: ERROR (the harness could not check it), NEW-FAIL (something that worked in the baseline fails: a shader, a shader that builds but lost more than in the
 #   baseline (a deleted bindless access, extra entry points: shader_regressions.losses), the interface check, a crash, a hang, the frame not reached), REGRESSION (new [RED] lines, a screenshot beyond the tolerance, frame time, memory or prepare time worse beyond it), CHANGED (MSL or numbers differ, nothing worse),
 #   PASS. "known" lists failures the baseline has too (they do not fail the check).
 # Exit status: 0 = no regression, 1 = a regression (NEW-FAIL or REGRESSION) in some game, 2 = a harness error (and no regression found).
-import argparse, collections, concurrent.futures as cf, contextlib, ctypes, datetime, fcntl, hashlib, importlib.util, json, math, os, re, shutil, signal, struct, subprocess, sys, time, traceback
+import argparse, collections, concurrent.futures as cf, ctypes, datetime, fcntl, hashlib, importlib.util, json, math, os, re, shutil, signal, struct, subprocess, sys, time, traceback
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -85,11 +85,11 @@ def load_module(name, path):   # a module from a file (another script, or a tool
 bench = load_module('bench', REPO / 'scripts/bench.py')
 shader_regressions = load_module('shader_regressions', REPO / 'dm/gfx/tools/shader_regressions.py')
 proc_group = load_module('proc_group', REPO / 'dm/tools/proc_group.py')   # a heavy job in a process group of its own, stopped whole (run_heavy)
-tree_tar = load_module('tree_tar', REPO / 'dm/tools/tree_tar.py')   # a work folder's quiet folders as one file each, and an old revision's compile cache
+tree_tar = load_module('tree_tar', REPO / 'dm/tools/tree_tar.py')   # a work folder's quiet folders as one file each
 shader_cache = load_module('shader_cache', REPO / 'dm/tools/shader_cache.py')   # the per-game regression compile cache, with read-only reuse of the player's
 shader_lib = load_module('shader_lib', REPO / 'dm/tools/shader_lib.py')   # a chain build's libraries as one file, read in place
 rfs = shader_lib.romfs
-# Where they are depends on the machine (a drive with room for the trees and the games' NSP folders): set with --root / --games-dir or REGRESS_ROOT / REGRESS_GAMES, checked in main
+# Where they are depends on the machine (a drive with room for the trees and the game folder): set with --root / --games-dir or REGRESS_ROOT / REGRESS_GAMES, checked in main
 ROOT = Path(os.environ.get('REGRESS_ROOT', ''))
 GAMES = Path(os.environ.get('REGRESS_GAMES', ''))
 HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex')   # as build_app.py: the host's sources and headers
@@ -179,7 +179,7 @@ def digest(paths, extra=b'', root=None):   # path-independent names and bytes; u
     h = hashlib.sha256(extra)
     for p in paths:
         h.update((Path(p).relative_to(root).as_posix() if root else Path(p).name).encode() + b'\0')
-        if rfs.isfile(p): sha256_file(p, h)   # a file in a folder or inside RomFS.img (a Vulkan game's shaders: vk_shaders.spirv_files walks the image)
+        if rfs.isfile(p): sha256_file(p, h)   # a file in a folder, or one inside an image
         else: h.update(b'missing')
         h.update(b'\0')
     return h.hexdigest()
@@ -249,11 +249,10 @@ class Game:
         self.name = re.sub(r'\s*\[[0-9A-Fa-f]{16}\]\s*$', '', folder.name)
         self.patched = bench.newest(build.glob('patched_v*'))
         self.ver = self.patched.name.removeprefix('patched_') if self.patched else None
-        self.kind = 'nvn' if (build / 'shader/pkg').is_dir() else None
-        # The build's own profile runs instead of dm/games' only when it is derived (the NSP script's <id>.derived.key beside it: a version the game's profile was not brought up
-        # on) or the game has no profile here (a provisional one). A provisional profile the NSP script left from before the game's profile was added would test its guesses
+        self.split = (build / 'shader/pkg').is_dir()   # the shader split's package, which the chain checks translate
+        # The build's own profile runs instead of dm/games' only when it is derived (the packing script's <id>.derived.key beside it: a version the game's profile was not brought up on)
         own = build / 'profile' / self.id
-        self.derived = (own / 'game.tsv').is_file() and ((build / 'profile' / f'{self.id}.derived.key').is_file() or not (REPO / 'dm/games' / self.id / 'game.tsv').is_file())
+        self.derived = (own / 'game.tsv').is_file() and (build / 'profile' / f'{self.id}.derived.key').is_file()
 
     def romfs(self):
         r = bench.rfs.source(self.build / 'extract' / self.ver)
@@ -268,17 +267,13 @@ class Game:
         env = dict(os.environ, DM_GAME=self.id)
         prof = self.profile_dir(tree)
         env.update(DM_GAMES_DIR=str(prof.parent), DM_GAMES_FIRST='1')
-        if self.kind == 'nvn' and not (prof / 'pso_pairs.tsv').is_file():
+        if not (prof / 'pso_pairs.tsv').is_file():
             pairs = self.build / 'shader/pso_pairs.tsv'
             if pairs.is_file(): env['DM_PSO_PAIRS'] = str(pairs)
         return env
 
     def profile_dir(self, tree):
         src = (self.build / 'profile' if self.derived else tree.path / 'dm/games') / self.id
-        if not self.derived and not (src / 'game.tsv').is_file() and (REPO / 'dm/games' / self.id / 'game.tsv').is_file():
-            # a game the revision does not know (its profile is new in the candidate: a bring-up PR): the baseline's chain translates its shaders with the candidate's profile,
-            # the same inputs, so the comparison is of the chains alone
-            src = REPO / 'dm/games' / self.id
         key = digest(sorted(p for p in src.glob('*') if p.is_file() and p.name != VALIDATED))[:16]   # validated.tsv records a result about the profile, it is not an input of it
         dst = game_root(self) / 'profiles' / key / self.id
         if not (dst / 'game.tsv').is_file(): shutil.copytree(src, dst, ignore=shutil.ignore_patterns(VALIDATED))
@@ -308,7 +303,8 @@ def find_games(want=None):
         for b in folder.glob('*_build'):
             if re.fullmatch(r'[0-9A-Fa-f]{16}_build', b.name) and (b / 'tools/dmhost').is_file():
                 g = Game(folder, b)
-                if g.patched and g.kind: found[g.id] = g
+                # a title without a profile in dm/games is not this repository's game (a build another project left beside it): no revision here can translate or run it
+                if g.patched and g.split and (REPO / 'dm/games' / g.id / 'game.tsv').is_file(): found[g.id] = g
     for s in [x.strip().upper() for x in os.environ.get('REGRESS_SKIP', '').split(',') if x.strip()]:
         if not want or s not in [w.upper() for w in want]: found.pop(s, None)
     if want:
@@ -320,45 +316,34 @@ def find_games(want=None):
 
 # ---------------------------------------------------------------- chain: build and manifest
 
-def dotnet_env(env):   # for a revision before GitHub issue #1853, whose translator is a framework-dependent .NET apphost; a native one ignores DOTNET_ROOT
-    if env.get('DOTNET_ROOT'): return env
-    for d in (GAMES.parent / 'tools/dotnet', Path('/usr/local/share/dotnet'), Path.home() / '.dotnet', Path('/opt/homebrew/opt/dotnet/libexec')):
-        if (d / 'dotnet').exists(): return dict(env, DOTNET_ROOT=str(d), PATH=f'{d}{os.pathsep}{env.get("PATH", "")}')
-    return env
-
-
 def toolchain_fp():
     out = []
-    for cmd in (['spirv-cross', '--version'], ['xcrun', '-sdk', 'macosx', 'metal', '--version'], ['xcrun', '-sdk', 'macosx', '--show-sdk-build-version']):
-        try: r = sh(cmd); out.append(r.stdout + r.stderr)
-        except FileNotFoundError: out.append('missing')   # spirv-cross on PATH: only revisions before the in-repo build (dm/gfx/tools/spirv_cross_bin) run it; a tree's own is in its chain key
+    for cmd in (['xcrun', '-sdk', 'macosx', 'metal', '--version'], ['xcrun', '-sdk', 'macosx', '--show-sdk-build-version']):   # spirv-cross is each tree's own: in its chain key
+        r = sh(cmd); out.append(r.stdout + r.stderr)
     return hashlib.sha256('\0'.join(out).encode()).hexdigest()
 
 
 def chain_key(tree, g, tools):
-    if g.kind == 'nvn':
-        v, inp = json.loads(tree.py("import sys, json; sys.path.insert(0, 'dm/gfx/tools'); import dmsh_chain as c; g = c.load_game(); print(json.dumps([c.version(), c.inputs(g)]))", g.env(tree)))
-        side = digest([tree.path / 'dm/gfx/tools' / f for f in ('c1_guard.py', 'cb_extent.py', 'dmsh_mtlcache.py', 'dmsh_pch.py', 'own_compilers.py', 'tool_lock.py')] + [tree.path / 'dm/games/game.py'])
-        pkg = g.build / 'shader/pkg'
-        sources = digest(sorted(p for p in pkg.rglob('*') if p.is_file()), root=pkg)
-        pairs = g.profile_dir(tree) / 'pso_pairs.tsv'
-        if not pairs.is_file(): pairs = g.build / 'shader/pso_pairs.tsv'
-        side += digest([pairs])
-    else: raise HarnessError(f'{g.id}: the chain check does not cover {g.kind} games yet')
-    sc = tree.path / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'
-    if sc.is_file() or os.environ.get('SPIRV_CROSS'):   # earlier revisions use PATH, already covered by tools; pinned revisions also honor SPIRV_CROSS
-        env = dotnet_env(g.env(tree))
-        selected = env.get('SPIRV_CROSS', str(sc))
-        side += digest([Path(shutil.which(selected, path=env.get('PATH')) or selected)])
-    return v, inp, f'{g.kind}-{v}-{inp}-{hashlib.sha256((tools + side + sources).encode()).hexdigest()[:16]}'
+    v, inp = json.loads(tree.py("import sys, json; sys.path.insert(0, 'dm/gfx/tools'); import dmsh_chain as c; g = c.load_game(); print(json.dumps([c.version(), c.inputs(g)]))", g.env(tree)))
+    side = digest([tree.path / 'dm/gfx/tools' / f for f in ('c1_guard.py', 'cb_extent.py', 'dmsh_mtlcache.py', 'dmsh_pch.py', 'own_compilers.py', 'tool_lock.py')] + [tree.path / 'dm/games/game.py'])
+    pkg = g.build / 'shader/pkg'
+    sources = digest(sorted(p for p in pkg.rglob('*') if p.is_file()), root=pkg)
+    pairs = g.profile_dir(tree) / 'pso_pairs.tsv'
+    if not pairs.is_file(): pairs = g.build / 'shader/pso_pairs.tsv'
+    side += digest([pairs])
+    env = g.env(tree)
+    selected = env.get('SPIRV_CROSS', str(tree.path / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'))   # the tree's own spirv-cross, or the one SPIRV_CROSS names
+    side += digest([Path(shutil.which(selected, path=env.get('PATH')) or selected)])
+    return v, inp, f'{CHAIN_KIND}-{v}-{inp}-{hashlib.sha256((tools + side + sources).encode()).hexdigest()[:16]}'
 
 
+CHAIN_KIND = 'nvn'   # what a chain build's key starts with and its manifest and the report call the shaders' API (report.json: chain.kind)
 CHAIN_KEEP, CHAIN_KEEP_HOURS = 3, 24   # prune_chains
 WORK_FOLDERS = set()   # the work folders of the games this run built chains for: main packs their quiet folders (tree_tar.pack_quiet) at its end
 
 
 def chain_build(tree, g, a):
-    """The game's shaders built into its NSP work folder's regress/chain/<key>/ (reused when its manifest is there): → manifest"""
+    """The game's shaders built into its work folder's regress/chain/<key>/ (reused when its manifest is there): → manifest"""
     v, inp, key = chain_key(tree, g, a.tools_fp)
     out = game_root(g) / 'chain' / key
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -366,8 +351,7 @@ def chain_build(tree, g, a):
         try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             say(f'  {g.id}: another process is building chain {key}: waiting for it'); fcntl.flock(lk, fcntl.LOCK_EX)
-        cache = regression_cache(tree, g, a) if g.kind == 'nvn' else contextlib.nullcontext()
-        with cache: built = chain_build_locked(tree, g, a, v, inp, key, out)
+        with regression_cache(g, a): built = chain_build_locked(tree, g, a, v, inp, key, out)
     WORK_FOLDERS.add(game_root(g).parent)
     prune_chains(g)
     return built
@@ -381,7 +365,7 @@ def prune_chains(g):
     def used(p):
         lock = p.with_name(p.name + '.lock')
         return max(p.stat().st_mtime, lock.stat().st_mtime if lock.exists() else 0)
-    try: builds = sorted((p for p in root.iterdir() if p.is_dir() and re.fullmatch(r'(nvn|vk|gl)-[0-9a-f]+-.+', p.name)), key=used, reverse=True)
+    try: builds = sorted((p for p in root.iterdir() if p.is_dir() and re.fullmatch(CHAIN_KIND + r'-[0-9a-f]+-.+', p.name)), key=used, reverse=True)
     except OSError: return []
     keep = {p.name for p in builds[:CHAIN_KEEP]} | {p.name for p in builds if time.time() - used(p) < CHAIN_KEEP_HOURS * 3600}
     try: stored = sorted((game_root(g) / 'baselines').glob('*/chain.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:CHAIN_KEEP]
@@ -404,10 +388,8 @@ def prune_chains(g):
     return gone
 
 
-def chain_cache(tree, g):
-    """One regression cache per game, shared across revisions and runs. The player's cache is only a read-only fallback, never adopted or repaired here.
-    Revisions from before shader_cache.py want regress/cas as a folder, kept as a tar between builds."""
-    if not (tree.path / 'dm/tools/shader_cache.py').is_file(): return game_root(g) / 'cas'
+def chain_cache(g):
+    """One regression cache per game, shared across revisions and runs. The player's cache is only a read-only fallback, never copied or repaired here"""
     return game_root(g) / 'cas.db'
 
 
@@ -423,21 +405,8 @@ def shader_cache_limit(g, a):
     return max(8 << 30, 4 * largest)
 
 
-@contextlib.contextmanager
-def regression_cache(tree, g, a):
-    root = game_root(g); limit = lambda: shader_cache_limit(g, a)
-    if (tree.path / 'dm/tools/shader_cache.py').is_file():
-        with shader_cache.bounded(root / 'cas.db', limit, say, legacy=root / 'cas'): yield
-        return
-    # Historical builders need a folder, not SQLite. Serialize them against modern builders and bound their archive too; the next modern run adopts it under the same exclusive lock.
-    with open(root / 'cas.db.lock', 'a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try: yield
-        finally:
-            tree_tar.pack(root / 'cas', say)
-            archive = root / 'cas.tar'
-            if archive.is_file() and archive.stat().st_size > limit():
-                archive.unlink(); say(f'  {g.id}: removed legacy regression shader cache above its size limit')
+def regression_cache(g, a):   # the game's regression cache for the time of a build, trimmed to its limit while no build uses it
+    return shader_cache.bounded(chain_cache(g), lambda: shader_cache_limit(g, a), say)
 
 
 def shader_cache_gb(value):
@@ -451,59 +420,46 @@ def chain_lib(out):   # a chain build's library, to read: its folder or its one 
     return shader_lib.view(next(p for p in sorted(out.glob('b-*')) if not p.name.endswith('.part')))
 
 
-def pack_chain(tree, lib):
-    """The chain build's libraries as one file, once this run has read what it needs from them. A revision from before shader_lib.py has a host that reads only the folder (its chain key differs:
-    the key covers c1_guard.py and cb_extent.py). A host of another session running from the folder goes on from the image"""
-    if (tree.path / 'dm/tools/shader_lib.py').is_file(): shader_lib.pack(lib, say)
-
-
 def chain_build_locked(tree, g, a, v, inp, key, out):
     jobs = a.jobs
     mf = out / 'manifest.json'
     if mf.is_file():
         m = json.loads(mf.read_text()); m['secs'] = 0
         lib = shader_lib.view(out / f'b-{v}')
-        if g.kind == 'nvn' and m.get('hashes') != NVN_HASHES and (lib / '_b_build.json').is_file():   # made by an older nvn_manifest: its hashes would not compare with this one's
+        if m.get('hashes') != NVN_HASHES and (lib / '_b_build.json').is_file():   # made by an older nvn_manifest: its hashes would not compare with this one's
             say(f'  {g.id}: hashing the outputs of chain {v} again (manifest hashes {m.get("hashes", 1)} → {NVN_HASHES})')
             m['shaders'] = nvn_manifest(lib, jobs); m['hashes'] = NVN_HASHES
             mf.write_text(json.dumps({k: x for k, x in m.items() if k != 'secs'}, indent=0))
-        # The archive planner and depth mode can change without changing the translation chain.
-        if g.kind == 'nvn': m['interface'] = interface_check(tree, g, out); pack_chain(tree, out / f'b-{v}')
+        # The archive planner and depth mode can change without changing the translation chain. The libraries become one file once this run has read what it needs from them;
+        # a host of another session running from the folder goes on from the image
+        m['interface'] = interface_check(tree, g, out); shader_lib.pack(out / f'b-{v}', say)
         return m, out
     out.mkdir(parents=True, exist_ok=True); tmp = game_root(g) / 'tmp'; tmp.mkdir(exist_ok=True)
-    env = dotnet_env(g.env(tree)); env.update(WORK=str(tmp), TMPDIR=str(tmp) + '/', J=str(jobs))
+    env = g.env(tree); env.update(WORK=str(tmp), TMPDIR=str(tmp) + '/', J=str(jobs))
     t0 = time.time(); log = out / 'build.log'
     done = (out / 'built.ok').is_file()   # a build whose outputs are complete (a run stopped while hashing, or a build made by hand); its manifest is made again
-    if g.kind == 'nvn':
-        tools_dir = tree.path / 'dm/gfx/tools'
-        cas = chain_cache(tree, g)
-        env.update(XLATE=str(tools_dir / 'dmsh_xlate_bin/dmsh_xlate'), DMSH_CAS=str(cas))
-        entry = tools_dir / ('own_compilers.py' if (tools_dir / 'own_compilers.py').is_file() else 'dmsh_build.py')
-        lib = out / f'b-{v}'
-        if not done:
-            say(f'  {g.id}: chain {v} (inputs {inp}) of {tree.id}: translating the shaders ({jobs} workers) → {out}')
-            command = [sys.executable, entry, g.build / 'shader/pkg', out]
-            if cas.suffix == '.db':
-                command = [sys.executable, REPO / 'dm/tools/shader_cache.py', '--run', '--readonly', g.build / 'shader/cache', entry, g.build / 'shader/pkg', out]
-                rc, paused = run_heavy(command, log, tree.path, env, a, f'{g.id} shader build')
-            else:
-                tree_tar.unpack(cas, say)
-                rc, paused = run_heavy(command, log, tree.path, env, a, f'{g.id} shader build')
-            t0 += paused
-            if rc or not (shader_lib.view(lib) / '_b_build.json').is_file():   # a folder (an older revision's dmsh_build.py) or the image a newer one writes
-                raise HarnessError(f'{g.id}: dmsh_build.py of {tree.id} failed (exit {rc}); last lines of {log}:\n' + ''.join(collections.deque(open(log, errors='replace'), maxlen=8)))
-            prof = out / 'profile'; prof.mkdir(exist_ok=True)   # the tables the host reads beside the shader map, as this build made them
-            for src in g.profile_dir(tree).glob('*.tsv'): shutil.copyfile(src, prof / src.name)
-            (out / 'built.ok').write_text(f'{tree.id}\n')
-            if cas.suffix != '.db': tree_tar.pack(cas, say)
-        say(f'  {g.id}: hashing the outputs of chain {v}')
-        shaders = nvn_manifest(shader_lib.view(lib), jobs)
+    tools_dir = tree.path / 'dm/gfx/tools'
+    env.update(XLATE=str(tools_dir / 'dmsh_xlate_bin/dmsh_xlate'), DMSH_CAS=str(chain_cache(g)))
+    lib = out / f'b-{v}'
+    if not done:
+        say(f'  {g.id}: chain {v} (inputs {inp}) of {tree.id}: translating the shaders ({jobs} workers) → {out}')
+        # the tree's builder with this checkout's shader_cache.py, which reads the player's cache without writing it
+        command = [sys.executable, REPO / 'dm/tools/shader_cache.py', '--run', '--readonly', g.build / 'shader/cache', tools_dir / 'own_compilers.py', g.build / 'shader/pkg', out]
+        rc, paused = run_heavy(command, log, tree.path, env, a, f'{g.id} shader build')
+        t0 += paused
+        if rc or not (shader_lib.view(lib) / '_b_build.json').is_file():   # in the image dmsh_build.py writes, or in its folder when the image could not be written
+            raise HarnessError(f'{g.id}: dmsh_build.py of {tree.id} failed (exit {rc}); last lines of {log}:\n' + ''.join(collections.deque(open(log, errors='replace'), maxlen=8)))
+        prof = out / 'profile'; prof.mkdir(exist_ok=True)   # the tables the host reads beside the shader map, as this build made them
+        for src in g.profile_dir(tree).glob('*.tsv'): shutil.copyfile(src, prof / src.name)
+        (out / 'built.ok').write_text(f'{tree.id}\n')
+    say(f'  {g.id}: hashing the outputs of chain {v}')
+    shaders = nvn_manifest(shader_lib.view(lib), jobs)
     st = collections.Counter(s['st'] for s in shaders.values())
-    m = {'key': key, 'kind': g.kind, 'chain': v, 'inputs': inp, 'tree': tree.id, 'game': g.id, 'total': len(shaders), 'ok': st['ok'], 'failed': len(shaders) - st['ok'],
+    m = {'key': key, 'kind': CHAIN_KIND, 'chain': v, 'inputs': inp, 'tree': tree.id, 'game': g.id, 'total': len(shaders), 'ok': st['ok'], 'failed': len(shaders) - st['ok'],
          'failed_by_status': {k: n for k, n in st.items() if k != 'ok'}, 'build_secs': round(time.time() - t0, 1), 'shaders': shaders}
-    if g.kind == 'nvn': m['interface'] = interface_check(tree, g, out); m['hashes'] = NVN_HASHES
+    m['interface'] = interface_check(tree, g, out); m['hashes'] = NVN_HASHES
     mf.write_text(json.dumps(m, indent=0))
-    if g.kind == 'nvn': pack_chain(tree, out / f'b-{v}')
+    shader_lib.pack(out / f'b-{v}', say)
     m['secs'] = m['build_secs']
     return m, out
 
@@ -587,9 +543,7 @@ def interface_check(tree, g, out):
     lib = chain_lib(out); chain = shader_lib.name_of(lib)[2:]
     prof = g.profile_dir(tree)
     pairs = [prof / 'shader_pairs.tsv', prof / 'pso_pairs.tsv' if (prof / 'pso_pairs.tsv').is_file() else g.build / 'shader/pso_pairs.tsv']
-    po = tree.path / 'dm/gfx/tools/pso_offline.py'
-    if not po.is_file(): return {'checked': 0, 'note': 'no pso_offline.py in this revision', 'bad': []}
-    mod = load_module('pso_offline_' + tree.id.replace('-', '_'), po)
+    mod = load_module('pso_offline_' + tree.id.replace('-', '_'), tree.path / 'dm/gfx/tools/pso_offline.py')
     todo = mod.read_pairs(mod.pair_text([p for p in pairs if p.is_file()]))
     zero = depth_zero(g, tree)
     keys = {k for pr in todo for k in pr}
@@ -620,7 +574,7 @@ def chain_diff(b, c):
     bs, cs = b['shaders'], c['shaders']
     common = bs.keys() & cs.keys()
     rows = lambda m: [{'key': k, 'st': v['st'], 'err': v.get('err', '')} for k, v in sorted(m.items())]
-    # the rule of shader_regressions.py, which the NSP script runs after each shader build of one game: ok in the earlier build, not ok now; a new key does not count there
+    # the rule of shader_regressions.py, which the packing script runs after each shader build: ok in the earlier build, not ok now; a new key does not count there
     nf = [{'key': k, 'status': st, 'error': err} for k, st, err in shader_regressions.lost(rows(bs), rows(cs))]
     af = [{'key': k, 'status': cs[k]['st'], 'error': cs[k].get('err', '')} for k in sorted(cs.keys() - bs.keys()) if cs[k]['st'] != 'ok']
     npass = [k for k in sorted(common) if bs[k]['st'] != 'ok' and cs[k]['st'] == 'ok']
@@ -674,10 +628,9 @@ def build_summary(m):
 
 def host_for(tree, g, jobs):
     srcs = [p for d in HOST_DIRS for p in sorted((tree.path / d).iterdir()) if p.is_file() and p.suffix in ('.c', '.m', '.h', '.S', '.inc')]
-    if (tree.path / 'dm/gfx/tools/host_msl.py').is_file():   # older baseline revisions compiled these sources at run time
-        r = sh(['make', '-s', f'GAME={g.id}', 'host_msl'], cwd=tree.path / 'dm/host', env=g.env(tree))
-        if r.returncode: raise HarnessError(f'{g.id}: host shader libraries of {tree.id} do not build:\n{r.stdout}{r.stderr}')
-        srcs.append(tree.path / 'dm/host/gen/msl-macosx/host_msl_gen.h')   # includes sources, compiler, SDK and deployment target, even on a cache hit
+    r = sh(['make', '-s', f'GAME={g.id}', 'host_msl'], cwd=tree.path / 'dm/host', env=g.env(tree))   # the host's own Metal sources, compiled at build time (dm/gfx/tools/host_msl.py)
+    if r.returncode: raise HarnessError(f'{g.id}: host shader libraries of {tree.id} do not build:\n{r.stdout}{r.stderr}')
+    srcs.append(tree.path / 'dm/host/gen/msl-macosx/host_msl_gen.h')   # includes sources, compiler, SDK and deployment target, even on a cache hit
     key = digest(srcs + [tree.path / 'dm/host/Makefile', g.profile_dir(tree) / 'game.tsv', tree.path / 'dm/games/game.py'], g.id.encode())[:16]
     dst = game_root(g) / 'host' / key / 'dmhost'
     if dst.is_file(): return dst, key, 0
@@ -707,7 +660,7 @@ def modules_for(tree, g, rewrite, jobs):
     if not g.derived:
         # Registered builds rewrite with this revision's original profile. The
         # shader-table copy also contains patches.py; exposing both registers
-        # each build's cuts twice. Provisional profiles still need their path.
+        # each build's cuts twice. A derived profile still needs its path.
         mods.pop('DM_GAMES_DIR', None)
         mods.pop('DM_GAMES_FIRST', None)
     names = tree.py(f"import sys; sys.path.insert(0, 'dm/games'); import game; print(' '.join(game.load({g.id!r}).words('modules')))", mods).split()
@@ -829,17 +782,16 @@ def footprint(pid):   # (current, lifetime peak) physical footprint in bytes (pr
     return v[7], v[28]
 
 
-# A shader the run asked for that the chain build does not hold (the harness builds part of a game's shaders, and which ones a run asks for depends on its timing: about 2,000 per
-# Tears of the Kingdom run, different names each run, baseline too): one kind, counted, not one kind per name. A library Metal could not load ("failed to load shader <key>_b: <Metal's
-# error>") stays a kind of its own. The patterns also read the kinds older baselines stored, whose keys normalize_red had cut into "#" fragments.
+# A shader the run asked for that the chain build does not hold (which ones a run asks for depends on its timing: about 2,000 per Tears of the Kingdom run, different names each
+# run, baseline too): one kind, counted, not one kind per name. A library Metal could not load ("failed to load shader <key>_b: <Metal's error>") stays a kind of its own.
 MISSING_LIB = 'shader library missing from the chain build'
 MISSING_RE = re.compile(r'failed to load shader [^\s:]*(: (cannot open|no reflection json)|$)|shader [^\s:]* \(\w+\) failed to load: build the shaders'
                         r'|pulling library of [^\s:]* not usable \(no library: cannot open')
 
 
 def red_messages(line):
-    """The [RED] messages of one log line: in logs of hosts before LOG held the stream lock (dm/host/dm.h), another thread's message could land before a line's newline, so two
-    messages share a line ("…_b.metallib[dm] [nvn-mtl] [RED] failed to load shader …")"""
+    """The [RED] messages of one log line: a message written past LOG's stream lock (dm/host/dm.h) can land before another line's newline, so two messages share a line
+    ("…_b.metallib[dm] [nvn-mtl] [RED] failed to load shader …")"""
     return ['[RED] ' + re.sub(r'\[dm\](\s*\[[\w-]+\])*\s*$', '', m).strip() for m in line.split('[RED]')[1:]]
 
 
@@ -852,30 +804,8 @@ def normalize_red(line):
     return MISSING_LIB if MISSING_RE.match(s) else s[:200]
 
 
-def cut_missing(m):   # the last message of a stored kind normalize_red cut at 200 characters, when it reads as a missing library as far as it goes ("failed to load shader #a#_b: no refle")
-    k = re.match(r'failed to load shader [^\s:]*', m)
-    if not k: return 'failed to load shader'.startswith(m)
-    rest = m[k.end():]
-    return any(x.startswith(rest) for x in (': cannot open', ': no reflection json'))
-
-
-def red_kinds(k):
-    """The [RED] kinds, as normalize_red makes them now, of a kind a stored baseline holds: hex numbers before they became "#" read "0x#", a key with a suffix was cut into
-    "#" fragments ("#c#f#dce#a_b"), fused messages (red_messages) were one kind, cut at 200 characters"""
-    out, ms = [], k.replace('0x#', '#').split('[RED]')
-    for i, m in enumerate(ms):
-        m = re.sub(r'\[dm\](\s*\[[\w-]+\])*\s*$', '', m).strip()
-        m = re.sub(r'(?<![\w#<])[0-9a-f#]*#[0-9a-f#]*(?=_[a-z]+\b)', '<key>', m)
-        if not m: continue
-        out.append(MISSING_LIB if MISSING_RE.match(m) or (i == len(ms) - 1 and len(k) >= 200 and cut_missing(m)) else m)
-    return out or [k]
-
-
-def red_counts(r):   # a run's [RED] kinds and their counts, stored ones read as red_kinds does
-    c = collections.Counter()
-    for k, n in r.get('red', {}).items():
-        for x in red_kinds(k): c[x] += n
-    return c
+def red_counts(r):   # a run's [RED] kinds and their counts
+    return collections.Counter(r.get('red', {}))
 
 
 def read_log(text):
@@ -940,8 +870,8 @@ def shot_distance(a, b):
 
 
 def save_source(g, route):
-    """The save a run starts from: a folder of the NSP folder (fixed saves, never written), none for `new`, and for `run` a copy of <id>_build/run/save frozen at its first
-    use in <NSP folder>/<id>-work/regress/save-run (the build's own save changes whenever someone plays)"""
+    """The save a run starts from: a folder of the game folder (fixed saves, never written), none for `new`, and for `run` a copy of <id>_build/run/save frozen at its first
+    use in <game folder>/<id>-work/regress/save-run (the build's own save changes whenever someone plays)"""
     if route['save'] == 'new': return None
     if route['save'] != 'run': return g.folder / route['save']
     frozen = game_root(g) / 'save-run'
@@ -975,9 +905,8 @@ def run_env(g, art, route, outdir, a):
     temp.mkdir()
     env = dict(os.environ, DM_ROOT=str(g.build), DM_ROMFS=str(g.romfs()), DM_SAVE=str(save), DM_TEMP=str(temp), DM_MSL_DIR=str(lib), DM_FONT_DIR=str(g.build / 'font'),
                DM_WINDOW='1', DM_WINDOW_TOP='1', DM_FOCUS_KEEP='1', DM_AUDIO='0', DM_METAL_HUD='0' if a.no_hud else '1', DM_CTL=str(outdir / 'ctl'), TMPDIR=str(game_root(g) / 'tmp') + '/')
-    if g.kind == 'nvn':
-        env.update(DM_NVN_SHMAP=str(prof / 'shader_map.tsv'), DM_NVN_TSV=str(outdir / 'frames.tsv'), DM_NVN_TSV_CALLS='0')
-        if not (prof / 'pso_pairs.tsv').is_file() and (g.build / 'shader/pso_pairs.tsv').is_file(): env['DM_PSO_PAIRS'] = str(g.build / 'shader/pso_pairs.tsv')
+    env.update(DM_NVN_SHMAP=str(prof / 'shader_map.tsv'), DM_NVN_TSV=str(outdir / 'frames.tsv'), DM_NVN_TSV_CALLS='0')
+    if not (prof / 'pso_pairs.tsv').is_file() and (g.build / 'shader/pso_pairs.tsv').is_file(): env['DM_PSO_PAIRS'] = str(g.build / 'shader/pso_pairs.tsv')
     if (g.build / 'aoc').is_dir(): env['DM_AOC_DIR'] = str(g.build / 'aoc')
     for kv in a.env: k, _, v = kv.partition('='); env[k] = v
     return env, src_save
@@ -989,21 +918,21 @@ def smoke_run(g, tree, art, route, quick, outdir, a):
     secs = route['quick'] if quick else route['secs']
     env, src_save = run_env(g, art, route, outdir, a)
     res = {'secs': secs, 'host': art['host_key'], 'modules': art['modules_key'], 'save': save_digest(src_save)}
-    prebuild = g.kind == 'nvn' and not quick and route['prebuild'] == 'on'
-    if prebuild:   # the pipeline prebuild into <run>/pso_archive, as the NSP script's Mac build and the Mac app's prepare step run it
+    prebuild = not quick and route['prebuild'] == 'on'
+    if prebuild:   # the pipeline prebuild into <run>/pso_archive, as the packing script's Mac build and the Mac app's prepare step run it
         penv = dict(env, DM_PSO_PREBUILD='tool'); penv.pop('DM_WINDOW', None)
         if g.get_depth_zero: penv['DM_PSO_PREBUILD_DEPTH'] = 'zero'
         r = run_watched([host], penv, outdir, outdir / 'prebuild.log', a, limit=a.prebuild_limit, hang=a.prebuild_hang, kind='prebuild', what=f'{g.id} prebuild')
         _, _, _, pb = read_log((outdir / 'prebuild.log').read_text(errors='replace'))
         res['prebuild'] = (pb or {}) | {'wall_s': r['wall'], 'exit': r['exit'], 'hang': r['hang_at_s'] is not None, 'hang_sample': r['hang_sample']}
     env['DM_KEYS'] = route['keys']
-    if not prebuild and g.kind == 'nvn': env['DM_PSO_PREBUILD'] = '0'
+    if not prebuild: env['DM_PSO_PREBUILD'] = '0'
     shots = [t for t in route['shots'] if t < secs - 1]
-    r = run_watched([host, modules], env, outdir, outdir / 'log.txt', a, limit=secs, hang=route['hang'], kind=g.kind, what=f'{g.id} smoke', shots=shots,
-                    frames=outdir / 'frames.tsv' if g.kind == 'nvn' else None)
+    r = run_watched([host, modules], env, outdir, outdir / 'log.txt', a, limit=secs, hang=route['hang'], kind='game', what=f'{g.id} smoke', shots=shots,
+                    frames=outdir / 'frames.tsv')
     text = (outdir / 'log.txt').read_text(errors='replace')
     red, crash_line, prep, _ = read_log(text)
-    if g.kind == 'nvn': res['pipeline'] = pipeline_status(text, g.get_depth_zero)
+    res['pipeline'] = pipeline_status(text, g.get_depth_zero)
     res.update(exit=r['exit'], hang_at_s=r['hang_at_s'], hang_sample=r['hang_sample'], hang_dump='state dump (DM_CTL dump)' in text, first_frame_s=r['first_frame_s'], max_frame=r['max_frame'], peak_footprint_mb=r['peak_mb'], busy=r['busy'],
                prepare_s=prep, red=dict(red), crash=None, covered=text.count('front end: window covered'))
     if crash_line or (r['exit'] not in (None, 0)):
@@ -1012,16 +941,12 @@ def smoke_run(g, tree, art, route, quick, outdir, a):
         n, t = route['reach']
         res['reached'] = (r['frame_at'](t) >= n) if t <= secs else None
     else: res['reached'] = r['max_frame'] > 0
-    if g.kind == 'nvn' and (outdir / 'frames.tsv').is_file():
+    if (outdir / 'frames.tsv').is_file():
         w0, wl = route['window'] or (secs / 2, secs / 2 - 2)
         w1 = min(w0 + wl, secs - 1)
         if w1 > w0:
             s = bench.summary(*bench.frames(outdir / 'frames.tsv', w0, w1), w1 - w0, 1000.0 / 60)
             res.update({k: s.get(k) for k in ('fps', 'frame_p50', 'frame_p99', 'frame_max', 'dropped', 'over_budget')}, window=[w0, w1])
-    elif r['presents']:
-        w0, wl = route['window'] or (secs / 2, secs / 2 - 2)
-        pts = [(t, n) for t, n in r['presents'] if w0 <= t <= w0 + wl]
-        if len(pts) >= 2: res['fps'] = round((pts[-1][1] - pts[0][1]) / (pts[-1][0] - pts[0][0]), 1)
     res['shots'] = {}
     for t in shots:
         p = outdir / f'shot_{t:g}s.png'
@@ -1042,12 +967,13 @@ def hang_evidence(p, cwd):
 
 
 def run_watched(cmd, env, cwd, log, a, limit, hang, kind, what, shots=(), frames=None, until=None):
-    """Runs one host process under the watchdog, holding the measuring lock and keeping the display on; stops it after limit seconds, or once its log has a line matching until"""
+    """Runs one host process under the watchdog, holding the measuring lock and keeping the display on; stops it after limit seconds, or once its log has a line matching until.
+    kind: what counts as progress, 'prebuild' (the log grows) or 'game' (frames, the DM_NVN_TSV file, has a new frame's row)"""
     check_disk(a.min_free_gb)
     busy = not wait_idle(a.wait_idle)
     take_lock(a.lock, what)
     p = caf = None; t0w = time.time(); t0 = time.monotonic()
-    st = {'max_frame': -1, 'first': None, 'last_new': None, 'hang': None, 'peak': 0, 'presents': [], 'pos': 0, 'logpos': 0, 'frame_t': [], 'upos': 0, 'until': None, 'sample': None}
+    st = {'max_frame': -1, 'first': None, 'last_new': None, 'hang': None, 'peak': 0, 'pos': 0, 'logpos': 0, 'frame_t': [], 'upos': 0, 'until': None, 'sample': None}
     try:
         (cwd / 'ctl').write_text('')
         with open(log, 'w') as lf: p = subprocess.Popen([str(c) for c in cmd], cwd=cwd, env=env, stdout=lf, stderr=subprocess.STDOUT)
@@ -1070,13 +996,6 @@ def run_watched(cmd, env, cwd, log, a, limit, hang, kind, what, shots=(), frames
                 for ln in chunk[:cut].splitlines():
                     c = ln.split('\t')
                     if len(c) == 3 and c[1] == '@t_s' and c[0].isdigit() and int(c[0]) > st['max_frame']: st['max_frame'] = int(c[0]); new = True
-            elif kind not in ('prebuild', 'nvn'):
-                with open(log, errors='replace') as fh:
-                    fh.seek(st['logpos']); chunk = fh.read(); cut = chunk.rfind('\n') + 1; st['logpos'] += len(chunk[:cut].encode())
-                # GL keeps rendering when the display link falls back to timed presents; its own frame log remains live then.
-                for m in re.finditer(r'(?:presents |\[gl\] frame )(\d+)', chunk[:cut]):
-                    n = int(m.group(1))
-                    if n > st['max_frame']: st['max_frame'] = n; new = True; st['presents'].append((el, n))
             elif kind == 'prebuild':
                 sz = log.stat().st_size if log.is_file() else 0
                 if sz != st['logpos']: st['logpos'] = sz; new = True
@@ -1110,7 +1029,7 @@ def run_watched(cmd, env, cwd, log, a, limit, hang, kind, what, shots=(), frames
             if e <= t: best = n
         return best
     return {'exit': rc, 'hang_at_s': st['hang'], 'first_frame_s': round(st['first'], 1) if st['first'] is not None else None, 'max_frame': st['max_frame'],
-            'peak_mb': round(st['peak'] / 1048576) if st['peak'] else None, 'presents': st['presents'], 'frame_at': frame_at, 't0': t0w, 'wall': round(time.monotonic() - t0, 1), 'busy': busy,
+            'peak_mb': round(st['peak'] / 1048576) if st['peak'] else None, 'frame_at': frame_at, 't0': t0w, 'wall': round(time.monotonic() - t0, 1), 'busy': busy,
             'until': st['until'], 'hang_sample': st['sample']}
 
 
@@ -1222,7 +1141,7 @@ def profile_tables(tree, g, m, out):
     if not (prof / '.done').is_file():
         prof.mkdir(parents=True, exist_ok=True)
         for f in g.profile_dir(tree).glob('*.tsv'): shutil.copyfile(f, prof / f.name)
-        for f in (out / 'profile').glob('*.tsv') if g.kind == 'nvn' else []:
+        for f in (out / 'profile').glob('*.tsv'):
             if f.name in ('c1_full.tsv', 'cb_extent.tsv'): shutil.copyfile(f, prof / f.name)
         (prof / '.done').write_text('')
     return prof
@@ -1457,8 +1376,8 @@ def cmd_capture(a):
         t0 = time.time(); gr = rep['games'][g.id] = {'name': g.name, 'status': 'PASS', 'reasons': [], 'known': [], 'secs': {}}
         try:
             route = g.route()
-            if g.kind != 'nvn' or not route or not route.get('capture'):
-                gr['known'].append('nothing to capture: an NVN game whose route (dm/games/<id>/smoke.tsv) has a capture frame'); continue
+            if not route or not route.get('capture'):
+                gr['known'].append('nothing to capture: a game whose route (dm/games/<id>/smoke.tsv) has a capture frame'); continue
             art = artifacts(tree, g, a, rewrite=a.rewrite)
             frame = route['capture']; cd = capture_dir(g); cd.mkdir(parents=True, exist_ok=True)
             name = f'{tree.id}-f{frame}'; cap = cd / f'{name}.nvncap'; cap.unlink(missing_ok=True)
@@ -1469,7 +1388,7 @@ def cmd_capture(a):
             say(f'  {g.id}: capturing frame {frame} with {tree.id} → {cap}')
             # the capture step itself shows no frame until it ends (reading back the textures and compressing the pools: about 2 minutes for Breath of the Wild), so only the
             # capture limit bounds it
-            r = run_watched([art['host'], art['modules']], env, outdir, outdir / 'log.txt', a, limit=a.capture_limit, hang=max(route['hang'], a.capture_limit), kind='nvn',
+            r = run_watched([art['host'], art['modules']], env, outdir, outdir / 'log.txt', a, limit=a.capture_limit, hang=max(route['hang'], a.capture_limit), kind='game',
                             what=f'{g.id} capture', frames=outdir / 'frames.tsv', until=r'DM_NVN_CAPTURE: frame \d+: [^\n]*')
             if not r['until'] or not cap.is_file():
                 raise HarnessError(f'frame {frame} was not captured within {a.capture_limit:g} s (the game reached frame {r["max_frame"]}; see {outdir / "log.txt"})')
@@ -1523,7 +1442,7 @@ def cmd_replay(a):
 def select(a, smoke):
     games = find_games(a.games.split(',') if a.games else None)
     if not games: raise HarnessError(f'no game with a Mac build under {GAMES}')
-    say('games: ' + ', '.join(f"{g.id} ({g.name}, {g.kind}{', route' if g.route() else ''}{', the build profile' if g.derived else ''})" for g in games))
+    say('games: ' + ', '.join(f"{g.id} ({g.name}{', route' if g.route() else ''}{', the build profile' if g.derived else ''})" for g in games))
     return games
 
 
@@ -1620,18 +1539,18 @@ def cmd_list(a):
     for g in find_games():
         r = g.route()
         bl = sorted(p.parent.name + '/' + p.stem for p in (game_root(g) / 'baselines').glob('*/smoke-*.json'))
-        say(f'{g.id}  {g.name}  {g.kind}  build {g.ver}  route: {"yes" if r else "no (dm/games/" + g.id + "/smoke.tsv)"}  baselines: {", ".join(bl) or "none"}  green: {validated_text(g.id)}')
+        say(f'{g.id}  {g.name}  build {g.ver}  route: {"yes" if r else "no (dm/games/" + g.id + "/smoke.tsv)"}  baselines: {", ".join(bl) or "none"}  green: {validated_text(g.id)}')
     return 0
 
 
 def main():
     global ROOT, GAMES
-    ap = argparse.ArgumentParser(description='Regression harness: chain diff, interface check and boot smoke over the local games (see the comment at the top of this file).')
+    ap = argparse.ArgumentParser(description='Regression harness: chain diff, interface check and boot smoke on this Mac\'s build of the game (see the comment at the top of this file).')
     ap.add_argument('--root', default=os.environ.get('REGRESS_ROOT', ''), help='source trees and reports (REGRESS_ROOT); before the command')
-    ap.add_argument('--games-dir', default=os.environ.get('REGRESS_GAMES', ''), help='the NSP folders with their Mac builds (REGRESS_GAMES); before the command')
+    ap.add_argument('--games-dir', default=os.environ.get('REGRESS_GAMES', ''), help='the folder of the game folders, each with its Mac build <id>_build (REGRESS_GAMES); before the command')
     sub = ap.add_subparsers(dest='cmd', required=True)
     def common(p, smoke=True):
-        p.add_argument('--games', help='title IDs, comma-separated (default: every game with a Mac build, and for the runs a smoke route)')
+        p.add_argument('--games', help='title IDs, comma-separated (default: every title of dm/games with a Mac build, and for the runs a smoke route)')
         p.add_argument('--jobs', type=int, help='workers for the shader builds (default: the cores; a build pauses while another process holds the measuring lock)')
         p.add_argument('--shader-cache-gb', type=shader_cache_gb, help='per-game regression compile cache limit in GiB (default: at least 8 GiB, or four times the largest shader-library image); enforced between builds')
         p.add_argument('--out', help='the report folder (default <root>/reports/<date-time>-<command>)')
@@ -1660,8 +1579,8 @@ def main():
     sub.add_parser('list', help='the games, routes and baselines')
     a = ap.parse_args()
     missing = [o for o, v in (('--root (REGRESS_ROOT)', a.root), ('--games-dir (REGRESS_GAMES)', a.games_dir)) if not v]
-    if missing: ap.error(f'set {" and ".join(missing)}: where the harness keeps its trees and reports, and the folder of the games\' NSP folders, for example '
-                         f'regress.py --root <drive>/harness --games-dir <drive>/nsp {a.cmd} ... (the options go before the command)')
+    if missing: ap.error(f'set {" and ".join(missing)}: where the harness keeps its trees and reports, and the folder that holds the game folder with its <id>_build, for example '
+                         f'regress.py --root <drive>/harness --games-dir <drive>/games {a.cmd} ... (the options go before the command)')
     ROOT, GAMES = Path(a.root), Path(a.games_dir)
     # A stop runs the finally blocks: a game or a shader build in its own process group is stopped too. A SIGHUP (the terminal closed) the same way: the shell sends it to its
     # job, which that group, a session of its own (proc_group), is not in, and its default action ended this script with no cleanup and left the game or build running

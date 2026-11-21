@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# The compile cache as one file (dm/tools/shader_cache.py): entries in and out, bytes stored once, several threads and processes, a damaged file, pruning, and taking in a cache from before it.
-import concurrent.futures as cf, hashlib, os, sqlite3, subprocess, sys, tarfile, tempfile, threading, time, unittest
+# The compile cache as one file (dm/tools/shader_cache.py): entries in and out, bytes stored once, several threads and processes, a damaged file, pruning, and one file per chain.
+import concurrent.futures as cf, hashlib, os, sqlite3, subprocess, sys, tempfile, threading, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -113,8 +113,8 @@ class Entries(Base):
         out = self.root / 'out'; self.assertTrue(self.store.to_file('e', out)); self.assertEqual(out.read_bytes(), b'')
 
     def test_names_take_a_prefix_only(self):
-        for n in ('shader/a/mac/x', 'shader/a/ios/x', 'shader/ab/mac/x', 'shader0'): self.store.put(n, b'1')
-        self.assertEqual(self.store.names('shader/a/'), {'shader/a/mac/x', 'shader/a/ios/x'})
+        for n in ('shader/a/mac/x', 'shader/a/mac/y', 'shader/ab/mac/x', 'shader0'): self.store.put(n, b'1')
+        self.assertEqual(self.store.names('shader/a/'), {'shader/a/mac/x', 'shader/a/mac/y'})
 
     def test_delete_prefix_takes_only_its_names_and_bytes_shared_stay(self):   # dmsh_build.py's staged outputs, once its image is written
         self.store.put('stage/x/mac/k_b.metallib', b'shared'); self.store.put('stage/x/mac/k_b.json', b'staged only')
@@ -413,7 +413,7 @@ class Writers(Base):
         with mock.patch.object(self.store, 'db', Db(real)), self.store.batch(): self.store.put('a', b'1')
         self.assertTrue(self.store.full); self.assertFalse(real.in_transaction); self.assertEqual(self.store.names(''), set())
 
-    def test_processes_share_it(self):   # regress.py's chain builds and the NSP script on one game's file
+    def test_processes_share_it(self):   # regress.py's chain builds and the packing script on one game's file
         code = ("import sys; sys.path.insert(0, sys.argv[1]); import shader_cache\ns = shader_cache.Store(sys.argv[2])\n"
                 "for j in range(300): s.put(f'{sys.argv[3]}/{j}', sys.argv[3].encode() * 1000); assert s.get(f'{sys.argv[3]}/{j}') == sys.argv[3].encode() * 1000\ns.close()\n")
         ps = [subprocess.Popen([sys.executable, '-c', code, str(REPO / 'dm/tools'), str(self.path), f'p{i}']) for i in range(4)]
@@ -528,15 +528,14 @@ class Generations(unittest.TestCase):   # one file per chain: a build writes its
 
     def test_older_generations_go_after_a_build(self):
         now = time.time()
-        self.file('cas.db', {'metallib/ios/i.metallib': b'ios', 'metallib/mac/x.metallib': b'old mac', f'shader/{D1}/mac/k_b.metal': b'm'}, now - 300)
+        self.file('cas.db', {'metallib/mac/x.metallib': b'old mac', f'shader/{D1}/mac/k_b.metal': b'm'}, now - 300)
         self.file(f'cas-{self.B}.db', {'metallib/mac/b.metallib': b'B'}, now - 100)
         self.assertEqual(shader_cache.drop_generations(self.d, self.A, self.said.append), [])   # no file of its own: nothing goes
         self.file(f'cas-{self.A}.db', {'metallib/mac/a.metallib': b'A', f'shader/{D2}/mac/k_b.metal': b'a'}, now)
         open(self.d / 'cas.db.lock', 'w').close()
         self.assertEqual(sorted(shader_cache.drop_generations(self.d, self.A, self.said.append)), [f'cas-{self.B}.db', 'cas.db'])
         self.assertEqual(sorted(p.name for p in self.d.iterdir()), [f'cas-{self.A}.db'])
-        self.assertEqual(self.names(self.d / f'cas-{self.A}.db'), {'metallib/mac/a.metallib', 'metallib/ios/i.metallib', f'shader/{D2}/mac/k_b.metal'})   # iOS, which it compiled none of, kept
-        self.assertIn('kept 1 ios Metal compiles of cas.db: this build compiled none for ios', self.said)
+        self.assertEqual(self.names(self.d / f'cas-{self.A}.db'), {'metallib/mac/a.metallib', f'shader/{D2}/mac/k_b.metal'})   # its own entries: what it reused of the others it copied as it read
         self.assertEqual(shader_cache.drop_generations(self.d, self.A, self.said.append), [])
 
     def test_a_folder_as_the_read_only_cache(self):   # regress.py's fallback reads the player's generations, never copying them
@@ -545,48 +544,6 @@ class Generations(unittest.TestCase):   # one file per chain: a build writes its
         s = shader_cache.Store(self.d / 'regress/cas.db', readonly=self.d); self.addCleanup(s.close)
         self.assertEqual((s.get('metallib/mac/m.metallib'), s.get('variant/v/x')), (b'B', b'v'))
         self.assertEqual(s._run('SELECT count(*) FROM entry')[0][0], 0)
-
-
-class Adopt(unittest.TestCase):
-    def setUp(self):
-        t = tempfile.TemporaryDirectory(); self.addCleanup(t.cleanup)
-        self.root = Path(t.name); self.old = self.root / 'cas'; self.path = self.root / 'cas.db'; self.said = []
-
-    def fill(self):
-        for name, data in (('metallib/mac/ab/abcd.metallib', b'compiled'), ('metallib/mac/ab/abcd_x.metallib', b'cut'), ('metallib/ios/cd/cdef.metallib', b'ios'), ('metallib/filled.json', b'{}'),
-                           (f'shader/{D1}/mac/k_b.metal', b'old chain'), ('index/k.json', b'{}'), ('variant/ee/metal', b'msl'), ('variant/ee/mac.metallib', b'v'), ('metallib/mac/ab/._abcd.metallib', b'appledouble')):
-            p = self.old / name; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(data)
-
-    def check(self):
-        s = shader_cache.Store(self.path)
-        self.assertEqual(s.names(''), {'metallib/mac/abcd.metallib', 'metallib/mac/abcd_x.metallib', 'metallib/ios/cdef.metallib'})
-        self.assertEqual(s.get('metallib/mac/abcd.metallib'), b'compiled')
-        s.close()
-        self.assertEqual(sorted(os.listdir(self.root)), ['cas.db'])
-
-    def test_a_folder(self):
-        self.fill(); self.assertEqual(shader_cache.adopt(self.old, self.path, self.said.append), 3); self.check()
-
-    def test_a_tar_read_without_unpacking(self):
-        self.fill()
-        with tarfile.open(f'{self.old}.tar', 'w', format=tarfile.PAX_FORMAT) as t: t.add(self.old, '.')
-        import shutil; shutil.rmtree(self.old)
-        self.assertEqual(shader_cache.adopt(self.old, self.path, self.said.append), 3); self.check()
-
-    def test_a_damaged_tar_costs_what_it_held(self):
-        Path(f'{self.old}.tar').write_bytes(b'not a tar' * 100)
-        self.assertEqual(shader_cache.adopt(self.old, self.path, self.said.append), 0)
-        self.assertFalse(Path(f'{self.old}.tar').exists()); self.assertTrue(any('[RED]' in m for m in self.said))
-
-    def test_nothing_there(self):
-        self.assertEqual(shader_cache.adopt(self.old, self.path, self.said.append), 0)
-        self.assertEqual(os.listdir(self.root), []); self.assertFalse(shader_cache.exists(self.path))
-
-    def test_what_a_stopped_build_left(self):
-        for p in (f'{self.old}.gone', f'{self.old}.unpack'): os.makedirs(p); (Path(p) / 'x').write_bytes(b'1')
-        Path(f'{self.old}.tar.part').write_bytes(b'1')
-        shader_cache.adopt(self.old, self.path, self.said.append)
-        self.assertEqual(os.listdir(self.root), [])
 
 
 if __name__ == '__main__': unittest.main()

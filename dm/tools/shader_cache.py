@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-# The shader build's compile cache, one file per translation chain version (a generation): <cache folder>/cas-<chain>.db, read and written in place. It was a folder of a few files per shader (Metroid Dread: 84,541 files), kept as a tar between builds and unpacked
-# for each build that ran. Nothing is unpacked now: an entry goes in and comes out by its name, and a file a tool needs is written only then.
+# The shader build's compile cache, one file per translation chain version (a generation): <cache folder>/cas-<chain>.db, read and written in place. Nothing is unpacked: an entry goes
+# in and comes out by its name, and a file a tool needs is written only then (as a folder of a few files per shader it was 84,541 files for Metroid Dread, slow to copy, delete or keep as a tar).
 # SQLite, as it is in Python and takes several writers: dmsh_build.py's threads share one connection (its worker processes use that one too, through this process: Served). Regression builds share their own per-game file, with read-only reuse of the player's cache.
 # Generations: a chain's build writes only its own file. Its per-shader entries never hit another chain's (their digests cover the chain), and the Metal compiles it reuses from an older generation
-# (keyed by the MSL, the convention and the compiler alone) are copied into its file when it takes them (for_chain). After a successful build the NSP script removes the other generations whole
+# (keyed by the MSL, the convention and the compiler alone) are copied into its file when it takes them (for_chain). After a successful build the packing script removes the other generations whole
 # (drop_generations): an old chain, a stopped build of one, or a development build of another chain is one file, removed or deleted by hand without a vacuum. cas.db, the one file from before
 # generations, holding every chain's entries, is the oldest generation and goes the same way.
 # Two tables: entry (name, the blob it names, when it was written) and blob (the bytes, once each). A library kept under its MSL's digest and under its shader's digest was one APFS clone of the other; inside
 # one file it would be two copies, so bytes are stored by their hash. A file removed from the cache gives its pages back at the next prune (incremental vacuum), with no copy of the file.
 # It only saves work: a damaged file costs the work it held and is made anew, and a full drive is one [RED] line. An entry is written and read whole, so its file is never seen half written.
-# Names, as in the folder this replaces: metallib/<target>/<digest>[_x].metallib (dmsh_mtlcache.py), shader/<digest>/<mac|ios>/<output>, index/<key>.json, variant/<digest>/<file> (dmsh_build.py).
+# Names: metallib/<target>/<digest>[_x].metallib (dmsh_mtlcache.py; the target is mac), shader/<digest>/mac/<output>, index/<key>.json, variant/<digest>/<file>, stage/<output folder>/mac/<output> (dmsh_build.py).
 # Not part of the translation chain: it decides no output (dmsh_chain.py), like dmsh_mtlcache.py.
-import contextlib, fcntl, hashlib, json, multiprocessing, os, re, shutil, sqlite3, tarfile, threading, time
+import contextlib, fcntl, hashlib, json, multiprocessing, os, re, sqlite3, threading, time
 from pathlib import Path
 
 SCHEMA = ('CREATE TABLE IF NOT EXISTS blob(id INTEGER PRIMARY KEY, hash BLOB UNIQUE NOT NULL, data BLOB NOT NULL)',
@@ -23,7 +23,6 @@ DBMOVED = 1032   # SQLITE_READONLY_DBMOVED, an error's sqlite_errorcode (Python 
 READ_ONLY = None   # set only by --run: the harness supplies this module to older SQLite-based builders too
 GENERATION = re.compile(r'cas-([0-9a-f]{12})\.db')   # a chain's file in a cache folder
 LEGACY = 'cas.db'   # the one file of every chain, from before generations
-TARGETS = ('mac', 'ios')   # metallib/<target>/
 
 
 def generations(folder):
@@ -279,21 +278,6 @@ class Store(_Files):
                 if not self._damage(e): raise
         self._run('PRAGMA incremental_vacuum')
 
-    def holds(self, prefix): return bool(self._run('SELECT 1 FROM entry WHERE name>=? AND name<? LIMIT 1', prefix, prefix + '\U0010ffff'))
-
-    def take(self, path, prefix):
-        """Copy the entries of the cache file path whose names start with prefix into this one, as they are (bytes, names, times); an entry this file holds stays. Returns the number taken"""
-        hi = prefix + '\U0010ffff'
-        with self.lock:
-            self.db.execute('ATTACH DATABASE ? AS old', (os.fspath(path),))
-            try:
-                with self.batch():
-                    self.db.execute('INSERT OR IGNORE INTO main.blob(hash, data) SELECT b.hash, b.data FROM old.entry e JOIN old.blob b ON b.id=e.blob WHERE e.name>=? AND e.name<?', (prefix, hi))
-                    n = self.db.execute('INSERT OR IGNORE INTO main.entry(name, blob, mtime) SELECT e.name, m.id, e.mtime FROM old.entry e JOIN old.blob b ON b.id=e.blob JOIN main.blob m ON m.hash=b.hash '
-                                        'WHERE e.name>=? AND e.name<?', (prefix, hi)).rowcount
-            finally: self.db.execute('DETACH DATABASE old')
-        return 0 if self.full else n
-
     def _close_readers(self, thread=None):   # every thread's connection, or one thread's
         with self.lock:
             readers = [self.readers.pop(thread)] if thread in self.readers else [] if thread is not None else list(self.readers.values())
@@ -350,7 +334,7 @@ class Store(_Files):
 
 
 @contextlib.contextmanager
-def bounded(path, limit, say=print, *, legacy=None):
+def bounded(path, limit, say=print):
     """Builds share this per-game lock; only an idle cache is trimmed, before and after a build, including a failed one. Active builds may temporarily exceed the limit."""
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     with open(str(path) + '.lock', 'a') as lock:
@@ -358,7 +342,6 @@ def bounded(path, limit, say=print, *, legacy=None):
             try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError: return
             try:
-                if legacy is not None: adopt(legacy, path, say)
                 if path.is_file():
                     store = Store(path, say)
                     try: store.trim(limit() if callable(limit) else limit)
@@ -454,59 +437,6 @@ class Remote(_Files):
             else: self.inside = False; self._call('end')
 
 
-def _adopted_name(name):
-    """What a file of the old folder is called here, None for one not taken. A shader/ or index/ entry's digest covers the chain's code, which the change to this file moved, so none can hit. A variant/ entry from
-    before shader compiles read their source from standard input (f2a50f35) holds its source's file name in its function constants, so its bytes differ from a fresh compile's: few, and cheap to compile again.
-    The compile results are the ones worth keeping, and their digests cover the MSL and the compiler alone"""
-    m = re.fullmatch(r'metallib/([^/]+)/[0-9a-f]{2}/([^/]+\.metallib)', name)
-    return f'metallib/{m.group(1)}/{m.group(2)}' if m else None
-
-
-def adopt(old, path, say=print):
-    """A compile cache from before this file (the folder old, or old.tar: tree_tar.py) into the file path, and the old one removed, so a build folder converts by itself at its next build. A damaged tar costs the work it held.
-    Returns the number of entries taken"""
-    folder, tar = os.fspath(old), f'{os.fspath(old)}.tar'
-    leftovers = [p for p in (f'{folder}.gone', f'{folder}.unpack', f'{tar}.part') if os.path.lexists(p)]
-    if not (os.path.isdir(folder) or os.path.isfile(tar) or leftovers): return 0
-    n, store = 0, None
-    def take(name, read):
-        nonlocal n, store
-        new = _adopted_name(name.removeprefix('./'))
-        if new is None or os.path.basename(name).startswith('._'): return
-        store = store or Store(path, say)
-        store.put(new, read()); n += 1
-    def in_batches(items):
-        for i, item in enumerate(items):
-            if not i % 2000 and store is not None and store.db.in_transaction: store.db.commit()
-            if store is not None and not store.db.in_transaction: store.db.execute('BEGIN IMMEDIATE')
-            yield item
-        if store is not None and store.db.in_transaction: store.db.commit()
-    try:
-        if os.path.isfile(tar):
-            say(f'moving the compile cache {tar} into one file read in place')
-            with tarfile.open(tar, 'r:') as t:
-                for m in in_batches(t):
-                    source = t.extractfile(m) if m.isfile() else None
-                    if source: take(m.name, source.read)
-    except (tarfile.TarError, OSError) as e: say(f'[RED] could not read {tar}, the build goes on without it: {e}')
-    if os.path.isdir(folder):   # the newer of the two, when a stopped build left both
-        say(f'moving the compile cache {folder} into one file read in place')
-        def files():
-            for d, _, fs in os.walk(folder):
-                for f in fs: yield os.path.join(d, f)
-        for p in in_batches(files()):
-            def read(p=p):
-                with open(p, 'rb') as f: return f.read()
-            take(os.path.relpath(p, folder), read)
-    if store is not None: store.close()
-    for p in [folder, tar] + leftovers:
-        try:
-            if os.path.isdir(p) and not os.path.islink(p): shutil.rmtree(p, onexc=lambda f, q, e: None if isinstance(e, FileNotFoundError) else (_ for _ in ()).throw(e))
-            elif os.path.lexists(p): os.unlink(p)
-        except OSError as e: say(f'[RED] could not remove the old compile cache {p}: {e}')
-    return n
-
-
 def exists(path): return os.path.isfile(os.fspath(path))
 
 
@@ -523,27 +453,11 @@ def _file_size(p): return sum(os.path.getsize(p + s) for s in ('', '-wal') if os
 
 def drop_generations(folder, chain, say=print, remove=None):
     """After a successful build of chain: remove the cache folder's other generations whole, the files of older chains and cas.db (the one file from before generations).
-    The build copied in every Metal compile it reused; a target it compiled nothing for (iOS after a Mac-only build, the Mac after an iPhone-only one) first takes the compiles of the newest
-    other generation that holds some, the work its next build of that target can reuse. Nothing goes without the chain's own file, or when copying fails (a full drive).
-    remove: what takes a file away (the NSP script's: into the build folder's obsolete/), else it is deleted. Returns the names of the files removed"""
+    The build copied into its own file every Metal compile it reused from them (for_chain), so nothing of theirs is needed any more. Nothing goes without the chain's own file.
+    remove: what takes a file away (the packing script's: into the build folder's obsolete/), else it is deleted. Returns the names of the files removed"""
     cur = chain_file(folder, chain)
     others = [p for p in generations(folder) if os.path.realpath(p) != os.path.realpath(cur)]
     if not others or not os.path.isfile(cur): return []
-    store = Store(cur, say)
-    try:
-        for t in TARGETS:
-            prefix = f'metallib/{t}/'
-            if store.holds(prefix): continue
-            for p in others:
-                src = _ReadOnly([p], say)
-                try: has = bool(next(src._each('SELECT 1 FROM entry WHERE name>=? AND name<? LIMIT 1', prefix, prefix + '\U0010ffff'), None))
-                finally: src.close()
-                if has:
-                    n = store.take(p, prefix)
-                    if n: say(f'kept {n:,} {t} Metal compiles of {os.path.basename(p)}: this build compiled none for {t}')
-                    break
-        if store.full: return []
-    finally: store.close()
     gone, size = [], 0
     for p in others:
         n = _file_size(p)

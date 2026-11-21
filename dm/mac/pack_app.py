@@ -294,7 +294,7 @@ def as_packed(row, record, moved):
     return was
 
 
-def is_chain_library(msl): return shader_lib.name_of(msl).startswith('b-')   # not a Vulkan or GL game's vk / gl, one Metal library with its table
+def is_chain_library(msl): return shader_lib.name_of(msl).startswith('b-')   # a library of the shader chain (b-<chain>), which goes into the app as one image; any other folder of libraries is copied as it is
 
 
 def msl_inputs(msl):
@@ -490,7 +490,7 @@ def pack(a):
         info['NSMicrophoneUsageDescription'] = f'{a.name} uses the microphone for in-game audio input.'
     commit = source_commit()
     if commit: info['DMCommit'] = commit
-    if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]   # the library chain the app carries (a Vulkan or GL game's vk / gl has none)
+    if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]   # the library chain the app carries
     (c / 'Info.plist').write_bytes(plistlib.dumps(info))
     (c / 'PkgInfo').write_text('APPL????')
     step(f'signing ({"ad-hoc" if a.sign == "-" else a.sign})'); sign(tmp, a.sign, codesign, fresh)   # a new data bundle is read whole once; the app's signature then takes its hash
@@ -521,12 +521,12 @@ def parse(argv):
     ap.add_argument('--host', required=True, help='the Mac host built for the profile')
     ap.add_argument('--patched', required=True, help='the rewritten modules (patch_nso.py output)')
     ap.add_argument('--romfs', required=True, help='the RomFS of the packed version')
-    ap.add_argument('--msl', required=True, help='the Mac shader libraries: <shader>/cache/b-<chain>, or a Vulkan or GL game\'s <shader>/vk or gl')
+    ap.add_argument('--msl', required=True, help='the Mac shader libraries: <shader>/cache/b-<chain>')
     ap.add_argument('--msl-name', help='its folder name in the app (default: its own)')
     ap.add_argument('--tables', required=True, help='the game profile folder (shader_map.tsv and the tables beside it)')
     ap.add_argument('--font', required=True, help='the folder of the shared-font stand-ins (nintendo_ext.ttf)')
     ap.add_argument('--aoc', help='the DLC RomFS images or folders by index')
-    ap.add_argument('--pso', help='the pipeline archive made offline for this Mac (pso_offline.py --platform macos output: <arch>.mtl4a, prebuilt.tsv)')
+    ap.add_argument('--pso', help='the pipeline archive made offline for this Mac (the output of pso_offline.py: <arch>.mtl4a, prebuilt.tsv)')
     ap.add_argument('--pso-pairs', help='pso_pairs.tsv for a profile that has none (the shader split\'s copy)')
     ap.add_argument('--control-nacp', help='the game\'s control data (control.nacp; Resources/control.nacp, beside the RomFS, where the host reads it: fs::GetCacheStorageMax)')
     ap.add_argument('--env-file', help='environment switches baked in (Resources/dm/env.txt)')

@@ -31,16 +31,6 @@ def meta(text, n):
     return out
 
 
-def render_base(g):
-    """The profile's render_base ("<w>x<h> <w>x<h>": the 3D views' base size docked, then handheld, which DM_RENDER_SCALE scales) as
-    {"docked": [w, h], "handheld": [w, h]}, for a front end to show the render scale in pixels; None when the profile has none"""
-    v = g.get('render_base', '')
-    if not v: return None
-    m = re.fullmatch(r'\s*(\d+)x(\d+)\s+(\d+)x(\d+)\s*', v)
-    if not m: sys.exit(f'{g.id}: render_base is "<w>x<h> <w>x<h>" (docked, then handheld): {v}')
-    return {'docked': [int(m[1]), int(m[2])], 'handheld': [int(m[3]), int(m[4])]}
-
-
 def rows():
     for n, line in enumerate((HERE / 'settings.tsv').read_text(encoding='utf-8').splitlines(), 1):
         if not line.strip() or line.startswith('#'): continue
@@ -95,7 +85,7 @@ def build(gid, patched, control):
         parts = v.split('?', 1)
         return len(parts) == 1 or all(shown(c, n) for c in parts[1].split('&'))
 
-    out, table, base = [], {r[1][0]: takes(r[1][1], r[1][2]) for r in rows()}, render_base(g)
+    out, table = [], {r[1][0]: takes(r[1][1], r[1][2]) for r in rows()}
     for n, (var, kind, values, default, cond, section, label, note, extra) in rows():
         m = meta(extra, n)
         if 'needs' in m:
@@ -105,7 +95,6 @@ def build(gid, patched, control):
             if can is not None and want not in can: sys.exit(f'settings.tsv:{n}: needs a value {need} never takes: {want} (it takes {", ".join(sorted(can))})')
         if not shown(cond, n): continue
         s = {'env': var, 'kind': kind, 'section': section, 'label': label, 'note': note, 'default': value(default, n), **m}
-        if var == 'DM_RENDER_SCALE' and base: s['base'] = base   # the render scale in pixels, for the console mode chosen
         if kind == 'choice':
             opts = [list(l) for l in langs] if values == 'languages' else [v.split('?', 1)[0].split('=', 1) for v in values.split(',') if offered(v, n)]
             if any(len(o) != 2 for o in opts): sys.exit(f'settings.tsv:{n}: choice values are value=label,...')
@@ -114,8 +103,6 @@ def build(gid, patched, control):
             if values == 'languages' and not have: s['note'] = UNKNOWN_LANGUAGES
         elif kind == 'range':
             lo, hi, st = (float(x) for x in values.split(':'))
-            if var == 'DM_RENDER_SCALE' and keys.get('RENDER_SCALE', '1') != '1':   # a stub that also raises the size: up to its largest scale (the rewriter's RENDER_SCALE, hex as every header value)
-                hi = float(int(keys['RENDER_SCALE'], 16))
             s.update(min=lo, max=hi, step=st)
         elif kind == 'toggle':
             if s['default'] not in ('0', '1'): sys.exit(f'settings.tsv:{n}: a toggle defaults to 0 or 1: {s["default"]}')

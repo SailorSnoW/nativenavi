@@ -27,7 +27,7 @@ class Ctx:
 
     def __init__(self, machine):
         self.machine, self.cursor, self.sites = machine, AREA, {}
-        self.others, self.capabilities, self.render_scale = {}, set(), 0
+        self.others, self.capabilities = {}, set()
 
     def here(self):
         return self.cursor

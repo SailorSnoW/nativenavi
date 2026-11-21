@@ -1,4 +1,4 @@
-"""dm/tools/nso.py, the one loader of code modules: a damaged NSO or NRO is an nso.Error before anything its header claims is allocated (GitHub issue #451), never a short image"""
+"""dm/tools/nso.py, the one loader of code modules: a damaged NSO is an nso.Error before anything its header claims is allocated (GitHub issue #451), never a short image"""
 import hashlib
 import os
 from pathlib import Path
@@ -34,17 +34,6 @@ def make_nso(segs=(TEXT, RO, DATA), compress=(1, 0, 1), bss=0x5000):
     return bytearray(hdr + body)
 
 
-def make_nro(segs=(TEXT, RO, DATA)):
-    """An NRO as nn::ro takes it: whole pages from 0, the file as long as the module"""
-    img, at = bytearray(), []
-    for s in segs:
-        o = len(img); img += s; img += bytes(page(len(img)) - len(img)); at.append((o, len(img) - o))
-    img[0x10:0x14] = b'NRO0'; struct.pack_into('<I', img, 0x18, len(img))
-    for i, (o, sz) in enumerate(at): struct.pack_into('<II', img, 0x20 + 8 * i, o, sz)
-    struct.pack_into('<I', img, 0x38, 0x3000); img[0x40:0x60] = bytes(0x20)
-    return img, at
-
-
 def seg(d, i, **kw):   # rewrite text (0), ro (1) or data (2) in the header: fo, mo, sz, stored
     fo, mo, sz = struct.unpack_from('<III', d, 0x10 + i * 0x10)
     fo, mo, sz = kw.get('fo', fo), kw.get('mo', mo), kw.get('sz', sz)
@@ -65,11 +54,6 @@ class Load(unittest.TestCase):
         self.assertEqual(len(m.image), data + len(DATA))   # bss is a size only
         self.assertEqual((m.image[:len(TEXT)], m.image[ro:ro + len(RO)], m.image[data:]), (TEXT, RO, DATA))
         self.assertEqual((m.bss, m.text_end, m.build_id), (0x5000, len(TEXT), bytes(range(0x20))))
-
-    def test_nro(self):
-        d, at = make_nro()
-        m = nso.load(d)
-        self.assertEqual(m.segments, tuple(at)); self.assertEqual(bytes(m.image), bytes(d)); self.assertEqual(m.bss, 0x3000)
 
     def error(self, d, *words):
         with self.assertRaises(nso.Error) as c: nso.load(d, 'main')
@@ -113,14 +97,7 @@ class Load(unittest.TestCase):
         d = make_nso()
         self.error(d[:-10], 'data segment', 'past the end of the file')
         self.error(d[:0x80], 'header is cut short')
-        d, at = make_nro()
-        self.error(d[:-1], 'the file is cut short')
-        self.error(b'NSP0' + bytes(0x100), 'not an NSO or NRO')
-
-    def test_nro_layout_as_nn_ro(self):
-        d, at = make_nro()
-        struct.pack_into('<I', d, 0x2c, at[1][1] - 0x10); self.error(d, 'ro segment', 'whole pages')
-        d, at = make_nro(); struct.pack_into('<I', d, 0x18, len(d) + 0x1000); self.error(d, "the module's size")
+        self.error(b'NSP0' + bytes(0x100), 'not an NSO')
 
     def test_uncompressed_is_read_at_its_size(self):   # Horizon ignores the stored size of an uncompressed segment
         d = make_nso()
@@ -131,7 +108,6 @@ class Load(unittest.TestCase):
     def test_compression_that_fails_is_named(self):
         # flag bit 7 makes every compressed segment ZBIC (system 22.0.0 on): these segments are LZ4, so the Error names ZBIC, whether zbic is installed or not
         self.error(flags(make_nso(), set_=0x80), 'ZBIC')
-        d, _ = make_nro(); struct.pack_into('<I', d, 0x1c, 2); self.error(d, 'compressed NRO')
 
 
 class Tools(unittest.TestCase):

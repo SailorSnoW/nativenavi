@@ -18,17 +18,14 @@ RET, MOV_X18_X0, MOV_X1_X2 = 0xd65f03c0, 0xaa0003f2, 0xaa0203e1
 
 
 def module(functions):
-    from test_nso_match import image
+    from test_nso_match import image, nso_file
 
     raw = image(functions)
-    raw[0x1100:0x111c] = raw[0x20:0x3c]
+    raw[0x1100:0x111c] = raw[0x20:0x3c]   # MOD0 in ro, as the game's modules have it
+    raw[0x20:0x3c] = bytes(0x1c)
     struct.pack_into('<I', raw, 4, 0x1100)
     struct.pack_into('<ii', raw, 0x1110, 0x3000 - 0x1100, 0x300c + 8 * len(functions) - 0x1100)
-    raw[0x10:0x14] = b'NRO0'
-    struct.pack_into('<I', raw, 0x18, len(raw))
-    struct.pack_into('<6I', raw, 0x20, 0, 0x1000, 0x1000, 0x2000, 0x3000, 0x1000)
-    struct.pack_into('<I', raw, 0x38, 0)
-    return raw
+    return nso_file(raw)
 
 
 class RewriterModPatches(unittest.TestCase):
@@ -36,7 +33,7 @@ class RewriterModPatches(unittest.TestCase):
         raw = module({0x100: [nso_asm.NOP, MOV_X1_X2, nso_asm.NOP, RET]})
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            src = tmp / 'input.nro'
+            src = tmp / 'input.nso'
             src.write_bytes(raw)
             build = nso.cli_read(str(src)).build_id[:0x10].hex()
             (tmp / 'games/T').mkdir(parents=True)
@@ -46,9 +43,9 @@ class RewriterModPatches(unittest.TestCase):
             if patches is not None:
                 (tmp / 'mod.tsv').write_text(''.join(f'{off:x}\t{data.hex()}\t{label}\n' for off, data, label in patches))
                 env['DM_MOD_PATCHES'] = str(tmp / 'mod.tsv')
-            run = subprocess.run([sys.executable, str(TOOLS / 'patch_nso.py'), str(src), str(tmp / 'out'), 'nro0'], env=env, capture_output=True, text=True)
-            read = lambda ext: (tmp / 'out' / f'nro0.{ext}').read_text() if (tmp / 'out' / f'nro0.{ext}').exists() else ''
-            image = (tmp / 'out/nro0.patched.bin').read_bytes() if (tmp / 'out/nro0.patched.bin').exists() else b''
+            run = subprocess.run([sys.executable, str(TOOLS / 'patch_nso.py'), str(src), str(tmp / 'out'), 'mod0'], env=env, capture_output=True, text=True)
+            read = lambda ext: (tmp / 'out' / f'mod0.{ext}').read_text() if (tmp / 'out' / f'mod0.{ext}').exists() else ''
+            image = (tmp / 'out/mod0.patched.bin').read_bytes() if (tmp / 'out/mod0.patched.bin').exists() else b''
             return run, read('sites.tsv'), read('changed.tsv'), read('fixups.tsv'), image, build
 
     def test_no_patch_file_changes_nothing(self):
@@ -80,7 +77,7 @@ class RewriterModPatches(unittest.TestCase):
         self.assertEqual(run.returncode, 4, run.stdout + run.stderr)
         refused = [line.split('\t') for line in run.stdout.splitlines() if line.startswith('MOD_REFUSED\t')]
         self.assertEqual([r[1] for r in refused], ['/mods/B/exefs/b.ips'])
-        self.assertIn('nro0+0x104', refused[0][2])
+        self.assertIn('mod0+0x104', refused[0][2])
         self.assertIn('a test cut', refused[0][2])
         run, sites, _, _, image, _ = self.rewrite(both[:1], cuts=[cut])
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)

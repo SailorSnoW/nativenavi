@@ -1249,7 +1249,7 @@ def prune_stale_chains(sh, chain):
 def prune_shader_cache(sh, chain):
     """Remove the compile cache entries the current chain's last full build did not use, with prune_stale_chains and under the same conditions (issue #1033). Returns the number of shaders removed.
     The other generations of sh/cache go whole (shader_cache.drop_generations): the files of older chains (cas-<chain>.db, a development build's too) and cas.db, the one file of every chain from
-    before them, once a target this build compiled nothing for has taken the newest of their Metal compiles. Ocarina of Time's cas.db held about seven chains' compiles: 52 GB, 10 GB of them in use.
+    before them; the build copied into its own file what it reused of theirs. Ocarina of Time's cas.db held about seven chains' compiles: 52 GB, 10 GB of them in use.
     In the chain's own file, the per-shader entries (shader/<digest>) the build did not list go: a shader's digest covers the profile's inputs too, so an edit of the shader map within one chain
     leaves old ones. The digests in use are listed by dmsh_build.py's full build in b-<chain>/_b_cas.txt beside the Mac outputs (every full build writes them); index/ cannot tell, since a cache
     hit does not rewrite it. No list (libraries from before the list): no entry goes. An entry newer than the list stays. Removals that fail are one [RED] line, as for the libraries.
@@ -1303,7 +1303,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key, seen=None):
     the sources and reflection carry a full build's stamp (inputs.tsv) for c1_full.tsv and cb_extent.tsv to name (chain_tables).
     After success the libraries of other chain versions and the cache entries this chain's build did not use are removed (prune_stale_chains, prune_shader_cache), the library becomes
     one file, b-<chain>.img beside the folder's name, read in place (shader_lib.py), and the compile cache is one file per chain, sh/cache/cas-<chain>.db (shader_cache.py), read in
-    place and into which a cache folder from before it moves: a reused step touches none of their files.
+    place: a reused step touches none of their files.
     seen (--seen-shaders): only those keys, into sh/partial/b-<chain>, emptied first, with its key inside; the full build's libraries, its key and the cache are left as they are, and the
     per-shader cache (DMSH_CAS) is the full build's, so a later full build reuses this work. It gets no stamp and no c1_full.tsv or cb_extent.tsv, on purpose: beside a stamp the host
     would take the tables' silence on a shader the partial build never saw as proof it is safe (no chain_tables, no shader_regressions, no pruning; the host logs the missing stamp
@@ -1311,7 +1311,6 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key, seen=None):
     log = logs / 'dmsh_build.log'
     PROG.stage('Mac shaders')
     chain = chain_of(repo)
-    shader_cache.adopt(sh / 'cache/cas', shader_cache.chain_file(sh / 'cache', chain), say)
     out = sh / 'partial' if seen else sh / 'cache'
     libs, kf = out / f'b-{chain}', out / 'key' if seen else sh / f'mac-b-{chain}.key'
     pso_pairs = g.table('pso_pairs.tsv')
@@ -1483,7 +1482,7 @@ def mac_gpu_arch(work, env, logs):
 
 
 def mac_pso(py, repo, work, lib, g, gpus, env, logs):
-    """PLATFORM 'mac-app', an NVN game with shader pairs: its pipeline archive made offline for this Mac's GPU (dm/gfx/tools/pso_offline.py --platform macos, metal-tt), which the app carries as
+    """PLATFORM 'mac-app', an NVN game with shader pairs: its pipeline archive made offline for this Mac's GPU (dm/gfx/tools/pso_offline.py, metal-tt), which the app carries as
     Resources/pso and the launcher hands to the host as DM_PSO_BUNDLE (docs/development.md, The pipeline archive made offline): the app's first start builds no base,
     and the bases do not go into the player's ~/Library/Application Support. gpus: --gpu / PSO_GPUS (empty: this Mac's GPU; none: no archive, the app
     builds the bases on its first start). Made again only when its inputs change (pso_offline.py's key). Returns the folder, or None"""
@@ -1498,7 +1497,7 @@ def mac_pso(py, repo, work, lib, g, gpus, env, logs):
     arch = gpus or here
     PROG.add(1); PROG.stage('Pipeline archive', step=f'{arch} (metal-tt, minutes when its inputs changed)')
     out = work / 'pso/mac'
-    cmd = [py, repo / 'dm/gfx/tools/pso_offline.py', '--game', g.id, '--msl', lib, '--out', out, '--work', work / 'pso/mac-work', '--gpu', arch, '--platform', 'macos']
+    cmd = [py, repo / 'dm/gfx/tools/pso_offline.py', '--game', g.id, '--msl', lib, '--out', out, '--work', work / 'pso/mac-work', '--gpu', arch]
     if not g.table('pso_pairs.tsv').is_file() and (work / 'shader/pso_pairs.tsv').is_file():   # the split's copy, as the app gets it (--pso-pairs)
         cmd += ['--pairs', g.table('shader_pairs.tsv'), '--pairs', work / 'shader/pso_pairs.tsv']
     if run(cmd, logs / 'pso_offline_mac.log', env=env, fatal=False):   # an optimization: the app builds the bases on its first start without it
@@ -1580,8 +1579,8 @@ def mac_prebake(py, repo, work, msl, g, host, pso, env, logs):
 
 
 def prewarm_script_libraries(out, scripts, lib_dir, po):
-    """The libraries the prewarm pipelines scripts name, as files for metal-tt, in out/libraries, and the scripts' paths pointed at them (po.script_libraries,
-    share: pso_offline.py --prewarm-host). po: the pso_offline module. Returns that folder, or raises BuildError naming a library not found"""
+    """The libraries the prewarm pipelines scripts name, as files for metal-tt, in out/libraries, and the scripts' paths pointed at them (po.script_libraries).
+    po: the pso_offline module. Returns that folder, or raises BuildError naming a library not found"""
     try: return po.script_libraries(scripts, lib_dir, out / 'libraries')
     except LookupError as e: raise BuildError(str(e)) from e
 
@@ -1597,7 +1596,7 @@ def other_gpu_prewarm(repo, out, arch, others, logs, lib_dir, env):
     scripts = sorted(out.glob('prewarm-*.mtl4-json'))
     if not scripts: say(f'[RED] prewarm pipelines for {", ".join(others)}: the host wrote no pipelines script; those GPUs build them on their first start'); return False
     sys.path.insert(0, str(repo / 'dm/gfx/tools')); import pso_offline as po
-    osmin = po.os_min_default('macos')
+    osmin = po.os_min_default()
     try: prewarm_script_libraries(out, scripts, lib_dir, po)
     except (BuildError, OSError) as e: say(f'[RED] prewarm pipelines for {", ".join(others)}: {e}; those GPUs build them on their first start'); return False
     ok = True

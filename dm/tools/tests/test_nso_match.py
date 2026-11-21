@@ -48,6 +48,13 @@ def image(functions):
     return out
 
 
+def nso_file(img, text=0x1000, ro=0x2000):
+    """The image as an NSO file for the rewriter's command line: text [0, text), ro the next ro bytes, data the rest, each stored as it is (no compression, no hash check)"""
+    head = bytearray(0x100); head[:4] = b'NSO0'
+    for i, (at, size) in enumerate(((0, text), (text, ro), (text + ro, len(img) - text - ro))): struct.pack_into('<III', head, 0x10 + i * 0x10, 0x100 + at, at, size)
+    return bytes(head) + bytes(img)
+
+
 def caller(start, target, data=0x2200):
     return [ADRP(8, start, data), ADDI(8, 8, data & 0xfff), MOV,
             B(start + 12, target) | 0x80000000, 0x54000040, NOP, RET]  # bl; b.eq +8

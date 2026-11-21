@@ -94,16 +94,15 @@ class ReadImage(unittest.TestCase):
         romfs_image.pack(self.src, self.image)
         self.assertEqual(shader_split.unzs(str(self.virtual / 'data/table.byml.zs')), self.data)
 
-    def test_damaged_flag_is_read_on_files_only(self):
+    def test_an_entry_flag_is_refused(self):   # the flags byte has no meaning: an image with one set is not this format (the host refuses it too, dm/host/romfs_image.h)
         with open(self.image, 'rb') as f: _, ioff, _, _ = romfs_image.HEAD.unpack(f.read(romfs_image.HEAD.size))
         loaded = romfs.Image(self.image); file_k, dir_k = loaded.find('a'), loaded.find('data')
         def flagged(k, flags):
             raw = bytearray(self.image.read_bytes()); raw[ioff + k * romfs.ENT.size + romfs.ENT.size - 1] = flags
             out = self.root / 'flagged.img'; out.write_bytes(raw); return out
-        self.assertEqual(romfs.Image(flagged(file_k, 1)).entry(file_k)[5], 1)
-        with self.assertRaises(ValueError): romfs.Image(flagged(file_k, 2))
-        with self.assertRaises(ValueError): romfs.Image(flagged(dir_k, 1))
-        self.assertEqual(romfs_image.read_index(flagged(file_k, 1)), romfs_image.read_index(self.image))
+        self.assertEqual(romfs.Image(self.image).entry(file_k)[5], 0)
+        for k, flags in ((file_k, 1), (file_k, 2), (dir_k, 1)):
+            with self.subTest(k=k, flags=flags), self.assertRaises(ValueError): romfs.Image(flagged(k, flags))
 
 
 if __name__ == '__main__': unittest.main()

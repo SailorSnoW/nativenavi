@@ -9,7 +9,7 @@
 #   each run gets a copy, the folder itself is not changed. --variant 'label:KEY=VALUE,KEY=VALUE': a variant (repeatable; KEY host=<path> runs another host binary, msl=<folder>
 #   other Mac shader libraries, shmap=<file> another shader map (with the c1_full.tsv / cb_extent.tsv of those libraries beside it), patched=<folder> other rewritten modules,
 #   pso=<folder> another pipeline archive); without one, a single variant 'base'. --runs N: each variant N times, in turn (default 2).
-#   --fps / --scale: DM_FPS_TARGET (with the display link at that rate) / DM_RENDER_SCALE for every variant; --env KEY=VALUE for every variant. --out <folder>: where the runs go
+#   --fps: DM_FPS_TARGET (with the display link at that rate) for every variant; --env KEY=VALUE for every variant. --out <folder>: where the runs go
 #   (default <id>_build/bench/<date-time>): per run log.txt, frames.tsv and the screenshots, and results.json and results.md for all.
 # A route line in bench.tsv: name, DM_KEYS (seconds from host start), the window's start and length in seconds, a description. The window starts once the scene is loaded and the
 # pipelines of the first frames are built, so runs compare the scene rather than its loading. Load on the Mac moves the numbers: compare variants of one invocation, not invocations.
@@ -94,7 +94,6 @@ def run_one(a, gid, build, var, route, out, lock):
     if archive: env['DM_PSO_ARCHIVE'] = archive if archive == 'off' else str(Path(archive).expanduser().resolve())
     if a.fps: env['DM_FPS_TARGET'] = str(a.fps)
     if a.fps and a.fps > 60: env.update(DM_PRESENT_HZ=str(a.fps), DM_PRESENT_LINK='2')   # the display link at the screen's rate for the variable frame step; at 60 or 30 the host matches the screen to the cap itself
-    if a.scale: env['DM_RENDER_SCALE'] = str(a.scale)
     for kv in a.env: k, _, v = kv.partition('='); env[k] = v
     for k, v in var.items():
         if k not in ('host', 'msl', 'shmap', 'patched', 'pso'): env[k] = v
@@ -175,7 +174,6 @@ def main():
     ap.add_argument('--variant', action='append', default=[], help="'label:KEY=VALUE,…' (repeatable); keys host, msl, shmap, patched, pso take paths")
     ap.add_argument('--runs', type=int, default=2)
     ap.add_argument('--fps', type=int, help='DM_FPS_TARGET for every variant (above 60 with the display link at that rate)')
-    ap.add_argument('--scale', type=float, help='DM_RENDER_SCALE for every variant')
     ap.add_argument('--env', action='append', default=[], help='KEY=VALUE for every variant (repeatable)')
     ap.add_argument('--pso-archive', help='DM_PSO_ARCHIVE for every variant (the pipeline archive; default the host\'s own)')
     ap.add_argument('--lock', default='', help='a lock file to hold while a game runs, shared with other measuring runs on this Mac')
@@ -207,7 +205,7 @@ def main():
             s = run_one(a, gid, build, var, route, d, lock); results[label].append(s)
             print(f'  {label} run {i + 1}: ' + (f'{s["fps"]} fps, frame p50 {s["frame_p50"]} / p99 {s["frame_p99"]} / max {s["frame_max"]} ms, GPU p50 {s["gpu_p50"]} ms' if s.get('frames') else f'no frames (see {d / "log.txt"})'), flush=True)
     keys = ['fps', 'frame_p50', 'frame_p95', 'frame_p99', 'frame_max', 'shown_p99', 'shown_max', 'dropped', 'over_budget', 'gpu_p50', 'gpu_p95', 'game_speed', 'red_lines']
-    md = (f'{gid}, route `{a.route}` ({route["about"]}), window {route["secs"]:g} s, fps target {a.fps or "profile"}, render scale {a.scale or "profile"}; '
+    md = (f'{gid}, route `{a.route}` ({route["about"]}), window {route["secs"]:g} s, fps target {a.fps or "profile"}; '
           f'medians over runs (range); times in ms; over_budget = frames longer than 1.5 frame times\n\n' + table(results, keys) + '\n')
     (out / 'results.md').write_text(md); (out / 'results.json').write_text(json.dumps({'game': gid, 'route': a.route, **{k: v for k, v in vars(a).items() if k != 'build' and k != 'save'}, 'save': str(a.save), 'variants': variants, 'results': results}, indent=1, default=str))
     print('\n' + md)

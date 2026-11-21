@@ -159,7 +159,7 @@ class Pairing(unittest.TestCase):
                                              'layouts': [{'stride': 16, 'step_function': 'PerVertex', 'step_rate': 1}]}
         script = self.root / 'bases.mtl4-json'; script.write_text(json.dumps(plan))
         archive = self.root / 'pairs.mtl4a'
-        osmin = pso_offline.os_min_default('macos')
+        osmin = pso_offline.os_min_default()
         r = subprocess.run(['xcrun', '-sdk', 'macosx', 'metal-tt', '-arch', 'applegpu_g13s', '-macos-version-min', osmin, script, '-o', archive],
                            env=dict(os.environ, TMPDIR=str(self.root)), capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

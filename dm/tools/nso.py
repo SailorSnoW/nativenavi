@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The one loader of Switch code modules: an NSO (ExeFS) or an NRO (loaded at run time with nn::ro) → its memory image of text + ro + data, bss not included.
+"""The one loader of the game's code modules: an NSO (ExeFS) → its memory image of text + ro + data, bss not included.
 Every tool that reads a module's code goes through load(). It accepts what Horizon accepts and checks it the same way, before anything the header claims is allocated; a damaged or
 truncated file raises Error (a ValueError):
   · NSO, as Horizon's loader (Atmosphere's ldr_process_creation.cpp, ValidateNsoHeaders, LoadAutoLoadModuleSegment, CheckSegmentHash): memory offsets on pages, text at 0, then ro,
@@ -7,11 +7,10 @@ truncated file raises Error (a ValueError):
     decompress to exactly its size (a short LZ4 stream decompresses without an error, and the image came out shorter or with the later segments shifted); a segment whose
     check-hash flag is set (every retail module: 93 of 93 surveyed, all 279 hashes matching) must match its SHA-256 in the header, so damaged bytes of the right size are caught too.
     A module with the flags cleared (a modified main) is not checked, as on the Switch.
-  · NRO, as nn::ro (Atmosphere's ro_service_impl.cpp, ValidateNro): sizes in whole pages, text at 0, ro and data right after, data ending at the module's size (40 of 40 surveyed).
   · Beyond Horizon, so a small file cannot claim gigabytes: a compressed segment can be no more than LZ4 produces from its stored bytes (255 bytes per byte; zstd has no such
     bound, so a ZBIC segment is held only to its own size), and the image, gaps included, no more than that of the whole file.
   · Compression: LZ4, and ZBIC (NSO flag bit 7, system 22.0.0 on: Nintendo's zstd variant, its own magic and entropy-table coding, which stock zstd cannot read) through the zbic
-    package, as lz4.block is used. A compressed NRO (system 23.0.0+) is an Error naming it, never a wrong image.
+    package, as lz4.block is used.
 bss is only a size: the image never includes it (patch_nso.py lays it out; this script's output file gets it as a sparse tail).
 Usage on its own: nso.py <module> <out.bin> (the whole memory image, bss included, for nso_fnmap.py and analysis)"""
 import hashlib, struct, sys
@@ -20,7 +19,7 @@ from typing import NamedTuple
 PAGE = 0x1000
 LZ4_MAX_RATIO = 255   # an LZ4 block produces at most 255 bytes per stored byte (a match length extension byte)
 SIZE_MAX = 0x7FFFFFFF   # Horizon reads segment sizes as s32
-NSO_ZSTD, NRO_COMPRESSED = 1 << 7, 1 << 1
+NSO_ZSTD = 1 << 7
 NAMES = ('text', 'ro', 'data')
 
 
@@ -54,7 +53,7 @@ class Module(NamedTuple):
 
 
 def load(d, name='module'):
-    """Module of the file's bytes d (NSO0 or NRO0); name goes into the Error messages"""
+    """Module of the file's bytes d (NSO0); name goes into the Error messages"""
     if d[:4] == b'NSO0':
         if len(d) < 0x100: raise Error(f'{name}: the NSO header is cut short ({len(d)} bytes)')
         flags = struct.unpack_from('<I', d, 0xc)[0]
@@ -71,23 +70,8 @@ def load(d, name='module'):
         if stored[0][1]: raise Error(f'{name}: text segment is at {stored[0][1]:#x}, not at 0')
         for i in (1, 2):
             if stored[i][1] < stored[i - 1][1] + stored[i - 1][2]: raise Error(f'{name}: {NAMES[i]} segment at {stored[i][1]:#x} overlaps the {NAMES[i - 1]} segment before it')
-    elif d[0x10:0x14] == b'NRO0':
-        # The file is the image itself: each segment stored at its memory offset, uncompressed; +0x18 the module's size, +0x1c flags, +0x20 text, +0x28 ro, +0x30 data as {offset, size},
-        # +0x38 bss size, +0x40 the build ID
-        if len(d) < 0x80: raise Error(f'{name}: the NRO header is cut short ({len(d)} bytes)')
-        size, nflags = struct.unpack_from('<II', d, 0x18)
-        if nflags & NRO_COMPRESSED: raise Error(f'{name}: a compressed NRO (system 23.0.0+), which this loader does not decode yet')
-        flags, stored = 0, [(o, o, sz) for o, sz in (struct.unpack_from('<II', d, 0x20 + 8 * i) for i in range(3))]
-        csz = [sz for _, _, sz in stored]
-        bss, build_id = struct.unpack_from('<I', d, 0x38)[0], bytes(d[0x40:0x60])
-        at = 0
-        for i, (o, _, sz) in enumerate(stored):
-            if sz % PAGE or o != at: raise Error(f'{name}: {NAMES[i]} segment {o:#x}..{o + sz:#x} is not whole pages right after the one before it (at {at:#x})')
-            at += sz
-        if at != size: raise Error(f'{name}: the segments end at {at:#x}, not at the module\'s size {size:#x}')
-        if size > len(d): raise Error(f'{name}: the module is {size:#x} bytes, the file {len(d):#x}: the file is cut short or damaged')
     else:
-        raise Error(f'{name}: not an NSO or NRO (magic {bytes(d[:4])!r})')
+        raise Error(f'{name}: not an NSO (magic {bytes(d[:4])!r})')
     end = stored[2][1] + stored[2][2]
     if end > len(d) * LZ4_MAX_RATIO: raise Error(f'{name}: the segments span {end:#x} bytes, more than a file of {len(d):#x} bytes can fill (a gap of zeros between them)')
     img = bytearray(end)

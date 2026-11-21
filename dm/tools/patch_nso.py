@@ -9,7 +9,6 @@
 #   sub sp, sp, xN      → xN rounded up to 16 first (Apple's kernel faults on a misaligned sp, Horizon does not; site_sp_align)
 #   sub sp, sp, #imm … add sp, sp, #imm with imm not a multiple of 16 → both rounded up to 16, when nothing between them reaches past the frame (odd_sp_frames)
 #   ldxr* / ldxp → ldaxr* / ldaxp, stxr* / stxp → stlxr* / stlxp: every exclusive access gets acquire or release ordering (exclusive_order_sites; the games ran on the Switch's Cortex-A57 without it, Apple cores need it)
-#   the completer of Trinity's per-frame rendezvous: dmb ish between its flag store and its load of the state word (trinity_completer_sites; exactly one such function in a module, or no change)
 #   spin wait loops     → a copy whose back-edges pass a spin gate (the host yields there; a busy poll costs nothing on the Switch, see "Spin waits")
 #   Registered cuts (CUTS of the patch files, restricted by NSO build ID, see "Registered patches"): before rewriting, the original bytes are asserted one by one and any mismatch aborts; results are listed in <name>.cuts.tsv
 #   Function-matched cuts (MATCH_CUTS of the selected game's patches.py): unknown builds only, unique complete-function and direct-callee fingerprints, then original-byte assertions
@@ -33,8 +32,7 @@ except ValueError: sys.exit('[RED] DM_REWRITE_J must be a positive integer')
 if WORKERS < 1: sys.exit('[RED] DM_REWRITE_J must be a positive integer')
 
 src, outdir, NAME = sys.argv[1], sys.argv[2], sys.argv[3]
-# An NSO, or an NRO (a module the game loads at run time with nn::ro, Super Smash Bros. Ultimate's fighter code), rewritten as an NSO of the same layout would be. nso.py checks the file
-# against its header before anything is allocated (a damaged module stops here with a [RED] line)
+# nso.py checks the file against its header before anything is allocated (a damaged module stops here with a [RED] line)
 MOD = nso.cli_read(src)
 bss = MOD.bss
 # Every jump between the patch area and the code is a B (±128 MB). A patch area appended after the image (with bss) cannot reach the code when it would start beyond 112 MB (leaving 16 MB for the patch area): Metroid Dread's main has about 1.8 GB of bss (the engine's static heap); Engage's main starts its patch area at about 103 MB and keeps it after the image.
@@ -87,8 +85,7 @@ else:
 #     independent (no PC-relative / branch / anything involving x18 or tpidr), asserted offline; when the host has no callback attached the gate block goes in and out once and returns
 #   FRAME_STEP = {build ID: function(ctx)}: the frame step stubs of a main ("Frame step in whole vsyncs" below)
 #   STUBS = {build ID: function(ctx)}: code a fix needs in the patch area, branched to from its sites ("Stubs" below)
-#   MATCH_STUBS = {module: [rule, ...]}: STUBS placed by the same function matcher as MATCH_FRAME_STEP, without a frame-step state page. A rule with fps_required=True disables
-#     native engine frame targets unless its stub sets ctx.fps_ready=True after installing every required correction; an unmatched future build keeps its original speed.
+#   MATCH_STUBS = {module: [rule, ...]}: STUBS placed by the same function matcher as MATCH_FRAME_STEP, without a frame-step state page
 #   MATCH_FRAME_STEP = {'main': [{name, size, fingerprints, stub}, ...]}: the frame step stubs of any main without FRAME_STEP, placed by the function they patch (nso_match.locate_stub:
 #     one complete unwind function of that size and fingerprint, or no stubs and a red line); stub(ctx) writes its sites at ctx.base + offsets inside that function. Rules are
 #     one patch's reviewed implementations (one name). Only the profile selected by DM_GAME participates, as for MATCH_CUTS. A rule's others = {label: {size, fingerprints}}
@@ -168,15 +165,12 @@ FS_MATCH = None
 if NAME == 'main' and BUILD_ID not in PATCHES['FRAME_STEP']:
     from nso_match import locate_stub
     FS_MATCH = locate_stub(IMG, TEXT_END, PATCHES['MATCH_FRAME_STEP'].get(PROFILE, {}).get(NAME, []))
-# Ordinary matched stubs do not declare a frame step. Keep their FPS dependency
-# separate: finding the engine interval alone does not prove every consumer scales.
+# Ordinary matched stubs do not declare a frame step
 STUB_RULES = PATCHES['MATCH_STUBS'].get(PROFILE, {}).get(NAME, [])
-assert all(isinstance(r.get('fps_required', False), bool) for r in STUB_RULES), 'fps_required must be a bool'
-NATIVE_FPS_BLOCKED = any(r.get('fps_required', False) for r in STUB_RULES)
 STUB_MATCH = None
 if STUB_RULES and BUILD_ID not in PATCHES['STUBS']:
     from nso_match import locate_stub
-    STUB_MATCH = locate_stub(IMG, TEXT_END, [{k: v for k, v in r.items() if k != 'fps_required'} for r in STUB_RULES])
+    STUB_MATCH = locate_stub(IMG, TEXT_END, STUB_RULES)
 # The frame step state page is the page after the key page. An appended patch area starts on the first 64 KB boundary after the key page, which is that page itself when the key
 # page ends on such a boundary (Hades II's v0 main): a main that gets the state page then starts its patch area 64 KB later. Nothing has been written to the patch area yet, and
 # every other module keeps its layout
@@ -828,34 +822,6 @@ for s, a, size in odd_sp_frames(IMG, CODE_RANGES, md):   # both immediates round
     r = (size + 15) & ~15
     struct.pack_into('<I', IMG, s, sp_adjust(0xD10003FF, r)); struct.pack_into('<I', IMG, a, sp_adjust(0x910003FF, r))
     stat('sp_frame')
-def trinity_completer_sites(img, ranges):
-    """Offsets of the completer of Trinity's per-frame rendezvous (Game Freak; Pokémon Scarlet 1.0.0 main+0x28f872c, 4.0.0 main+0x2d0010c):
-      stp x29,x30,[sp,#-0x20]!; stp x20,x19,[sp,#0x10]; mov x29,sp; ldr x8,[x0,#imm]; mov w9,#1; strb w9,[x8,#A]; ldrb w9,[x8,#A+1]; cbz w9,..;
-      ldr x20,[x8,#B]; add x9,x20,#C; ldar w8,[x9]; cmp w8,#2; b.ne ..
-    It sets the release flag with the plain strb and returns without a wake if the state word (ldar) is 2. A load-acquire does not order an earlier plain store, so the flag can stay
-    invisible while main resets the state to 0, reads the flag as 0 and parks for good (GitHub issue #1250, docs/reference/threads.md). The frame holds only the saved registers, so nothing
-    in the function reads x29"""
-    out, needle = [], struct.pack('<II', 0x88DFFD28, 0x7100091F)   # ldar w8,[x9]; cmp w8,#2
-    for s, e in ranges:
-        o = img.find(needle, s, e)
-        while o >= 0:
-            f = o - 40
-            if o % 4 == 0 and f >= s and o + 12 <= e:
-                w = struct.unpack_from('<13I', img, f)
-                if w[:3] == (0xA9BE7BFD, 0xA9014FF4, 0x910003FD) and w[3] & 0xFFC003FF == 0xF9400008 and w[4] == 0x52800029 and w[5] & 0xFFC003FF == 0x39000109 and \
-                        w[6] & 0xFFC003FF == 0x39400109 and w[6] >> 10 & 0xFFF == (w[5] >> 10 & 0xFFF) + 1 and w[7] & 0xFF00001F == 0x34000009 and w[8] & 0xFFC003FF == 0xF9400114 and \
-                        w[9] & 0xFFC003FF == 0x91000289 and w[12] & 0xFF00001F == 0x54000001:
-                    out.append(f)
-            o = img.find(needle, o + 4, e)
-    return out
-def trinity_completer_barrier(img, f):
-    """The frame pointer's mov gives up its word: the ldr, the mov and the strb move up one and dmb ish follows the strb. Backtraces skip this frame, and nothing in it reads x29"""
-    struct.pack_into('<4I', img, f + 8, *struct.unpack_from('<3I', img, f + 12), 0xD5033BBF)
-trinity = trinity_completer_sites(IMG, CODE_RANGES)
-if len(trinity) > 1: print(f'[RED] {NAME}: {len(trinity)} functions have the shape of Trinity\'s rendezvous completer, so none gets its barrier: ' + ', '.join(hex(o) for o in trinity))
-elif trinity:
-    trinity_completer_barrier(IMG, trinity[0])
-    stat('trinity_completer')
 md_lite = Cs(CS_ARCH_ARM64, CS_MODE_ARM)   # no details: the x18 scan reads only the operand text
 R18 = re.compile(r'\b[xw]18\b')
 def x18_words(lo, hi):
@@ -1397,7 +1363,7 @@ obs += region_obs
 # +0x3c u32 marked by a stub that reads it (Ocarina of Time: its step is never shorter than the frame took), +0x40 u32 1 = the game's own dynamic resolution runs, 0 = its
 # stub holds full resolution (DM_DYNAMIC_RESOLUTION, written by the loader; the stub declares the DYNAMIC_RESOLUTION capability). Stub bodies assembled with clang
 # A build's stubs are FRAME_STEP[build ID](ctx) in its patches.py: ctx.here() / ctx.emit(word) assemble into the patch area, ctx.site(offset, original bytes) asserts a site and that it is
-# no rewrite site, ctx.put(offset, words, reason) writes it (listed with the cuts), ctx.state is the state page's offset, ctx.render_scale = n marks a render-scale stub that takes scales up to n (1: it only lowers the game's size),
+# no rewrite site, ctx.put(offset, words, reason) writes it (listed with the cuts), ctx.state is the state page's offset,
 # ctx.step_max = n says the stubs hand the game steps of at most n vsyncs (its own interval logic stops there; 0 = FSTEP_MAX, 3), so the host holds frames and pays back at most n,
 # ctx.others the other functions a MATCH_FRAME_STEP rule names, ctx.found what an anchored rule's find returned, ctx.address(offset) the data address an adrp there and the add / load / store after it make (in the original
 # text: the fingerprints mask those pages, so a matched stub reads the globals it needs from its functions), and ctx.capabilities.add(name) declares a launcher capability the
@@ -1405,7 +1371,6 @@ obs += region_obs
 FRAME_STEP = PATCHES['FRAME_STEP']
 FS_STATE_OFF = 0
 STEP_MAX = 0   # n = the stubs give the game steps of at most n vsyncs (ctx.step_max): the fixups table says so (STEP_MAX n), and the host holds frames at most n vsyncs (nvn_fstep.h smax)
-RENDER_SCALE = 0   # n = the build has a render-scale stub (state +0x10) that takes scales up to n: the fixups table says so (RENDER_SCALE n), the loader holds DM_RENDER_SCALE to it and the launcher offers the setting up to it (dm/games/settings.tsv)
 FS_CAPABILITIES = set()   # capabilities the frame step stubs declare (ctx.capabilities)
 if (BUILD_ID in FRAME_STEP or FS_MATCH) and NAME == 'main':
     FS_STATE_OFF = KEY_PAGE_OFF + 0x4000
@@ -1441,9 +1406,9 @@ def stub_address(off, what, lo_off=None):   # ADRP and its low instruction (adja
 if FS_STATE_OFF:   # the build's stubs (FRAME_STEP of its patches.py), or those placed by their function (MATCH_FRAME_STEP: ctx.base is its start)
     use_area(0); fs = types.SimpleNamespace(here=here, emit=emit, site=lambda off, orig: stub_site(off, orig, 'frame step'),
                                             put=lambda off, words, why: stub_put(off, words, why + (' [function match]' if FS_MATCH else ''), 'frame_step'),
-                                            state=FS_STATE_OFF, render_scale=0, step_max=0, base=FS_MATCH[1] if FS_MATCH else 0, others=FS_MATCH[2] if FS_MATCH else {},
+                                            state=FS_STATE_OFF, step_max=0, base=FS_MATCH[1] if FS_MATCH else 0, others=FS_MATCH[2] if FS_MATCH else {},
                                             found=FS_MATCH[3] if FS_MATCH else None, capabilities=set(), address=lambda off, lo_off=None: stub_address(off, 'frame step', lo_off))
-    (FS_MATCH[0]['stub'] if FS_MATCH else FRAME_STEP[BUILD_ID])(fs); RENDER_SCALE = fs.render_scale; STEP_MAX = fs.step_max; FS_CAPABILITIES = fs.capabilities
+    (FS_MATCH[0]['stub'] if FS_MATCH else FRAME_STEP[BUILD_ID])(fs); STEP_MAX = fs.step_max; FS_CAPABILITIES = fs.capabilities
 
 # ---- Stubs (the modules whose patch file has STUBS of their build) ----
 # A fix of the game's own code that needs more instructions than its sites hold: STUBS[build ID](ctx) in its patches.py assembles them into the patch area and branches there from
@@ -1457,10 +1422,8 @@ if BUILD_ID in STUBS or STUB_MATCH:
                               put=lambda off, words, why: stub_put(off, words, why + (' [function match]' if STUB_MATCH else ''), 'stub'),
                               address=lambda off, lo_off=None: stub_address(off, 'stub', lo_off),
                               base=STUB_MATCH[1] if STUB_MATCH else 0, others=STUB_MATCH[2] if STUB_MATCH else {},
-                              found=STUB_MATCH[3] if STUB_MATCH else None, fps_ready=False)
+                              found=STUB_MATCH[3] if STUB_MATCH else None)
     (STUB_MATCH[0]['stub'] if STUB_MATCH else STUBS[BUILD_ID])(st)
-    if st.fps_ready: NATIVE_FPS_BLOCKED = False
-if NATIVE_FPS_BLOCKED: print(f'[RED] {NAME}: native frame target disabled: a required timing correction did not match')
 
 # ---- Spin waits (every module) ----
 # A guest loop that polls memory until another thread changes it fills only its own core on the Switch, where any higher-priority thread pinned there preempts it, so the
@@ -1801,30 +1764,6 @@ if FAR:   # patch area before the base: file = text + ro + data (padded to 16K) 
 else:
     open(P('patched.bin'), 'wb').write(IMG + bytearray(PATCH_OFF - len(IMG)) + patch)
 import hashlib
-def movie_native_color_keys():
-    # NintendoSDK_movie 7.3.2 rotates hw-buf-ColorSpace right by five, then accepts values 1 through 4 as-is.
-    # SDK 4.4.1 adds one. Match the reviewed converter at its export and verify what key the result is written to.
-    key = b'nv12-colorspace\0'
-    symbol = '_ZN5movie25convertMessageToMediaDataERKN7android2spINS0_8AMessageEEEPNS_9MediaDataE'
-    if IMG.find(key, RO_OFF, DATA_OFF) < 0 or IMG.find(symbol.encode() + b'\0', RO_OFF, DATA_OFF) < 0:
-        return False
-    start, size = nso_syms.defined(IMG).get(symbol, (0, 0))
-    if not 0 < start < start + size <= TEXT_END:
-        return False
-    signature = struct.pack('<4I', 0x13881508, 0x51000509, 0x7100113f, 0x1a9f3102)
-    at = ORIG_TEXT.find(signature, start, start + size)
-    if at < 0 or at % 4 or at + 24 > start + size or ORIG_TEXT.find(signature, at + 4, start + size) >= 0:
-        return False
-    pair = list(md.disasm(ORIG_TEXT[at + 16:at + 24], at + 16))
-    if len(pair) != 2 or pair[0].mnemonic != 'adrp' or pair[1].mnemonic != 'add':
-        return False
-    page, low = pair[0].operands, pair[1].operands
-    if (len(low) != 3 or low[2].type != ARM64_OP_IMM or low[2].shift.value or
-            any(md.reg_name(op.reg) != 'x1' for op in (page[0], low[0], low[1]))):
-        return False
-    target = page[1].imm + low[2].imm
-    return RO_OFF <= target < DATA_OFF and IMG[target:target + len(key)] == key
-
 with open(os.path.join(outdir, 'build_src.sha256'), 'w') as f:   # the same for every module: the rewriter and every patch file, by path from dm/tools
     for src_ in (os.path.abspath(__file__), nso.__file__, nso_code.__file__, nso_asm.__file__, nso_syms.__file__, *PATCH_FILES): f.write(hashlib.sha256(open(src_, 'rb').read()).hexdigest() + f'  {os.path.relpath(os.path.abspath(src_), os.path.dirname(os.path.abspath(__file__)))}\n')
 with open(P('fixups.tsv'), 'w') as f:
@@ -1833,11 +1772,6 @@ with open(P('fixups.tsv'), 'w') as f:
     if TWO: f.write(f'# BACK_OFF\t{BACK_OFF:#x}\n# BACK_LEN\t{BACK_LEN:#x}\n')   # the back patch area (TWO): its offset in the image, and its length, the last bytes of the file
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
     if FS_STATE_OFF: f.write(f'# FPS_STATE_OFF\t{FS_STATE_OFF:#x}\n')   # frame step state page (FRAME_STEP): the loader writes the target fps there
-    if NATIVE_FPS_BLOCKED: f.write('# NATIVE_FPS_BLOCKED\t0x1\n')   # a required matched timing correction was not installed
-    if movie_native_color_keys(): f.write('# MOVIE_NATIVE_COLOR_KEYS\t0x1\n')
-    if RENDER_SCALE:   # a render-scale stub reads state +0x10, up to this scale (the loader holds DM_RENDER_SCALE to it; dm/games/settings.py offers the setting up to it)
-        assert isinstance(RENDER_SCALE, int) and 1 <= RENDER_SCALE <= 9, f'render scale stub: ctx.render_scale is a whole largest scale, 1 to 9: {RENDER_SCALE!r}'
-        f.write(f'# RENDER_SCALE\t{RENDER_SCALE}\n')
     if STEP_MAX:   # the largest step the frame step stubs give the game (the host holds frames and pays back within it)
         assert isinstance(STEP_MAX, int) and 1 <= STEP_MAX <= 3, f'frame step stub: ctx.step_max is a whole step, 1 to 3: {STEP_MAX!r}'
         f.write(f'# STEP_MAX\t{STEP_MAX}\n')

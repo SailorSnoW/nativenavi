@@ -6,7 +6,7 @@
 #   fullscreen-class passes (draw vertex count ≤ 6 and ≤ 3 draws; draw count from the d rows of PASSDUMP_ALL, or else the number of fragment program binding rows): for each sampled bound view, min(whole bound view bytes, target pixel count × bytes per texel);
 #   geometry-class passes: target pixel count × number of texture slots declared by the fragment shaders in the pass (take the max) × average bytes per texel of the sampled textures (about one sample per pixel per slot; material textures have mips).
 #   Texture format and size come from the B row of each descriptor in the same frame and pass (the same serial can bind views of different levels / layers); 4 bytes if not found; slot counts come from the B library reflection json.
-# Usage: tbdr_budget.py <log containing PASSDUMP> [frame number (default: first frame)] [budget MB=170] [--tsv=path of the full table]
+# Usage: [DM_MSL_DIR=<build folder>/shader/cache] tbdr_budget.py <log containing PASSDUMP> [frame number (default: first frame)] [budget MB=170] [--tsv=path of the full table]
 # The TSV is not truncated to the top 25 / shader keys; it carries per-draw sources, the unknown-texture denominator and merged-pass notes. The texture column is always a rough binding-model estimate, not an external-memory measurement.
 import re, sys, collections
 BPP = {70: 4, 71: 4, 80: 4, 81: 4, 90: 4, 92: 4, 93: 4, 115: 8, 125: 16, 55: 4, 25: 2, 65: 4, 105: 4, 103: 4, 252: 4, 250: 2, 260: 5, 255: 4, 10: 1, 20: 2, 30: 2, 60: 4, 53: 4}
@@ -19,8 +19,10 @@ TBPP = {10: 1, 20: 2, 25: 2, 30: 2, 53: 4, 55: 4, 60: 4, 65: 8, 70: 4, 71: 4, 80
 texinfo = collections.defaultdict(dict); sampled = collections.defaultdict(set); tgt = {}; maxvc = collections.defaultdict(int); ndraw = collections.defaultdict(int); fskeys = collections.defaultdict(set); fused = set(); att_desc = collections.defaultdict(list)
 import os, json; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import dmsh_chain
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'tools')); import shader_lib
-DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
-LIB = shader_lib.view(os.path.join(DM_ROOT, f'build/cache/metal_shader_cache/b-{dmsh_chain.version()}'))
+# The shader libraries the run loaded, found as the host finds them (g_msl_dir in dm/gfx/nvn/nvn_mtl.m): under DM_MSL_DIR, which a build's run command sets to <build folder>/shader/cache,
+# else under DM_ROOT (default ~/dm-work). Without them every fragment shader counts as 4 texture slots
+MSL_DIR = os.environ.get('DM_MSL_DIR') or os.path.join(os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work'), 'build/cache/metal_shader_cache')
+LIB = shader_lib.view(os.path.join(MSL_DIR, f'b-{dmsh_chain.version()}'))
 def tex_slots(key):
     try: return sum(1 for b in json.loads((LIB / f'{key}_b.json').read_bytes())['bindings'] if b.get('kind') in ('tex', 'samp_tex'))
     except Exception: return 4

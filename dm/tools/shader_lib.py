@@ -6,19 +6,16 @@
 # A folder and an image may lie side by side, and each file comes from the folder first:
 #   folder with a stamp (inputs.tsv)      a finished full build: the image, if any, is older and pack replaces it
 #   folder without a stamp, and an image  a partial dmsh_build.py run (given keys) over a packed library, or a stopped build: the folder holds only what it rebuilt, and pack keeps the image's other files
-#   folder alone                          a build folder from before this, a partial build, or a build in progress: used as it is
+#   folder alone                          a partial build, or a build in progress: used as it is
 # pack writes the image, then removes the folder, so every file is in one or the other at each moment, and a host running from the folder goes on from the image. A pack that fails
 # (a full drive) is one [RED] line, not an error: the build is done, and the folder works.
-# An iPhone library may leave out the pulling vertex libraries when nothing will read them (pack's leave_out), which the marker PULLING_LEFT_OUT inside it says: the build that needs them compiles them,
-# and pack_ipa.py refuses to pack such an image for an app that needs them, which would fail only on the device.
 # Not part of the translation chain: it decides no output (dmsh_chain.py). dmsh_build.py writes the image itself (write, from the outputs it staged in the shader cache), and its folder holds
-# only the shaders in flight; pack is for a folder an older chain's dmsh_build.py wrote (regress.py builds old revisions) or a build stopped before that.
+# only the shaders in flight; pack is for the folder a partial build (given keys) or a build stopped before that leaves.
 # Usage: shader_lib.py pack <lib>                      the folder into the image
-#        shader_lib.py expand <lib>                    the image back into a folder, only for a host from before this change
 #        shader_lib.py path <lib>                      what to read: the folder or the image
 #        shader_lib.py has <lib>                       exit status 0 when it holds a shader's library (<key>_b.metallib)
 #        shader_lib.py cat <lib> <name>                one file's bytes on standard output
-#        shader_lib.py subset <lib> <out.img> [--skip-suffix S]...  a new image without .metal sources and build reports, as an app carries it
+#        shader_lib.py subset <lib> <out.img>          a new image without .metal sources and build reports, as the Mac app carries it (dm/mac/pack_app.py)
 # <lib> is the path b-<chain>, with or without .img.
 import argparse, builtins, collections, concurrent.futures, contextlib, os, shutil, sys
 
@@ -30,7 +27,6 @@ STAMP = 'inputs.tsv'   # dmsh_chain.py STAMP
 APP_SUFFIXES = ('.metallib', '.json', '.tsv')   # what the host reads (not the Mac build's .metal sources)
 APP_LEAVE_OUT = ('_b_build.json',)   # dmsh_build.py's report, for the tools
 READERS = 8   # threads that call ahead the sources write is given as functions (dmsh_build.py's outputs, read from the shader cache), a few entries before the writer takes them
-PULLING, PULLING_LEFT_OUT = '_bp.metallib', '_bp_left_out'   # dmsh_pull.py's libraries (build_ipa.sh decides who wants them), and the marker of an image without them
 
 
 def folder_of(lib):
@@ -114,25 +110,18 @@ def write(files, dst):
     os.replace(part, dst)
 
 
-def pack(lib, say=print, leave_out=False):
-    """The folder into the image, and the folder removed. Returns whether an image now stands for the library. Without a folder there is nothing to do, unless leave_out finds pulling libraries in the
-    image to take out: leave_out is the iPhone build's when nothing will read them"""
+def pack(lib, say=print):
+    """The folder into the image, and the folder removed. Returns whether an image now stands for the library. Without a folder there is nothing to do"""
     folder, image = folder_of(lib), image_of(lib)
     try:
         before = _names(folder) if os.path.isdir(folder) else None
         if before is not None and not before: os.rmdir(folder); before = None
-        if before is None and not os.path.isfile(image): return False
-        files = {n: os.path.join(folder, n) for n in before or ()}
-        if os.path.isfile(image) and (before is None or STAMP not in before):   # a partial build over a packed library, or the image alone
+        if before is None: return os.path.isfile(image)
+        files = {n: os.path.join(folder, n) for n in before}
+        if os.path.isfile(image) and STAMP not in before:   # a partial build over a packed library
             with romfs.scandir(image) as it:
                 for e in it: files.setdefault(e.name, e.path)
-        pulling = [n for n in files if n.endswith(PULLING)]
-        if before is None and not (leave_out and pulling): return True
-        if leave_out:
-            for n in pulling: del files[n]
-            files[PULLING_LEFT_OUT] = b'the pulling vertex libraries are left out: nothing in this build reads them (dm/tools/shader_lib.py)\n'
         write(files, image)
-        if before is None: return True
         if _names(folder) != before:   # a build wrote to it meanwhile: the folder is the newer one, and the next pack takes it
             say(f'{folder} changed while it was packed: it stays a folder'); return True
         shutil.rmtree(folder)
@@ -151,7 +140,7 @@ def remove_image(lib):   # before a full build: its folder replaces the library,
 
 
 def expand(lib):
-    """The image back into a folder and the image removed, for a host from before this file (a kept host copy of the same chain). No build or run of the current sources needs it"""
+    """The image back into a folder and the image removed: the state a stopped build or a build by hand leaves, which the packing script's tests start from. No build or run needs it"""
     folder, image = folder_of(lib), image_of(lib)
     if not os.path.isfile(image): return
     work = folder + '.expand'
@@ -164,13 +153,13 @@ def expand(lib):
     os.rename(work, folder); os.unlink(image)
 
 
-def app_files(lib, skip_suffix=()):
-    """{name: path} of what an app carries of the library: what the host reads, and of that what the build wants (build_ipa.sh leaves out the pulling vertex libraries when nothing uses them)"""
-    return {p.name: str(p) for p in view(lib).iterdir() if p.name.endswith(APP_SUFFIXES) and p.name not in APP_LEAVE_OUT and not p.name.startswith('.') and '.tmp' not in p.name and not p.name.endswith(tuple(skip_suffix) or ('\0',))}
+def app_files(lib):
+    """{name: path} of what an app carries of the library: what the host reads"""
+    return {p.name: str(p) for p in view(lib).iterdir() if p.name.endswith(APP_SUFFIXES) and p.name not in APP_LEAVE_OUT and not p.name.startswith('.') and '.tmp' not in p.name}
 
 
-def subset(lib, dst, skip_suffix=()):   # → the number of files in the image dst
-    files = app_files(lib, skip_suffix)
+def subset(lib, dst):   # → the number of files in the image dst
+    files = app_files(lib)
     if not any(n.endswith('.metallib') for n in files): raise ValueError(f'no shader libraries at {lib}')
     def whole(path):   # a file's bytes, read by one of write's threads: one after the other, the 130,000 files an app takes of Ocarina of Time's library were 25 s of each pack that made it
         with romfs.open(path, 'rb') as f: return f.read()
@@ -179,24 +168,21 @@ def subset(lib, dst, skip_suffix=()):   # → the number of files in the image d
 
 
 def has_library(lib): return next(view(lib).glob('*_b.metallib'), None) is not None
-def left_out_pulling(lib): return (view(lib) / PULLING_LEFT_OUT).is_file()   # whether a build that needs the pulling libraries must make them again
 
 
 def main():
     ap = argparse.ArgumentParser(description='A game\'s shader libraries as one file, read in place')
-    ap.add_argument('cmd', choices=('pack', 'expand', 'path', 'has', 'cat', 'subset'))
+    ap.add_argument('cmd', choices=('pack', 'path', 'has', 'cat', 'subset'))
     ap.add_argument('lib'); ap.add_argument('arg', nargs='?')
-    ap.add_argument('--skip-suffix', action='append', default=[])
     a = ap.parse_args()
     if a.cmd == 'pack': return 0 if pack(a.lib) else 1
-    if a.cmd == 'expand': expand(a.lib); return 0
     if a.cmd == 'path': print(view(a.lib)); return 0
     if a.cmd == 'has': return 0 if has_library(a.lib) else 1
     if a.cmd == 'cat':
         try: sys.stdout.buffer.write((view(a.lib) / a.arg).read_bytes())
         except OSError as e: sys.exit(f'[RED] {e}')
         return 0
-    try: print(f'{a.arg}: {subset(a.lib, a.arg, a.skip_suffix)} files, {os.path.getsize(a.arg)} bytes')
+    try: print(f'{a.arg}: {subset(a.lib, a.arg)} files, {os.path.getsize(a.arg)} bytes')
     except (OSError, ValueError) as e: sys.exit(f'[RED] {e}')
     return 0
 

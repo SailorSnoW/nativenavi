@@ -39,7 +39,7 @@ class Image:
         next_child = 1
         for k in range(count):
             a, b, no, nl, t, flags = self.entry(k)
-            if no + nl > size - self.pool or t > 1 or flags > t or (k == 0 and (t or nl)):   # flags: 1 on a damaged file (romfs_image.py), 0 otherwise
+            if no + nl > size - self.pool or t > 1 or flags or (k == 0 and (t or nl)):   # flags: always 0 (romfs_image.py); the host refuses an image with another value too (dm/host/romfs_image.h)
                 raise ValueError(f'invalid RomFS image entry {k}: {path}')
             name = self.name(k)
             if k and (not nl or nl > 0x300 or b'\0' in name or b'/' in name or name in (b'.', b'..')):

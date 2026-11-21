@@ -101,12 +101,12 @@ class Nvn(Base):
         self.assertEqual(len([m for m in said if m.startswith('[RED] could not remove old shader libraries')]), 1)
         self.assertEqual(len([m for m in said if m.startswith('removed old shader libraries b-157e1b96c8da, b-a78f966a7b38 (')]), 1)
 
-    def test_prune_ignores_other_names(self):   # only b-<12 hex> folders and their keys, never the compile cache or another folder
+    def test_prune_ignores_other_names(self):   # only b-<12 hex> folders and their keys, never another folder
         self.build()
         for n in ('cas', 'b-notahexchain', 'b-0123456789abcd', 'mine'): (self.sh / 'cache' / n).mkdir()
         (self.sh / 'cache' / 'b-ffffffffffff').write_text('a file, not a library folder')
         self.build()
-        self.assertEqual(sorted(p.name for p in (self.sh / 'cache').iterdir()), sorted(['b-0123456789abcd', 'b-ffffffffffff', 'b-notahexchain', f'b-{CHAIN}.img', 'mine']))   # an empty old cache's folder goes
+        self.assertEqual(sorted(p.name for p in (self.sh / 'cache').iterdir()), sorted(['b-0123456789abcd', 'b-ffffffffffff', 'b-notahexchain', f'b-{CHAIN}.img', 'cas', 'mine']))
 
     def test_a_folder_from_before_becomes_one_file_without_a_build(self):   # a reused step: nothing is translated again
         self.build(); lib = self.sh / 'cache' / f'b-{CHAIN}'
@@ -144,22 +144,6 @@ class Nvn(Base):
             with mock.patch.object(nsp, 'main'): self.assertEqual(nsp.cli([]), 0)
         self.assertEqual([c.args[0].name for c in tidy.call_args_list], ['0100000000000000-work'])
 
-    def test_a_cache_from_before_moves_into_the_one_file(self):   # even by a reused build, and a build that runs never finds a folder
-        self.build()
-        old = self.sh / 'cache/cas/metallib/mac/ab'; old.mkdir(parents=True); (old / 'abcd.metallib').write_bytes(b'compiled')
-        self.build()
-        self.assertEqual(self.ran, [])
-        self.assertFalse((self.sh / 'cache/cas').exists())
-        self.assertEqual(self.store().get('metallib/mac/abcd.metallib'), b'compiled')
-        (self.sh / f'mac-b-{CHAIN}.key').unlink()
-        seen = []
-        real = nsp.run
-        def looks(cmd, log, env=None, cwd=None, on_line=None):
-            seen.append((self.sh / 'cache/cas').exists())
-            return real(cmd, log, env=env, cwd=cwd, on_line=on_line)
-        with mock.patch.object(nsp, 'run', looks): self.build()
-        self.assertEqual(seen, [False])
-
     def store(self):
         s = nsp.shader_cache.Store(self.sh / f'cache/cas-{CHAIN}.db'); self.addCleanup(s.close)
         return s
@@ -185,7 +169,7 @@ class Nvn(Base):
         self.assertEqual(self.ran, []); self.assertNotIn(OLD, self.entries()); self.assertIn(NEW, self.entries())
 
     def test_older_compile_caches_go_with_a_build(self):   # other chains' files and the one file from before generations, once this chain has its own; a failed build keeps them
-        old = nsp.shader_cache.Store(self.sh / 'cache/cas.db'); old.put('metallib/ios/i.metallib', b'ios'); old.close()
+        old = nsp.shader_cache.Store(self.sh / 'cache/cas.db'); old.put('metallib/mac/x.metallib', b'old'); old.close()
         other = nsp.shader_cache.Store(self.sh / 'cache/cas-fedcba987654.db'); other.put('metallib/mac/m.metallib', b'mac'); other.close()
         self.build()
         self.assertTrue((self.sh / 'cache/cas.db').exists())   # the chain has no file of its own yet
@@ -197,7 +181,7 @@ class Nvn(Base):
         said = []
         with mock.patch.object(nsp, 'say', said.append): self.build()
         self.assertEqual(sorted(p.name for p in (self.sh / 'cache').glob('cas*.db')), [f'cas-{CHAIN}.db'])
-        self.assertEqual(self.store().get('metallib/ios/i.metallib'), b'ios')
+        self.assertEqual(self.store().names('metallib/'), {'metallib/mac/a.metallib'})   # its own compiles: what a build reuses of the others it copies as it reads them
         self.assertTrue(any(m.startswith('removed old shader compile caches ') and m.endswith(' to obsolete/') for m in said), said)
         self.assertEqual(sorted(p.name for p in (self.sh.parent / 'obsolete').glob('* build/shader/cache/cas*.db')), ['cas-fedcba987654.db', 'cas.db'])
 

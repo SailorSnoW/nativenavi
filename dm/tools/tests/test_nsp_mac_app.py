@@ -749,7 +749,7 @@ class App(unittest.TestCase):
         domain = f'org.nxnative.test.{uuid.uuid4().hex}'   # never a real game's domain
         listed = {'schema': 1, 'game': TID, 'settings': [
             {'env': 'DM_FPS_TARGET', 'kind': 'choice', 'section': 'Game', 'label': 'Frame rate', 'note': '', 'default': '60', 'options': [['30', '30 fps'], ['60', '60 fps']]},
-            {'env': 'DM_RENDER_SCALE', 'kind': 'range', 'section': 'Game', 'label': 'Render scale', 'note': '', 'default': '1.0', 'min': 0.5, 'max': 1.0, 'step': 0.05},
+            {'env': 'DM_RUMBLE_GAIN', 'kind': 'range', 'section': 'Game', 'label': 'Rumble strength', 'note': '', 'default': '1.0', 'min': 0.5, 'max': 1.0, 'step': 0.05},
             {'env': 'DM_FPS_HOLD', 'kind': 'toggle', 'section': 'Performance', 'label': 'Hold', 'note': '', 'default': 'on', 'on': 'on', 'off': 'off'},
             {'env': 'DM_LANG', 'kind': 'choice', 'section': 'Game', 'label': 'Language', 'note': '', 'default': 'fr', 'options': [['fr', 'French'], ['ja', 'Japanese']]},
             {'env': 'DM_BOTH', 'kind': 'choice', 'section': 'Game', 'label': 'Both', 'note': '', 'default': 'bundle', 'options': [['bundle', 'b'], ['player', 'p'], ['saved', 's']]},
@@ -771,29 +771,29 @@ class App(unittest.TestCase):
         try:
             app = pack('Saved', listed)
             self.assertEqual(plistlib.loads((app / 'Contents/Info.plist').read_bytes())['DMSettings'][:3],
-                             [{'env': 'DM_FPS_TARGET', 'values': ['30', '60']}, {'env': 'DM_RENDER_SCALE', 'min': 0.5, 'max': 1.0}, {'env': 'DM_FPS_HOLD', 'values': ['on', 'off']}])
-            for key, value in [('DM_FPS_TARGET', '30'), ('DM_RENDER_SCALE', '0.75'), ('DM_FPS_HOLD', 'maybe'), ('DM_LANG', 'ja'), ('DM_BOTH', 'saved'), ('DM_BAKED', '0')]: save(key, '-string', value)
+                             [{'env': 'DM_FPS_TARGET', 'values': ['30', '60']}, {'env': 'DM_RUMBLE_GAIN', 'min': 0.5, 'max': 1.0}, {'env': 'DM_FPS_HOLD', 'values': ['on', 'off']}])
+            for key, value in [('DM_FPS_TARGET', '30'), ('DM_RUMBLE_GAIN', '0.75'), ('DM_FPS_HOLD', 'maybe'), ('DM_LANG', 'ja'), ('DM_BOTH', 'saved'), ('DM_BAKED', '0')]: save(key, '-string', value)
             save('DM_OPMODE', '-string', '0')   # not one of this build's settings
             r = run(app)   # from Finder or the Dock: no environment of its own
-            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RENDER_SCALE'], r.get('DM_FPS_HOLD')), ('30', '0.75', None))   # a value the toggle never takes is ignored
+            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RUMBLE_GAIN'], r.get('DM_FPS_HOLD')), ('30', '0.75', None))   # a value the toggle never takes is ignored
             self.assertEqual(r['DM_LANG'], 'ja')   # a saved choice before the packed language
             self.assertEqual((r['DM_BOTH'], r['DM_BAKED']), ('player', '1'))   # the player's env.txt and the bundle's win over a saved choice
             self.assertNotIn('DM_OPMODE', r)
             self.assertEqual((r['DM_ENV_FILE_KEYS'], r['DM_ENV_LAUNCH_KEYS']), ('DM_BOTH DM_BAKED', ''))   # what the settings window keeps: the env files' variables
-            r = run(app, DM_FPS_TARGET='60', DM_RENDER_SCALE='0.5')   # a front end's launch overrides: they win, and are not saved
-            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RENDER_SCALE']), ('60', '0.5'))
-            self.assertEqual(r['DM_ENV_LAUNCH_KEYS'], 'DM_FPS_TARGET DM_RENDER_SCALE')   # the window shows them fixed ("Set at launch")
+            r = run(app, DM_FPS_TARGET='60', DM_RUMBLE_GAIN='0.5')   # a front end's launch overrides: they win, and are not saved
+            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RUMBLE_GAIN']), ('60', '0.5'))
+            self.assertEqual(r['DM_ENV_LAUNCH_KEYS'], 'DM_FPS_TARGET DM_RUMBLE_GAIN')   # the window shows them fixed ("Set at launch")
             r = run(app, args=['--no-launcher'], DM_LAUNCHER='1')   # open <app> --args --no-launcher: no window, the saved choices
             self.assertEqual(r['DM_FPS_TARGET'], '30')
             self.assertEqual(subprocess.run(['defaults', 'read', domain, 'launcher.DM_FPS_TARGET'], capture_output=True, text=True).stdout.strip(), '30')
             r = run(app, DM_SAVED_CHOICES='0')
-            self.assertEqual((r.get('DM_FPS_TARGET'), r.get('DM_RENDER_SCALE'), r['DM_LANG']), (None, None, 'fr'))
-            save('DM_RENDER_SCALE', '-float', '0.75')   # not a string
-            self.assertNotIn('DM_RENDER_SCALE', run(app))
-            save('DM_RENDER_SCALE', '-string', ' 0.75')   # a number the iPhone's settings screen would not take either
-            self.assertNotIn('DM_RENDER_SCALE', run(app))
-            save('DM_RENDER_SCALE', '-string', '0x1p-1')   # hex, which neither side takes (Setting.accepts)
-            self.assertNotIn('DM_RENDER_SCALE', run(app))
+            self.assertEqual((r.get('DM_FPS_TARGET'), r.get('DM_RUMBLE_GAIN'), r['DM_LANG']), (None, None, 'fr'))
+            save('DM_RUMBLE_GAIN', '-float', '0.75')   # not a string
+            self.assertNotIn('DM_RUMBLE_GAIN', run(app))
+            save('DM_RUMBLE_GAIN', '-string', ' 0.75')   # not a plain number
+            self.assertNotIn('DM_RUMBLE_GAIN', run(app))
+            save('DM_RUMBLE_GAIN', '-string', '0x1p-1')   # hex, which neither side takes (Setting.accepts)
+            self.assertNotIn('DM_RUMBLE_GAIN', run(app))
             listed['settings'][0]['options'] = [['60', '60 fps']]; listed['settings'][0]['default'] = '60'   # a rebuild that no longer offers 30 fps
             r = run(pack('Rebuilt', listed))
             self.assertEqual((r.get('DM_FPS_TARGET'), r['DM_LANG']), (None, 'ja'))   # the host's tested default; the other saved choices still hold
@@ -817,7 +817,7 @@ class App(unittest.TestCase):
         self.assertEqual(r['argv0'], str(self.app / 'Contents/MacOS/dmhost')); self.assertEqual(r['argv1'], str(res / 'dm'))
         self.assertEqual((r['DM_ROMFS'], r['DM_MSL_DIR'], r['DM_NVN_SHMAP'], r['DM_FONT_DIR'], r['DM_AOC_DIR']),
                          (str(res / 'romfs'), str(res / 'msl'), str(res / 'dm/shader_map.tsv'), str(res / 'dm/font'), str(res / 'aoc')))
-        self.assertEqual(r['DM_PSO_BUNDLE'], str(res / 'pso'))   # the pipeline archive made offline, as the iOS app's main.m sets it
+        self.assertEqual(r['DM_PSO_BUNDLE'], str(res / 'pso'))   # the pipeline archive made offline (dm/gfx/tools/pso_offline.py)
         self.assertEqual((r['DM_SAVE'], r['DM_TEMP'], r['DM_ROOT'], r['cwd']), (str(sup / 'save'), str(sup / 'temp'), str(sup), str(sup)))   # pso_user.tsv goes beside save/
         self.assertEqual((r['DM_WINDOW'], r['DM_AUDIO'], r['DM_LANG']), ('1', '1', 'ja'))   # the caller's DM_LANG wins over the packed language
         self.assertEqual((r['DM_BAKED'], r['DM_BOTH']), ('1', 'player'))   # the player's env.txt before the bundle's
@@ -1074,12 +1074,12 @@ class Script(unittest.TestCase):
         p = self.pso_cmd; self.assertTrue(p[1].endswith('dm/gfx/tools/pso_offline.py'))
         self.assertEqual({p[i]: p[i + 1] for i in range(2, len(p) - 1) if p[i].startswith('--')},
                          {'--game': '01008CF01BAAC000', '--msl': str(tmp / 'shader/cache/b-0123456789ab'), '--out': str(tmp / 'pso/mac'), '--work': str(tmp / 'pso/mac-work'),
-                          '--gpu': 'applegpu_g14s', '--platform': 'macos'})
+                          '--gpu': 'applegpu_g14s'})
         self.assertFalse(any('does not name this Mac' in m for m in self.said))
-        o, _ = self.pack_cmd(work=tmp, gpus='g18p')   # PSO_GPUS naming another GPU: built as asked, with a note that this Mac's app builds its own bases
+        o, _ = self.pack_cmd(work=tmp, gpus='g16s')   # PSO_GPUS naming another GPU: built as asked, with a note that this Mac's app builds its own bases
         self.assertEqual(o['--pso'], str(tmp / 'pso/mac'))
         self.assertTrue(any('does not name this Mac\'s GPU (applegpu_g14s)' in m for m in self.said))
-        o, _ = self.pack_cmd(work=tmp, gpus='applegpu_g14s,g18p'); self.assertFalse(any('does not name this Mac' in m for m in self.said))
+        o, _ = self.pack_cmd(work=tmp, gpus='applegpu_g14s,g16s'); self.assertFalse(any('does not name this Mac' in m for m in self.said))
         o, _ = self.pack_cmd(work=tmp, gpus='none')
         self.assertNotIn('--pso', o); self.assertIsNone(self.pso_cmd)   # --gpu none: no archive, the app builds its bases on its first start
         shutil.rmtree(tmp / 'pso')
@@ -1165,30 +1165,30 @@ class Script(unittest.TestCase):
 
     def test_prebake_other_gpus(self):   # --gpu naming more GPUs: the tool's pipelines scripts become each of their prewarm archives, through metal-tt
         tmp = self.prebake_work()
-        o, _ = self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g17p', lib_hashes=self.lib_hashes)
+        o, _ = self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g15s', lib_hashes=self.lib_hashes)
         names = sorted(p.name for p in (tmp / 'pso/mac').iterdir())
-        self.assertEqual([n for n in names if n.startswith('applegpu_g17p')], ['applegpu_g17p-prewarm-00.keys', 'applegpu_g17p-prewarm-00.mtl4a', 'applegpu_g17p-prewarm-01.keys', 'applegpu_g17p-prewarm-01.mtl4a',
-                                                                        'applegpu_g17p-prewarm-02.keys', 'applegpu_g17p-prewarm-02.mtl4a', 'applegpu_g17p.mtl4a'])
+        self.assertEqual([n for n in names if n.startswith('applegpu_g15s')], ['applegpu_g15s-prewarm-00.keys', 'applegpu_g15s-prewarm-00.mtl4a', 'applegpu_g15s-prewarm-01.keys', 'applegpu_g15s-prewarm-01.mtl4a',
+                                                                        'applegpu_g15s-prewarm-02.keys', 'applegpu_g15s-prewarm-02.mtl4a', 'applegpu_g15s.mtl4a'])
         for i in range(3):   # each with the index of this Mac's file of the same period: with it the file leads the lookup over an earlier build's device files
-            self.assertEqual((tmp / f'pso/mac/applegpu_g17p-prewarm-{i:02d}.keys').read_bytes(), (tmp / f'pso/mac/applegpu_g14s-prewarm-{i:02d}.keys').read_bytes())
+            self.assertEqual((tmp / f'pso/mac/applegpu_g15s-prewarm-{i:02d}.keys').read_bytes(), (tmp / f'pso/mac/applegpu_g14s-prewarm-{i:02d}.keys').read_bytes())
         self.assertEqual([n for n in names if not n.startswith('applegpu_')], ['prewarm.tsv'])   # the scripts and the libraries stay in the work folder
         self.assertEqual(len(self.metal_tt), 3)
         c = self.metal_tt[0]
-        self.assertEqual((c[4], c[5], c[6], c[7]), ('-arch', 'applegpu_g17p', '-macos-version-min', '26.0'))   # this Mac's GPU is not built again
-        self.assertEqual((Path(c[8]).name, Path(c[10]).name), ('prewarm-00.mtl4-json', 'applegpu_g17p-prewarm-00.mtl4a'))
+        self.assertEqual((c[4], c[5], c[6], c[7]), ('-arch', 'applegpu_g15s', '-macos-version-min', '26.0'))   # this Mac's GPU is not built again
+        self.assertEqual((Path(c[8]).name, Path(c[10]).name), ('prewarm-00.mtl4-json', 'applegpu_g15s-prewarm-00.mtl4a'))
         script = json.loads((tmp / 'pso/mac-prewarm/prewarm-02.mtl4-json').read_text())   # the paths point at the libraries found by their SHA-256, written beside the scripts
         self.assertEqual([Path(lib['path']).name for lib in script['libraries']], [h + '.metallib' for h in self.lib_hashes])
         self.assertEqual(Path(script['libraries'][1]['path']).parent, tmp / 'pso/mac-prewarm/libraries')
         self.assertFalse((tmp / 'pso/mac-prewarm/libraries').exists())   # removed once metal-tt has read them
-        self.assertTrue(any('prewarm pipelines for applegpu_g17p: 3 of 3 files' in m for m in self.said))
+        self.assertTrue(any('prewarm pipelines for applegpu_g15s: 3 of 3 files' in m for m in self.said))
         self.metal_tt.clear(); self.tool_env = None   # the same inputs: reused, metal-tt does not run again
         for f in (tmp / 'pso/mac').glob('*-prewarm-*'): f.unlink()
-        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g17p', lib_hashes=self.lib_hashes)
-        self.assertEqual((self.tool_env, self.metal_tt, len(list((tmp / 'pso/mac').glob('applegpu_g17p-prewarm-*.mtl4a')))), (None, [], 3))
-        (tmp / 'pso/mac/applegpu_g17p.mtl4a').unlink()   # the pair archive of a GPU no longer named
+        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g15s', lib_hashes=self.lib_hashes)
+        self.assertEqual((self.tool_env, self.metal_tt, len(list((tmp / 'pso/mac').glob('applegpu_g15s-prewarm-*.mtl4a')))), (None, [], 3))
+        (tmp / 'pso/mac/applegpu_g15s.mtl4a').unlink()   # the pair archive of a GPU no longer named
         self.pack_cmd(work=tmp, prebake=True, gpus='g14s', lib_hashes=self.lib_hashes)   # the GPUs are an input of the other GPUs' files only: this Mac's are kept
         self.assertEqual((self.tool_env, self.metal_tt), (None, []))
-        self.assertEqual(list((tmp / 'pso/mac').glob('applegpu_g17p-*')) + list((tmp / 'pso/mac-prewarm').glob('applegpu_g17p-*')), [])
+        self.assertEqual(list((tmp / 'pso/mac').glob('applegpu_g15s-*')) + list((tmp / 'pso/mac-prewarm').glob('applegpu_g15s-*')), [])
 
     @unittest.skipUnless(shutil.which('xcrun'), 'needs Xcode and Metal')
     def test_prebake_other_gpus_cut_library(self):   # a specialized function that is not its library's first (main0_z of a depth_mode zero game): metal-tt needs a library of its own for it
@@ -1215,27 +1215,27 @@ class Script(unittest.TestCase):
 
     def test_prebake_other_gpus_failures(self):   # an optimization: a period whose build fails for a GPU, or a library not found, leaves those pipelines to that GPU's first start
         tmp = self.prebake_work()
-        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g17p,g17s', lib_hashes=self.lib_hashes, metal_tt_fail='applegpu_g17p')
+        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g15s,g17s', lib_hashes=self.lib_hashes, metal_tt_fail='applegpu_g15s')
         names = sorted(p.name for p in (tmp / 'pso/mac').iterdir())
-        self.assertEqual([n for n in names if n.startswith('applegpu_g17p-')], [])
+        self.assertEqual([n for n in names if n.startswith('applegpu_g15s-')], [])
         self.assertEqual(len([n for n in names if n.startswith('applegpu_g17s-prewarm-') and n.endswith('.mtl4a')]), 3)
-        self.assertTrue(any('prewarm pipelines for applegpu_g17p: metal-tt failed on prewarm-00.mtl4-json, prewarm-01.mtl4-json, prewarm-02.mtl4-json' in m for m in self.said))
+        self.assertTrue(any('prewarm pipelines for applegpu_g15s: metal-tt failed on prewarm-00.mtl4-json, prewarm-01.mtl4-json, prewarm-02.mtl4-json' in m for m in self.said))
         self.assertFalse((tmp / 'pso/mac-prewarm.key').exists())   # a period left out: the next build tries the other GPUs again
         shutil.rmtree(tmp / 'pso'); self.metal_tt.clear()
-        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g17p', lib_hashes=self.lib_hashes, metal_tt_fail=('applegpu_g17p', 'prewarm-01'))   # one period: the others kept
-        self.assertEqual(sorted(p.name for p in (tmp / 'pso/mac').glob('applegpu_g17p-*')),
-                         ['applegpu_g17p-prewarm-00.keys', 'applegpu_g17p-prewarm-00.mtl4a', 'applegpu_g17p-prewarm-02.keys', 'applegpu_g17p-prewarm-02.mtl4a'])
+        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g15s', lib_hashes=self.lib_hashes, metal_tt_fail=('applegpu_g15s', 'prewarm-01'))   # one period: the others kept
+        self.assertEqual(sorted(p.name for p in (tmp / 'pso/mac').glob('applegpu_g15s-*')),
+                         ['applegpu_g15s-prewarm-00.keys', 'applegpu_g15s-prewarm-00.mtl4a', 'applegpu_g15s-prewarm-02.keys', 'applegpu_g15s-prewarm-02.mtl4a'])
         self.assertFalse((tmp / 'pso/mac-prewarm.key').exists())
         self.tool_env = None; self.metal_tt.clear()
-        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g17p', lib_hashes=self.lib_hashes)   # the next build: this Mac's files kept, the other GPU made again, whole
+        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g15s', lib_hashes=self.lib_hashes)   # the next build: this Mac's files kept, the other GPU made again, whole
         self.assertIsNone(self.tool_env); self.assertEqual(len(self.metal_tt), 3)
-        self.assertEqual(len(list((tmp / 'pso/mac').glob('applegpu_g17p-prewarm-*.mtl4a'))), 3); self.assertTrue((tmp / 'pso/mac-prewarm.key').exists())
+        self.assertEqual(len(list((tmp / 'pso/mac').glob('applegpu_g15s-prewarm-*.mtl4a'))), 3); self.assertTrue((tmp / 'pso/mac-prewarm.key').exists())
         shutil.rmtree(tmp / 'pso'); self.metal_tt.clear()
-        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g17p', lib_hashes=['0' * 64])   # a library the folder does not hold
+        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g15s', lib_hashes=['0' * 64])   # a library the folder does not hold
         self.assertEqual(self.metal_tt, []); self.assertEqual(len(list((tmp / 'pso/mac').glob('applegpu_g14s-prewarm-*.mtl4a'))), 3)
         self.assertTrue(any('are not in' in m and 'those GPUs build them on their first start' in m for m in self.said))
         shutil.rmtree(tmp / 'pso'); self.metal_tt.clear()
-        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g17p', scripts=False)   # a tool that wrote no scripts
+        self.pack_cmd(work=tmp, prebake=True, gpus='g14s,g15s', scripts=False)   # a tool that wrote no scripts
         self.assertEqual(self.metal_tt, []); self.assertEqual(len(list((tmp / 'pso/mac').glob('applegpu_g14s-prewarm-*.mtl4a'))), 3)
 
     def test_prebake_skipped_or_failed(self):   # an optimization: no list rows, no pipeline archive or a failed tool leave the app as it was

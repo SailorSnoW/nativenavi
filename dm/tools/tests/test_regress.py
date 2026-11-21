@@ -81,7 +81,6 @@ class Regress(unittest.TestCase):
         a = regress.normalize_red('[dm] [RED] NVN unimplemented function called: nvnCommandBufferSetConservativeRasterDilate (x0=0x7f3c2a10 x1=0 x2=0x3)')
         b = regress.normalize_red('[dm] [RED] NVN unimplemented function called: nvnCommandBufferSetConservativeRasterDilate (x0=0x7f3c2a10 x1=0x1 x2=0x3)')
         self.assertEqual(a, b)
-        self.assertEqual(regress.red_kinds(a.replace('x#=#', 'x#=0x#')), [a])   # a kind stored in an older baseline
 
     def test_red_missing_libraries(self):   # Tears of the Kingdom, 2026-10-28: ~2,000 shaders per run the chain build does not hold, other names each run
         M = regress.MISSING_LIB
@@ -98,16 +97,8 @@ class Regress(unittest.TestCase):
                          regress.normalize_red(f'[dm] [nvn-mtl] [RED] pulling library of 9e0d17c3b4a5f601_b not usable (no library: cannot open {lib}/y)'))
         text = '\n'.join([fused, '[dm] [nvn-mtl] [RED] failed to load shader 7ae4bdc2749fd127_b: no reflection json', '[dm] frame 3'])
         self.assertEqual(regress.read_log(text)[0], {M: 3})
-        # kinds stored by the harness before (keys cut into "#" fragments, fused messages, cut at 200 characters) read as the one kind
-        old = {'failed to load shader #c#f#dce#a_b: cannot open <path> [nvn-mtl] [RED] failed to load shader f#a#cdfe#a#eb_b: cannot open <path>': 1,
-               'failed to load shader #d#c#cd#ad_b: cannot open <path> Legend of Zelda Tears of the Kingdom<path> [nvn-mtl] [RED] failed to load shader #e#a#ba#_b: no reflection json': 1,
-               'failed to load shader #e#d#e#fbd#_b: cannot open <path> Legend of Zelda Tears of the Kingdom<path> [nvn-mtl] [RED] failed to load shader #e#d#e#fbd#_b: cannot open <path> Legend of Zelda Tears of the ': 1,
-               'shader #bd#f#e#c (pixel) failed to load: build the shaders with dm<path> first': 7, 'NVN unimplemented function called: x (x#=#)': 2,
-               'pulling library of #f#c#dbf_b not usable (no library: cannot open <path> Legend of Zel': 1, 'compile of #a#e_b failed: x': 1}
-        for tail in ('failed to load shader f#d#d#e#a#c#_b: no refle', 'failed to', 'fail'):   # the cut-off last message of a 200-character kind
-            head, sep = 'failed to load shader #a#e_b: cannot open <path> Legend of Zelda Tears of the Kingdom<path>', ' [nvn-mtl] [RED] '
-            old[head + ' ' * (200 - len(head) - len(sep) - len(tail)) + sep + tail] = 1
-        self.assertEqual(regress.red_counts({'red': old}), {M: 20, 'NVN unimplemented function called: x (x#=#)': 2, 'compile of <key>_b failed: x': 1})
+        self.assertEqual(regress.normalize_red('[dm] [nvn-mtl] [RED] compile of 0a91af5bef8578e2_b failed: x'), 'compile of <key>_b failed: x')
+        old = {M: 20, 'NVN unimplemented function called: x (x#=#)': 2, 'compile of <key>_b failed: x': 1}
         route = {'reach': None}
         base = [{'exit': None, 'max_frame': 500, 'red': old}, {'exit': None, 'max_frame': 500, 'red': {M: 2303}}]
         lv, known, d = regress.smoke_diff(base, [{'exit': None, 'max_frame': 500, 'red': {M: 1641, 'NVN unimplemented function called: x (x#=#)': 1, 'compile of <key>_b failed: x': 1}}], route)
@@ -128,9 +119,9 @@ class Regress(unittest.TestCase):
             with patch.object(regress.time, 'sleep'), patch.object(regress.subprocess, 'run', side_effect=OSError):
                 self.assertIsNone(regress.hang_evidence(NS(pid=4242), cwd))
 
-    def test_gl_frames_progress_while_display_link_messages_stop(self):
+    def test_frames_progress_keeps_the_watchdog_quiet(self):   # the frame rows (DM_NVN_TSV) are the progress of a run, whatever its log says
         with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
-            now = [0.0]; log = Path(td) / 'log.txt'
+            now = [0.0]; log = Path(td) / 'log.txt'; frames = Path(td) / 'frames.tsv'
             child = NS(pid=4242, returncode=0, poll=lambda: 0 if now[0] >= 1.5 else None, send_signal=lambda _: None, wait=lambda _: None)
             cafe = NS(poll=lambda: 0)
             def popen(cmd, **kw):
@@ -138,13 +129,13 @@ class Regress(unittest.TestCase):
                 kw['stdout'].write('[dm] [nvn-mtl] presents 1\n'); kw['stdout'].flush(); return child
             def sleep(secs):
                 now[0] += secs
-                with log.open('a') as f: f.write(f'[dm] [gl] frame {int(now[0] * 1200)}: draws 10\n')
+                with frames.open('a') as f: f.write(f'{int(now[0] * 1200)}\t@t_s\t{now[0]:.3f}\n')
             for name, value in (('check_disk', None), ('wait_idle', True), ('take_lock', None), ('footprint', None), ('hang_evidence', None)):
                 stack.enter_context(patch.object(regress, name, return_value=value))
             stack.enter_context(patch.object(regress.subprocess, 'Popen', side_effect=popen))
             stack.enter_context(patch.object(regress.time, 'monotonic', side_effect=lambda: now[0]))
             stack.enter_context(patch.object(regress.time, 'sleep', side_effect=sleep))
-            r = regress.run_watched(['host'], {}, Path(td), log, NS(min_free_gb=0, wait_idle=0, lock=None), limit=2, hang=0.5, kind='gl', what='synthetic')
+            r = regress.run_watched(['host'], {}, Path(td), log, NS(min_free_gb=0, wait_idle=0, lock=None), limit=2, hang=0.5, kind='game', what='synthetic', frames=frames)
             self.assertIsNone(r['hang_at_s'])
             self.assertGreaterEqual(r['max_frame'], 1200)
 
@@ -319,7 +310,7 @@ class Regress(unittest.TestCase):
         self.assertEqual(regress.worst('PASS', 'CHANGED', 'REGRESSION'), 'REGRESSION'); self.assertEqual(regress.worst('NEW-FAIL', 'ERROR'), 'ERROR')
 
     def test_selection_keeps_games_without_routes(self):
-        games = [NS(id='a', name='routed', kind='nvn', derived=False, route=lambda: {'save': 'new'}), NS(id='b', name='unrouted', kind='nvn', derived=False, route=lambda: None)]
+        games = [NS(id='a', name='routed', derived=False, route=lambda: {'save': 'new'}), NS(id='b', name='unrouted', derived=False, route=lambda: None)]
         with patch.object(regress, 'find_games', return_value=games), patch.object(regress, 'say'):
             self.assertEqual(regress.select(NS(games=None), smoke=True), games)
 
@@ -347,7 +338,7 @@ class Regress(unittest.TestCase):
 
     def test_prune_chains(self):   # the 3 used last, the recent and the stored baselines' stay; a build in use and other names are never touched
         with tempfile.TemporaryDirectory() as td:
-            g = NS(id='game', kind='nvn', folder=Path(td)); root = regress.game_root(g) / 'chain'; root.mkdir(parents=True); old = time.time() - 30 * 86400
+            g = NS(id='game', folder=Path(td)); root = regress.game_root(g) / 'chain'; root.mkdir(parents=True); old = time.time() - 30 * 86400
             def build(i, when):
                 p = root / f'nvn-{i:012x}-in-k'; p.mkdir(); (p / 'f').write_text('x'); (root / f'{p.name}.lock').write_text('')
                 os.utime(root / f'{p.name}.lock', (when, when)); os.utime(p, (when, when)); return p
@@ -364,7 +355,7 @@ class Regress(unittest.TestCase):
 
     def test_reused_chain_rechecks_current_interface(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td); g = NS(id='game', kind='nvn', folder=root)
+            root = Path(td); g = NS(id='game', folder=root)
             out = regress.game_root(g) / 'chain/key'; out.mkdir(parents=True)
             (out / 'manifest.json').write_text(json.dumps({'kind': 'nvn', 'interface': {'bad': []}}))
             current = {'bad': [{'vs': 'new-pair'}]}
@@ -392,7 +383,7 @@ class Regress(unittest.TestCase):
 
     def test_reused_manifest_of_older_hashes_is_hashed_again(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td); g = NS(id='game', kind='nvn', folder=root)
+            root = Path(td); g = NS(id='game', folder=root)
             out = regress.game_root(g) / 'chain/key'; (out / 'b-v').mkdir(parents=True)
             (out / 'b-v/_b_build.json').write_text('[]')
             (out / 'manifest.json').write_text(json.dumps({'kind': 'nvn', 'shaders': {'old': {}}, 'interface': {'bad': []}}))
@@ -404,22 +395,16 @@ class Regress(unittest.TestCase):
                 self.assertEqual(json.loads((out / 'manifest.json').read_text())['hashes'], regress.NVN_HASHES)
                 regress.chain_build(NS(path=root), g, NS(tools_fp='', jobs=1))
             hashed.assert_called_once()   # a manifest of the current hashes is reused as it is
-            self.assertTrue((out / 'b-v').is_dir())   # a revision from before shader_lib.py: its host reads only the folder
+            self.assertFalse((out / 'b-v').exists()); self.assertTrue((out / 'b-v.img').is_file())   # and the libraries are one file once it is made
 
-    def test_chain_builds_keep_their_own_cache_without_adopting_players_files(self):
+    def test_chain_builds_keep_their_own_cache_beside_the_players(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td); build = root / 'build'; g = NS(id='game', kind='nvn', folder=root, build=build)
-            new = root / 'new'; (new / 'dm/tools').mkdir(parents=True); (new / 'dm/tools/shader_cache.py').write_text('')
+            root = Path(td); build = root / 'build'; g = NS(id='game', folder=root, build=build)
             with patch.object(regress, 'ROOT', root):
                 own = regress.game_root(g)
-                self.assertEqual(regress.chain_cache(NS(path=new), g), own / 'cas.db')   # no player's build yet
-                old = build / 'shader/cache/cas/metallib/mac/ab'; old.mkdir(parents=True); (old / 'abcd.metallib').write_bytes(b'compiled')
-                self.assertEqual(regress.chain_cache(NS(path=new), g), own / 'cas.db')
-                self.assertEqual((old / 'abcd.metallib').read_bytes(), b'compiled')
-                self.assertFalse((build / 'shader/cache/cas.db').exists())
+                self.assertEqual(regress.chain_cache(g), own / 'cas.db')   # no player's build yet
                 s = regress.shader_cache.Store(build / 'shader/cache/cas.db'); s.put('metallib/mac/abcd.metallib', b'compiled'); s.close()
-                self.assertEqual(regress.chain_cache(NS(path=new), g), own / 'cas.db')
-                self.assertEqual(regress.chain_cache(NS(path=root / 'revision-from-before'), g), own / 'cas')   # its dmsh_build.py wants a folder
+                self.assertEqual(regress.chain_cache(g), own / 'cas.db')
 
     def test_shader_cache_budget_scales_with_largest_library_and_can_be_overridden(self):
         with tempfile.TemporaryDirectory() as td:
@@ -437,28 +422,10 @@ class Regress(unittest.TestCase):
         for value in ('0', '-1', 'nan', 'inf', 'not a number'):
             with self.assertRaises(regress.argparse.ArgumentTypeError): regress.shader_cache_gb(value)
 
-    def test_legacy_cache_is_bounded_and_only_regression_legacy_files_are_adopted(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td); g = NS(id='game', kind='nvn', folder=root, build=root / 'build')
-            own = regress.game_root(g); own.mkdir(parents=True); a = NS(shader_cache_gb=1 / 1024)
-            legacy = own / 'cas'
-            with patch.object(regress, 'say'):
-                with regress.regression_cache(NS(path=root / 'old'), g, a):
-                    regress.tree_tar.unpack(legacy)
-                    legacy.mkdir(); (legacy / 'large').write_bytes(os.urandom(2 << 20))
-                self.assertFalse(legacy.exists()); self.assertFalse((own / 'cas.tar').exists())
-                old = legacy / 'metallib/mac/ab'; old.mkdir(parents=True); (old / 'abcd.metallib').write_bytes(b'compiled')
-                tree = root / 'new'; (tree / 'dm/tools').mkdir(parents=True); (tree / 'dm/tools/shader_cache.py').touch()
-                with regress.regression_cache(NS(path=tree), g, a): pass
-            self.assertFalse(legacy.exists())
-            s = regress.shader_cache.Store(own / 'cas.db'); self.addCleanup(s.close)
-            self.assertEqual(s.get('metallib/mac/abcd.metallib'), b'compiled')
-            self.assertFalse(g.build.exists())
-
     def test_reused_chain_enforces_lowered_cache_limit(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td); g = NS(id='game', kind='nvn', folder=root, build=root / 'build')
-            tree = root / 'tree'; (tree / 'dm/tools').mkdir(parents=True); (tree / 'dm/tools/shader_cache.py').touch()
+            root = Path(td); g = NS(id='game', folder=root, build=root / 'build')
+            tree = root / 'tree'
             cache = regress.game_root(g) / 'cas.db'; s = regress.shader_cache.Store(cache)
             for i in range(12): s.put(f'metallib/mac/{i}.metallib', os.urandom(200000), i)
             s.close()
@@ -472,11 +439,10 @@ class Regress(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); build = root / 'build'; tree = root / 'tree'; tools = tree / 'dm/gfx/tools'; tools.mkdir(parents=True)
             (tree / 'dm/tools').mkdir(parents=True)
-            (tree / 'dm/tools/shader_cache.py').write_text('raise AssertionError("old cache module loaded")\n')
-            (tree / 'dm/tools/shader_lib.py').touch()
+            (tree / 'dm/tools/shader_cache.py').write_text('raise AssertionError("the tree\'s cache module loaded")\n')   # the builder runs with this checkout's
             normal = build / 'shader/cache/cas.db'; s = regress.shader_cache.Store(normal)
             s.put('metallib/mac/normal.metallib', b'normal'); s.close(); before = normal.read_bytes()
-            (tools / 'dmsh_build.py').write_text('''import atexit, json, os, shader_cache, sys
+            (tools / 'own_compilers.py').write_text('''import atexit, json, os, shader_cache, sys
 from pathlib import Path
 s = shader_cache.Store(os.environ['DMSH_CAS']); atexit.register(s.close)
 assert s.get('metallib/mac/normal.metallib') == b'normal'
@@ -489,7 +455,7 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
 (out / '0123456789abcdef_b.json').write_text('{}')
 (out / 'reused.txt').write_text(str(reused))
 ''')
-            g = NS(id='game', kind='nvn', folder=root, build=build, env=lambda t: dict(os.environ), profile_dir=lambda t: root / 'profile')
+            g = NS(id='game', folder=root, build=build, env=lambda t: dict(os.environ), profile_dir=lambda t: root / 'profile')
             a = NS(jobs=1, tools_fp='', shader_cache_gb=None)
             def run(cmd, log, cwd, env, args, what):
                 r = regress.sh(cmd, cwd=cwd, env=env); log.write_text(r.stdout + r.stderr); return r.returncode, 0
@@ -506,14 +472,14 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
     def test_a_chain_build_becomes_one_file_with_the_same_hashes(self):
         k = '0123456789abcdef'
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td); g = NS(id='game', kind='nvn', folder=root)
+            root = Path(td); g = NS(id='game', folder=root)
             out = regress.game_root(g) / 'chain/key'; lib = out / 'b-v'; lib.mkdir(parents=True)
             (lib / '_b_build.json').write_text(json.dumps([{'key': k, 'st': 'ok', 'err': ''}]))
             (lib / f'{k}_b.metal').write_text('kernel void main0() {}'); (lib / f'{k}_b.metallib').write_bytes(b'lib')
             (lib / f'{k}_b.json').write_text(json.dumps({'chain': 'v', 'bindings': []})); (lib / f'{k}_bp.metallib').write_bytes(b'pull')
             folder = regress.nvn_manifest(lib, 1)
             (out / 'manifest.json').write_text(json.dumps({'kind': 'nvn', 'shaders': folder, 'hashes': regress.NVN_HASHES, 'interface': {'bad': []}}))
-            tree = root / 'tree'; (tree / 'dm/tools').mkdir(parents=True); (tree / 'dm/tools/shader_lib.py').write_text('')
+            tree = root / 'tree'
             with patch.object(regress, 'ROOT', root), patch.object(regress, 'chain_key', return_value=('v', 'i', 'key')), patch.object(regress, 'interface_check', return_value={'bad': []}):
                 regress.chain_build(NS(path=tree), g, NS(tools_fp='', jobs=1))
             self.assertFalse(lib.exists()); self.assertTrue((out / 'b-v.img').is_file())
@@ -552,7 +518,7 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
                     log.write_text(text)
                     return dict(exit=None, hang_at_s=None, hang_sample=None, first_frame_s=1, max_frame=500, peak_mb=100, busy=False, presents=[])
                 with patch.object(regress, 'run_env', return_value=({}, None)), patch.object(regress, 'run_watched', watched):
-                    run = regress.smoke_run(NS(kind='nvn', id='game', get_depth_zero=zero), None,
+                    run = regress.smoke_run(NS(id='game', get_depth_zero=zero), None,
                                             dict(host='host', modules='modules', host_key='h', modules_key='m'), route, True, out, None)
                 failures = regress.run_failures(run, route)
                 if failure:
@@ -587,16 +553,26 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
         with patch.object(regress, 'sh', return_value=NS(stdout=processes)), patch.object(regress.os, 'getpid', return_value=200):
             self.assertEqual(regress.heavy_jobs(), ['103 metal /another/build.metal', '104 make dmhost'])
 
-    def test_build_profile_runs_only_when_derived_or_unported(self):
-        # A provisional profile the NSP script left from before the game's profile was added must not shadow dm/games' (it lacked OCTOPATH TRAVELER 0's tex_dyn_slots and fps_target)
-        with tempfile.TemporaryDirectory() as td, patch.object(regress, 'REPO', Path(td) / 'repo'):
+    def test_build_profile_runs_only_when_derived(self):
+        # A profile in the build folder without the packing script's derived key must not shadow dm/games' (a leftover lacked OCTOPATH TRAVELER 0's tex_dyn_slots and fps_target)
+        with tempfile.TemporaryDirectory() as td:
             root, gid = Path(td), '0123456789ABCDEF'
-            build = root / f'{gid}_build'; (build / 'profile' / gid).mkdir(parents=True); (build / 'profile' / gid / 'game.tsv').write_text('# Provisional game profile\n')
-            self.assertTrue(regress.Game(root, build).derived)                       # no profile in dm/games: the provisional one
-            (root / 'repo/dm/games' / gid).mkdir(parents=True); (root / 'repo/dm/games' / gid / 'game.tsv').write_text('title_id\t' + gid + '\n')
-            self.assertFalse(regress.Game(root, build).derived)                      # a profile in dm/games: it runs, not the leftover guesses
+            build = root / f'{gid}_build'; (build / 'profile' / gid).mkdir(parents=True); (build / 'profile' / gid / 'game.tsv').write_text('title_id\t' + gid + '\n')
+            self.assertFalse(regress.Game(root, build).derived)                      # dm/games' profile runs, not the leftover
             (build / 'profile' / f'{gid}.derived.key').write_text('key\n')
             self.assertTrue(regress.Game(root, build).derived)                       # derived from it for another version
+
+    def test_only_builds_of_a_title_with_a_profile_take_part(self):   # a build of another title beside the game's: no revision here has a profile to translate or run it with
+        with tempfile.TemporaryDirectory() as td:
+            root, mine, other = Path(td), '0123456789ABCDEF', 'FEDCBA9876543210'
+            for gid in (mine, other):
+                build = root / 'games/folder' / f'{gid}_build'
+                for d in ('tools', 'patched_v0', 'shader/pkg'): (build / d).mkdir(parents=True)
+                (build / 'tools/dmhost').touch()
+            (root / 'repo/dm/games' / mine).mkdir(parents=True); (root / 'repo/dm/games' / mine / 'game.tsv').write_text('title_id\t' + mine + '\n')
+            with patch.object(regress, 'REPO', root / 'repo'), patch.object(regress, 'GAMES', root / 'games'), patch.dict(os.environ, {'REGRESS_SKIP': ''}):
+                self.assertEqual([g.id for g in regress.find_games()], [mine])
+                with self.assertRaises(regress.HarnessError): regress.find_games([other])
 
     def test_chain_key_tracks_shader_package_and_split_pairs(self):
         with tempfile.TemporaryDirectory() as td:
@@ -604,7 +580,7 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
             shader = pkg / 'a.bin'; shader.write_bytes(b'original')
             prof = root / 'profile'; prof.mkdir()
             g = regress.Game(root, root / ('0' * 16 + '_build'))
-            g.build, g.id, g.kind, g.derived = root, 'game', 'nvn', False
+            g.build, g.id, g.derived = root, 'game', False
             tree = NS(path=root, py=lambda *args: '["chain", "inputs"]')
             with patch.object(g, 'profile_dir', return_value=prof):
                 original = regress.chain_key(tree, g, 'tools')[2]
@@ -627,7 +603,7 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
                 original = regress.smoke_context(NS(), art, route, a, {})
                 self.assertNotEqual(original, regress.smoke_context(NS(), art, dict(route, shots=[45]), a, {}))
                 self.assertNotEqual(original, regress.smoke_context(NS(), dict(art, host_key='other'), route, a, {}))
-                a.env = ['DM_RENDER_SCALE=0.5']
+                a.env = ['DM_FPS_TARGET=30']
                 self.assertNotEqual(original, regress.smoke_context(NS(), art, route, a, {}))
                 a.env = []; (save / 'data').write_bytes(b'changed')
                 self.assertNotEqual(original, regress.smoke_context(NS(), art, route, a, {}))
@@ -676,7 +652,7 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
             self.assertEqual(env['DM_GAMES_DIR'], str(g.profile_dir(tree).parent))
             self.assertEqual(env['DM_GAMES_FIRST'], '1')
 
-    def test_rewriter_uses_original_registered_profile_and_keeps_provisional(self):
+    def test_rewriter_uses_original_registered_profile_and_keeps_a_derived_one(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             for derived in (False, True):
@@ -826,7 +802,7 @@ class Validated(unittest.TestCase):
                 self.assertEqual(regress.validated_text('nobody'), 'never recorded')
                 (Path(td) / 'dm/gfx/nvn/dmsh_chain.h').write_text('#define DMSH_CHAIN "dddd77778888"\n')
                 self.assertIn('(old, now dddd77778888)', regress.validated_text('g1'))
-                g = NS(id='g1', name='n', kind='nvn', ver='1', folder=Path(td), route=lambda: None)
+                g = NS(id='g1', name='n', ver='1', folder=Path(td), route=lambda: None)
                 with patch.object(regress, 'find_games', return_value=[g]), patch.object(regress, 'say') as say:
                     regress.cmd_list(NS())
                 self.assertIn('green: quick chain aaaa11112222 (old', say.call_args.args[0])
