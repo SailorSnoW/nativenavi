@@ -18,7 +18,6 @@ static char *g_argv[64] = {"game"}; static int g_argc = 1;
 static void guest_main(void) {
     guest_thread_init();
     guest_gate_stack(0);   // the guest code runs on this thread's own stack: its SVCs get a stack of their own
-    { void dm_oodle_serve_maybe(int); dm_oodle_serve_maybe(0); }   // DM_OODLE_SERVE tool mode: the game's own Oodle decoder over stdin / stdout (hle_oodle.c, exits when the input ends)
     uint32_t hmain = svc_thread_main_init();   // Main thread handle: x0 of nnosInitialize (stored in an sdk global, used by ThreadManagerImplByHorizon); x1 = pointer to the argument area
     // Copy Start step by step: _init_libc1 = __nnmusl_init_locks (initializes the stdio etc. locks as recursive locks; skipping it self-deadlocks on nested locking in putc) + __init_ssp.
     // The three callbacks passed in by rtld: A only sets an rtld flag (skipped), B = each module's DT_INIT (before nnMain), C = destructors (not done)
@@ -34,8 +33,6 @@ static void guest_main(void) {
     ((fn0)req("_init_libc2"))();
     run_module_inits();   // rtld callback B: each module's DT_INIT (global constructors)
     { void dm_guest_spawn_selftest(void); dm_guest_spawn_selftest(); }   // DM_GUEST_SPAWN_TEST self-test of host-created guest threads (hle_guestthread.c)
-    { void dm_oodle_serve_maybe(int); dm_oodle_serve_maybe(1); }   // DM_OODLE_SERVE with a decoder that needs the game's malloc (LZ5, hle_oodle.c)
-    { void dm_oodle_job_maybe(void); dm_oodle_job_maybe(); }   // DM_OODLE_JOB: decode a job file with the game's own Oodle and exit (hle_oodle.c, for the offline shader tools)
     LOG(">>> nnMain"); ((fn0)req("nnMain"))();
     LOG("nnMain returned");
 }
@@ -150,7 +147,6 @@ static void host_preload(int argc, char **argv) {
     stubs_report();
     if (g_flag.bootprof) LOG("① breakdown (after loading): probes / keys %.1f ms, stub report %.1f ms", (tb - ta) / 1e6, (now_ns() - tb) / 1e6);
     { void loader_hash_log(void); loader_hash_log(); }   // DM_LOADHASH=1: address-independent hash of the load result (loader.c)
-    { void dm_ue_malloc_install(void); dm_ue_malloc_install(); }   // Unreal's allocator on a host malloc zone, for the builds whose constructor call is cut (hle_uemalloc.c)
 }
 static struct { int argc; char **argv; pthread_t th; _Atomic int started; } g_pre;
 static void *preload_thread(void *a) { (void)a; host_preload(g_pre.argc, g_pre.argv); return NULL; }

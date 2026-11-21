@@ -315,25 +315,6 @@ static void read_layout(module_t *m, const char *dir) {
         else if (!strcmp(key, "RENDER_SCALE")) m->render_scale_max = (uint32_t)v;
         else if (!strcmp(key, "MOVIE_NATIVE_COLOR_KEYS")) m->movie_native_color_keys = v == 1;
         else if (!strcmp(key, "STEP_MAX")) m->step_max = (uint32_t)v;
-        else if (!strcmp(key, "UE_MALLOC_VT")) m->ue_malloc_vt = v;
-        else if (!strcmp(key, "UE_MALLOC_SLOT")) m->ue_malloc_slot = (unsigned)v;
-        else if (!strcmp(key, "FPS_TARGET_PTR")) m->fps_target_ptr = v;
-        else if (!strcmp(key, "FPS_TARGET_FIELD")) m->fps_target_field = (uint32_t)v;
-        else if (!strcmp(key, "MONOLITH_INTERVAL")) m->monolith_interval = v;
-        else if (!strcmp(key, "NATIVE_FPS_BLOCKED")) m->native_fps_blocked = v != 0;
-        else if (!strcmp(key, "UE_FIXED_RATE_PTR")) m->ue_fixed_ptr = v;
-        else if (!strcmp(key, "UE_FIXED_RATE_FIELD")) m->ue_fixed_field = (uint32_t)v;
-        else if (!strcmp(key, "UE_FIXED_RATE_FLAG")) m->ue_fixed_flag = (uint32_t)v;
-        else if (!strcmp(key, "UNITY_TARGET_FPS")) m->unity_target_fps = v;
-        else if (!strcmp(key, "UNITY_QS_PTR")) m->unity_qs_ptr = v;
-        else if (!strcmp(key, "UNITY_QS_IDX")) m->unity_qs_idx = (uint32_t)v;
-        else if (!strcmp(key, "UNITY_QS_ARR")) m->unity_qs_arr = (uint32_t)v;
-        else if (!strcmp(key, "UNITY_QS_SIZE")) m->unity_qs_size = (uint32_t)v;
-        else if (!strcmp(key, "UNITY_QS_VSYNC")) m->unity_qs_vsync = (uint32_t)v;
-        else if (!strncmp(key, "UE_CVAR:", 8)) {
-            if (m->n_ue_cvar == (int)(sizeof m->ue_cvar / sizeof *m->ue_cvar) || strlen(key + 8) >= sizeof m->ue_cvar[0].name) die("%s: too many Unreal console variables, or too long a name: %s", path, key);
-            strcpy(m->ue_cvar[m->n_ue_cvar].name, key + 8); m->ue_cvar[m->n_ue_cvar++].off = v;
-        }
         else if (!strcmp(key, "BUILD_ID")) sscanf(line, "# %*s %32s", m->build_id);
         else for (int k = 0; k < KEY_N; k++) {
             size_t n = strlen(kn[k]);

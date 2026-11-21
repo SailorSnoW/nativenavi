@@ -75,22 +75,6 @@ Applied to the `sdk` of any build without CUTS, found by function fingerprint ([
 - regions of 4 MB and more aligned to 2 MB, as SDK 20: SDK 12.3.2 (OCTOPATH TRAVELER II), 12.3.9 (Xenoblade Chronicles 3), 13.3.5 (Mario + Rabbids Sparks of Hope), 14.3.0 (Batman: Arkham Knight), 15.3.2 (Paper Mario: The Thousand-Year Door)
 - regions of 4 MB and more aligned to 2 MB, as SDK 20: SDK 16.2.0 (Sea of Stars), 18.3.2 (Absolum), 18.3.5 (Super Mario Galaxy)
 
-## Host rows of builds no profile registers
-
-Dead code unless such a build is run; a candidate for removal, or for a build row in its profile.
-
-- `c9a3dd77…`: [hle_fpslock.c:35](../../dm/host/hle_fpslock.c#L35): engine frame limit set to fps_target: RE Engine frame limit (a build no profile registers)
-- `79e5950f…`: [hle_fpslock.c:39](../../dm/host/hle_fpslock.c#L39): engine frame limit set to fps_target: NLG frame limiter target (a build no profile registers)
-- `799d1061…`: [hle_fpslock.c:44](../../dm/host/hle_fpslock.c#L44): engine frame limit set to fps_target: Criterion 60 fps mode (a build no profile registers)
-- `799d1061…`: [hle_fpslock.c:45](../../dm/host/hle_fpslock.c#L45): engine frame limit set to fps_target: Criterion frame ticks (a build no profile registers)
-- `799d1061…`: [hle_fpslock.c:46](../../dm/host/hle_fpslock.c#L46): engine frame limit set to fps_target: Criterion frame ticks / 10 (a build no profile registers)
-- `799d1061…`: [hle_fpslock.c:47](../../dm/host/hle_fpslock.c#L47): engine frame limit set to fps_target: Criterion 2D game step (a build no profile registers)
-- `799d1061…`: [hle_fpslock.c:48](../../dm/host/hle_fpslock.c#L48): engine frame limit set to fps_target: Criterion 3D game step (a build no profile registers)
-- `a48c0de3…`: [hle_fpslock.c:54](../../dm/host/hle_fpslock.c#L54): engine frame limit set to fps_target: FIFA frame regulator (a build no profile registers)
-- `3c10ec35…`: [hle_fpslock.c:71](../../dm/host/hle_fpslock.c#L71): frame interval and dynamic-resolution floor (a build no profile registers)
-- `98397a10…`: [hle_fpslock.c:72](../../dm/host/hle_fpslock.c#L72): frame interval and dynamic-resolution floor (a build no profile registers)
-- `feae83dc…`: [hle_uemalloc.c:41](../../dm/host/hle_uemalloc.c#L41): Unreal's allocator on a host malloc zone (a build no profile registers)
-
 ## Translator rules keyed by a shader's code
 
 - [Program.cs:308](../../dm/gfx/tools/dmsh_xlate/Program.cs#L308): Tears of the Kingdom 1.4.3 visibility counter (one vertex shader, exact code SHA-256 below) (**`game` → `host`**, kept: one shader in one game, already handled; a general lowering is a chain change (every game's shaders rebuilt) for no measured gain: revisit when a vertex shader with subgroup operations fails in another game: a general lowering of subgroup ballots in vertex shaders (subgroups of one invocation: ballots, votes, lane ids and counts, refusing shuffles that exchange data between lanes) would cover any shader that counts that way)

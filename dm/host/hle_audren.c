@@ -42,7 +42,7 @@ static size_t ar_align(size_t n, size_t alignment) { return (n + alignment - 1) 
 // service's compact commands. The SDK's local server instead sizes its own CPU command structures, so forwarding its size inflates the guest's service requirement.
 // Derived from the service's sizing and revision gates; checked against its isolated machine-code execution. No firmware code is needed at runtime. Unknown revisions retain
 // the SDK requirement. SDK 8 keeps the public parameter revision at +0x38, while SDK 9+ uses +0x34 (the copied parameter holds both).
-// dm_audren_work_size: the same for a parameter whose revision the caller found (SDK 1.3.1's 0x34-byte parameter has it at +0x30: audren:u, hle_audren_sv.c)
+// dm_audren_work_size: the same for a parameter whose revision the caller found
 size_t dm_audren_work_size(const uint8_t *p, uint32_t revision) {
     if ((revision & 0xffffff) != 0x564552 || revision < 0x31564552 || revision > 0x3f564552) return 0;
     unsigned r = (revision >> 24) - 0x30;
@@ -77,11 +77,11 @@ size_t dm_audren_work_size(const uint8_t *p, uint32_t revision) {
     return ar_align(size + commands + 0x7e, WORK_PAGE);
 }
 
-// An SDK without the renderer in the process (SDK 1.3.1, Rayman Legends: Definitive Edition: no ExecuteAudioRendererRendering, only CreateAudioRendererManagerByHipc) is only the client of
-// audren:u, which the host serves (hle_audren_sv.c). Its work size, open and close go to the SDK as the game called them: the SDK's own client talks to the service
+// An SDK without the renderer in the process (SDK 1.3.1: no ExecuteAudioRendererRendering, only CreateAudioRendererManagerByHipc) is only the client of audren:u, which this
+// host does not serve. Ocarina of Time's SDK (22.2.8) renders in the process; for any other, the calls go to the SDK as the game made them and the log says so
 static int ar_in_process(void) {
     static int v = -1;
-    if (v < 0) { v = guest_sym("_ZN2nn5audio29ExecuteAudioRendererRenderingENS0_19AudioRendererHandleE") != NULL; if (!v) LOG("audren: the SDK has no renderer of its own: its client talks to audren:u, served by the host"); }
+    if (v < 0) { v = guest_sym("_ZN2nn5audio29ExecuteAudioRendererRenderingENS0_19AudioRendererHandleE") != NULL; if (!v) LOG("[RED] audren: the SDK has no renderer of its own: its client talks to audren:u, which this host does not serve"); }
     return v;
 }
 static size_t ar_service_work_size(const uint8_t *p) {

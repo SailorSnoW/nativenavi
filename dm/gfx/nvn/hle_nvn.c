@@ -200,7 +200,6 @@ static const int g_devinfo2[] = {
 __attribute__((weak)) int dm_sdk_major(void) { return 0; }   // loader.c; graphics unit tests have no loader
 __attribute__((weak)) int dm_sdk_ounce(void) { return 0; }
 __attribute__((weak)) int dm_sdk_nvn2_item(unsigned item, int *out) { (void)item; (void)out; return 0; }
-__attribute__((weak)) int dm_glslc_gpu_code(int *major, int *minor) { *major = *minor = 0; return 0; }   // hle_glslc.c: the game's own GLSLC's GPU code version
 static void nvn_api(int api[2]) {
 #ifdef DM_GAME_NVN_API_MAJOR
     api[0] = DM_GAME_NVN_API_MAJOR; api[1] = DM_GAME_NVN_API_MINOR; LOG("[nvn] device API %d.%d (game profile device_api)", api[0], api[1]);
@@ -230,11 +229,9 @@ NVN(nvnDeviceGetInteger, void, const NVNdevice *d, NVNdeviceInfo what, int *out)
     *out = g_devinfo[w];
     // 0x2E / 0x30 describe the GPU code the host can translate, not the linked SDK's driver. Precompiled shaders can come from a newer compiler: ASTRAL CHAIN links SDK 6.4 but its
     // hwfillcolor.vso is 1.15; main+0x9e97d0 rejects the old SDK-based answer 1.14 and initialization unwinds into a null read at main+0x9c0d1c. Our chain translates through 1.16
-    // (Bayonetta 3), so advertise that range for every SDK. Retain the floor from a game's own run-time GLSLC (Catherine: Full Body), whose outputs the build also translates.
+    // (Bayonetta 3), so advertise that range for every SDK.
     if (w == 0x2E || w == 0x30) {
-        int gv[2], cur[2] = {1, 16};
-        if (dm_glslc_gpu_code(&gv[0], &gv[1]) && (gv[0] > cur[0] || (gv[0] == cur[0] && gv[1] > cur[1]))) { cur[0] = gv[0]; cur[1] = gv[1]; }
-        *out = w == 0x2E ? cur[0] : cur[1];
+        *out = w == 0x2E ? 1 : 16;
     }
     if (w <= 1) { static int api[2] = {-1, -1}; if (api[0] < 0) { nvn_api(api); const char *e = getenv("DM_NVN_API"); if (e) sscanf(e, "%d.%d", &api[0], &api[1]); } *out = api[w]; }
     OLOG("DeviceGetInteger %#x -> %d", w, *out);
@@ -2376,10 +2373,9 @@ static _Atomic uint64_t g_itv2_since;   // start of the game's current run of ev
 // (fstep_tick, nvn_fstep.h) and presents follow the hold k it decides with it
 __attribute__((weak)) uint8_t *dm_fps_state;   // loader.c; graphics unit tests have no loader
 __attribute__((weak)) int dm_fps_step_max;   // loader.c: the largest step the stubs give the game (0 = FSTEP_MAX)
-__attribute__((weak)) void dm_fps_lock_tick(void) {}   // hle_fpslock.c: engine frame limits in game memory (Monster Hunter Rise); graphics unit tests have no host
-static int g_engine_stub = 1;   // the weak dm_fps_lock_engine's answer, for graphics unit tests (t_nvn sets it)
-__attribute__((weak)) int dm_fps_lock_engine(void) { return g_engine_stub; }   // hle_fpslock.c: the host writes fps_target into an engine limiter of this main
-__attribute__((weak)) void dm_ue_cvar_tick(void) {}   // hle_uecvar.c: Unreal's texture streaming pool (profile ue_texture_pool)
+// An engine frame limiter the host writes: none. Ocarina of Time takes its frame time from the frame step's state page (dm_fps_state), in whole vsyncs of 1/60 s, so the
+// pacer's ticks of 1/120 s (fps_high) are not reachable in the game; the graphics unit tests of that path set this
+static int g_fps_engine;
 __attribute__((weak)) int dm_movie_hz(void) { return 0; }   // hle_movie.c: the picture rate of the movie playing, 0 when none; graphics unit tests have no movie decoder
 // Thermal cap (iOS): while the device is thermally serious or worse (NSProcessInfo thermalState >= 2) the frame step holds 30 fps, and it goes back to the cap after the device
 // has been fair or better for THERMAL_CALM_NS, so it does not flap. At "serious" iOS caps the GPU clock to about a third: Breath of the Wild's vistas (about 3,000 G-buffer draws)
@@ -2406,7 +2402,7 @@ static int thermal_capped(void) {
     pthread_mutex_unlock(&mu);
     return result;
 }
-// 120 fps (profile fps_max 120, DM_FPS_TARGET=120): an engine limiter the host writes (hle_fpslock.c) follows the frame step, counted here in ticks of 1/120 s: hold 1 is 120 fps, hold 2 is 60.
+// 120 fps (profile fps_max 120, DM_FPS_TARGET=120): an engine limiter the host writes (g_fps_engine: none here) follows the frame step, counted here in ticks of 1/120 s: hold 1 is 120 fps, hold 2 is 60.
 // A game may step by its target whatever the frames really take (Fire Emblem Fortune's Weave: 60.0 / target a frame), so a target of 120 at 70 frames a second is a game at 58% speed, and
 // on a 60 Hz screen at half speed: late frames step the hold up (nvn_fstep.h), the target follows the hold, and the game's step stays what the screen shows. The cap is 60 on a screen
 // below 120 Hz, while a movie plays (its pictures are paced for the Switch's 30 and 60) and under the thermal cap. No window (headless): nothing limits the rate but the pacer's clock.
@@ -2417,7 +2413,7 @@ static int fps_high(void) {
     int v = __atomic_load_n(&g_fps_high, __ATOMIC_RELAXED);
     if (v < 0) {
         const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
-        v = t == 120 && DM_GAME_FPS_MAX >= 120 && !dm_fps_state && dm_fps_lock_engine();
+        v = t == 120 && DM_GAME_FPS_MAX >= 120 && !dm_fps_state && g_fps_engine;
         if (t == 120 && DM_GAME_FPS_MAX >= 120 && !v) LOG("[RED] [nvn] 120 fps: this main has %s, so it runs at 60", dm_fps_state ? "a frame step in whole vsyncs" : "no engine frame limit the host writes");
         __atomic_store_n(&g_fps_high, v, __ATOMIC_RELAXED);
     }
@@ -2446,7 +2442,7 @@ static int fps_step_cap(void) {
 static int fstep_on(void) { return fps_step_cap() != 0; }   // the host decides the steps in whole vsyncs
 // Engine-native frame limiters have no frame-step state page. Their requested
 // cap still governs presentation, even when the profile uses display pacing.
-// Without a limiter the host writes (dm_fps_lock_engine) nothing makes the game
+// Without a limiter the host writes (g_fps_engine) nothing makes the game
 // follow the cap, so in game mode the game's own present interval stays: a fixed-step
 // game presented at a cap it does not step by runs fast or slow. Display mode already
 // declares that the game steps by the time that passed (its present interval is its
@@ -2462,9 +2458,9 @@ static int fps_present_cap(void) {
     if (g_present_cap < 0) {
         const char *e=getenv("DM_FPS_TARGET");int t=e?atoi(e):DM_GAME_FPS_TARGET;
         g_present_cap=t==30||t==60?t:t==120?60:0;   // 120 here: not this game's (fps_high), so it runs at 60
-        if (g_present_cap && !dm_fps_lock_engine() && display_mode())
+        if (g_present_cap && !g_fps_engine && display_mode())
             LOG("[nvn] present cap %d fps (%s) applied by the present interval alone: display mode, and this main has no engine frame limit the host writes", g_present_cap, e ? "DM_FPS_TARGET" : "game profile fps_target");
-        else if (g_present_cap && !dm_fps_lock_engine()) {
+        else if (g_present_cap && !g_fps_engine) {
             LOG("[nvn] present cap %d fps (%s) not applied: this main has neither a frame step nor an engine frame limit the host writes, so the game's own present interval stays", g_present_cap, e ? "DM_FPS_TARGET" : "game profile fps_target");
             g_present_cap=0;
         }
@@ -2475,7 +2471,6 @@ static nvn_fstep g_fs;   // present thread only
 static nvn_fgpu g_fg;   // the GPU time at kmin and at the current hold (nvn_fstep_gpu_slowed)
 static _Atomic int g_fs_k;   // the hold presentation follows (0 = not decided yet)
 // The display link runs at 30 Hz at a 30 cap, except while the game fixes its own step at 1 (BotW's VFR override)
-int nvn_fps_high_now(void) { return atomic_load(&g_fs_k) == 1 ? 120 : 60; }   // hle_fpslock.c: the target of the next game frame, from the hold in force
 // The rate of vi::GetDisplayVsyncEvent (hle_sdk16.c, nvn_mtl.m mtl_link_wait_vsync): the Switch's 60 Hz, or 120 while 120 fps is on and its hold is one tick of 1/120 s. A game that
 // waits for the next vblank each frame is held to the event's rate whatever the present cap: Unity's NVN device waits until its vblank time (set from the event) passes
 // (The Rogue Prince of Persia: main+0x14f65f0), so at 120 every frame came two ticks late and the hold fell back to 60. The hold's trial at 120 must already have the event at 120
@@ -2679,7 +2674,6 @@ static const int *present_crop(const int win[4], int tw, int th, int lc[4]) {
 }
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     (void)q; win_t *o = (win_t *)w; o->presents++;
-    dm_ue_cvar_tick();
     if (fps_high()) high_cap_tick();
     int movie = dm_movie_hz();
     if (dm_fps_state) __atomic_store_n((uint32_t *)(dm_fps_state + 4), (uint32_t)(movie != 0), __ATOMIC_RELAXED);   // the stubs' copy of the movie state (hle.h)
@@ -2687,7 +2681,6 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (dm_fps_state) { static int was; if (c != was) { char why[48] = ""; if (movie) snprintf(why, sizeof why, " (a movie of %d pictures a second)", movie); else if (c == 30 && was == 60 && thermal_capped()) snprintf(why, sizeof why, " (thermal state serious)");
         LOG("[nvn] frame step cap %d → %d fps at present %llu%s", was, c, (unsigned long long)o->presents, why); was = c; } }
     if (c) fstep_tick(o, c);
-    dm_fps_lock_tick();   // after the frame step: at 120 fps the target follows the hold just decided
     static uint64_t prev_in, prev_out, prev_pass, prev_draw;
     present_cfg(o);
     {

@@ -13,7 +13,7 @@ GAME ?= 0400486024DEC000
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
 $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../romfs_image.h
 GAME_H = ../gen/$(GAME)/game_profile.h
-run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_friends $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_output_stream $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pollwait $(B)/t_clockwait $(B)/t_pause $(B)/t_pause_stress $(B)/t_pctl $(B)/t_sf $(B)/t_audren_sv $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_pad_hid $(B)/t_switch2
+run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_friends $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_output_stream $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pollwait $(B)/t_clockwait $(B)/t_pause $(B)/t_pause_stress $(B)/t_pctl $(B)/t_sf $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_pad_hid $(B)/t_switch2
 	$(B)/t_language
 	$(B)/t_heap_size
 	$(B)/t_touch
@@ -31,9 +31,6 @@ run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B
 	$(B)/t_mii
 	$(B)/t_audio_spsc
 	$(B)/t_audio_stats
-	$(B)/t_fpslock
-	$(B)/t_uecvar
-	$(B)/t_ue_heap_span
 	$(B)/t_audren_work
 	$(B)/t_audren_layout
 	$(B)/t_swkbd
@@ -51,7 +48,6 @@ run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B
 	$(B)/t_net_eventfd
 	$(B)/t_net_loopback
 	$(B)/t_sf
-	$(B)/t_audren_sv
 	$(B)/t_time
 	$(B)/t_sync_wait $(QUIET)
 	$(B)/t_shared_font
@@ -203,15 +199,6 @@ $(B)/t_audio_input: t_audio_input.c ../audio_input.c ../audio_input.h | $(B)
 audio-input: $(B)/t_audio_input
 	$(B)/t_audio_input
 run: audio-input
-run: $(B)/t_fpslock
-$(B)/t_fpslock: t_fpslock.c ../hle_fpslock.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wno-unused-function $(GINC) -o $@ t_fpslock.c
-run: $(B)/t_ue_heap_span
-$(B)/t_ue_heap_span: t_ue_heap_span.c ../hle_uemalloc.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function $(GINC) -o $@ t_ue_heap_span.c
-run: $(B)/t_uecvar
-$(B)/t_uecvar: t_uecvar.c ../hle_uecvar.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wno-unused-function $(GINC) -o $@ t_uecvar.c
 $(B)/t_swkbd: t_swkbd.c ../hle_swkbd.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_swkbd.c ../hle_swkbd.c
 run: $(B)/t_bigstack
@@ -241,8 +228,6 @@ $(B)/t_pctl: t_pctl.c ../hle_misc.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_pctl.c
 $(B)/t_sf: t_sf.c ../hle_sf.c ../hle_irs.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_sf.c
-$(B)/t_audren_sv: t_audren_sv.c ../hle_sf.c ../hle_audren_sv.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -fsanitize=address,undefined -I.. $(GINC) -o $@ t_audren_sv.c
 $(B)/t_shared_font: t_shared_font.c ../hle_sdk16.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -Wno-frame-address -I.. $(GINC) -o $@ t_shared_font.c
 # nn::vi::ListFrameHistory: the SDK's FrameInfo, newest first, from the present queue's progress
@@ -370,15 +355,6 @@ FORCE:
 $(B):
 	mkdir -p $@
 .PHONY: run tsan
-$(B)/t_resolution: t_resolution.c ../hle_fpslock.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	clang -O1 -Wall -Werror -Wno-unused-function -fsanitize=undefined -I.. $(GINC) -o $@ t_resolution.c
-.PHONY: resolution
-run: resolution
-resolution: $(B)/t_resolution
-	@for fps in 0 30 60; do for mode in 0 1 unset invalid; do $(B)/t_resolution $$mode $$fps native || exit 1; done; done
-	$(B)/t_resolution 1 60 old
-	$(B)/t_resolution 1 30 wrong
-	@for fps in 0 30 60; do for mode in 0 1 unset invalid; do $(B)/t_resolution $$mode $$fps asia || exit 1; done; done
 tsan: $(B)/t_audio_spsc_tsan $(B)/t_hid_tsan
 	$(B)/t_audio_spsc_tsan
 	TMPDIR="$(abspath $(B))" $(B)/t_hid_tsan

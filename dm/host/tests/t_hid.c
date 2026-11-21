@@ -81,8 +81,6 @@ void dm_gfx_texraw(uint64_t serial, const char *path) { (void)serial; (void)path
 void dm_ctl_peek(uint64_t a, int n) { (void)a; (void)n; }
 void crash_dump_now(const char *why) { (void)why; }
 void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path) { (void)a; (void)n; (void)path; }
-void dm_ctl_cvar_i32(uint64_t off, int32_t v) { (void)off; (void)v; }
-void dm_ctl_cvar_f32(uint64_t off, float v) { (void)off; (void)v; }
 void dm_gfx_texdump_next(const char *path) { (void)path; }
 void dm_gfx_passdump_next(long n) { (void)n; }
 void dm_gfx_addr_note(uint64_t a, char *note, size_t n) { (void)a; if (n) note[0] = 0; }   // DM_CTL "addr" (nvn_mtl.m)

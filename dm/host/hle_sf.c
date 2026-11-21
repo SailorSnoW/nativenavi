@@ -27,7 +27,7 @@ static const struct { const char *name; sf_answer answer; } sf_served[] = {
     // (0xe15, main+0x37080). Offline stand-in: acknowledge and discard events; no queue is retained for Nintendo's later upload (services.md, "Mission events through mnpp:app")
     {"mnpp:app", NULL},
 };
-// The services other files serve (SF_SERVICE, hle.h): audren:u (hle_audren_sv.c)
+// The services other files serve (SF_SERVICE, hle.h): none at present
 static const sf_service_ent *sf_registered(unsigned long *n) {
     unsigned long sz = 0; const sf_service_ent *e = (const sf_service_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swsf", &sz);
     *n = e ? sz / sizeof *e : 0; return e;

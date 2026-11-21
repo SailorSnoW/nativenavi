@@ -610,8 +610,6 @@ static void module_data_query(const module_t *m, uint64_t off, uint64_t *lo, uin
 }
 static int map_source_backed(uint64_t src, uint64_t size) {
     if (memory_contains((uintptr_t)g_heap, g_heap_cur, src, size)) return 1;
-    int dm_ue_heap_owns(uint64_t a, uint64_t n);   // Unreal's heap on a host malloc zone outside the guest block (hle_uemalloc.c): Unreal allocates its threads' stacks there
-    if (dm_ue_heap_owns(src, size)) return 1;
     if (memory_contains((uintptr_t)g_alias, g_alias_cap, src, size))
         return !alias_unmapped(src - (uintptr_t)g_alias, size);
     module_t *m = module_of((void *)(uintptr_t)src);
@@ -780,22 +778,9 @@ static void stdalloc_init(uint64_t *r, int param) {
         DM_GAME_STDALLOC_CAP ? "the profile's stdalloc_cap" : "what the alias region has room for (the profile key stdalloc_cap sets it)");
     r[2] = cap;
 }
-// ---- Unreal's engine region ----
-// Unreal Engine 4 / 5's nninitStartup reserves one address region for the engine, which the engine hands out itself: 62 GB by default (16 GB in Unreal Engine 4.18), made for the
-// Switch's 64 GB alias region. The rewriter's gate on the store of its size right before the reservation (dm/tools/ue_region.py, in any Unreal main) gives it what the alias region
-// has room for, as StandardAllocator's gate above: the size variable (the register the gate number names) and the request (x1) both take it, so the engine lays the region out from
-// the size it got. -SwitchVirtualAddressSpaceSize= gives a size too, but UE 4.26 then skips the reservation (Pikmin 4); a smaller size given that way stays. A workaround for the
-// iPhone's address space, not the game: with room for the request (the Mac's 64 GB) nothing changes
-static void ue_region(uint64_t *r, int param) {
-    if (param < 1 || param > 28 || param == 18) return;
-    uint64_t cap = alias_room();
-    if (!cap || r[param] <= cap) return;
-    LOG("[mem] Unreal's engine region: %.2f GB asked, %.2f GB of address space, what the alias region has room for", r[param] / 1073741824.0, cap / 1073741824.0);
-    r[param] = r[1] = cap;
-}
 __attribute__((constructor)) static void regions_attach(void) {
     gate_obs_set(OBS_REGION_ASK, region_ask); gate_obs_set(OBS_REGION_GOT, region_got); gate_obs_set(OBS_REGION_FREE, region_free);
-    gate_obs_set(OBS_STDALLOC_INIT, stdalloc_init); gate_obs_set(OBS_UE_REGION, ue_region);
+    gate_obs_set(OBS_STDALLOC_INIT, stdalloc_init);
 }
 // Pages set in a bitmap's bits [lo, hi), a word at a time: a 62 GB region is 16 million pages, counted under g_map_lock, which every MapPhysicalMemory takes
 static uint64_t bits_set(_Atomic uint64_t *b, uint64_t lo, uint64_t hi) {

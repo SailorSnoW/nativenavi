@@ -61,20 +61,6 @@ typedef struct {
     uint8_t *base;             // Start address of the image (including the patch area) in the host address space
     size_t size;
     uint64_t text_end, ro_off, data_off, key_page_off, key_page_size;   // From the rewriter fixups header
-    uint64_t ue_malloc_vt;     // Unreal's FMallocBinned3 vtable, found by the rewriter (patch_nso.py, ue_malloc.py; hle_uemalloc.c); 0 = none
-    unsigned ue_malloc_slot;   // the slot of its name getter, which names the slot layout
-    struct { char name[32]; uint64_t off; } ue_cvar[8];   // Unreal console variables found by their registered names (patch_nso.py, ue_cvar.py; UE_CVAR:<name>): each one's TAutoConsoleVariable
-    int n_ue_cvar;
-    uint64_t fps_target_ptr;   // a target frame rate the game steps by, an int32 at [main + fps_target_ptr] + fps_target_field (patch_nso.py, fps_target.py; hle_fpslock.c); 0 = none
-    uint32_t fps_target_field;
-    uint64_t monolith_interval; // Monolith's native frame interval, an int32 at main + this (monolith_fps.py); 0 = not found
-    int native_fps_blocked;    // a required timing correction did not match: retain this main's own engine frame limits
-    uint64_t ue_fixed_ptr;     // Unreal's GEngine (main's offset of the global) and UEngine::FixedFrameRate in it, a float (patch_nso.py, ue_fixed_rate.py; hle_fpslock.c); 0 = none
-    uint32_t ue_fixed_field;
-    uint32_t ue_fixed_flag;    // bUseFixedFrameRate in UEngine: byte offset << 8 | bit mask; the rate is written only while it is set
-    uint64_t unity_target_fps; // Unity's Application.targetFrameRate, an int32 at main + this (patch_nso.py, unity_fps.py; hle_fpslock.c); 0 = none
-    uint64_t unity_qs_ptr;     // Unity's QualitySettings (main's offset of the global pointer); the current level's vSyncCount, an int32, is at
-    uint32_t unity_qs_idx, unity_qs_arr, unity_qs_size, unity_qs_vsync;   // [obj + arr] + (int32)[obj + idx] * size + vsync; 0 = none
     uint64_t fps_state_off;    // frame step state page (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3 and Breath of the Wild 1.9.0 main); 0 = none
     uint32_t step_max;         // the largest step the frame step stubs give the game (the fixups table's STEP_MAX, patch_nso.py ctx.step_max); 0 = FSTEP_MAX
     uint32_t render_scale_max; // a render-scale stub's largest scale (the fixups table's RENDER_SCALE, patch_nso.py): DM_RENDER_SCALE is held to it; 0 = no such stub
@@ -116,6 +102,7 @@ int nro_refused(const uint8_t sha256[32]);      // an NRO the pack refused (an o
 void nro_load(module_t *m);     // relocate an NRO against the loaded modules and bind the earlier modules' imports it defines (the caller runs its init)
 void nro_load_alone(module_t *m);   // relocate an NRO against itself only: a JIT plugin, which on Horizon is not linked with the game (hle_jit.c)
 void nro_unload_alone(module_t *m); // the end of a load alone (DestroyJitEnvironment): inactive again, after its fini; its memory stays mapped in the layout
+void dm_ctl_peek(uint64_t a, int n); void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path);   // DM_CTL "peek" and "memdump": guest memory to the log or a file (probe.c)
 const char *dm_jit_serve_dir(void); uint8_t *dm_jit_layout_base(void);   // a served nn::jit image and the layout the modules are mapped in for it (loader.c, hle_jit.c)
 void nro_unload(module_t *m);   // take an NRO out of the lookups and bind the imports that pointed into it again
 int svc_nro_deactivate(module_t *m);   // mark inactive under the memory map lock, refusing while a stack borrows its data
@@ -132,13 +119,11 @@ module_t *module_of(const void *p);
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): read-only callbacks, called on a gate hit once attached
 // IDs 19 / 20 belonged to the removed movie request-ring workaround. Old rewritten modules may still contain them; without callbacks those gates are harmless passes through.
-enum { OBS_UE_MALLOC = 21,                                       // Unreal's FMallocBinned3 constructor call, cut: the object in the register its upper bits name (patch_nso.py, hle_uemalloc.c)
-       OBS_REGION_ASK = 22, OBS_REGION_GOT = 23, OBS_REGION_FREE = 24,   // the SDK's address regions, gates the rewriter places by symbol in every sdk (patch_nso.py "Address regions", hle_svc.c)
+enum { OBS_REGION_ASK = 22, OBS_REGION_GOT = 23, OBS_REGION_FREE = 24,   // the SDK's address regions, gates the rewriter places by symbol in every sdk (patch_nso.py "Address regions", hle_svc.c)
        OBS_STDALLOC_INIT = 25,                                         // StandardAllocator::Initialize's entry, the same way: its callback writes the size (hle_svc.c)
-       OBS_UE_REGION = 26,                                             // the store of Unreal's engine region size before nninitStartup reserves it: the register its upper bits name (dm/tools/ue_region.py, hle_svc.c)
-       OBS_MAX = 27 };
+       OBS_MAX = 26 };
 // A gate number's bits from 8 up are a parameter for its callback (OBS_REGION_GOT: the register that holds the address). Callbacks read the registers; a write to x0–x29 takes
-// effect when the gate returns (entry.S restores them from the frame), which OBS_STDALLOC_INIT and OBS_UE_REGION do
+// effect when the gate returns (entry.S restores them from the frame), which OBS_STDALLOC_INIT does
 void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));
 int gate_obs_present(int id);
 uint64_t now_ns(void);

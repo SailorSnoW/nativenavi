@@ -445,3 +445,22 @@ void probe_install(void) {
     watch_install();
 #endif
 }
+
+// ---- DM_CTL "peek" and "memdump" (hle_hid.c): guest memory read safely, whatever is mapped there ----
+static int ctl_rd(uint64_t a, void *out, size_t n) { vm_size_t got = 0; return a >= 0x1000 && vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n; }
+// "peek <guest address> <count>": count floats (and their bits) from guest memory to the log
+void dm_ctl_peek(uint64_t a, int n) {
+    for (int i = 0; i < n && i < 64; i += 4) {
+        uint32_t w[4] = {0}; int k = n - i < 4 ? n - i : 4;
+        if (!ctl_rd(a + 4 * (uint64_t)i, w, 4 * (size_t)k)) { LOG("DM_CTL: peek %#llx: not readable", (unsigned long long)(a + 4 * (uint64_t)i)); return; }
+        float f[4]; memcpy(f, w, sizeof f);
+        LOG("DM_CTL: peek %#llx: %g %g %g %g (%08x %08x %08x %08x)", (unsigned long long)(a + 4 * (uint64_t)i), f[0], f[1], f[2], f[3], w[0], w[1], w[2], w[3]);
+    }
+}
+// "memdump <guest address> <bytes> <path>": guest memory to a file (stops at the first unreadable page)
+void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path) {
+    FILE *f = fopen(path, "wb"); if (!f) { LOG("[RED] DM_CTL: memdump: cannot open %s", path); return; }
+    static uint8_t buf[1 << 16]; uint64_t done = 0;
+    while (done < n) { size_t k = n - done < sizeof buf ? (size_t)(n - done) : sizeof buf; if (!ctl_rd(a + done, buf, k)) break; fwrite(buf, 1, k, f); done += k; }
+    fclose(f); LOG("DM_CTL: memdump %#llx: %llu of %llu bytes → %s", (unsigned long long)a, (unsigned long long)done, (unsigned long long)n, path);
+}

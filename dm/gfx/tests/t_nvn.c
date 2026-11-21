@@ -376,7 +376,7 @@ int main(void) {
     // No frame step page and no engine limiter the host writes (a main the profile's
     // stubs or limiter rows do not know): nothing makes the game follow the cap, so
     // presentation keeps the game's own interval (Tears of the Kingdom 1.4.2 at 2x).
-    { win_t w={.interval=2};nvn_present_config(60,0);dm_fps_state=NULL;g_engine_stub=0;
+    { win_t w={.interval=2};nvn_present_config(60,0);dm_fps_state=NULL;g_fps_engine=0;
       setenv("DM_FPS_TARGET","60",1);g_present_cap=-1;
       EXPECT("no limiter: the 60 cap is not applied",0,fps_present_cap());
       EXPECT("no limiter: the game's present interval stays",2,present_itv(&w));
@@ -384,10 +384,10 @@ int main(void) {
       EXPECT("no limiter: the 30 cap is not applied",1,present_itv(&w));
       _Alignas(8) uint8_t state[64]={0};float cap=60;memcpy(state,&cap,4);dm_fps_state=state;
       EXPECT("a frame step page needs no limiter",60,fps_present_cap());
-      dm_fps_state=NULL;unsetenv("DM_FPS_TARGET");g_present_cap=-1;g_engine_stub=1;nvn_present_config(0,0);
+      dm_fps_state=NULL;unsetenv("DM_FPS_TARGET");g_present_cap=-1;g_fps_engine=1;nvn_present_config(0,0);
     }
     // Display mode with no engine limiter (Red Dead Redemption: interval 2 set once, steps by time): the cap is the present interval alone
-    { win_t w={.interval=2};nvn_present_config(60,1);dm_fps_state=NULL;g_engine_stub=0;
+    { win_t w={.interval=2};nvn_present_config(60,1);dm_fps_state=NULL;g_fps_engine=0;
       setenv("DM_FPS_TARGET","60",1);g_present_cap=-1;
       EXPECT("display mode, no limiter: the 60 cap is applied",60,fps_present_cap());
       EXPECT("display mode, no limiter: one vsync a frame",1,present_itv(&w));
@@ -400,7 +400,7 @@ int main(void) {
       EXPECT("display mode, no limiter, no cap: one frame per tick",1,present_itv(&w));
       nvn_present_config(-1,0);setenv("DM_PRESENT_INTERVAL","display",1);setenv("DM_FPS_TARGET","30",1);g_present_cap=-1;
       EXPECT("the cap asked for before the window's first interval: display mode from the environment",30,fps_present_cap());
-      unsetenv("DM_PRESENT_INTERVAL");unsetenv("DM_FPS_TARGET");g_present_cap=-1;g_engine_stub=1;nvn_present_config(0,0);
+      unsetenv("DM_PRESENT_INTERVAL");unsetenv("DM_FPS_TARGET");g_present_cap=-1;g_fps_engine=1;nvn_present_config(0,0);
     }
     crash_install();   // the same SIGSEGV / SIGBUS handling as production (the page-fault hook is dispatched from within it)
     // 1. Bootstrap address lookup: bootstrap gets GetProcAddress, then uses it to get all the names
