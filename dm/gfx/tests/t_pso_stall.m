@@ -125,6 +125,7 @@ int main(void) { @autoreleasepool {
     EXPECT("held: the compile of f1 entered", 0, dispatch_semaphore_wait(hold->entered, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)));
     EXPECT("held: every pair handed out (the prepare step stops waiting)", 1, until(^{ return (int)(atomic_load(&g_pre_next) >= 3); }, 10));
     EXPECT("held: the other pairs built", 1, until(^{ return (int)(g_pre_done == 2); }, 10));
+    EXPECT("held: the others, of another vertex function, waited for no stripe", 0, atomic_load(&g_vs_waited) + atomic_load(&g_vs_stalls));
     EXPECT("held: the prebuild not done", 1, g_pre_running);
 
     // a flush hands the held period over and returns; a draw's compile in the next period goes through, and that period's flush writes its file
@@ -295,6 +296,22 @@ int main(void) { @autoreleasepool {
     EXPECT("returned: the other from the archive", 1, g_pre_archived);
     EXPECT("returned: put back first", 1, g_pre_deferred >= 2);
     EXPECT("returned: stamped", 1, [NSFileManager.defaultManager fileExistsAtPath:stamp5]);
+
+    // the same with a build of v1 under way outside any capture (its stripe held: vs_enter, DM_PSO_VS_SERIAL; a draw's whole pipeline, a lookup): its pairs are put back, not
+    // waited for, and built once it returns; the other pair goes on
+    NSString *arch6 = [root stringByAppendingPathComponent:@"archive6"], *stamp6 = [arch6 stringByAppendingPathComponent:@"prebuilt.tsv"];
+    [NSFileManager.defaultManager createDirectoryAtPath:arch6 withIntermediateDirectories:YES attributes:nil error:nil];
+    g_arch_dir = arch6; g_arch4 = @[]; g_arch4p = @[];
+    int hgo = 0; vs_guard_t hv = vs_enter(pre_desc(@"v1", @"f4", 0), 1, &hgo);
+    EXPECT("stripe: v1 under way", 1, hv.held && vs_stripe_of(pre_desc(@"v1", @"f6", 0)) == hv.idx);
+    reset_counts(); uint64_t t6 = bp_now(), waited6 = atomic_load(&g_vs_waited);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ vs_leave(hv); });
+    EXPECT("stripe: three pairs", 3, pso_prebuild(2, 1, QOS_CLASS_USER_INITIATED));
+    EXPECT("stripe: built once it returned", 1, bp_now() - t6 >= 250000000ull);
+    EXPECT("stripe: all built", 3, g_pre_built);
+    EXPECT("stripe: put back", 1, g_pre_deferred >= 2);
+    EXPECT("stripe: none waited for it", waited6, atomic_load(&g_vs_waited));
+    EXPECT("stripe: stamped", 1, [NSFileManager.defaultManager fileExistsAtPath:stamp6]);
     [NSFileManager.defaultManager removeItemAtPath:root error:nil];
     printf("t_pso_stall: %d checks, %d failed\n", checks, failed);
     return failed != 0;

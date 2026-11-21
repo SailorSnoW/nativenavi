@@ -7,3 +7,4 @@ t_*
 nvn_replay
 .precommit.err
 .precommit_snap/
+t_tile_small

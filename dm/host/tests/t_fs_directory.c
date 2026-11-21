@@ -160,19 +160,20 @@ int main(void) {
     CHECK(h_fs_OpenDirectory(&dh, "ov:/", DIRMODE_FILE) == RES_OK && h_fs_ReadDirectory(&count, ents, dh, 8) == RES_OK && count == 4, "then the overlay lists its three files and the base's one");
     if (dh) h_fs_CloseDirectory(dh);
 
-    // A name in several layers is listed once, as the first layer has it; the layers come in their order (the last overlay folder first), and names differing in case are two
+    // A name in several layers is listed once, as the first layer has it, and names that differ only in case are one, spelled as the game's own folder has it (mods made for
+    // emulators name the game's files in any case); the layers come in their order (the last overlay folder first)
     char ov2[1100]; snprintf(ov2, sizeof ov2, "%s.ov2", root); mkdir(ov2, 0755);
     snprintf(q, sizeof q, "%s/entry", ov); FILE *g = fopen(q, "w"); fputs("overlay!", g); fclose(g);
     snprintf(q, sizeof q, "%s/ENTRY", ov2); fclose(fopen(q, "w"));
     snprintf(q, sizeof q, "%s/oa", ov2); fclose(fopen(q, "w"));
     snprintf(g_mnt[g_nmnt - 1].overlay, sizeof g_mnt[0].overlay, "%s:%s", ov, ov2);
     drop_indexes();   // a read-only folder's index is kept for the run: the folder just changed, which a game's never does
-    dh = 0; count = 0; int once = 0, upper = 0, big = 0;
-    CHECK(h_fs_OpenDirectory(&dh, "ov:/", DIRMODE_FILE) == RES_OK && h_fs_ReadDirectory(&count, ents, dh, 8) == RES_OK && count == 5,
-          "the layers list oa, ob, oc, entry and ENTRY, each once");
-    for (int64_t i = 0; i < count; i++) { once += !strcmp(ents[i].name, "entry"); upper += !strcmp(ents[i].name, "ENTRY"); big += !strcmp(ents[i].name, "entry") && ents[i].size == 8; }
-    CHECK(once == 1 && upper == 1 && big == 1, "entry is the overlay's (8 bytes, not the base's 5), and ENTRY is a name of its own");
-    CHECK(count == 5 && (!strcmp(ents[0].name, "ENTRY") || !strcmp(ents[0].name, "oa")) && (!strcmp(ents[1].name, "ENTRY") || !strcmp(ents[1].name, "oa")), "the last overlay folder's names come first");
+    dh = 0; count = 0; int once = 0, other = 0, big = 0;
+    CHECK(h_fs_OpenDirectory(&dh, "ov:/", DIRMODE_FILE) == RES_OK && h_fs_ReadDirectory(&count, ents, dh, 8) == RES_OK && count == 4,
+          "the layers list oa, ob, oc and entry, each once");
+    for (int64_t i = 0; i < count; i++) { once += !strcmp(ents[i].name, "entry"); other += !strcasecmp(ents[i].name, "entry") && strcmp(ents[i].name, "entry"); big += !strcmp(ents[i].name, "entry") && ents[i].size == 8; }
+    CHECK(once == 1 && !other && big == 1, "entry and ENTRY are one name, spelled as the base has it, and the overlay's (8 bytes, not the base's 5)");
+    CHECK(count == 4 && (!strcmp(ents[0].name, "entry") || !strcmp(ents[0].name, "oa")) && (!strcmp(ents[1].name, "entry") || !strcmp(ents[1].name, "oa")), "the last overlay folder's names come first");
     if (dh) h_fs_CloseDirectory(dh);
     snprintf(q, sizeof q, "%s/entry", ov); unlink(q); snprintf(q, sizeof q, "%s/ENTRY", ov2); unlink(q); snprintf(q, sizeof q, "%s/oa", ov2); unlink(q); rmdir(ov2);
 

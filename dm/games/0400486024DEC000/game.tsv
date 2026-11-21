@@ -39,10 +39,21 @@ shader_note	Ocarina of Time shaders
 # ---- Frame rate ----
 # The game steps its time by a frame ratio, its base rate / its frame rate, whatever the frame took: frames longer than a vsync played in slow motion. The ratio takes the host's
 # frame step instead (MATCH_FRAME_STEP in patches.py, found by its function on any build that keeps it): 1 vsync at 60 fps, 2 when 60 does not hold, so game time = real time
+# (frames that are not whole vsyncs long: the stub takes the measured frame time when it is longer than that step, DM_FRAME_DELTA=0 turns that off)
 fps_target	60
 
 # ---- Graphics ----
+# The game turns the difference of two raw counter reports into its wind and particle time step at the Switch 2's system counter rate. At NVN's 614.4 MHz the step was 19.66 times too large: foliage, leaves and hanging plants moved about 20 times too fast
+gpu_ts_hz	31250000
 draw_barriers	game
 # As Tears of the Kingdom: the terrain's height, blend and hole maps are written by the CPU into textures after they are created. Without these keys they stay zero: holes in the ground and the wrong materials
 tex_flush_upload	on
 tex_dirty_upload	on
+# The game submits a frame's commands behind an event its CPU signals once the frame before has left the GPU, so the GPU starts each frame with nothing queued and waits for the
+# replay: with Metal encoding on its own thread a GPU-bound Hyrule Field scene went 55.3-55.8 -> 56.5-56.9 fps (Apple M4 Pro, three runs a side, interleaved)
+enc_thread	on
+# The same event again: with the encode thread the replay still began translating at the signal. Translating the parked queue before it, its commits held until the signal, in
+# Kakariko Village (headless, DM_FPS_HOLD=off, Apple M4 Pro, 2026-11-11): 55.5-57.1 -> 59.6-59.8 fps, frame p50 17.2-17.7 -> 16.5-16.6 ms, the GPU work and the draws the same
+replay_ahead	on
+# The player compared MetalFX's picture with the network's in 2x crops and found it too crisp; with 30 % of a bilinear picture blended in it came closest (2026-11-11)
+upscaler_sharpness	0.7

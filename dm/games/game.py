@@ -107,16 +107,19 @@ def by_build(main_id, skip=()):   # the profile whose build rows register this m
 # (Splatoon Raiders' 20), and the pack inside nn::ndve's movie file. Being named only lets the host read a shader's colour from its code; one whose colour it does not know, or a dispatch
 # it cannot draw, runs as the game's (nvn_mtl.m up_mfx_color, up_mfx_encode)
 UPSCALER_SOURCE = re.compile(r'#NDSR@0x[0-9a-f]+$')
+# agl's variable-ratio NDSR, a chain of compute dispatches a frame (a tile list, edges, a pack, then the network its ratio picks) instead of one: the compute shaders of agl_ndsr_vr.pck
+# and agl_ndsr_vr_light.pck (Ocarina of Time on the Switch 2: 37). The host tells the chain's dispatches apart by what they bind (nvn_mtl.m up_chain_dispatch)
+UPSCALER_CHAIN_SOURCE = re.compile(r'/agl_ndsr_vr(_light)?\.pck#')
 
 
-def upscaler_keys(g):
-    """the game's own upscaler shaders, from its shader map (shader_split.py's source column): sorted 16-digit keys, none without a map"""
+def upscaler_keys(g, source=UPSCALER_SOURCE):
+    """the game's own upscaler shaders, from its shader map (shader_split.py's source column): sorted 16-digit keys, none without a map; source: the pack they come from"""
     p = g.table('shader_map.tsv')
     if not p.exists(): return []
     keys = set()
     for line in p.read_text(encoding='utf-8').splitlines():
         c = line.split('\t')
-        if len(c) >= 5 and c[2] == 'compute' and UPSCALER_SOURCE.search(c[4]) and re.fullmatch(r'[0-9a-f]{16}', c[3]): keys.add(c[3])
+        if len(c) >= 5 and c[2] == 'compute' and source.search(c[4]) and re.fullmatch(r'[0-9a-f]{16}', c[3]): keys.add(c[3])
     return sorted(keys)
 
 
@@ -196,6 +199,9 @@ def header_one(g):
         sys.exit(f'{g.id}: shader_key_skip takes <offset>+<length> within the first 0x880 bytes of the control section, past its header (+0x30) and clear of +0x700..+0x75f: {sks}')
     sko, skl = (int(m[1], 0), int(m[2], 0)) if m else (0, 0)
     if g.get('render_cond', ''): print(f'{g.id}: render_cond is ignored: the host evaluates NVN conditional rendering for every game', file=sys.stderr)   # a profile written before the key went (a build folder's derived one)
+    rah = g.get('replay_ahead', 'off')   # a queue parked on an event the game's CPU signals is translated meanwhile, its commits held until the signal (nvn_queue.inc nq_worker, nvn_rec.h hold_*; DM_NVN_REPLAY_AHEAD overrides; needs enc_thread): on / off
+    if rah not in ('on', 'off'): sys.exit(f'{g.id}: replay_ahead must be on or off: {rah}')
+    if rah == 'on' and et != 'on': sys.exit(f'{g.id}: replay_ahead needs enc_thread on (the encode thread holds the commits)')
     tfu = g.get('tex_flush_upload', 'off')   # textures written by the CPU into a pool and published with nvnMemoryPoolFlushMappedRange are uploaded like packaged ones (hle_nvn.c): on / off
     if tfu not in ('on', 'off'): sys.exit(f'{g.id}: tex_flush_upload must be on or off: {tfu}')
     tdu = g.get('tex_dirty_upload', 'off')   # with tex_flush_upload: a registered texture the CPU writes after init without any flush is uploaded too (dirty pages, hle_nvn.c nvn_ft_written): on / off
@@ -206,9 +212,14 @@ def header_one(g):
     if vcr not in ('on', 'off'): sys.exit(f'{g.id}: vconv_range must be on or off: {vcr}')
     mml = g.get('mem_map_limit', 'off')   # MapPhysicalMemory refused beyond the application pool, as on Horizon (hle_svc.c): on / off
     if mml not in ('on', 'off'): sys.exit(f'{g.id}: mem_map_limit must be on or off: {mml}')
-    ups = upscaler_keys(g)   # the game's own upscaler shaders, which DM_UPSCALER=metalfx (the launcher's Game's upscaler) replaces with MetalFX's spatial scaler (nvn_mtl.m up_mfx_encode)
+    ush = g.get('upscaler_sharpness', '1.0')   # DM_UPSCALER=metalfx: the share of MetalFX's own picture, the rest a bilinear one (nvn_mtl.m up_mfx_sharpness; DM_UPSCALER_SHARPNESS overrides): 0.0-1.0
+    if not re.fullmatch(r'[01]\.\d{1,2}', ush) or float(ush) > 1: sys.exit(f'{g.id}: upscaler_sharpness must be 0.0 to 1.0: {ush}')
+    ups = upscaler_keys(g)   # the game's own upscaler shaders, which DM_UPSCALER=metalfx (the launcher's 3D upscaler) replaces with MetalFX's spatial scaler (nvn_mtl.m up_mfx_encode)
+    upc = upscaler_keys(g, UPSCALER_CHAIN_SOURCE)   # the shaders of its upscaler chain, which the same choice replaces as a whole, before the single dispatch (nvn_mtl.m up_chain_dispatch)
     dbr = g.get('draw_barriers', 'full')   # how draw passes are ordered (nvn_mtl.m barrier_game): full = each waits for all earlier GPU work, game = by the game's own barriers, so vertex work overlaps the previous pass's fragments
     if dbr not in ('full', 'game'): sys.exit(f'{g.id}: draw_barriers must be full or game: {dbr}')
+    tsh = g.get('gpu_ts_hz', '0')   # the counter timestamps' tick rate (nvn_timestamp.h): 0 = by the game's NVN (614.4 MHz, nanoseconds on NVN2), 31250000 for a Switch 2 game that reads raw reports at its system counter rate
+    if not tsh.isdigit(): sys.exit(f'{g.id}: gpu_ts_hz must be a rate in Hz, or 0 for the game\'s NVN: {tsh}')
     om = g.get('op_mode', 'console')   # the operation mode reported at start (hle_oe.c dm_opmode; DM_OPMODE overrides): console = docked, handheld = touch screen in use (Super Mario Galaxy's pointer)
     if om not in ('console', 'handheld'): sys.exit(f'{g.id}: op_mode must be console or handheld: {om}')
     if pl == 'touch' and om != 'handheld': sys.exit(f'{g.id}: pad_layout touch needs op_mode handheld (the touch screen reaches the game only in handheld mode)')
@@ -259,10 +270,14 @@ def header_one(g):
          f'#define DM_GAME_PERF_BOOST {int(pm == "boost")}',
          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
          f'#define DM_GAME_SHADER_KEY_SKIP_OFF {sko:#x}', f'#define DM_GAME_SHADER_KEY_SKIP_LEN {skl:#x}',
+         f'#define DM_GAME_REPLAY_AHEAD {int(rah == "on")}',
          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
          f'#define DM_GAME_DRAW_BARRIERS_GAME {int(dbr == "game")}',
+         f'#define DM_GAME_GPU_TS_HZ {int(tsh)}ull',
          f'#define DM_GAME_UPSCALER_KEYS {q(",".join(ups))}', f'#define DM_GAME_UPSCALER_N {len(ups)}',
+         f'#define DM_GAME_UPSCALER_SHARPNESS {ush}',
+         f'#define DM_GAME_UPSCALER_CHAIN_KEYS {q(",".join(upc))}', f'#define DM_GAME_UPSCALER_CHAIN_N {len(upc)}',
          f'#define DM_GAME_VCONV_RANGE {int(vcr == "on")}',
          *([f'#define DM_GAME_NVN_API_MAJOR {api.split(".")[0]}', f'#define DM_GAME_NVN_API_MINOR {api.split(".")[1]}'] if g.get('device_api', '') else []),   # without the key: by the SDK version (hle_nvn.c nvn_api)
          '']

@@ -351,6 +351,12 @@ check_t_dispatch_barrier: t_dispatch_barrier
 	@set -e; for mode in full game; do for enc in 0 1; do \
 	    DM_NVN_DISPATCH_BARRIER=$$mode DM_NVN_ENC_THREAD=$$enc MTL_DEBUG_LAYER=1 ./t_dispatch_barrier; \
 	done; done; for r in 0 1; do DM_NVN_DISPATCH_RANGELESS=$$r MTL_DEBUG_LAYER=1 ./t_dispatch_barrier; done
+t_vs_serial: t_vs_serial.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_vs_serial.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_vs_serial
+check_t_vs_serial: t_vs_serial
+	MTL_DEBUG_LAYER=1 ./t_vs_serial
+	./t_vs_serial off
 t_args_gen: t_args_gen.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_args_gen.m $(MTL_T_SRC) $(FW)
 check_t_args_gen: RUN_ENV = MTL_DEBUG_LAYER=1
@@ -463,6 +469,12 @@ check_t_pso_demand_record: t_pso_demand_record
 	MTL_DEBUG_LAYER=1 ./t_pso_demand_record --cap
 t_shmap_warm: t_shmap_warm.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_shmap_warm.m $(MTL_T_SRC) $(FW)
+t_tile_small: t_tile_small.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_tile_small.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_tile_small
+check_t_tile_small: t_tile_small
+	MTL_DEBUG_LAYER=1 ./t_tile_small
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_tile_small
 t_pso_bg_look: t_pso_bg_look.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_bg_look.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_pso_bg_look
@@ -855,13 +867,23 @@ t_wait_event: t_wait_event.m $(MTL_T_DEP)
 t_queue_lifetime: t_queue_lifetime.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_queue_lifetime.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 
+# A queue parked on an event the game's CPU signals: translated meanwhile, nothing of it on the GPU before the signal (nvn_rec.h hold_*, DM_NVN_REPLAY_AHEAD)
+t_replay_ahead: t_replay_ahead.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_replay_ahead.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+.PHONY: check_t_replay_ahead
+check_t_replay_ahead: t_replay_ahead
+	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 DM_NVN_REPLAY_AHEAD=0 ./$<
+	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 DM_NVN_REPLAY_AHEAD=1 ./$<
+
 .PHONY: check_t_wait_event check_t_queue_lifetime
 check_t_wait_event: t_wait_event
 	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=0 ./$<
 	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 ./$<
+	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 DM_NVN_REPLAY_AHEAD=1 ./$<
 check_t_queue_lifetime: t_queue_lifetime
 	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=0 ./$<
 	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 ./$<
+	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 DM_NVN_REPLAY_AHEAD=1 ./$<
 
 t_render_enable_queue: t_render_enable_queue.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_render_enable_queue.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)

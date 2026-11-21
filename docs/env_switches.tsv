@@ -3,6 +3,7 @@ DM_AB	diagnostic	`=<frames>` splits the run into phases of that many frames and 
 DM_ALIAS_SIZE	diagnostic	`=<bytes>` gives the guest an alias region of that size instead of the platform's, which is at least the Switch's 64 GB on the Mac and the profile's `mem_alias` on an iPhone (at least 256 MB, whole host pages; the heap and stacks stay as they are): the profile's value reproduces an iPhone's address space on the Mac, as the NSP script's heap check does; its address region check sets 64 GB (Mac only: an iPhone has no room)
 DM_ALIAS_WINDOWS	diagnostic	`=<MB>` logs every 30 s how much of each window of that size in the alias region is mapped (windows aligned to their size in absolute addresses)
 DM_ALLOW_OTHER_METAL	switch	`1` lets `own_compilers.py` build the shader libraries with a Metal compiler other than the one in `dmsh_chain.lock` (it stops otherwise, GitHub issue #242); the NSP script sets it for `--allow-other-metal`
+DM_AMIIBO	path	An amiibo dump (a raw `.bin`) that is on the virtual NFC reader from the start: the game's first tag detection finds it (the Mac window's Amiibo menu scans one while the game runs)
 DM_AOC_DIR	path	Folder of add-on content: one numbered subfolder per DLC index holding that DLC's RomFS, reported by `aoc` and mounted read-only; the app, the Mac launcher and the NSP script set it when the build has DLC
 DM_AOC_OWNED	switch	`0` reports no add-on content even when `DM_AOC_DIR` has some, for runs without the DLC
 DM_APP_DM	path	Set by the iOS app of a game of several programs: the running program's `dm/p<N>` folder, where the settings screen finds its `launcher.json`
@@ -51,6 +52,7 @@ DM_FORCE_STRICT	diagnostic	`=1` makes the loader fail on forced-hook entries no 
 DM_FPS	switch	`30` or `60` pins the frame rate the display link and frame pacing aim for; otherwise it follows the game's present interval (60, or 30 when the game asks for 30)
 DM_FPS_HOLD	player	`on` / `off` overrides the profile's `fps_hold`: whether late frames may raise the hold above the frame cap's vsyncs (on by default)
 DM_FPS_TARGET	player	Frame-rate cap: `30` or `60`, `120` for a game whose profile has `fps_max 120` (60 otherwise), or `0` for the game's own limit; overrides the profile's `fps_target`
+DM_FRAME_DELTA	switch	`0` keeps the host's whole-vsync frame step alone where a game's stub would also take the measured frame time when it is longer, as for The Legend of Zelda: Ocarina of Time (on by default)
 DM_FS	diagnostic	When set, logs file opens, paths not found or not mounted, and a read summary every 64 MiB or 1000 reads
 DM_FSLOG	diagnostic	`=<file>` writes one TSV line per ReadFile: seconds since boot, guest path, offset, length and guest buffer address
 DM_FSLOG_HASH	diagnostic	With `DM_FSLOG`, adds a column with the FNV-1a 64 hash of the bytes read
@@ -128,6 +130,9 @@ DM_METAL_HUD	player	`1` shows Apple's Metal performance HUD over the game (frame
 DM_MIC	player	`1` lets a game use the Mac's microphone through SDK polling input streams, after macOS grants access. Off by default. A packed Mac app asks before launching the host, including with the settings window hidden
 DM_MIC_DEVICE	player	Core Audio input device UID for Mac microphone capture. Unset or `default` follows the system default. If the selected device is absent, capture uses the system default until it returns
 DM_MIC_GAIN	player	Gain on the Mac microphone before the soft limiter, from 1 to 8 (default 4)
+DM_MODS	path	Folder of mods, one folder each (default `<DM_ROOT>/mods`): their `romfs/` folders join `DM_ROMFS_OVERLAY`, every `cheats/<build ID>.txt` of the running build joins the cheats folder's own as one list, and on the Mac their `exefs/*.pchtxt` and `.ips` patches are applied to the modules as they load; `order.txt` in it orders them and turns them off
+DM_MODS_CHECK	diagnostic	`=<file>`: the host loads the modules, writes its verdict on every mod patch file of a loaded module's build there (applied, refused, invalid, baked, with the patches as image offsets) and ends before the game starts; `dm/tools/mods_rewrite.py` asks this way which files the modules must be rewritten with
+DM_MOD_PATCHES	path	Set by `dm/tools/mods_rewrite.py` for `patch_nso.py`: a file of mod patches (image offset, bytes, patch file) written into the module's code before it is rewritten; a patch over a cut, a frame step or stub site, or an observation gate ends the rewrite with `MOD_REFUSED` lines and exit status 4
 DM_MOTION	switch	`0` ignores live motion: every six-axis sensor lies flat as before (a shake still plays), and neither controllers' motion sensors nor the phone's device motion are switched on (`hle_hid.c`, `motion_apple.h`, `DmGamepad.m`); the NSP script's `--no-motion` (`MOTION = False`) builds it in
 DM_MOTION_ACC_SIGN	switch	`-1` flips only GameController's acceleration, for a source that reports the specific force (+1 G up at rest) instead of the gravity direction (`motion_fusion.h`); phone and raw HID samples are already in the Switch frame
 DM_MOTION_AXES	switch	`=<map>` such as `x,-z,y`: maps Apple's controller axes to the Switch's, a signed permutation applied to acceleration and rotation alike, for a controller whose axes differ (default `x,y,z`; phone and raw HID samples are already in the Switch frame)
@@ -199,6 +204,7 @@ DM_NVN_GPU_STORAGE	switch	`0` stops what the GPU writes into a texture in storag
 DM_NVN_GPU_TS	switch	`segment_submit_gaps`, `segment_gaps` or `submission`: what timestamp reports record instead of the default `segment` (the GPU start / end of the segment holding each report, without the GPU's idle time between the submission's command buffers, nor its wait between submissions for the host's translation of one the game had submitted already): segment times with the wait between submissions (the earlier default), segment times with both idle times, or one time for the whole submission
 DM_NVN_HILITE	diagnostic	`=<fragment shader key>,…`: those draws use a solid colour instead (magenta, green, cyan, yellow, blue, white in order), to tell wrong geometry from wrong shading
 DM_NVN_INDLOG	diagnostic	`=<n>`: the first n indirect draws (and those of pass-dumped frames) log their arguments at encode and as the GPU left them once the submission completed, with the first indices
+DM_NVN_IND_SPLIT	switch	`0` lets an indirect dispatch join a copy encoder that already holds work again, as before; by default the encoder ends first and the dispatch goes into the next one, behind its queue barrier, so its group counts are read after the dispatch that wrote them (Ocarina of Time's foliage cull)
 DM_NVN_IXCLOG	diagnostic	`=<n>` logs the first n indirect draw and dispatch conversions (record to arguments) once the GPU has run them
 DM_NVN_KEYDUMP	diagnostic	`=<fs key>[:n[:every]]`: for up to n draws of that fragment shader (default 6), logs the pass dump binding lines plus vertex formats, vertex streams and uniform values; meant for devices
 DM_NVN_LAZY_CLEAR	switch	`0` makes clears with no draw after them open a pass of their own, as before; by default they wait to become the load action of the next pass on that target
@@ -223,6 +229,7 @@ DM_NVN_PRESENT_FINISH	diagnostic	`=1` makes each present return once the GPU has
 DM_NVN_PROF	diagnostic	`=1` wraps the implemented NVN functions in a timing wrapper and collects the time each takes during recording
 DM_NVN_PROGTRACE	diagnostic	`=<vertex keys,...>` logs matching ProgramSetShaders calls and their guest backtraces
 DM_NVN_REGLUM	diagnostic	`=x0,y0,x1,y1:<file>` (normalized coordinates): on every present records the present number, time, mean luminance and a grayscale thumbnail of that region, to check animation speed against frame rate
+DM_NVN_REPLAY_AHEAD	switch	`1` translates a queue parked on an event the game's CPU signals before the signal, the encode thread keeping its commits until then (with `DM_NVN_ENC_THREAD=1`); `0` translates from the signal on (the default unless the profile sets replay_ahead: Ocarina of Time does)
 DM_NVN_REPORT_EXACT	switch	`0` refuses a partly covered uniform shadow over the whole 4 KB page of a counter report of a running submission, as before; by default only over the report's own 16 bytes, which the host writes when that submission completes
 DM_NVN_REUPLOADS	diagnostic	`=1` logs the first 400 re-uploads of textures taken from their storage: shape, size, how much was read from guest memory and how many images were copied from the texture it replaces, the frame and the submission, the pages written since the upload and where the first lies, and the GPU copies into it since then
 DM_NVN_ROP_ROUND	switch	`0` leaves float colours going into 8-bit, 16-bit and RGB10A2 normalized targets to Apple's conversion (the exact product rounded to nearest); by default a pixel shader rounds them as NVIDIA's colour unit does (the float32 product rounded to nearest even) where blending is off, MIN or MAX, or a logic operation
@@ -234,6 +241,7 @@ DM_NVN_SHDUMP	diagnostic	`=<dir>` saves programs missing from the shader map as 
 DM_NVN_SHMAP	path	The shader map (`shader_map.tsv`); `c1_full.tsv` and `pso_manifest.tsv` are taken from the same folder. Default: the game profile's folder on the Mac; the iOS app sets it
 DM_NVN_SHOT	diagnostic	`=<frame>[,<frame>…]:<path>` saves the swapchain texture as an image at those frames (`%d` in the path = frame number); a window the game crops is saved as presented (the crop drawn at the texture's own size)
 DM_NVN_SHOT_OUT	diagnostic	`=<W>x<H>` makes `DM_NVN_SHOT` capture the picture as the present pass upscales it to that size, the crop included, instead of the raw swapchain texture
+DM_NVN_SKIP_CS	diagnostic	`=<compute key>[,…]` (up to 16) drops all dispatches of those compute shaders, to measure one dispatch's GPU cost inside an encoder that holds several; what they write stays stale, so the picture is wrong
 DM_NVN_SKIP_FS	diagnostic	`=<fragment key>[,…]` (up to 16) drops all draws of those fragment shaders, to measure their GPU cost or bisect a wrong draw; the picture is wrong
 DM_NVN_SKIP_MESH	diagnostic	`=1` drops every task and mesh draw, to measure what they cost in all; the picture is wrong
 DM_NVN_SKIP_SMALL	diagnostic	`=<width>` drops all draws whose target width is at most that, to measure the cost of tiny render passes; the picture is wrong
@@ -258,9 +266,11 @@ DM_NVN_TEXINFO	diagnostic	`=<W>x<H>` logs storage and description of every textu
 DM_NVN_TEXRAW	diagnostic	`=<serial>,…` or `info` (the textures `DM_NVN_TEXINFO` picked out): saves those textures' raw bytes at the `DM_NVN_TEXDUMP` frame, with a text header line
 DM_NVN_TEXSNAP	diagnostic	`=<in-frame pass index>,…`: with `DM_NVN_TEXDUMP`, copies those passes' colour attachments as they end and saves them with the end-of-frame dump
 DM_NVN_TF_CPU	switch	`0` sends every transform feedback capture through the `tf_prepare` dispatch in a render pass of its own, as before; by default the capture state is kept on the CPU from a begin until a resume or a geometry capture takes it from the GPU, and captures that follow each other share one pass, behind barriers inside it where one may touch what another read or wrote
+DM_NVN_TILE_SMALL	switch	`0` opens every draw pass with the tiles Metal picks; on by default, a pass whose 32x32 tiles, times its layers, number fewer than four per GPU core takes 16x16 tiles, so its fragment work spreads over more cores; `ab` alternates with the `DM_AB` phases
 DM_NVN_TREG_ID	diagnostic	`=<n>` logs every registration of texture ID n: what it holds from then on, and the frame being recorded
 DM_NVN_TSV	diagnostic	`=<path>` writes the per-frame NVN call table and timing rows (frame, metric, value) to a TSV, read by `scripts/bench.py`
 DM_NVN_TSV_CALLS	diagnostic	`0` makes `DM_NVN_TSV` write only the timing rows, without the call counts (about two thirds of the file)
+DM_NVN_TS_HZ	switch	`=<Hz>` sets the tick rate of the raw counter timestamps instead of the profile's `gpu_ts_hz` (default: the game's NVN, 614,400,000 on NVN, nanoseconds on NVN2)
 DM_NVN_UB	diagnostic	`="name=item,…;…"`: alternating measurement in one run; odd phases of `DM_NVN_UB_N` frames (default 180) take one category in turn (`@set:<global>=<value>` or dropped shader keys) and log present times
 DM_NVN_UBD_MEMO	diagnostic	`0` scans the deferred uniform update list for every lookup instead of remembering answers per range until the list changes (for timing)
 DM_NVN_UBP_CHECK	diagnostic	`=1` checks every uniform shadow made from memory: the pass ends, the updates land, the replay waits for the GPU and compares (a difference is a red line; slow)
@@ -332,6 +342,7 @@ DM_PROBE_X2	diagnostic	`=<bytes>` (hex): probe hits also dump that many bytes of
 DM_PROGRAM	switch	`=<index>`: the program of a game of several programs that a host over their profiles runs (default 0; `main.c` `dm_game_cur`)
 DM_PROGRAMS	path	Table of a game's programs on the Mac (`programs.tsv`: index, host, modules, run folder, environment): `oe::ExecuteProgram` starts the named one in this process's place; the NSP script's run command and the Mac app set it
 DM_PROGRAM_ID	switch	`=<hex>`: the program ID the host reports from `svcGetInfo(ProgramId)` (default: the profile's `program_id`)
+DM_PSO_ALL_COMPUTE	switch	`0`: the prewarm builds only the compute pipelines its lists name, not every compute shader of the shader map (on by default: a compute pipeline is its shader alone, and one no list named was built at its first dispatch)
 DM_PSO_ARCHIVE	path	The folder of the per-game Metal 4 pipeline archive of pipeline bases (default `pso_archive/` beside `pso_user.tsv`); `off` keeps no archive
 DM_PSO_ARCH_WARM_FLUSH_MS	switch	`=<ms>`: during a prewarm the game plays through (no prepare step) that is not compacting, the timer's flush hands the archive's period over once it is that old, then twice as long each time up to 16 times (default 60000; `0`: no flush until the prewarm ends or the period is full)
 DM_PSO_BUNDLE	path	The pipeline archive made offline (`<GPU architecture>.mtl4a`, `prebuilt.tsv`), read only; the iOS app and Mac launcher set it to their `pso/` folder; `off` ignores it
@@ -353,6 +364,7 @@ DM_PSO_PREPARE_THREADS	switch	`=<n>`: the workers of the prepare step that build
 DM_PSO_PULL_ALL	diagnostic	`=1`: every draw that has a pulling pipeline draws with it, never with the pipeline for its vertex layout
 DM_PSO_RECORD	path	`=<file>`: appends the shaders and pipelines used in the run to that file, for re-recording the prewarm manifest
 DM_PSO_USER	path	The per-device list of shaders and pipelines built on the spot (default: `pso_user.tsv` in the parent of `DM_SAVE`)
+DM_PSO_VS_SERIAL	switch	`=0` builds pipelines that share a vertex function in parallel again (by default they are built one at a time, so Apple's G16X driver does not crash in createVertexProgramVariant's completion block)
 DM_PSO_WAITLOG	diagnostic	`=1` logs each draw that waited more than 20 ms for its pipeline, with its shader pair and why no stand-in served it
 DM_QOS_EDGES	switch	`=e1,e2`: the Switch priority edges of `DM_QOS_MAP` (default `44,59`)
 DM_QOS_MAP	switch	`=1` maps guest thread priority to QoS class: ≤ 44 user-interactive, 45–59 user-initiated, the rest utility (off by default: every guest thread runs user-interactive)
@@ -449,6 +461,7 @@ DM_UDC_SELFTEST	diagnostic	`=1` runs a start-up check of DontCare load and store
 DM_UE_SHADERS	path	Folder of the Unreal shader code archives decoded by `uepak.py`, for `shader_split.py` (default `ue_shaders` beside the RomFS); needed when the RomFS has Unreal paks
 DM_UE_TEXTURE_POOL	switch	Megabytes Unreal's texture streaming pool (`r.Streaming.PoolSize`) is raised to, overriding the profile's `ue_texture_pool`; `0` keeps the game's own pool. On iOS only this switch turns it on (`Documents/env.txt`)
 DM_UPSCALER	player	`metalfx` draws the game's own upscaler shaders (agl's NDSR network, found by the shader map) with MetalFX's spatial scaler; `game` (the default) runs them
+DM_UPSCALER_SHARPNESS	player	`=<0.0-1.0>`: with `DM_UPSCALER=metalfx`, the share of MetalFX's own picture in the game's image, the rest a bilinear picture of the same input (softer); the profile's `upscaler_sharpness` when unset, 1.0 without one
 DM_VK_CAPTURE	path	`=<dir>` (Mac) writes every SPIR-V module the game creates to `<dir>/<key>.spv`; the NSP script's Vulkan shader capture stage sets it
 DM_VK_LOG	diagnostic	`=1` logs Vulkan object creation in the Vulkan-on-Metal layer
 DM_VSYNC_HZ	switch	`=<Hz>`: rate at which a host thread fires the vi vsync event when the display link does not drive it (default 60)
@@ -459,6 +472,7 @@ DM_WATCH_STALL	diagnostic	`=<s>`: when the frame loop makes no progress for that
 DM_WEB_LOG	diagnostic	`1` logs each key an offline HTML page is given and where the focus is after it
 DM_WINDOW	switch	When set (to any value, `0` included) opens a Mac window with keyboard and controller input; unset runs headless with the guest on the current thread; the Mac launcher sets it
 DM_WINDOWLESS_ROLE	switch	`0` keeps the existing task role for a windowless Mac run. By default the host requests the [default application task role](reference/audio.md#underruns-in-a-run-without-a-window) to enable interactive QoS
+DM_WINDOW_SCREEN	diagnostic	`builtin` or `=<index>` (Mac, with `DM_WINDOW`): opens the game window on the Mac's built-in display, or on that entry of `NSScreen.screens`, instead of the primary screen; fullscreen then takes that screen
 DM_WINDOW_TOP	diagnostic	`1` (Mac, with `DM_WINDOW`) orders the game window in front without activating it and keeps it above other apps' windows, so a covered window does not slow the run; `regress.py` sets it
 DM_XCODE_DERIVED_DATA	path	Xcode derived data folder for `build_ipa.sh` (default `$W/build/ios/xcode-dd`); the NSP script points it into the game's build folder
 DM_XCODE_PROJECT_DIR	path	Folder of the per-game Xcode project that `build_ipa.sh --prepare-xcode` makes (default `$W/xcode`); the NSP script sets it

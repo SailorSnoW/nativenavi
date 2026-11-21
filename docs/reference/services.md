@@ -321,7 +321,7 @@ Most service calls can be found before they crash, before the first boot or the 
 
 - **Symptom:** with `DM_ROMFS_OVERLAY` set, `OpenDirectory` on a RomFS folder of tens of thousands of entries takes seconds, during which every other path call waits for the path lock.
 - **Cause:** the overlay snapshot (`dir_snapshot` in `hle_fs.c`) compared each name it gathered with every name gathered before it, the base folder's own too, to drop a name a layer repeats: n(n−1)/2 comparisons, 722 million for 38,000 names.
-- **Fix:** the snapshot gathers every layer's names, then `names_first` sorts (name, position) once and keeps each name's first, in the order gathered, so the listing is the same as before (the last overlay folder first, then the base, an image base in its table order). Measured on an M4 Pro, a read-only folder of 4-byte files under an empty overlay folder: 10,000 entries 0.19 s → 0.03 s, 38,000 entries 3.23 s → 0.20 s; what is left grows linearly (each name's layer is looked up for its type and size). `t_fs_directory` checks a name in several layers, names differing in case and the layers' order.
+- **Fix:** the snapshot gathers every layer's names, then `names_first` sorts them once without case, so that the folders' names that differ only in case take one spelling (the image's first of that case, else the base folder's, else the first folder's: the rule of [the mods folder](#mods-made-for-emulators-do-nothing-or-only-half-of-them-does)), and sorts (name, position) once to keep each name's first, in the order gathered, so the listing is the same as before (the last overlay folder first, then the base, an image base in its table order). Measured on an M4 Pro, a read-only folder of 4-byte files under an empty overlay folder: 10,000 entries 0.19 s → 0.03 s, 38,000 entries 3.23 s → 0.20 s; what is left grows linearly (each name's layer is looked up for its type and size). `t_fs_directory` checks a name in several layers, names differing in case (one name, spelled as the base has it) and the layers' order; `t_fs` the spelling of an image base.
 - **Found on:** a code audit's synthetic measurement (2026-11-13). No game runs with an overlay by default.
 
 ### System data stand-in for the MiiModel archive
@@ -1734,3 +1734,21 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Cause:** an NRR with 1 in the byte at +5 (the Switch 2's) has a header 0x180 bytes longer. The same fields follow it: program ID +0x4b0, size +0x4b8, hash table +0x4c0, its count +0x4c4.
 - **Fix:** `hle_ro.c` and `nro_collect.py` read the table by that byte.
 - **Found on:** Mario Tennis Fever.
+
+### Mods made for emulators do nothing, or only half of them does
+
+- **Symptom:** a mod folder as Ryujinx, the yuzu family or Atmosphère take it (`romfs/`, `exefs/`, `cheats/`) had no place to go: only `DM_ROMFS_OVERLAY` replaced RomFS files, by hand, and only one cheat file per build was read. With the mods folder: `[RED] mods: … is not applied` for a code patch, `mods: warning: … differ only in case` for a file a Switch would not have matched.
+- **Cause:** the host had no notion of a mod: no folder, no order, no way to turn one off, and no patching of a module after the rewriter.
+- **Fix:** `dm/host/hle_mods.c` reads a mods folder (`DM_MODS`, default `<DM_ROOT>/mods`), one folder per mod in any of the layouts mods ship in, ordered and switched by `order.txt` ([Mods](../development.md#mods)):
+  - `romfs/` folders join the RomFS overlay and follow the Mods menu while the game runs; a `<name>.dm-delete` marker hides a game file or directory, and a name that differs from the game's only in case is taken with a warning;
+  - every `cheats/<build ID>.txt` joins the cheats folder's own as one list ([Cheat files from several places](../development.md#cheat-files-from-several-places));
+  - `.pchtxt` and `.ips` patches are written into a module as it is mapped, before its code is sealed, each file whole or not at all, and never over what the rewriter changed ([the launch-time rewrite](rewriter.md#mod-code-patches-the-host-cannot-make-at-load-time) takes those).
+- **Open:** code modules of a mod (ExLaunch, Skyline) are not loaded ([what one would need](../development.md#what-an-exlaunch-mod-would-need-open)); no exefs patch on iOS.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), with two RomFS mods (a controller UI, a pack of tunic recolours) and synthetic patches and cheat files.
+### A game that asks for an amiibo never finds one
+
+- **Symptom:** a game's amiibo screen waits for a figure forever; nothing in the host can put one on the reader.
+- **Cause:** `nn::nfp` was answered with one NFC device whose detection never finds a tag, as a console with no figure at hand.
+- **Fix:** the host's NFC device (`dm/host/hle_sdk16.c`) finds an amiibo from a raw dump of the figure's tag: **Amiibo › Scan Amiibo…** in the Mac window, `DM_AMIIBO=<file>`, or `DM_CTL`'s `amiibo <file>` ([Amiibo](../development.md#amiibo)). The UID, the model block and the write counter come from the dump; the owner, nickname and application area, which the tag holds encrypted, are the host's own.
+- **Open:** reading a dump's own encrypted data with the player's key file.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game).

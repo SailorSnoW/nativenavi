@@ -705,21 +705,7 @@ static id<MTLRenderPipelineState> mtk_pso(NvProg *raster) {
 // The scratch buffer of the mesh shaders whose stage array is a device slice (reflection mesh_spill, dmsh_meshstage.py to_stage, DMSH_MESH_SCRATCH_* in dmsh_abi.h): one buffer for every draw,
 // made on first use, in shared storage so that the host writes the head's words and reads the overflow count. Its slices must outnumber the groups the GPU runs at once: with the stage array out of
 // threadgroup memory an Apple GPU core holds 3072 threads, 96 groups of 32, and twice that keeps a claim to about two tickets. The Mac reads its GPU's cores (gpu-core-count); iOS GPUs have at
-// most 10 (2048 slices). The flags start 0 as a new buffer's bytes do, and a group zeroes its own slice, so nothing clears the buffer between draws
-static unsigned gpu_cores(void) {
-    unsigned n = 0;
-#if TARGET_OS_OSX
-    io_iterator_t it;
-    if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("AGXAccelerator"), &it) != KERN_SUCCESS) return 0;   // takes the matching dictionary
-    for (io_object_t s; !n && (s = IOIteratorNext(it)); IOObjectRelease(s)) {
-        CFTypeRef v = IORegistryEntryCreateCFProperty(s, CFSTR("gpu-core-count"), kCFAllocatorDefault, 0);
-        if (v && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberIntType, &n);
-        if (v) CFRelease(v);
-    }
-    IOObjectRelease(it);
-#endif
-    return n;
-}
+// most 10 (2048 slices). The flags start 0 as a new buffer's bytes do, and a group zeroes its own slice, so nothing clears the buffer between draws (gpu_cores: nvn_mtl.m)
 static uint32_t *mesh_scratch(uint64_t *gpu) {
     static uint64_t addr; static uint32_t *head; static __strong id<MTLBuffer> buf; static dispatch_once_t once;
     dispatch_once(&once, ^{

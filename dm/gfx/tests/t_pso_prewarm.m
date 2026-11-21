@@ -114,6 +114,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     char tmp[PATH_MAX]; snprintf(tmp, sizeof tmp, "%s/t_pso_prewarm.XXXXXX", getenv("TMPDIR") ?: "/tmp"); if (!mkdtemp(tmp)) abort();
     NSString *root = @(tmp), *msl = [root stringByAppendingFormat:@"/msl/b-%s", DMSH_CHAIN], *tables = [root stringByAppendingPathComponent:@"tables"];
     if (!fixtures(msl, tables)) { printf("t_pso_prewarm: no Metal compiler (xcrun metal), not run\n"); [NSFileManager.defaultManager removeItemAtPath:root error:nil]; return 0; }
+    setenv("DM_PSO_ALL_COMPUTE", "0", 1);   // the lists' own rows are counted here: the fixture map's compute shader is not added to them (t_pso_warm covers that)
     setenv("DM_PSO_ARCHIVE", "off", 1); setenv("DM_MSL_DIR", [root stringByAppendingPathComponent:@"msl"].UTF8String, 1); setenv("DM_NVN_SHMAP", [tables stringByAppendingPathComponent:@"shader_map.tsv"].UTF8String, 1); setenv("DM_PSO_MANIFEST", "off", 1);
     mtl_init(); shmap_load();
     NSString *gpu = g_dev.architecture.name;

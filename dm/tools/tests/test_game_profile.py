@@ -1,5 +1,5 @@
 # dm/games/game.py's profile-key validation, on a synthetic profile: pso_gpu (the GPU architectures the app's offline pipeline archive is made for, beside pso_mtl4) takes, none and no others,
-# and a profile without the key generates its header unchanged; the game's upscaler shaders (the launcher's Game's upscaler) are the compute shaders its shader map found in an NDSR pack, under any name or container
+# and a profile without the key generates its header unchanged; the game's upscaler shaders (the launcher's 3D upscaler) are the compute shaders its shader map found in an NDSR pack, under any name or container
 from pathlib import Path
 import os
 import subprocess
@@ -52,13 +52,17 @@ MAP = ('# kind: evidence  Test shaders\n# column 5 records where each key first 
        'cs_other.bin\t8\tcompute\tddc729bcdb4c8df9\t/data.zip/66e36a907a6b7251#NDSR@0x12da#NDSR@0xec640\n'   # nested in another container (Star Fox)
        'cs_other.bin\t9\tcompute\tc2fc2ddd604c25e7\t/Movie/Ndve/Ndve-Nvn2-vid_seq5.dat.zs#NDSR@0x1000\n'   # the pack inside nn::ndve's movie file
        'cs_other.bin\t10\tcompute\tba079f68ae288dba\t/Movie/Ndve/Ndve-Nvn2-vid_seq5.dat.zs#NDVE@0x1423e8\n')   # that file's own movie network: not the pack's
+# the upscaler that runs as a chain of dispatches: the compute shaders of agl's two variable-ratio packs (MAP's agl_ndsr_vr_light.pck shader too); they are NDSR packs, so upscalers as well
+CHAIN = ('cs_other.bin\t11\tcompute\tf8965bffbdf51d78\t/Lib/agl/agl_resource.Nin_Ounce_NVN2.release.sarc.zs/agl_ndsr_vr.pck#NDSR@0x1000\n'
+         'cs_other.bin\t12\tcompute\t7c511cc23ff85d14\t/Lib/agl/agl_resource.Nin_Ounce_NVN2.release.sarc.zs/agl_ndsr_vr_light.pck#NDSR@0x2000\n'
+         'ps_other.bin\t13\tpixel\t1111111111111111\t/Lib/agl/agl_resource.Nin_Ounce_NVN2.release.sarc.zs/agl_ndsr_vr.pck#NDSR@0x3000\n')
 
 
-def macros(shader_map):
+def macros(shader_map, extra=''):
     """The upscaler macros of a synthetic profile's header, with this shader map (None: none)"""
     with tempfile.TemporaryDirectory() as d:
         Path(d, ID).mkdir()
-        (Path(d, ID) / 'game.tsv').write_text(TSV)
+        (Path(d, ID) / 'game.tsv').write_text(TSV + extra)
         if shader_map is not None: (Path(d, ID) / 'shader_map.tsv').write_text(shader_map)
         subprocess.run([sys.executable, str(GAME), 'header', ID, str(Path(d, ID) / 'game.h')], env={**os.environ, 'DM_GAMES_DIR': d}, check=True, capture_output=True)
         return [l for l in (Path(d, ID) / 'game.h').read_text().splitlines() if 'UPSCALER' in l]
@@ -66,10 +70,16 @@ def macros(shader_map):
 
 class UpscalerKeys(unittest.TestCase):
     def test_from_shader_map(self):
-        none = ['#define DM_GAME_UPSCALER_KEYS ""', '#define DM_GAME_UPSCALER_N 0']   # the launcher hides the setting
+        sh = '#define DM_GAME_UPSCALER_SHARPNESS 1.0'
+        no_chain = ['#define DM_GAME_UPSCALER_CHAIN_KEYS ""', '#define DM_GAME_UPSCALER_CHAIN_N 0']
+        none = ['#define DM_GAME_UPSCALER_KEYS ""', '#define DM_GAME_UPSCALER_N 0', sh] + no_chain   # the launcher hides the setting
         self.assertEqual(macros(None), none)
         self.assertEqual(macros(MAP.split('cs_other.bin')[0]), none)
-        self.assertEqual(macros(MAP), ['#define DM_GAME_UPSCALER_KEYS "7629d857a0a93833,805f2de96bd6d78d,c2fc2ddd604c25e7,c56db3d5a0f1b5af,ddc729bcdb4c8df9,fa3033d05c0a41d6"', '#define DM_GAME_UPSCALER_N 6'])
+        six = ['#define DM_GAME_UPSCALER_KEYS "7629d857a0a93833,805f2de96bd6d78d,c2fc2ddd604c25e7,c56db3d5a0f1b5af,ddc729bcdb4c8df9,fa3033d05c0a41d6"', '#define DM_GAME_UPSCALER_N 6', sh]
+        self.assertEqual(macros(MAP), six + ['#define DM_GAME_UPSCALER_CHAIN_KEYS "fa3033d05c0a41d6"', '#define DM_GAME_UPSCALER_CHAIN_N 1'])
+        self.assertEqual(macros(MAP + CHAIN), ['#define DM_GAME_UPSCALER_KEYS "7629d857a0a93833,7c511cc23ff85d14,805f2de96bd6d78d,c2fc2ddd604c25e7,c56db3d5a0f1b5af,ddc729bcdb4c8df9,f8965bffbdf51d78,fa3033d05c0a41d6"',
+                                               '#define DM_GAME_UPSCALER_N 8', sh, '#define DM_GAME_UPSCALER_CHAIN_KEYS "7c511cc23ff85d14,f8965bffbdf51d78,fa3033d05c0a41d6"', '#define DM_GAME_UPSCALER_CHAIN_N 3'])
+        self.assertEqual(macros(None, 'upscaler_sharpness\t0.7\n'), ['#define DM_GAME_UPSCALER_KEYS ""', '#define DM_GAME_UPSCALER_N 0', '#define DM_GAME_UPSCALER_SHARPNESS 0.7'] + no_chain)
 
 
 if __name__ == '__main__':

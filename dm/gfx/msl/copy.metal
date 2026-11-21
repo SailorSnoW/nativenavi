@@ -12,6 +12,12 @@ fragment float4 fsa(V in [[stage_in]], texture2d<float> t [[texture(0)]], sample
 // fs with each colour channel squared, keeping its sign: c * |c| (COPY_T2T_SQUARE: an upscaler's square-rooted input into linear colour, up_mfx_encode)
 fragment float4 fsq(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant float4 *p [[buffer(0)]]) {
   float2 st = p[0].xy + (in.p.xy - p[1].xy) * p[0].zw; float4 c = t.sample(s, st / p[1].zw, level(0)); return float4(c.rgb * abs(c.rgb), c.a); }
+// fs blended with t1, a smoother picture of the same rectangle (COPY_T2T_BLEND: MetalFX's picture softened, up_mfx_sharpness). p[2].x = t1's weight (0 = none);
+// p[2].zw = t1's coordinate per source texel of the rectangle
+fragment float4 fsup(V in [[stage_in]], texture2d<float> t [[texture(0)]], texture2d<float> t1 [[texture(1)]], sampler s [[sampler(0)]], constant float4 *p [[buffer(0)]]) {
+  float2 st = p[0].xy + (in.p.xy - p[1].xy) * p[0].zw; float4 c = t.sample(s, st / p[1].zw, level(0));
+  if (p[2].x > 0) c = mix(c, t1.sample(s, (st - p[0].xy) * p[2].zw, level(0)), p[2].x);
+  return c; }
 struct D { float d [[depth(any)]]; };
 fragment D fsd(V in [[stage_in]], depth2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant float4 *p [[buffer(0)]]) {
   float2 st = p[0].xy + (in.p.xy - p[1].xy) * p[0].zw; D o; o.d = t.read(uint2(st)); return o; }

@@ -47,6 +47,14 @@ void mtl_sub_counter(uint64_t addr, uint32_t type);                       // Wri
 uint64_t mtl_sub_commit(void);
 
 uint64_t mtl_completed_fence(void);                 // Completed physical submissions, including CPU-visible post effects
+int mtl_replay_ahead(void);                          // profile key replay_ahead / DM_NVN_REPLAY_AHEAD, with the encode thread
+int mtl_hold_begin(volatile uint32_t *word, unsigned mode, uint32_t value);   // submit thread, between submissions: 1 when what reaches the queue from now on is held until the wait is satisfied
+int mtl_hold_active(void);
+void mtl_hold_signal(volatile uint32_t *word, uint32_t value);   // any thread: this event word was signalled and holds value
+void mtl_hold_force(volatile uint32_t *word);        // any thread: commands that signal this word were submitted; a hold on it cannot be satisfied
+void mtl_hold_drain(void);                           // any thread: the host drains (a suspend); a hold ends now
+void mtl_hold_wait(void);                            // submit thread: returns once the hold has ended
+void mtl_hold_satisfied(void);                       // any thread: the held wait was satisfied (a signal latched before the hold began)
 uint64_t mtl_last_fence(void);                       // Fence value of the most recent submit (0 = never submitted)
 enum { POOL_STATS = 14 };
 void mtl_pool_stats(uint64_t s[POOL_STATS]);              // the pool tables' counts for the power line (nvn_mtl.m mtl_pool_stats)

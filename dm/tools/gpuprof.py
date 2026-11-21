@@ -2,7 +2,7 @@
 """Summarise the host's GPU profile lines in a log (Mac run log or the iPhone's Documents/log.txt).
 
 DM_NVN_GPUPROF=<frame>[-<frame>] or every:<n> prints one "[gpuprof]" line per encoder of the profiled frames (render pass: size, colour attachments, depth, draws,
-attachment load / store KB, Metal pixel formats; compute / copy: copies, uniform updates, dispatches) and a "frame" line per frame. DM_AB=<frames> prints one "[ab]"
+attachment load / store KB, Metal pixel formats; compute / copy: copies, uniform updates, dispatches, barriers inside the encoder) and a "frame" line per frame. DM_AB=<frames> prints one "[ab]"
 line per phase. This tool reads both:
 
   gpuprof.py log.txt                       per-frame totals, then the mean per frame of each pass shape (size, colours, depth, formats), by GPU time
@@ -18,7 +18,7 @@ import argparse, collections, re, statistics, sys
 
 ENC = re.compile(r'\[gpuprof\] F(\d+)\s+(\d+)\s+([\d.]+) us (render pass|compute / copy)(.*)')
 RP = re.compile(r'^ (\d+) (\d+)x(\d+) colors (\d+) depth (\d+) loads (\d+) draws (\d+) start ([+-][\d.]+) seg (\d+)(?: load (\d+) KB store (\d+) KB)?(?: fmt (\d+)/(\d+))?')
-CP = re.compile(r'^ after pass (\d+) start ([+-][\d.]+) seg (\d+) copies (\d+) \(uniform updates (\d+)\) dispatches (\d+)')
+CP = re.compile(r'^ after pass (\d+) start ([+-][\d.]+) seg (\d+) copies (\d+) \(uniform updates (\d+)\) dispatches (\d+)(?: barriers (\d+))?')
 FRAME = re.compile(r'\[gpuprof\] frame (\d+): render ([\d.]+) ms, compute / copy ([\d.]+) ms over (\d+) encoders.*?first start to last end ([\d.]+) ms')
 AB = re.compile(r'\[ab\] phase (\d+) (\S+): (\d+) frames, GPU p50 ([\d.]+) / p90 ([\d.]+) / mean ([\d.]+) ms, frame p50 ([\d.]+) / p90 ([\d.]+) / mean ([\d.]+) ms'
                 r'(?:; per frame: attachments load ([\d.]+) MB store ([\d.]+) MB, passes ([\d.]+))?')
@@ -39,7 +39,7 @@ def fmt_name(v):
     return MTL_FORMATS.get(v, str(v)) if v else '-'
 
 
-Enc = collections.namedtuple('Enc', 'frame idx us kind pass_ w h colors depth loads draws start seg load_kb store_kb cfmt dfmt copies ubd dispatches')
+Enc = collections.namedtuple('Enc', 'frame idx us kind pass_ w h colors depth loads draws start seg load_kb store_kb cfmt dfmt copies ubd dispatches barriers', defaults=(None,))
 
 
 def parse(lines):
@@ -60,7 +60,7 @@ def parse(lines):
                 c = CP.match(rest)
                 if not c: continue
                 e = Enc(f, idx, us, 'C', int(c.group(1)), 0, 0, 0, 0, 0, 0, float(c.group(2)), int(c.group(3)), 0, 0, 0, 0,
-                        int(c.group(4)), int(c.group(5)), int(c.group(6)))
+                        int(c.group(4)), int(c.group(5)), int(c.group(6)), int(c.group(7)) if c.group(7) else None)
             frames.setdefault(f, []).append(e)
             continue
         m = FRAME.search(line)
@@ -190,7 +190,7 @@ def main(argv=None):
                 what = (f'pass {e.pass_} {e.w}x{e.h} {e.colors}c{"+d" if e.depth else ""} draws {e.draws} loads {e.loads} '
                         f'load {e.load_kb} KB store {e.store_kb} KB {fmt_name(e.cfmt)}/{fmt_name(e.dfmt)}')
             else:
-                what = f'compute / copy after pass {e.pass_}: copies {e.copies} (uniform updates {e.ubd}) dispatches {e.dispatches}'
+                what = f'compute / copy after pass {e.pass_}: copies {e.copies} (uniform updates {e.ubd}) dispatches {e.dispatches}' + (f' barriers {e.barriers}' if e.barriers is not None else '')
             print(f'  {e.idx:4d} +{e.start:9.1f} {e.us:8.1f}{"  gap %.1f" % gap if gap >= 1 else "":>12s}  {what}')
         return 0
 

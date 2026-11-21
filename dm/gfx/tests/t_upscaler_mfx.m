@@ -94,6 +94,7 @@ static NvShader *upscaler(const char *key) {
 }
 int main(void) { @autoreleasepool {
     mtl_init();
+    g_up_sharp = 1;   // MetalFX's own picture, whatever the profile's upscaler_sharpness: the checks below count which side is the game's texture; the blend has its own check
     const float enc[2] = {0.0031308f, 1 / 2.4f}, dec[2] = {0.04045f, 2.4f}, both[4] = {0.0031308f, 1 / 2.4f, 0.04045f, 2.4f}, dec16[3] = {0.040435791015625f, 2.3984375f, 0.07745361328125f}, enc16[1] = {0.41650390625f};
     float once[1] = {2.4f}; uint8_t rare[256] = {0}; memcpy(rare, once, 4);
     CHECK(color_of(both, 4, NULL, 0) == UP_COLOR_LINEAR, "an encode and a decode in floats: linear input and output (Bananza)");
@@ -235,6 +236,14 @@ int main(void) { @autoreleasepool {
         CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error(), "the square-rooted RGBA16F submission completes");
         CHECK(g_up_mfx_straight[0] == s_in && g_up_mfx_straight[1] == s_out + 1, "a square-rooted whole RGBA16F input still goes through the squaring copy; the output straight");
         CHECK(matches(written, squared, MTLRegionMake2D(0, 0, 1920, 1080), black), "the square-rooted RGBA16F input comes out squared into linear colour");
+        // Sharpness 0.5 (DM_UPSCALER_SHARPNESS, the profile's upscaler_sharpness): half of a bilinear picture of the same squared input blended in on the draw back, so the output is
+        // never MetalFX's own straight; a flat colour stays itself
+        g_up_sharp = 0.5f; fill(written, MTLClearColorMake(0, 0, 0, 1)); s_out = g_up_mfx_straight[1]; mtl_sub_begin();
+        CHECK(up_mfx_encode(named), "MetalFX's picture blended with a bilinear one (sharpness 0.5)");
+        CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error(), "the blended submission completes");
+        CHECK(g_up_mfx_straight[1] == s_out, "a softened output is drawn back, for its blend");
+        CHECK(matches(written, squared, MTLRegionMake2D(0, 0, 1920, 1080), black), "the blend of two pictures of one colour is that colour, squared once");
+        g_up_sharp = 1;
         named->up_color = UP_COLOR_LINEAR;
         NvShader *encoded_out = upscaler(key); encoded_out->up_color = UP_COLOR_KEEP;
         CHECK(!up_mfx_wanted(encoded_out), "a named shader whose output stays encoded is left to its shader");

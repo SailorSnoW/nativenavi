@@ -729,12 +729,16 @@ def gather_quad(off):
 # access helpers inlined Metal's compiler built a copy of the search at every access: Ocarina of Time's foliage mesh shader 3439aaa071d868ae makes 141, and its task / mesh pipeline
 # took 1.9 s to compile cold on an M2 Air (25 s for the route's 54 at the first start), while the GPU waited at its first draw (Native mesh pipelines compiled at their first draw).
 # Written noinline, it is one function the misses branch to. Only the search: the last entry's check and the access stay inline, since keeping the whole access helper apart
-# put the last entry and the vector words behind the call at every access (2.5 ms of a 15 ms frame on an M4 Pro)
-# Workaround for Apple's M1/M2 mesh compiler: some mesh programs calling this helper crash in MachineOperand::setReg. Keep the search inline in every final mesh library,
-# including one composed from vertex/geometry sources already rewritten noinline. Other stages retain one search; the compiler defect itself remains open.
+# put the last entry and the vector words behind the call at every access (2.5 ms of a 15 ms frame on an M4 Pro).
+# Not in an object (task) or mesh function (stage 'ts' or 'ms'), two workarounds for Apple's compiler or firmware whose cause has not been found:
+# - with the call in a task or mesh function an M2 Pro's GPU locks up in its geometry stage ("firmware-detected lockup", kIOGPUCommandBufferCallbackErrorHang, then GPU access
+#   revoked) at some camera cuts of Ocarina of Time, and with the same source always_inline again it does not (A noinline call in a task or mesh function locks up an M2's GPU);
+# - some mesh programs calling it crash Apple's M1/M2 mesh compiler in MachineOperand::setReg (A noinline raw search crashes Apple's M1/M2 mesh compiler).
+# Those two stages build the search at every access again, including a mesh library composed from vertex / geometry sources already rewritten noinline; other stages keep one search
 RAW_FIND = re.compile(r'\nstatic (?:inline __attribute__\(\(always_inline\)\)|__attribute__\(\(noinline\)\))\n(\w+ dmsh_raw_find\w*\()')
+RAW_INLINE_STAGES = ('ts', 'ms')
 def raw_noinline(msl, stage='cs'):
-    attr = 'inline __attribute__((always_inline))' if stage == 'ms' else '__attribute__((noinline))'
+    attr = 'inline __attribute__((always_inline))' if stage in RAW_INLINE_STAGES else '__attribute__((noinline))'
     return RAW_FIND.sub(lambda m: '\nstatic ' + attr + '\n' + m.group(1), msl) if 'dmsh_raw_find' in msl else msl
 
 GATHER4 = 'template<typename T> static inline __attribute__((always_inline)) vec<T, 4> dm_gather4(T a, T b, T c, T d) { return vec<T, 4>(a, b, c, d); }\n'

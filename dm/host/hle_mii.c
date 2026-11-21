@@ -137,6 +137,7 @@ static void mii_db_load(void) {
 static void mii_db_once(void) { static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, mii_db_load); }
 
 // The object keeps its service pointer at +0, which the constructor zeroes and the destructor releases through its vtable when set; the host never sets it
+void dm_mii_default_charinfo(void *out) { mii_default(out, 0, 0); }   // an amiibo's owner (hle_sdk16.c)
 HLE_FORCE("_ZN2nn3mii8Database10InitializeEv", "mii:u service; the host's database: the six default Miis, the console's own when supplied, those made in AppendMii", Result, h_mii_Init, void *self) {
     (void)self; mii_db_once();
     LOG("mii: Database::Initialize (the six default Miis, %d of the console's own, %d made in the host's editor)", g_mii_own, g_mii_n - g_mii_own); return RES_OK;

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """One copy of a raw global memory lookup's search (dmsh_rewrite.py raw_noinline): the translator's dmsh_raw_find (GlobalToStorage GetRawFindFunction), as spirv-cross writes it, is
-marked noinline outside mesh stages; final mesh code keeps it inline, including composed code whose inputs were already rewritten. The access helpers that check the last entry and
-call it stay inline, and so does a function of the same shape without the name. The pass is idempotent, and with xcrun the rewritten shader compiles. test_dmsh_raw_last.py runs the
-translator's own lookups on the GPU in both forms."""
+marked noinline outside task and mesh stages; final task and mesh code keeps it inline (an M2's GPU locks up on the call there, and Apple's M1/M2 mesh compiler can crash on it),
+including composed mesh code whose inputs were already rewritten, and dmsh_build.py passes each source's stage. The access helpers that check the last entry and call it stay inline,
+and so does a function of the same shape without the name. The pass is idempotent, and with xcrun the rewritten shader compiles. test_dmsh_raw_last.py runs the translator's own
+lookups on the GPU in both forms."""
 from pathlib import Path
 import re
 import shutil
@@ -74,14 +75,15 @@ def attribute(src, name):
 
 class RawNoinline(unittest.TestCase):
     def test_mesh_keeps_the_search_inline(self):
-        for source in (SRC, raw_noinline(SRC)):
-            with self.subTest(already_noinline=source != SRC):
-                out = raw_noinline(source, stage='ms')
-                self.assertEqual(out, SRC)
-                self.assertEqual(raw_noinline(out, stage='ms'), out)
+        for stage in ('ts', 'ms'):   # a task or mesh function keeps the search inline
+            for source in (SRC, raw_noinline(SRC)):
+                with self.subTest(stage=stage, already_noinline=source != SRC):
+                    out = raw_noinline(source, stage=stage)
+                    self.assertEqual(out, SRC)
+                    self.assertEqual(raw_noinline(out, stage=stage), out)
 
     def test_other_stages_keep_one_search(self):
-        for stage in ('ts', 'vs', 'ps', 'cs', 'rt'):
+        for stage in ('vs', 'ps', 'cs', 'rt'):
             with self.subTest(stage=stage):
                 self.assertEqual(raw_noinline(SRC, stage=stage), raw_noinline(SRC))
 
@@ -97,6 +99,12 @@ class RawNoinline(unittest.TestCase):
         plain = HEAD + OTHER + helper('_71', '_70') + MAIN
         self.assertEqual(raw_noinline(plain), plain)
         self.assertEqual(raw_noinline(raw_noinline(SRC)), raw_noinline(SRC))
+
+    def test_build_passes_the_stage(self):
+        build = (TOOLS / 'dmsh_build.py').read_text()
+        self.assertIn("dmsh_rewrite.raw_noinline(src, mesh['kind'] if mesh else j['stage'])", build)   # native task / mesh shaders are translated as cs: their mesh_stage record names the stage
+        self.assertLess(build.index("mesh = j.get('mesh_stage')"), build.index('dmsh_rewrite.raw_noinline('))
+        self.assertIn("dmsh_rewrite.raw_noinline(msl, 'ms')", build)   # a mesh library composed from vertex / geometry sources
 
     @unittest.skipUnless(shutil.which('xcrun'), 'no xcrun')
     def test_compiles(self):
