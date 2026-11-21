@@ -25,8 +25,7 @@ class FrameRateOption(unittest.TestCase):
     def test_no_120_for_a_game_not_checked_at_that_speed(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
             (Path(tmp)/'main.fixups.tsv').write_text('')
-            with patch.dict(settings.os.environ,{'SETTINGS_PLATFORM':'mac'}):
-                fps=next(s for s in settings.build(OOT,tmp,'unused')['settings'] if s['env']=='DM_FPS_TARGET')
+            fps=next(s for s in settings.build(OOT,tmp,'unused')['settings'] if s['env']=='DM_FPS_TARGET')
             self.assertEqual(fps['default'],'60')
             self.assertEqual(fps['options'],[['30','30 fps'],['60','60 fps']])
 

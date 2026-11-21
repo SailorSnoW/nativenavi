@@ -701,8 +701,7 @@ static void region_free(uint64_t *r, int param) {
 // With virtual address memory, StandardAllocator::Initialize(nullptr, size) takes a region of size from the alias region and lays its heap out over all of it (CentralHeap), and
 // games pass sizes made for the Switch's 64 GB alias region: Pokémon Legends: Z-A 12 GB, Pokémon Scarlet 12 GB, Paper Mario: The Thousand-Year Door 62 GB, Absolum 40 GB. Where the
 // size is more than the alias region has room for, the request would fail (an nn::diag abort in nninitStartup), so the gate at the function's entry (patch_nso.py) gives it the room
-// instead: the alias region less the regions already made (at least the SDK's 62 MB node area) and 256 MB for regions made later, in 32 MB steps; the profile key stdalloc_cap sets
-// it instead (Absolum's .NET garbage collector takes 1.5 GB after it). The SDK lays the region out from that size, so it holds; the pool, not the region, bounds what the heap
+// instead: the alias region less the regions already made (at least the SDK's 62 MB node area) and 256 MB for regions made later, in 32 MB steps. The SDK lays the region out from that size, so it holds; the pool, not the region, bounds what the heap
 // can map. A workaround for the iPhone's address space, not the game: with room for the request (the Mac's 64 GB) nothing changes. Found by symbol in every sdk
 #define STDALLOC_LATER 0x10000000ull
 // What the alias region has room for in one more region: past the end of the regions made so far, less STDALLOC_LATER for those made later, in 32 MB steps (0 = none)
@@ -717,11 +716,10 @@ static uint64_t alias_room(void) {
 static void stdalloc_init(uint64_t *r, int param) {
     (void)param;
     if (r[1]) return;   // a heap over memory the game passes in: no address region
-    uint64_t cap = DM_GAME_STDALLOC_CAP ? DM_GAME_STDALLOC_CAP : alias_room();
+    uint64_t cap = alias_room();
     if (!cap || r[2] <= cap) return;
     char who[40]; uint64_t via; guest_caller(r, who, sizeof who, &via);
-    LOG("[mem] StandardAllocator::Initialize(nullptr, %.2f GB) returning to %s: %.2f GB of address space, %s", r[2] / 1073741824.0, who, cap / 1073741824.0,
-        DM_GAME_STDALLOC_CAP ? "the profile's stdalloc_cap" : "what the alias region has room for (the profile key stdalloc_cap sets it)");
+    LOG("[mem] StandardAllocator::Initialize(nullptr, %.2f GB) returning to %s: %.2f GB of address space, what the alias region has room for", r[2] / 1073741824.0, who, cap / 1073741824.0);
     r[2] = cap;
 }
 __attribute__((constructor)) static void regions_attach(void) {

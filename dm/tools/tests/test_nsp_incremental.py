@@ -134,7 +134,7 @@ class DeriveProfile(Base):
 
     def test_changed_inputs_derive_again(self):
         changes = {
-            'source game.tsv': lambda: (self.src / 'game.tsv').write_text((self.src / 'game.tsv').read_text() + 'pad_layout\tfull\n'),
+            'source game.tsv': lambda: (self.src / 'game.tsv').write_text((self.src / 'game.tsv').read_text() + 'core_preempt\toff\n'),
             'source manual table': lambda: (self.src / 'shader_facts_manual.tsv').write_text('k\t{"manual": 2}\n'),
             'main build': lambda: nso(self.ex / 'ExeFS/main', 'ef' * 16),
             'display version': lambda: control(self.ex / 'control.nacp', '1.2.0'),
@@ -570,7 +570,7 @@ class ShaderProfileKey(Base):   # the shader step's key takes the profile's shad
         before = self.key()
         (self.src / 'README.md').write_text('# a note\n')
         (self.src / 'pso_manifest.tsv').write_text('S\tk2\tpixel\n')
-        (self.src / 'game.tsv').write_text((self.src / 'game.tsv').read_text() + 'pad_layout\tfull\n')
+        (self.src / 'game.tsv').write_text((self.src / 'game.tsv').read_text() + 'core_preempt\toff\n')
         self.assertEqual(self.key(), before)
 
     def test_shader_inputs_change_the_key(self):

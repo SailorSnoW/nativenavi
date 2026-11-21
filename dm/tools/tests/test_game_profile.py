@@ -1,5 +1,4 @@
-# dm/games/game.py's profile-key validation, on a synthetic profile: pso_gpu (the GPU architectures the app's offline pipeline archive is made for, beside pso_mtl4) takes, none and no others,
-# and a profile without the key generates its header unchanged; the game's upscaler shaders (the launcher's 3D upscaler) are the compute shaders its shader map found in an NDSR pack, under any name or container
+# dm/games/game.py's profile-key validation, on a synthetic profile: the game's upscaler shaders (the launcher's 3D upscaler) are the compute shaders its shader map found in an NDSR pack, under any name or container
 from pathlib import Path
 import os
 import subprocess
@@ -22,23 +21,6 @@ def header(rows):
         r = subprocess.run([sys.executable, str(GAME), 'header', ID, str(Path(d, ID) / 'game.h')],
                            env={**os.environ, 'DM_GAMES_DIR': d}, capture_output=True, text=True)
     return r.returncode, (r.stderr + r.stdout).strip()
-
-
-class PsoGPU(unittest.TestCase):
-    def test_valid_tokens(self):
-        for rows in ('', 'pso_mtl4\ton\npso_gpu\tg18p\n', 'pso_mtl4\ton\npso_gpu\tapplegpu_g19p\n',   # without the key: the header is made as before, no message
-                     'pso_mtl4\ton\npso_gpu\tg18p g19p\n', 'pso_mtl4\ton\npso_gpu\tg14s g15s g16s g17p\n'):
-            rc, out = header(rows)
-            self.assertEqual((rc, out), (0, ''), rows)
-
-    def test_rejected_tokens(self):
-        for rows in ('pso_gpu\tnone\n',                     # none is not a value: absence of the key says no archive of its own
-                     'pso_mtl4\ton\npso_gpu\tg18p none\n', 'pso_gpu\tx g18p!\n', 'pso_gpu\tg14s g15s g16s g17p g18p\n',
-                     'pso_gpu\tapplegpu_g19p,x\n'):
-            rc, out = header(rows)
-            self.assertNotEqual(rc, 0, rows)
-            self.assertIn(': pso_gpu takes 1-4 whitespace-separated GPU architectures', out, rows)
-
 
 
 MAP = ('# kind: evidence  Test shaders\n# column 5 records where each key first appears\npackage\tindex\tstage\tdm_ctl_sha16\tsource\n'

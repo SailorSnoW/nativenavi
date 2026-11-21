@@ -1,4 +1,4 @@
-"""The launcher's settings (dm/games/settings.tsv through dm/games/settings.py): rows by graphics API and profile, single-screen sections, toggle values and the strict format;
+"""The launcher's settings (dm/games/settings.tsv through dm/games/settings.py): rows by profile, single-screen sections, toggle values and the strict format;
 the meta column's optional fields, and the written list against docs/launcher.schema.json, the contract front ends read."""
 import importlib.util
 import json
@@ -18,15 +18,13 @@ OOT = '0400486024DEC000'
 PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
 
 
-def build(gid, api, platform=None):
-    env = {'GFXAPI': api, **({'SETTINGS_PLATFORM': platform} if platform else {})}
-    with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, env):
-        if not platform: os.environ.pop('SETTINGS_PLATFORM', None)
+def build(gid):
+    with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']):
         return {s['env']: s for s in settings.build(gid, tmp, Path(tmp) / 'control.nacp')['settings']}
 
 
 def rows_with_languages(listed):   # the settings rows, by variable, of a game whose control data lists these languages
-    with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=listed), patch.dict(os.environ, {'GFXAPI': 'nvn', 'DM_LANG': 'en-US'}):
+    with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=listed), patch.dict(os.environ, {'DM_LANG': 'en-US'}):
         return {s['env']: s for s in settings.build(OOT, tmp, Path(tmp) / 'control.nacp')['settings']}
 
 
@@ -39,75 +37,50 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual(s['options'], [list(l) for l in settings.nacp.LANGUAGES])
         self.assertEqual((s['default'], s['note']), ('en-US', settings.UNKNOWN_LANGUAGES))
 
-    def test_upscaling_is_opt_in_for_every_graphics_api(self):
-        for api, gid in [('nvn', OOT)]:
-            with self.subTest(api=api):
-                s = build(gid, api)['DM_PRESENT_UPSCALE']
-                self.assertEqual((s['kind'], s['section'], s['default']), ('choice', 'Game', 'off'))
-                self.assertEqual(s['options'], [['off', 'Standard'], ['metalfx', 'MetalFX']])
+    def test_upscaling_is_opt_in(self):
+        s = build(OOT)['DM_PRESENT_UPSCALE']
+        self.assertEqual((s['kind'], s['section'], s['default']), ('choice', 'Game', 'off'))
+        self.assertEqual(s['options'], [['off', 'Standard'], ['metalfx', 'MetalFX']])
 
-    def test_frame_buffering_by_graphics_api(self):
-        for api, gid in [('nvn', OOT), ('', OOT)]:
-            with self.subTest(api=api):
-                rows = build(gid, api)
-                self.assertEqual('DM_PRESENT_SNAP' in rows, api == 'nvn')
-                if api == 'nvn':
-                    s = rows['DM_PRESENT_SNAP']
-                    self.assertEqual((s['kind'], s['section'], s['default']), ('toggle', 'Performance', '0'))   # Ocarina of Time's profile: no present_snap
-                    self.assertIn('latency', s['note'])
+    def test_frame_buffering_follows_the_profile(self):
+        s = build(OOT)['DM_PRESENT_SNAP']
+        self.assertEqual((s['kind'], s['section'], s['default']), ('toggle', 'Performance', '0'))   # the profile has no present_snap
+        self.assertIn('latency', s['note'])
 
-    def test_sections_keep_the_profile_defaults(self):
-        oot = build(OOT, 'nvn')
+    def test_sections_keep_the_host_defaults(self):
+        oot = build(OOT)
         self.assertEqual([e for e, s in oot.items() if s['section'] == 'Performance'], PERFORMANCE_NVN)
-        self.assertEqual((oot['DM_PRESENT_SNAP']['default'], oot['DM_PSO_MTL4']['default']), ('0', '0'))   # neither present_snap nor pso_mtl4 in the profile
-        self.assertEqual((oot['DM_PSO_PREBUILD']['default'], oot['DM_NVN_ENC_THREAD']['default'], oot['DM_METAL_HUD']['default']), ('1', '1', '0'))   # the host's iOS defaults
+        # nvn_mtl.m pso4_on: on; nvn_rec.h rec_on: off unless the profile says enc_thread on, as this game's does
+        self.assertEqual((oot['DM_PSO_MTL4']['default'], oot['DM_PSO_PREBUILD']['default'], oot['DM_NVN_ENC_THREAD']['default'], oot['DM_METAL_HUD']['default']), ('1', '1', '1', '0'))
         self.assertEqual(list(dict.fromkeys(s['section'] for s in oot.values())), ['Game', 'Controls', 'Performance'])
         self.assertIn('DM_FPS_HOLD', oot)   # a frame step (fps_target), as the Frame rate row
         self.assertIn('first start', oot['DM_PSO_PREBUILD']['note'])   # it runs once in the prepare step, before the first frame
 
     def test_hold_frames_takes_on_and_off(self):   # the host reads DM_FPS_HOLD as on / off (hle_nvn.c), not 1 / 0
-        s = build(OOT, 'nvn')['DM_FPS_HOLD']
+        s = build(OOT)['DM_FPS_HOLD']
         self.assertEqual((s['on'], s['off'], s['default']), ('on', 'off', 'on'))
-        s = build(OOT, 'nvn')['DM_SHOW_FPS']
+        s = build(OOT)['DM_RUMBLE']
         self.assertEqual((s['on'], s['off']), ('1', '0'))
 
-    def test_iphone_switches_only_on_the_iphone(self):   # the frame-rate counter and touch feedback are the iOS front end's (front_ios.m, DmGamepad.m)
-        ios, mac = build(OOT, 'nvn'), build(OOT, 'nvn', 'mac')
-        self.assertEqual(build(OOT, 'nvn', 'ios').keys(), ios.keys())   # ios when unset
-        self.assertEqual(set(ios) - set(mac), {'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS', 'DM_PICTURE_FIT'})
-        self.assertIn('DM_RUMBLE', mac); self.assertIn('DM_METAL_HUD', mac)
-        self.assertEqual(set(mac) - set(ios), {'DM_FULLSCREEN', 'DM_SW2'})   # the Mac window's Display mode (front_mac.m reads 1 or 0); Switch 2 controllers (pad_switch2_apple.m, wired on the Mac only)
+    def test_the_mac_front_ends_rows(self):   # the window's Display mode (front_mac.m reads 1 or 0); Switch 2 controllers (pad_switch2_apple.m)
+        mac = build(OOT)
+        self.assertFalse({'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS', 'DM_PICTURE_FIT', 'DM_SCREEN_ASPECT'} & set(mac))   # the iPhone app's
+        self.assertTrue({'DM_RUMBLE', 'DM_METAL_HUD', 'DM_FULLSCREEN', 'DM_SW2'} <= set(mac))
         s = mac['DM_FULLSCREEN']
         self.assertEqual((s['kind'], s['default'], s['options'], s['level']), ('choice', '0', [['0', 'Window'], ['1', 'Fullscreen']], 'basic'))
 
-    def test_defaults_follow_each_platform_host(self):
-        # nvn_mtl.m pso4_on: Mac defaults on, iOS follows the profile. nvn_rec.h rec_on: iOS on, Mac off unless the profile says enc_thread on, as this game's does.
-        for gid, ios_pso in ((OOT, '0'),):
-            with self.subTest(game=gid):
-                ios, mac = build(gid, 'nvn', 'ios'), build(gid, 'nvn', 'mac')
-                self.assertEqual((ios['DM_PSO_MTL4']['default'], ios['DM_NVN_ENC_THREAD']['default']), (ios_pso, '1'))
-                self.assertEqual((mac['DM_PSO_MTL4']['default'], mac['DM_NVN_ENC_THREAD']['default']), ('1', '1'))
-
-    def test_unknown_platform_is_rejected(self):
-        with self.assertRaisesRegex(SystemExit, 'SETTINGS_PLATFORM must be ios or mac'):
-            build(OOT, 'nvn', 'mca')
-
-    def test_malformed_platform_defaults_are_rejected(self):
-        for default in ('1|', '|0', '1|0|1'):
-            with self.subTest(default=default), tempfile.TemporaryDirectory() as tmp:
-                row = '\t'.join(('DM_X', 'toggle', '-', default, 'always', 'Game', 'X')) + '\n'
-                (Path(tmp) / 'settings.tsv').write_text(row, encoding='utf-8')
-                with patch.object(settings, 'HERE', Path(tmp)), patch.object(settings.nacp, 'languages', return_value=['en-US']), \
-                        self.assertRaisesRegex(SystemExit, 'platform default'):
-                    settings.build(OOT, tmp, Path(tmp) / 'control.nacp')
+    def test_written_list_follows_the_schema(self):
+        schema = json.loads((ROOT / 'docs/launcher.schema.json').read_text(encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']):
+            self.assertEqual(conforms(settings.build(OOT, tmp, Path(tmp) / 'control.nacp'), schema, schema), [])
 
     def test_meta_fields_and_the_schema_version(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US', 'ja']), patch.dict(os.environ, {'GFXAPI': 'nvn'}):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US', 'ja']):
             (Path(tmp) / 'main.fixups.tsv').write_text('# RENDER_SCALE\t1\n')   # the render scale row's condition
             listed = settings.build(OOT, tmp, Path(tmp) / 'control.nacp')
         rows = {s['env']: s for s in listed['settings']}
         self.assertEqual(listed['schema'], 1)
-        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_RUMBLE'])
+        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_FULLSCREEN', 'DM_RUMBLE'])
         self.assertEqual(rows['DM_RUMBLE_GAIN']['needs'], 'DM_RUMBLE=1')
         self.assertFalse({'level', 'needs'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
 
@@ -132,13 +105,6 @@ class LauncherSettingsTests(unittest.TestCase):
                 self.assertRegex(docs, rf'- `{key}` \(optional\)')
         self.assertEqual(schema['properties']['schema']['const'], settings.SCHEMA)
 
-    def test_written_lists_follow_the_schema(self):
-        schema = json.loads((ROOT / 'docs/launcher.schema.json').read_text(encoding='utf-8'))
-        for gid, api, platform in [(OOT, 'nvn', None), (OOT, 'nvn', 'mac')]:
-            with self.subTest(gid=gid, platform=platform), tempfile.TemporaryDirectory() as tmp, \
-                    patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, {'GFXAPI': api, **({'SETTINGS_PLATFORM': platform} if platform else {})}):
-                self.assertEqual(conforms(settings.build(gid, tmp, Path(tmp) / 'control.nacp'), schema, schema), [])
-
     def test_schema_1_takes_new_sections_but_not_new_kinds(self):
         """A section is a heading a reader draws by its name, so a new one stays schema 1; a new kind would not"""
         schema = json.loads((ROOT / 'docs/launcher.schema.json').read_text(encoding='utf-8'))
@@ -150,7 +116,7 @@ class LauncherSettingsTests(unittest.TestCase):
         schema = json.loads((ROOT / 'docs/launcher.schema.json').read_text(encoding='utf-8'))
         for gid, base in [(OOT, None)]:   # Ocarina of Time's profile has no render_base
             with self.subTest(gid=gid), tempfile.TemporaryDirectory() as tmp, \
-                    patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, {'GFXAPI': 'nvn'}):
+                    patch.object(settings.nacp, 'languages', return_value=['en-US']):
                 (Path(tmp) / 'main.fixups.tsv').write_text('# RENDER_SCALE\t1\n')   # the render scale row's condition
                 listed = settings.build(gid, tmp, Path(tmp) / 'control.nacp')
             self.assertEqual({s['env']: s for s in listed['settings']}['DM_RENDER_SCALE'].get('base'), base)
@@ -164,7 +130,7 @@ class LauncherSettingsTests(unittest.TestCase):
         """The rewriter writes a render-scale stub's largest scale as RENDER_SCALE: 1 keeps the table's range (a stub that only lowers the size), 3 raises its top (Hades II)"""
         for value, top in (('1', 1.0), ('3', 3.0)):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp, \
-                    patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, {'GFXAPI': 'nvn'}):
+                    patch.object(settings.nacp, 'languages', return_value=['en-US']):
                 (Path(tmp) / 'main.fixups.tsv').write_text(f'# RENDER_SCALE\t{value}\n')
                 row = {s['env']: s for s in settings.build(OOT, tmp, Path(tmp) / 'control.nacp')['settings']}['DM_RENDER_SCALE']
             self.assertEqual((row['min'], row['max']), (0.5, top))

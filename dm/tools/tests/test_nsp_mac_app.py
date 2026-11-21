@@ -1062,7 +1062,7 @@ class Script(unittest.TestCase):
         self.assertNotIn('--pso', o)   # no shader pairs: no pipeline archive
         self.assertEqual(o['--settings'], str(tmp / 'app/launcher.json'))   # the launcher settings the Mac front end reads
         self.assertEqual(self.settings_cmd[2:], ['01008CF01BAAC000', str(tmp / 'patched'), str(tmp / 'ex/control.nacp'), str(tmp / 'app/launcher.json')])
-        self.assertEqual((self.settings_env['SETTINGS_PLATFORM'], self.settings_env['GFXAPI'], self.settings_env['DM_LANG']), ('mac', 'nvn', 'en-US'))
+        self.assertEqual(self.settings_env['DM_LANG'], 'en-US')
         o, tmp = self.pack_cmd(aoc=Path('/x/aoc'), sign='Developer ID Application: X (T)')
         self.assertEqual((o['--aoc'], o['--sign']), ('/x/aoc', 'Developer ID Application: X (T)'))
 
