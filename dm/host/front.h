@@ -15,17 +15,13 @@ void front_run(void (*guest)(void));
 void *front_metal_layer(void);
 // The highest refresh rate of the screen the game is shown on in Hz, 0 = not known (front_mac.m: the window's screen; front_ios.m: the game view's screen, 60 in Low Power Mode). Any thread
 int front_screen_max_fps(void);
-// The pixel size of the display the game is shown on: on the Mac the window's screen in its current mode (the main display before the window is up) (a scaled Retina mode's pixels), an iPhone's or iPad's screen (nativeBounds).
-// Returns 0 and leaves w, h alone when not known (no front end: graphics unit tests). Any thread
-int front_display_pixels(int *w, int *h);
 // Whether the window's current screen mode supports variable refresh (Mac front_mac.m; none on iOS). Any thread
 int front_screen_variable_refresh(void);
 // The frame rate the display link paces the game at (60, 30, 120; nvn_mtl.m link_sync): in fullscreen, a screen whose refresh rate is not a multiple of it is switched, while the game runs,
 // to a mode of the same size whose rate is, and back when the window leaves fullscreen or that screen (front_mac.m; none on iOS). Called from the present thread
 void front_screen_match(int fps);
 // The shape of the picture the game presents (nvn_mtl.m present_now, present_shape: the layer's, not the crop's, w x h), called when its width / height changes: the front end
-// lays the picture out in that shape instead of 16:9, so a profile with screen_aspect under DM_SCREEN_ASPECT (1920x1344) fills a 1.43:1 screen and touches map onto the picture
-// as drawn. Before the first call the picture is 16:9. Called from the present thread; the front end switches to its main thread and does not block
+// lays the picture out in that shape instead of 16:9. Before the first call the picture is 16:9. Called from the present thread; the front end switches to its main thread and does not block
 void front_picture_shape(int w, int h);
 // Progress screen of the first-start prepare step (nvn_mtl.m warm_prepare: "Preparing shaders" while the pipelines of the prewarm lists are built before the game's first frame):
 // title and done of total shown over the game's view (a dark screen, the title, a bar and a count), updated on each call; title NULL hides it. Any thread; the front end switches to its main
@@ -41,25 +37,6 @@ extern void (*front_progress_hook)(const char *title, long done, long total);
 // prompt over the game while controllers join and the calling thread blocks until it closes. 1: done (A or Return with the minimum in, the maximum in, or nobody left to join);
 // 0: closed (B, Escape); -1 with no window: nothing shown, the caller answers as the player closing it
 int front_ctrl_support(int min, int max);
-
-// Account applet: choices are already filtered by the host's selection settings.
-// Return a displayed user's slot, FRONT_USER_CREATE, FRONT_USER_SKIP, or FRONT_USER_CANCEL.
-// Synchronous on the guest thread, native UI on the main thread. No window: cancel,
-// never infer a user from controllers. Creation/skip actions appear only when allowed.
-typedef struct { int slot, open; char nickname[33]; } front_user;
-enum { FRONT_USER_CANCEL = -1, FRONT_USER_CREATE = -2, FRONT_USER_SKIP = -3 };
-int front_user_select(const front_user *users, int count, int allow_create, int allow_skip);
-
-// Early start of host loading (main.c): reading the NSO / relocation / forced takeover / prefetch start are moved to a background thread, in parallel with the front end (UIKit launch chain, Metal view);
-// the dm_main / main called afterwards waits for it to finish. For call timing and preconditions see the comments in main.c (set DM_ROMFS and the other environment variables and the cwd first; arguments identical item by item to those of the later main).
-void dm_host_preload_start(int argc, char **argv);
-
-// Touchscreen (implemented by the host's hle_touch.c; called by the iOS / Mac front end): whenever the set of touch points changes (down / move / up / cancel) the whole set is pushed once; n = 0 = all lifted.
-// id = finger slot number 0–15 (the lowest free slot on down, unchanged until up; used directly as finger_id); x / y = normalized coordinates [0,1) on the output frame, origin at top left.
-// The host converts to the panel coordinates the game reads, 1280x720 (x·1280, y·720), and latches short taps (a down and up between two reads is reported at least once). May be called from any thread.
-typedef struct { uint32_t id; float x, y; } dm_touch;
-void dm_touch_set(const dm_touch *t, int n);
-void dm_touch_script(const dm_touch *t, int n);   // scripted touches (DM_KEYS, DM_CTL; hle_hid.c): as dm_touch_set, but never recorded by DM_REC
 
 // Save not written (called by the host's hle_fs.c; the iOS front end provides a strong implementation of the same name that shows the native prompt "Not enough storage. Progress was not saved"; the default weak implementation only logs).
 // Timing: when a save write fails (disk full etc.) within one of the game's save transactions (between two Commits), so that this Commit is refused and the previously committed save is unchanged, it is called once per refused transaction;

@@ -19,7 +19,6 @@
 #include "hle.h"
 #include <pthread.h>
 #include <stdbool.h>
-#include <sys/mman.h>
 #include "hle_movie_av1.h"   // AV1 on VideoToolbox or dav1d
 #include "hle_movie_vt.h"
 
@@ -236,39 +235,10 @@ HLE_FORCE("_ZN2nn5codec36GetDecoderImagePoolNativeImageHandleEPKNS0_25VideoDecod
     p->native = 1;
     return (uint32_t)p->slot << 8 | i;
 }
-// Blank native images: a picture the system would fill that the host has no source for (GameChat's camera pictures, hle_misc.c), all zeros. Their handles have the top bit set, apart from
-// the decoder pools' (slot << 8 | image). The storage holds any uncompressed format up to 16 bytes a pixel, as the texture's format is known only when the game makes it
-#define BLANK_MAX 32
-static struct { uint32_t w, h; uint8_t *mem; uint64_t size; } g_blank[BLANK_MAX];
-static uint32_t blank_stride(uint32_t w) { return (w * 16 + 63) & ~63u; }
-uint32_t dm_native_image_blank(uint32_t w, uint32_t h) {   // a blank image's handle; 0 when there is no room
-    uint64_t size = ((uint64_t)blank_stride(w) * h + CV_NATIVE_ALIGN - 1) & ~(CV_NATIVE_ALIGN - 1);
-    void *mem = size ? mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0) : MAP_FAILED;
-    if (mem == MAP_FAILED) return 0;
-    dm_host_mutex_lock(&g_cv_mu);
-    uint32_t k = 0; while (k < BLANK_MAX && g_blank[k].mem) k++;
-    if (k < BLANK_MAX) { g_blank[k].w = w; g_blank[k].h = h; g_blank[k].mem = mem; g_blank[k].size = size; }
-    pthread_mutex_unlock(&g_cv_mu);
-    if (k == BLANK_MAX) { munmap(mem, size); LOG("[RED] native images: more than %d blank images", BLANK_MAX); return 0; }
-    return 0x80000000u | (k + 1);
-}
-void dm_native_image_blank_free(uint32_t handle) {   // a texture on it must be finalized first, as on the console
-    uint32_t k = (handle & 0x7fffffffu) - 1;
-    if (!(handle >> 31) || k >= BLANK_MAX) return;
-    dm_host_mutex_lock(&g_cv_mu);
-    uint8_t *mem = g_blank[k].mem; uint64_t size = g_blank[k].size; memset(&g_blank[k], 0, sizeof g_blank[k]);
-    pthread_mutex_unlock(&g_cv_mu);
-    if (mem) munmap(mem, size);
-}
-// A native image handle's picture for hle_nvn.c: 1 and its memory, size and layout; 0 for a handle no pool or blank image holds
+// A native image handle's picture for hle_nvn.c: 1 and its memory, size and layout; 0 for a handle no pool holds
 int dm_native_image(uint32_t handle, uint8_t **mem, uint64_t *size, uint32_t *w, uint32_t *h, uint32_t *stride) {
     uint32_t slot = handle >> 8, i = handle & 0xff; int ok = 0;
     dm_host_mutex_lock(&g_cv_mu);
-    uint32_t k = (handle & 0x7fffffffu) - 1;
-    if (handle >> 31 && k < BLANK_MAX && g_blank[k].mem) {
-        *mem = g_blank[k].mem; *size = g_blank[k].size; *w = g_blank[k].w; *h = g_blank[k].h; *stride = blank_stride(g_blank[k].w);
-        pthread_mutex_unlock(&g_cv_mu); return 1;
-    }
     cv_pool *p = slot && slot <= 256 ? g_cv_pools[slot - 1] : NULL;
     if (p && p->mem && i < p->count && (i + 1) * native_size(p->w, p->h) <= p->size) {
         *mem = p->mem + i * native_size(p->w, p->h); *size = native_size(p->w, p->h); *w = p->w; *h = p->h; *stride = native_stride(p->w); ok = 1;

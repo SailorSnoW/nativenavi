@@ -11,16 +11,6 @@ uint64_t now_ns(void) { return 0; }
 void dm_audio_suspend(int on) { (void)on; }   // stubs for the bg item of DM_OE_SCRIPT (hle_audio.c / hle_os.c / hle_nvn.c)
 void guest_clock_freeze_for(int reason, int on) { (void)reason; (void)on; }
 void dm_gfx_suspend(int on) { (void)on; }
-void dm_gfx_quit_begin(void) {}
-void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg) { (void)why; (void)then; (void)arg; }
-void dm_host_shutdown(const char *why) { (void)why; }
-// The notification event (hle_thread.c binds a kernel event): the unit test only tracks whether it is signalled
-static int ev_bound, ev_sig;
-void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; ev_bound = 1; }
-void hle_signal_system_event(void *g) { (void)g; ev_sig = 1; }
-void hle_clear_system_event(void *g) { (void)g; ev_sig = 0; }
-static int hid_moves;   // hle_hid.c signals the npads' style events there; here only that a mode change reports to it
-void dm_hid_opmode_changed(void) { hid_moves++; }
 static int checks, fails;
 #define CHECK(c, s) do { checks++; int ok = !!(c); fails += !ok; printf("%s %s\n", ok ? "✓" : "✗", s); } while (0)
 static void reset(void) { g_mqh = g_mqn = 0; g_focus = 1; g_seen = 1; g_applets = 0; g_opmode = 1; g_ntf_opmode = g_ntf_perfmode = 0; g_focus_mode = -1; }
@@ -64,24 +54,11 @@ static int child_burst(int kind) {
 }
 int main(void) {
     unsetenv("DM_OE_SCRIPT"); reset();
-    CHECK(h_oe_InactivityMode() == 0 && !h_oe_InactivityExtQ(), "inactivity extension starts disabled");
-    h_oe_InactivityExtSafe(1);
-    CHECK(h_oe_InactivityMode() == 1 && h_oe_InactivityExtQ(), "normal inactivity extension is mode 1");
-    h_oe_InactivityExt(1);
-    CHECK(h_oe_InactivityMode() == 2 && h_oe_InactivityExtQ(), "unsafe inactivity extension is mode 2");
-    h_oe_InactivityExtSafe(0x100);
-    CHECK(h_oe_InactivityMode() == 0 && !h_oe_InactivityExtQ(), "clearing the extension restores mode 0");
     CHECK(empty(), "empty queue at start: returns false and leaves the output alone");
     h_oe_FinishLogo();
-    CHECK(empty(), "finishing absent startup logo does not notify without registration");
-    h_oe_EnableStartupLogoMessage();
-    CHECK(pop_is(95) && empty(), "startup logo already absent: registration queues notification 95");
-    h_oe_GetMsgEv();
-    h_oe_EnableStartupLogoMessage();
-    CHECK(ev_sig && pop_is(95) && !ev_sig && empty(), "startup-logo notification signals and clears the existing message event");
-    dm_focus_set(1); dm_set_opmode(1); CHECK(empty(), "same state sends no notification"); CHECK(hid_moves == 0, "an unchanged mode moves no npad");
-    dm_set_opmode(0); CHECK(hid_moves == 1, "to handheld: hid is told that the npads moved");
-    dm_set_opmode(1); CHECK(hid_moves == 2 && empty(), "and back to console (no notification: the game has not turned it on)");
+    CHECK(empty(), "finishing the absent startup logo queues no notification");
+    dm_focus_set(1); dm_set_opmode(1); CHECK(empty(), "same state sends no notification");
+    dm_set_opmode(0); dm_set_opmode(1); CHECK(empty(), "to handheld and back to console: no notification, the game has not turned it on");
     dm_focus_set(3); CHECK(h_oe_GetFocus() == 3, "background state 3 can be queried before popping");
     CHECK(pop_is(15) && empty(), "background change notification 15 exactly once");
     dm_focus_set(2); dm_focus_set(1);
@@ -119,19 +96,6 @@ int main(void) {
     dm_focus_set(1); dm_set_opmode(0); dm_focus_set(3); dm_set_opmode(1);
     CHECK(pop_is(15) && pop_is(30) && pop_is(31) && empty(), "after wrapping across 32 slots still deduplicated by 15,30,31 in first-seen order");
     CHECK(child_burst(3), "new change after the consumer pops and before it queries: the new resume is not missed, final focus 1 / mode 0");
-    // The notification event follows the queue, as the am service's does: signalled while a message is queued, cleared when the last one is popped. Monster Hunter Rise's
-    // MessageSuperviseThread (main+0x6bc8fc4) waits on it with WaitAny, which does not clear it, then pops until the queue is empty: a signal left behind made it spin on a core
-    reset(); g_ntf_opmode = g_ntf_perfmode = 1;
-    h_oe_GetMsgEv();
-    CHECK(ev_bound && !ev_sig, "notification event: bound on first use, not signalled while the queue is empty");
-    dm_focus_set(2);
-    CHECK(ev_sig, "notification event: signalled when a notification is queued");
-    CHECK(pop_is(15) && !ev_sig, "notification event: cleared when the last notification is popped");
-    dm_focus_set(1); dm_set_opmode(0);
-    CHECK(pop_is(15) && ev_sig, "notification event: still signalled after a pop that leaves notifications queued");
-    CHECK(pop_is(30) && ev_sig && pop_is(31) && !ev_sig, "notification event: cleared only when the queue is empty");
-    ev_sig = 1;
-    CHECK(empty() && !ev_sig, "notification event: a pop from an empty queue clears a signal left behind");
     // Focus handling modes 0 and 3 get no focus notifications (the system suspends the game instead); 1 and 2 do. Super Mario Galaxy 2 sets 3 and deadlocked in its own pause on focus 2
     reset(); g_ntf_opmode = g_ntf_perfmode = 1; h_oe_SetFocusMode(3);
     dm_focus_set(2); dm_focus_set(3);
@@ -172,7 +136,5 @@ int main(void) {
     dm_set_opmode(0); CHECK(h_oe_GfxScale() == 0, "graphics scale handheld: tier 0");
     setenv("DM_GFX_SCALE", "2", 1); CHECK(h_oe_GfxScale() == 2, "DM_GFX_SCALE=2: tier 2");
     setenv("DM_GFX_SCALE", "7", 1); CHECK(h_oe_GfxScale() == 0, "DM_GFX_SCALE=7: no such tier, 0"); unsetenv("DM_GFX_SCALE");
-    reset(); h_oe_EnableCrashReport(); h_oe_DisableCrashReport();
-    CHECK(empty() && h_oe_GetFocus() == 1, "crash-report service switches require no SDK proxy or notifications");
     printf("== oe %d checks, %d failed ==\n", checks, fails); return fails != 0;
 }

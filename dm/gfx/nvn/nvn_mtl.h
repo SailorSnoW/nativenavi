@@ -25,16 +25,6 @@ void mtl_sp_phys_gone(const void *mem, uint64_t size);
 int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off);   // 1 on success; buf is a (__bridge) id<MTLBuffer>
 int mtl_addr_known(uint64_t addr, uint64_t len);   // 1 when the range lies in one memory pool (as mtl_addr finds it); does not make the pool resident
 
-typedef struct {
-    uint32_t pso, cps, shaders, dss;
-    uint32_t view_nonnull, view_slots, live_tex, sview_nonnull;
-    uint32_t pools;
-    uint64_t pool_adds;
-    uint32_t c1_bufs; uint64_t c1_alloc, c1_data;   // Shader c1 constant segment: buffer count (4 MiB banks, dedicated 64 KiB slices inside them), allocated bytes, actual bytes
-} mtl_res_count;
-void mtl_res_counts(uint32_t tick, const char *why);   // Print one line of resource counts (the host calls it per tick / event, see dm_res_report_register in dm.h)
-void mtl_res_snapshot(mtl_res_count *out);
-
 // One submit: begin -> several operations -> commit (returns the fence value at which this submit completes)
 void mtl_prepare(void);                                // the first submission's prepare step (prewarm, pipeline prebuild): no GPU work, called outside the graphics gate
 void mtl_sub_begin(void);
@@ -67,6 +57,5 @@ enum { MTL_QUIT_ARCH_MS = 10000 };   // what quitting gives the archive's write 
 void mtl_warm_stop(void);   // the process is ending: the pipeline prewarm takes no more lines, and what it has not built is left to the next start (no compiles beside the archive's write)
 void *mtl_device(void);   // the Metal device, initialized on first use
 void mtl_present_layer(uint32_t w, uint32_t h);   // a sized vi layer (hle_vi.c): the picture's shape instead of the display's 16:9
-void mtl_present_screen(uint32_t w, uint32_t h);   // a screen taller than 16:9 (loader.c, DM_SCREEN_ASPECT): the picture's shape for a texture of that shape
 void mtl_present_wait(uint64_t ticket);   // as in nvn_obj.h: wait until that present has been handed to the GPU
 void mtl_present_wait_texture(uint64_t ticket, uint64_t copy);   // the next acquire of a presented texture, or a queue finish: with a snapshot (copy, from mtl_present) its copy has run on the GPU, else as mtl_present_wait

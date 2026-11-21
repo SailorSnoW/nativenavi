@@ -1,7 +1,7 @@
 // Mac front end: with DM_WINDOW=1 open a window (CAMetalLayer, for the graphics backend to present frames) + keyboard and controllers → dm_input; the guest runs on a large-stack thread instead and the main thread belongs to AppKit.
 // Without DM_WINDOW: run the guest on the current thread with the default application task role (front_role.h).
 // The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN=1 starts it that way. ⌘Q quits, and so does a controller's Home button held for 2 s and
-// confirmed with A (home_quit.h); the left mouse button is the touchscreen.
+// confirmed with A (home_quit.h).
 // Key map (Nintendo layout): WASD left stick, arrow keys D-pad (with Shift held: the right stick, for the camera), J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−, Space=shake the controller.
 // Controllers: face buttons as on the iPhone, by position (right A, bottom B, top X, left Y) or on a Nintendo pad by its labels (pad_apple.h), shoulders L R, triggers ZL ZR, Menu + Options −, both sticks and their presses.
 // Each controller is a player of its own (local co-op): the first one connected is player 1, together with the keyboard, the next player 2, and so on up to 8 (pad_slots.h);
@@ -30,7 +30,6 @@ static void merge_rumble_to(void (*sink)(const dm_haptic_state *));
 #include "home_quit.h"
 #include "home_quit_mac.h"
 #include "ctrl_prompt.h"
-#include "user_select_mac.h"
 #include <signal.h>
 #include <math.h>
 #include <sys/stat.h>
@@ -44,24 +43,14 @@ static int g_input_on = 1;   // main thread: the game window is key, so its keyb
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static _Atomic int g_screen_fps;   // the window's screen's maximumFramesPerSecond, kept up to date when the window moves to another screen
 int front_screen_max_fps(void) { return g_screen_fps; }
-static _Atomic CGDirectDisplayID g_screen_id;   // the window's screen (screen_refresh); 0 until the window is up, then the main display stands in
-int front_display_pixels(int *w, int *h) {
-    CGDirectDisplayID id = g_screen_id; CGDisplayModeRef m = CGDisplayCopyDisplayMode(id ? id : CGMainDisplayID()); if (!m) return 0;
-    int a = (int)CGDisplayModeGetPixelWidth(m), b = (int)CGDisplayModeGetPixelHeight(m); CGDisplayModeRelease(m);
-    if (a <= 0 || b <= 0) return 0;
-    *w = a; *h = b; return 1;
-}
 static _Atomic int g_screen_variable_refresh;
 int front_screen_variable_refresh(void) { return g_screen_variable_refresh; }
 static void screen_refresh(NSScreen *screen) {   // main thread: refresh capabilities of the current screen and mode, including a mode change without moving the window
     if (!screen) return;
     g_screen_fps = (int)screen.maximumFramesPerSecond;
-    g_screen_id = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
     g_screen_variable_refresh = screen.minimumRefreshInterval > 0 && screen.maximumRefreshInterval > screen.minimumRefreshInterval;
 }
 static _Atomic int g_fullscreen;   // the window is in fullscreen (set when it has entered and when it has left)
-// A modal box of the host is up (the user selector, front_user_select). The game window is not key then, which is not a focus change the game should see
-static int g_text_box;
 int front_fullscreen(void) { return g_fullscreen; }   // nvn_mtl.m link_latency: frame latency 2 in variable-refresh fullscreen
 // The screen's refresh rate matched to the game's frame rate in fullscreen (front_screen_match, from PR #79; DM_SCREEN_MATCH=0 turns it off). 60 fps on a 144 Hz screen cannot be paced
 // evenly: the display link counts a tick on the refresh nearest each 1/60 s slot (nvn_mtl.m link_range), so frames stay up 2 and 3 refreshes in turn (13.9 / 20.8 ms) and Apple's HUD shows
@@ -134,7 +123,7 @@ void front_screen_match(int fps) {
     g_match_want = fps; dispatch_async(dispatch_get_main_queue(), ^{ screen_match_apply(); });
 }
 // The pointer hides on game input while it is over the picture of the active game window (issue #675): AppKit shows it again when the mouse moves, input_release when
-// the window loses focus. The title bar, other windows and other apps keep theirs; the mouse is the touch screen (DmGameView), and moving it shows the pointer
+// the window loses focus. The title bar, other windows and other apps keep theirs
 static void cursor_hide_for_input(void) {
     if (!g_win.isKeyWindow || !NSApp.isActive) return;
     NSView *v = g_win.contentView;
@@ -320,10 +309,9 @@ static void display_awake(int on) {
         g_display_activity = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityIdleDisplaySleepDisabled reason:@"NxNative active game window"];
     else if (!on && g_display_activity) { [NSProcessInfo.processInfo endActivity:g_display_activity]; g_display_activity = nil; }
 }
-// Focus: a window that is no longer key sees no key-up, mouse-up or controller release, so whatever is held when it loses focus (another app, the text box, minimized) would
-// stay pressed in the game. The front end releases only what it pressed itself: scripted buttons and sticks have their own path, and the touch is also DM_KEYS / DM_CTL's (hle_hid.c).
+// Focus: a window that is no longer key sees no key-up or controller release, so whatever is held when it loses focus (another app, the text box, minimized) would
+// stay pressed in the game. The front end releases only what it pressed itself: scripted buttons and sticks have their own path (hle_hid.c).
 // Out of focus a controller's changes are ignored, so back in focus each controller is read as it is now (a button still held, a stick still deflected)
-static int g_mouse_down;   // the mouse holds the touch (DmGameView)
 // Nothing the controllers pressed stays pressed (focus lost, the Home quit prompt open)
 static void pads_release(void) {
     if (g_merge) { if (merge_pads_left(nil)) dm_pad_set(0, 0, 0, 0, 0); return; }
@@ -352,7 +340,6 @@ static void input_release(void) {
     dm_motion_pro_active(0); hidpad_motion_clear();
     dm_switch2_active(0); dm_jc1_active(0);
     g_btn = 0; g_w = g_a = g_s = g_d = 0; g_rl = g_ru = g_rr = g_rd = 0; push();
-    if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); }
     pads_release();
 }
 static void input_resume(void) {
@@ -500,7 +487,7 @@ static void jc1pad_detach(jc1_pad *d) {   // d is already off g_jc1_pads
 static void jc1_models_changed(void) { pads_changed(nil); }
 // Quit with the Home button (home_quit.h, LNPANDY/NX2Apple#336): held for 2 s it opens the prompt (home_quit_mac.h) over the game's view, A quits through the same path as ⌘Q
 // (NSApp terminate, so the save writer and the other exit handlers run as there), B or Home closes it. While the prompt is open the game is told it lost the focus, as the
-// Switch's HOME menu does, and gets no controller input or touch; the keyboard and ⌘Q work as always. DM_HOME_QUIT=0 turns it off
+// Switch's HOME menu does, and gets no controller input; the keyboard and ⌘Q work as always. DM_HOME_QUIT=0 turns it off
 static int g_hq_on;
 static NSTimer *g_hq_timer;   // while Home is held: the time runs on without a button change
 static NSView *g_hq_hold, *g_hq_prompt; static CAShapeLayer *g_hq_ring;
@@ -556,7 +543,6 @@ static void hq_changed(hq_phase was, hq_phase now, GCController *holder) {
         break;
     case HQ_PROMPT: {
         pads_release();   // nothing the game held stays pressed while the prompt has the controllers
-        if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); }
         dm_focus_set(2);
         GCExtendedGamepad *g = holder.extendedGamepad;
         g_hq_prompt = hq_prompt_view(cv.bounds, @(g_hq_text[HQ_TEXT_TITLE]), @(g_hq_text[HQ_TEXT_NOTE]), @(g_hq_text[HQ_TEXT_QUIT]), @(g_hq_text[HQ_TEXT_CANCEL]),
@@ -652,7 +638,6 @@ int front_ctrl_support(int min, int max) {
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_main_queue(), ^{
         g_btn = 0; g_w = g_a = g_s = g_d = 0; g_rl = g_ru = g_rr = g_rd = 0; push();   // nothing the game held stays pressed while the prompt has the input
-        if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); }
         pads_release();
         int a, b; cp_buttons(&a, &b);
         g_cp_done = done; cp_open(&g_cp, min, max, dm_players_reported(), a, b);
@@ -681,25 +666,9 @@ static void pads_start(void) {
     dm_switch2_start(&s2front);
 }
 
-// Mouse as a single-point touchscreen (front.h dm_touch_set): left button down / drag = finger 0, release = lifted. The content view takes the clicks,
-// not a window-wide event monitor, so clicks on the title bar, the window buttons and the resize edges still reach AppKit.
-// The picture's width / height (front.h front_picture_shape; 16:9 until the first present), which the present fits into the view
-static _Atomic double g_picture_aspect = 16.0 / 9.0;
-void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = (double)w / h; }
+// The window's content view, which holds the Metal layer
 @interface DmGameView : NSView @end
 @implementation DmGameView
-- (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
-- (void)mouseDragged:(NSEvent *)e {
-    if (!g_input_on) return;
-    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize b = self.bounds.size;
-    double w = b.width, h = b.height;
-    if (w <= 0 || h <= 0) return;
-    double a = g_picture_aspect; if (w / h > a) w = h * a; else h = w / a;   // the centered picture the present fits into the view (16:9, or a taller one under DM_SCREEN_ASPECT)
-    double x0 = (b.width - w) / 2, y0 = (b.height - h) / 2;
-    dm_touch t = {0, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax(1 - (p.y - y0) / h, 0), 0.999)};   // The AppKit view origin is at bottom left, the touchscreen origin is at top left
-    dm_touch_set(&t, 1); g_mouse_down = 1;
-}
-- (void)mouseUp:(NSEvent *)e { (void)e; if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); } }
 // The drawable follows the view in pixels: a layer assigned to a layer-backed view kept the drawable at the first window's 1280x720 in fullscreen too, so the game picture was
 // scaled down to it and up again by the compositor
 - (void)fitDrawable {
@@ -912,7 +881,7 @@ void front_run(void (*guest)(void)) {
         // DM_FOCUS_KEEP=1 (scripts/regress.py): the game stays in focus while its window is up, whichever app is active. Tears of the Kingdom stops presenting out of focus, so
         // another app taking the key window during an unattended run read as a hang (no frame after the last focus change)
         static int keep = -1; if (keep < 0) keep = getenv("DM_FOCUS_KEEP") && atoi(getenv("DM_FOCUS_KEEP"));
-        [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; input_release(); if (!win.miniaturized && !g_text_box && !keep) dm_focus_set(2); }];
+        [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; input_release(); if (!win.miniaturized && !keep) dm_focus_set(2); }];
         [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; input_resume(); dm_focus_set(1); }];
         [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; input_release(); dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
         [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(2); }];
@@ -958,17 +927,6 @@ void front_progress(const char *title, long done, long total) {
     });
 }
 
-int front_user_select(const front_user *users, int count, int allow_create, int allow_skip) {
-    if (!g_layer) return FRONT_USER_CANCEL;
-    __block int result = FRONT_USER_CANCEL;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        g_text_box = 1; input_release();
-        result = user_select_mac(users, count, allow_create, allow_skip);
-        g_text_box = 0;
-        if (g_win.isKeyWindow) input_resume();
-    });
-    return result;
-}
 // GPU lost (front.h): macOS runs none of the game's GPU work any more and nothing is drawn again. In full screen the frozen game held the whole screen (#1326: WindowServer froze for 40 s
 // and its watchdog killed it), so the window leaves full screen first and the alert comes once it has, or after 3 s if it has not. Then the app quits with exit status 70
 // (EX_SOFTWARE), so a launcher or script that runs it sees a failed run: exit() runs the same atexit handlers as ⌘Q's terminate (the one will-terminate

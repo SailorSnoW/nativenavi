@@ -63,8 +63,6 @@ typedef struct {
     uint64_t text_end, ro_off, data_off, key_page_off, key_page_size;   // From the rewriter fixups header
     uint64_t fps_state_off;    // frame step state page (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3 and Breath of the Wild 1.9.0 main); 0 = none
     uint32_t step_max;         // the largest step the frame step stubs give the game (the fixups table's STEP_MAX, patch_nso.py ctx.step_max); 0 = FSTEP_MAX
-    uint32_t render_scale_max; // a render-scale stub's largest scale (the fixups table's RENDER_SCALE, patch_nso.py): DM_RENDER_SCALE is held to it; 0 = no such stub
-    int movie_native_color_keys; // the movie SDK's MediaData uses the native buffer's colour index directly (MOVIE_NATIVE_COLOR_KEYS)
     int64_t patch_off;         // patch area relative to the base; negative = before the base (image too large, see patch_nso.py FAR), and size does not include it
     uint64_t image_size, file_image_len, patch_len;   // only with the patch area before the base: whole image (with bss and key page), length of the image part of the file, patch area length
     uint64_t back_off, back_len;   // a second patch area after the image (patch_nso.py TWO: a text longer than a B reaches), inside size; 0 = none
@@ -86,7 +84,6 @@ static inline const char *dm_main_build(void) { for (int i = 0; i < g_nmod; i++)
 extern pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
 
 void load_modules(const char *dir, const char **names, int n);
-const char *dm_module_dir(void);   // the folder load_modules read the modules and the rewriter's tables from
 void run_module_inits(void);
 void dm_ctl_peek(uint64_t a, int n); void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path);   // DM_CTL "peek" and "memdump": guest memory to the log or a file (probe.c)
 void dm_device_share(const void *p, uint64_t size, int share);   // guest memory a device maps (share 1) or no longer maps (0): Horizon's DeviceShared attribute, which refuses unmapping it (hle_svc.c)
@@ -108,7 +105,6 @@ enum { OBS_REGION_ASK = 22, OBS_REGION_GOT = 23, OBS_REGION_FREE = 24,   // the 
 // A gate number's bits from 8 up are a parameter for its callback (OBS_REGION_GOT: the register that holds the address). Callbacks read the registers; a write to x0–x29 takes
 // effect when the gate returns (entry.S restores them from the frame), which OBS_STDALLOC_INIT does
 void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));
-int gate_obs_present(int id);
 uint64_t now_ns(void);
 uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while frozen, guest_clock_freeze)
 uint64_t guest_ns_at_host_time(uint64_t host_ns);  // Host Mach-absolute ns projected into the current guest clock
@@ -123,10 +119,7 @@ void dm_guest_frame_tick(void);        // Called on every present (hle_nvn.c): w
 uint64_t dm_nvn_frame_count(void);
 uint64_t dm_nvn_sub_cpu_ns(void);     // Cumulative CPU nanoseconds of submit (excluding present)
 void dm_backtrace(uint64_t fp);
-void crash_watch_progress(uint32_t tick, const char *stage);
 void crash_watch_frame(void);
-void crash_watch_pregame_done(void);
-uint64_t crash_watch_progress_count(void);
 void crash_dump_now(const char *why);   // Dump state on demand (threads + graphics wait points), without exiting
 // Diagnostic switches: read once from environment variables when main starts (getenv takes the libc global environment lock, and on a hot path it would make all guest threads queue up)
 extern uint64_t g_t0_ns;   // Host start time (now_ns), used for relative times in the log
@@ -135,31 +128,13 @@ void *objmap_get(const void *guest); void objmap_put(const void *guest, void *ho
 void hle_signal_system_event(void *g);   // hle_thread.c: signal a service-layer SystemEvent (any thread)
 void hle_bind_system_event(void *g, int autoclear);   // On a guest thread, bind a guest SystemEvent to a kernel event
 void hle_clear_system_event(void *g);    // hle_thread.c: clear a bound service-layer SystemEvent (any thread)
-int hle_signal_bound_system_event(void *g);   // hle_thread.c: signal a service-layer SystemEvent only if it is bound (any thread); 0 when it is not
 uint64_t hle_system_event_binding(void *g);   // Opaque lifetime ID of a binding, 0 if unbound; a rebind gets a new ID even if its address and handle are reused
 int hle_signal_system_event_binding(uint64_t binding);   // Signal only this binding lifetime (any thread); 0 after its write handle closes
-uint32_t hle_new_event(uint32_t *write_end);   // hle_thread.c: a new kernel event's read end (a service's handle copied to its client); its write end in *write_end, none when NULL (never signaled)
-typedef struct { const void *bytes; size_t size; } hle_readonly_shmem;
-uint32_t hle_new_readonly_shmem(const hle_readonly_shmem *memory);   // immutable, process-lifetime backing; each returned handle closes independently
-const hle_readonly_shmem *hle_get_readonly_shmem(uint32_t handle);
-typedef struct { uintptr_t address; size_t size; uint32_t owner_perm; } hle_transfer_memory;
-uint32_t hle_new_transfer_memory(hle_transfer_memory memory);
-int hle_get_transfer_memory(uint32_t handle, hle_transfer_memory *memory);   // snapshot under the kernel handle lock
-typedef struct hle_transfer_mapping {
-    uintptr_t address;
-    size_t size;
-    struct hle_transfer_mapping *next;
-} hle_transfer_mapping;
-// A service owns the in-place mapping independently of the guest's handle. Start with a zeroed record, kept at a stable address until unmapped.
-int hle_map_transfer_memory(hle_transfer_mapping *mapping, uint32_t handle, uint64_t size, uint32_t owner_perm);
-void hle_unmap_transfer_memory(hle_transfer_mapping *mapping);
+uint32_t hle_new_transfer_memory(void);   // hle_thread.c: the handle CreateTransferMemory gives the game (0: the table is full); closed like any other
 uint32_t hle_dup_readable_handle(uint32_t h);   // hle_thread.c: a second read end of a kernel event (the copy a service hands its client), 0 if h is no read end
-int hle_signal_event_handle(uint32_t write_end);   // hle_thread.c: signal a host-made kernel event by its write end (any thread); 0 once that end is closed
 // Page fault hook / hook before the host writes guest memory (crash.c; used for write-protect dirty page tracking)
 void dm_fault_hook_register(int (*fn)(void *addr, int is_write, void *uc));
 void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len));
-void dm_res_report_register(void (*fn)(uint32_t tick, const char *why));   // Resource count callback (registered by the graphics layer): called every 250 ticks, when the loading screen has been dismissed, and on exit when the record is full
-void (*dm_res_report_cb(void))(uint32_t tick, const char *why);   // Get the registered resource count callback (null if not registered)
 void dm_guest_write_prepare(void *addr, size_t len);
 void dm_guest_heap_range(uint64_t *base, size_t *open_len);   // hle_svc.c: the guest heap's base and opened length (guest addresses), 0 / 0 when none
 void dm_mods_init(void);              // Before load_modules (main.c): finds the mods folder's mods, in order, and puts their romfs folders into DM_ROMFS_OVERLAY (hle_mods.c)
@@ -182,6 +157,5 @@ void dm_gfx_quit_begin(void);   // hle_nvn.c: the process is about to end (the g
 enum { DM_QUIT_ARCH_MS = 10000 };   // what any end of the process the host controls gives the pipeline archive's write (atexit, the graceful exit): a file of 900 bases took 1.8-4 s on Macs
 void dm_gfx_enter(void); void dm_gfx_leave(void);   // hle_nvn.c: the gate dm_gfx_suspend closes, for callers outside the NVN layer
 void dm_gfx_shot_at(long k, const char *path);   // graphics side: screenshot of the k-th frame after the current presented frame (nvn_mtl.m)
-void dm_shot_written(const char *path, int ok);   // The graphics side finished writing a screenshot to disk (diag.c: DM_TICK_HOLD=E:SHOT unfreezes on this)
 void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg);   // The same, then(arg) in place of the last _exit(0) (oe::ExecuteProgram: execve of the next program)
 void dm_host_shutdown(const char *why);   // Graceful exit (hle_lifecycle.c): stop background threads and audio, stop the pipeline prewarm, drain graphics, write the pipeline archive, then _exit(0); used by SIGTERM and oe::ExecuteProgram

@@ -39,6 +39,15 @@ int main(void) {
     int32_t bad[3] = {OS_FLOAT, 2, 44100};
     char other[0x350] = {0};
     if (!h_os_Open(other, NULL, NULL, 0, name, bad, CAP, 0, 0) || h_os_State(other) != OS_NONE) FAIL("a 44.1 kHz stream opened");
+    // the stream plays on an AudioOut, which takes 1, 2 or 6 channels: any other count is refused before anything opens (9 and more would not fit the silent sink's block;
+    // 0x10002 is 2 once cut to the AudioOut parameter's 16 bits)
+    const int badch[] = {0, -2, 3, 8, 9, 0x10002};
+    for (size_t i = 0; i < sizeof badch / sizeof *badch; i++) {
+        int32_t f[3] = {OS_FLOAT, badch[i], 48000};
+        if (!h_os_Open(other, NULL, NULL, 0, name, f, CAP, 0, 0) || h_os_State(other) != OS_NONE) FAIL("a %d-channel stream opened", badch[i]);
+    }
+    int nout = 0; for (int i = 0; i < AOMAX; i++) nout += g_aos[i] != NULL;
+    if (nout != 1) FAIL("%d outputs open after the refused streams, 1 expected (the stream opened first)", nout);
 
     // interleaved float, as the game writes it (Xenoblade Chronicles 2's Switch 2 program; read as planar, all its sound came out an octave low): the block keeps the order, scaled to 16 bits and clamped
     static float pcm[2 * FRAMES];

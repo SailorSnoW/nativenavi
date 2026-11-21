@@ -1,4 +1,4 @@
-// The movie signal of the frame step and the VideoToolbox decoders' wait. The game's movies are AV1 WebM files (Event/Movie, 26 of them) that its movie library (subsdk0,
+// The movie signal of the frame step and the VideoToolbox decoders' cancellation. The game's movies are AV1 WebM files (Event/Movie, 26 of them) that its movie library (subsdk0,
 // NintendoSDK_movie) demuxes itself and decodes through nn::codec's Av1Decoder, which the host serves (hle_codec_video.c, hle_movie_av1.c)
 #include "hle.h"
 #include <pthread.h>
@@ -17,30 +17,16 @@
 typedef struct { const void *dec; uint64_t ns, base_ns; int64_t ts, base_ts, win[MD_RATE_PICS]; int hz, logged_hz, nwin; uint32_t n, pace_n; } md_slot;
 static md_slot g_md_slots[MD_SLOTS];
 static pthread_mutex_t g_md_slots_mu = PTHREAD_MUTEX_INITIALIZER;
-// The wait of a VideoToolbox decoder for its hardware (hle_movie_vt.h): while the app is not active (dm_movie_active(0)) a packet stays on its decoder's thread instead
-// of being lost. The Mac host never leaves the active state, so only a Stop / Flush / Finalize ends a wait here; the unit test drives the inactive state
+// Stop / Flush / Finalize cancel what a VideoToolbox decoder's thread is doing for a session it lost (hle_movie_vt.h): making a session again and replaying the stream into it
 static pthread_mutex_t g_vt_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_vt_cv = PTHREAD_COND_INITIALIZER;
-static int g_vt_active = 1;
-void dm_movie_active(int active) {
-    pthread_mutex_lock(&g_vt_mu); g_vt_active = active; pthread_cond_broadcast(&g_vt_cv); pthread_mutex_unlock(&g_vt_mu);
-}
 void movie_vt_cancel(movie_vt_control *control) {
-    pthread_mutex_lock(&g_vt_mu); control->cancelled = 1; pthread_cond_broadcast(&g_vt_cv); pthread_mutex_unlock(&g_vt_mu);
+    pthread_mutex_lock(&g_vt_mu); control->cancelled = 1; pthread_mutex_unlock(&g_vt_mu);
 }
 void movie_vt_continue(movie_vt_control *control) {
     pthread_mutex_lock(&g_vt_mu); control->cancelled = 0; pthread_mutex_unlock(&g_vt_mu);
 }
-int movie_vt_wait(movie_vt_control *control) {
-    pthread_mutex_lock(&g_vt_mu);
-    while (!g_vt_active && !(control && control->cancelled)) pthread_cond_wait(&g_vt_cv, &g_vt_mu);
-    int ready = !(control && control->cancelled); pthread_mutex_unlock(&g_vt_mu); return ready;
-}
-int movie_vt_wait_unavailable(movie_vt_control *control) {
-    pthread_mutex_lock(&g_vt_mu);
-    int waited = !g_vt_active;
-    while (!g_vt_active && !(control && control->cancelled)) pthread_cond_wait(&g_vt_cv, &g_vt_mu);
-    int result = control && control->cancelled ? -1 : waited; pthread_mutex_unlock(&g_vt_mu); return result;
+int movie_vt_cancelled(movie_vt_control *control) {
+    pthread_mutex_lock(&g_vt_mu); int cancelled = control && control->cancelled; pthread_mutex_unlock(&g_vt_mu); return cancelled;
 }
 static int md_slot_hz(const md_slot *s, uint64_t now) { return !s->dec || now - s->ns >= MD_PLAYING_NS ? 0 : s->hz; }
 void dm_movie_picture(const void *dec, int64_t ts_ns) {

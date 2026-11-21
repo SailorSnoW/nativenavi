@@ -13,7 +13,7 @@ static _Atomic int g_sig;
 void hle_signal_system_event(void *g) { (void)g; atomic_fetch_add_explicit(&g_sig, 1, memory_order_seq_cst); }
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }   // the real implementation needs a guest thread + SDK kernel event; the unit test only counts triggers
 module_t *module_of(const void *p) { (void)p; return NULL; }   // call sites in the log: no guest modules in the unit test
-int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }   // hle_svc.c: no guest address space in the unit test, so the big-stack take-overs (Start / Stop / CloseAudioOut, hle_bigstack.c) run on the calling host stack
+int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }   // hle_svc.c: no guest address space in the unit test, so the big-stack entries (hle_bigstack.c) run on the calling host stack
 void dm_host_helper_qos(qos_class_t q) { (void)q; }   // hle_thread.c: the helper threads keep the default class in the unit test
 
 // A callback can finish several buffers, and the notifier can combine pending wakes.
@@ -49,7 +49,7 @@ static int test_surround_output(void) {
         memset(out, 0xa5, sizeof out);
         aout_buf b[2] = {{.ptr = in, .cap = SPLIT * 12, .size = SPLIT * 12}, {.ptr = in + SPLIT * 6, .cap = (FRAMES - SPLIT) * 12, .size = (FRAMES - SPLIT) * 12}};
         aout a = {.ch = 6};
-        atomic_init(&a.state, STATE_STARTED); atomic_init(&a.vol, 0x3f800000u);
+        atomic_init(&a.state, STATE_STARTED);
         a.q[0] = b; a.q[1] = b + 1; atomic_init(&a.q_tail, 2);
         AudioBufferList bl = {.mNumberBuffers = 1, .mBuffers = {{2, sizeof out, out}}};
         au_render(&a, NULL, NULL, 0, FRAMES, &bl);
@@ -79,7 +79,7 @@ static int test_buffer_layout(void) {
     _Static_assert(sizeof sdk == sizeof(aout_buf), "nn::audio::AudioOutBuffer size");
     int16_t out[(FRAMES + 1) * 2]; memset(out, 0x5a, sizeof out);
     aout a = {.ch = 2};
-    atomic_init(&a.state, STATE_STARTED); atomic_init(&a.vol, 0x3f800000u);
+    atomic_init(&a.state, STATE_STARTED);
     a.q[0] = (aout_buf *)&sdk; atomic_init(&a.q_tail, 1);
     AudioBufferList bl = {.mNumberBuffers = 1, .mBuffers = {{2, sizeof out, out}}};
     au_render(&a, NULL, NULL, 0, FRAMES + 1, &bl);
@@ -96,20 +96,20 @@ static int test_output_lifetime(void) {
     uint32_t out[16] = {0}; uint8_t prm[16];
     size_t page = (size_t)getpagesize(), bytes = page * 4;
     void *pcm[CYCLES]; aout_buf *buf[CYCLES];
-    h_au_InitParam(prm);
+    memset(prm, 0, 8);
     for (int i = 0; i < CYCLES; i++) {
         pcm[i] = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         buf[i] = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (pcm[i] == MAP_FAILED || buf[i] == MAP_FAILED) return 1;
         memset(out, 0, sizeof out);
-        if (h_au_OpenDef0(out, prm)) return 1;
+        if (h_au_Open4(out, NULL, prm)) return 1;
         if (out[0] != RATE || out[1] != 2 || out[2] != FMT_PCM16 || out[3] != STATE_STOPPED) {
             printf("FAIL AudioOut open: guest fields %u %u %u %u, expected %u 2 %u %u as the SDK writes them\n", out[0], out[1], out[2], out[3], RATE, FMT_PCM16, STATE_STOPPED); return 1;
         }
         set_buf(buf[i], pcm[i], bytes, bytes);
         if (!h_au_Append(out, buf[i])) return 1;
-        h_au_Start(out); usleep(1000); dm_audio_suspend(1);
-        if (out[0]) { if (h_au_State(out) == STATE_STARTED) h_au_Stop(out); h_au_Close(out); }
+        au_start_at(out, NULL); usleep(1000); dm_audio_suspend(1);
+        if (out[0]) { if (atomic_load(&ao(out)->state) == STATE_STARTED) au_stop_at(out, __builtin_return_address(0)); au_close(out, NULL); }
         if (out[0] != RATE || out[3] != STATE_STOPPED || objmap_get(out)) { puts("FAIL AudioOut close: state not stopped or the host output still open"); return 1; }
         for (int k = 0; k < AOMAX; k++) if (g_aos[k]) { puts("FAIL AudioOut close: a consumer is still registered"); return 1; }
         if (mprotect(pcm[i], bytes, PROT_NONE) || mprotect(buf[i], page, PROT_NONE)) return 1;
@@ -123,35 +123,59 @@ static int test_output_lifetime(void) {
 // defaults when refused: the refused open leaves no output and the guest AudioOut as it was, and the second one opens at 48 kHz
 static int test_rate_refused(void) {
     uint32_t out[16] = {0}; uint8_t prm[16];
-    h_au_InitParam(prm); *(int32_t *)prm = 44100;
-    Result r = h_au_OpenDef0(out, prm);
+    memset(prm, 0, 8); *(int32_t *)prm = 44100;
+    Result r = h_au_Open4(out, NULL, prm);
     if (r != 0x699 || objmap_get(out) || out[0] || out[1]) { printf("FAIL 44.1 kHz open: result %#x, output %p, guest fields %u %u (0x699, none, 0 0 expected)\n", r, objmap_get(out), out[0], out[1]); return 1; }
     for (int k = 0; k < AOMAX; k++) if (g_aos[k]) { puts("FAIL 44.1 kHz open: a consumer is registered"); return 1; }
     *(int32_t *)prm = 0;
-    if (h_au_OpenDef0(out, prm) || out[0] != RATE || h_au_Rate(out) != RATE) { puts("FAIL the open with the default rate after the refusal"); return 1; }
-    h_au_Close(out);
+    if (h_au_Open4(out, NULL, prm) || out[0] != RATE) { puts("FAIL the open with the default rate after the refusal"); return 1; }
+    au_close(out, NULL);
     *(int32_t *)prm = RATE;
-    if (h_au_OpenDef0(out, prm)) { puts("FAIL a 48 kHz open"); return 1; }
-    h_au_Close(out);
+    if (h_au_Open4(out, NULL, prm)) { puts("FAIL a 48 kHz open"); return 1; }
+    au_close(out, NULL);
     puts("AudioOut rate: 44.1 kHz refused with 0x699 and nothing opened; 0 and 48000 open at 48 kHz");
     return 0;
 }
+// audout takes 1, 2 or 6 channels (0: the default, 2) and refuses any other count with 0x1499 (ResultInvalidChannelCount): the refused open leaves no output and the guest AudioOut
+// as it was. 9 is the count whose 5 ms block would not fit the silent sink's (eight channels, the renderer's output); the renderer's own output still opens with its eight
+static int test_channels_refused(void) {
+    const int bad[] = {3, 4, 5, 7, 8, 9, 64, 0xffff}, good[] = {0, 1, 2, 6};
+    uint32_t out[16] = {0}; uint8_t prm[16];
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
+        memset(prm, 0, 8); *(uint16_t *)(prm + 4) = (uint16_t)bad[i];
+        Result r = h_au_Open4(out, NULL, prm);
+        if (r != 0x1499 || objmap_get(out) || out[0] || out[1]) { printf("FAIL %d-channel open: result %#x, output %p, guest fields %u %u (0x1499, none, 0 0 expected)\n", bad[i], r, objmap_get(out), out[0], out[1]); return 1; }
+        for (int k = 0; k < AOMAX; k++) if (g_aos[k]) { puts("FAIL refused channel count: a consumer is registered"); return 1; }
+    }
+    for (size_t i = 0; i < sizeof good / sizeof *good; i++) {
+        memset(prm, 0, 8); *(uint16_t *)(prm + 4) = (uint16_t)good[i]; memset(out, 0, sizeof out);
+        int want = good[i] ? good[i] : 2;
+        if (h_au_Open4(out, NULL, prm) || out[1] != (uint32_t)want || ao(out)->ch != want) { printf("FAIL %d-channel open\n", good[i]); return 1; }
+        au_start_at(out, NULL); usleep(12000); au_close(out, NULL);   // the silent sink pulls this output's 5 ms blocks into its own block
+    }
+    void *sink = dm_pcmout_open_sink();
+    if (ao(sink)->ch != DM_AUDIO_SINK_CHANNELS || !ao(sink)->sink_pcm) { puts("FAIL the renderer's output: not its eight channels"); return 1; }
+    dm_pcmout_start(sink); usleep(12000); dm_pcmout_close(sink);
+    puts("AudioOut channels: 3, 4, 5, 7, 8, 9, 64 and 65535 refused with 0x1499 and nothing opened; 0, 1, 2 and 6 open and play on the silent sink, as does the renderer's eight");
+    return 0;
+}
 int main(void) {
-    if (test_buffer_layout() || test_surround_output() || test_output_lifetime() || test_rate_refused()) return 1;
+    if (test_buffer_layout() || test_surround_output() || test_output_lifetime() || test_rate_refused() || test_channels_refused()) return 1;
     char out[64], ev[64]; uint8_t prm[16]; aout_buf b[3]; static int16_t pcm[3][4800 * 2];
-    h_au_InitParam(prm);
-    if (h_au_Open(out, ev, NULL, prm)) return 1;
-    if (h_au_Ch(out) != 2 || h_au_Rate(out) != 48000 || h_au_State(out) != STATE_STOPPED) { puts("FAIL parameters"); return 1; }
+    memset(prm, 0, 8);
+    if (au_open_at(out, ev, NULL, prm, NULL, 0)) return 1;
+    uint32_t rate0; memcpy(&rate0, out, 4);
+    if (ao(out)->ch != 2 || rate0 != 48000 || atomic_load(&ao(out)->state) != STATE_STOPPED) { puts("FAIL parameters"); return 1; }
     for (int i = 0; i < 3; i++) { set_buf(&b[i], pcm[i], sizeof pcm[i], sizeof pcm[i]); if (!h_au_Append(out, &b[i])) return 1; }
     if (h_au_Released(out)) { puts("FAIL buffers released before start"); return 1; }
-    uint64_t t0 = now_ns(); h_au_Start(out);
+    uint64_t t0 = now_ns(); au_start_at(out, NULL);
     int got = 0, seen = 0, order_ok = 1;
     while (got < 3 && now_ns() - t0 < 10000000000ull) {
         order_ok = drain_signaled(out, b, 3, &got, &seen);
         if (!order_ok) break;
         if (got < 3) usleep(1000);
     }
-    h_au_Close(out);
+    au_close(out, NULL);
     printf("released %d/3 in order=%d after %d signals\n", got, order_ok, seen);
     if (!order_ok || got != 3) return 1;
 
@@ -160,9 +184,9 @@ int main(void) {
     setenv("DM_AUDIO", "1", 1);
     if (test_output_lifetime()) return 1;
     char out2[64]; aout_buf b2[6]; static int16_t pcm2[6][4800 * 2]; g_sig = 0;
-    if (h_au_Open(out2, ev, NULL, prm)) return 1;
+    if (au_open_at(out2, ev, NULL, prm, NULL, 0)) return 1;
     for (int i = 0; i < 6; i++) { set_buf(&b2[i], pcm2[i], sizeof pcm2[i], sizeof pcm2[i]); h_au_Append(out2, &b2[i]); }
-    t0 = now_ns(); h_au_Start(out2);
+    t0 = now_ns(); au_start_at(out2, NULL);
     int got2 = 0, seen2 = 0, susp = 0, resumed = 0;
     while (got2 < 6 && now_ns() - t0 < 10000000000ull) {
         uint64_t ms = (now_ns() - t0) / 1000000;
@@ -173,7 +197,7 @@ int main(void) {
         if (got2 < 6) usleep(1000);
     }
     double total = (now_ns() - t0) / 1e6;
-    h_au_Close(out2);
+    au_close(out2, NULL);
     int ok2 = got2 == 6 && order_ok && susp && resumed && total > 520;
     printf("suspend / resume: released %d/6 in order=%d after %d signals, total duration lower bound 520 ms, got %.0f ms %s\n", got2, order_ok, seen2, total, ok2 ? "✓" : "✗");
     if (!ok2) return 1;
@@ -185,10 +209,10 @@ int main(void) {
     // last release (CI: "AudioUnit restarted", a second "has not called back for 204 ms", then Close 1 s later, "calling back again=0"). So the backend is followed on every poll until a restarted AudioUnit
     // has called back, up to 20 s (the watchdog's back-off of 1, 2, 4 s fits), instead of being read once 100 ms after the last release; it still fails when no restarted AudioUnit ever calls back
     char out3[64]; aout_buf b3[20]; static int16_t pcm3[20][4800 * 2]; g_sig = 0;
-    if (h_au_Open(out3, ev, NULL, prm)) return 1;
+    if (au_open_at(out3, ev, NULL, prm, NULL, 0)) return 1;
     for (int i = 0; i < 20; i++) set_buf(&b3[i], pcm3[i], sizeof pcm3[i], sizeof pcm3[i]);
     int app3 = 0; for (; app3 < 20 && h_au_Append(out3, &b3[app3]); app3++) ;
-    aout *a3 = ao(out3); t0 = now_ns(); h_au_Start(out3);
+    aout *a3 = ao(out3); t0 = now_ns(); au_start_at(out3, NULL);
     int got3 = 0, order3 = 1, cut = 0, standins = 0, sink = 0, restarted = 0, back = 0; uint64_t cb_restart = 0; double total3 = 0;
     while (!(got3 == 20 && back) && now_ns() - t0 < 20000000000ull) {
         uint64_t ms = (now_ns() - t0) / 1000000;
@@ -208,7 +232,7 @@ int main(void) {
         if (app3 < 20) h_au_Append(out3, &b3[app3++]);
     }
     double waited3 = (now_ns() - t0) / 1e6;
-    h_au_Close(out3);
+    au_close(out3, NULL);
     int ok3 = got3 == 20 && order3 && total3 > 1900 && total3 < 5000 && back;
     printf("device stall: released %d/20 in order=%d in %.0f ms (expected 1900-5000), AudioUnit restarted and calling back again=%d (silent sink stood in %d times, %.0f ms) %s\n", got3, order3, total3, back, standins, waited3, ok3 ? "✓" : "✗");
     return !ok3;

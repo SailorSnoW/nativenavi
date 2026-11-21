@@ -15,12 +15,7 @@
 #include <spawn.h>
 #include <sys/wait.h>
 
-static _Atomic uint64_t g_watch_last_ns;
-static _Atomic uint64_t g_watch_count;
-static _Atomic uint32_t g_watch_tick;
-static _Atomic int g_watch_pregame = 1;
-static _Atomic int g_watch_stage_idx;
-static char g_watch_stage[2][256] = {"startup", "startup"};
+static _Atomic uint64_t g_watch_last_ns;   // when the game last presented a frame: the watchdog's measure of progress
 static unsigned g_watch_stall;
 static void (*g_dump_hook)(void);
 static void (*g_wait_dump)(void);
@@ -29,19 +24,7 @@ static uint64_t watch_now_ns(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
-uint64_t crash_watch_progress_count(void) { return atomic_load(&g_watch_count); }
-void crash_watch_progress(uint32_t tick, const char *stage) {
-    int next = 1 - atomic_load(&g_watch_stage_idx);
-    if (stage && *stage) snprintf(g_watch_stage[next], sizeof g_watch_stage[next], "%s", stage);
-    atomic_store(&g_watch_tick, tick);
-    atomic_store(&g_watch_stage_idx, next);
-    atomic_fetch_add(&g_watch_count, 1);
-    atomic_store(&g_watch_last_ns, watch_now_ns());
-}
-void crash_watch_frame(void) { if (atomic_load(&g_watch_pregame)) crash_watch_progress(0, "present frame"); }
-void crash_watch_pregame_done(void) { atomic_store(&g_watch_pregame, 0); }
-void crash_watch_pregame_again(void) { atomic_store(&g_watch_pregame, 1); }   // Back from a run to the front end: count progress by presented frames again (diag.c)
-void crash_dump_now(const char *why);
+void crash_watch_frame(void) { atomic_store(&g_watch_last_ns, watch_now_ns()); }
 // Keep the output path as one argument: shell quoting breaks apostrophes and can
 // execute path contents, and a command buffer can truncate a long path.
 static int watch_sample(const char *path) {
@@ -66,20 +49,12 @@ static void *watchdog_main(void *arg) {
     (void)arg;
     for (;;) {
         usleep(250000);
-        // Read the last progress time first, then read now: reading in the opposite order, if the game thread happens to record progress between the two reads, last is newer than now and now − last underflows as unsigned into "no progress since second 18446744073",
+        // Read the last progress time first, then read now: reading in the opposite order, if the game thread happens to record progress between the two reads, last is newer than now and now − last underflows as unsigned into 18446744073 s without a frame,
         // which is misjudged on the spot as a hang and exits (accept inv_drag_out, local load 11, the watchdog thread was switched out between the two reads). Reading this way gives last ≤ now; and if the clock ever wraps around it is not judged either
         uint64_t last = atomic_load(&g_watch_last_ns), now = watch_now_ns();
         if (last > now) continue;
-        // Second-scale stall (progress has stopped for more than 1 second but has not yet reached the kill threshold): do not exit, dump what each thread is waiting on. When hitting a case of "only one frame every 2 seconds", the 15-second threshold cannot catch it and the log has nothing on what it is waiting for.
-        // Dump only after entering a run; at most 3 dumps per process, at least 10 seconds between two dumps (the loading screen and the pause menu also stop ticks, do not let them flood the log)
-        { static int dumps; static uint64_t last_dump, dumped_for;
-          if (g_watch_stall && !atomic_load(&g_watch_pregame) && atomic_load(&g_watch_tick) > 0 && now - last >= 1000000000ull && now - last < (uint64_t)g_watch_stall * 1000000000ull
-              && dumps < 3 && dumped_for != last && (!last_dump || now - last_dump >= 10000000000ull)) { dumps++; last_dump = now; dumped_for = last; crash_dump_now("progress stalled for over 1 second"); } }
         if (g_watch_stall && now - last >= (uint64_t)g_watch_stall * 1000000000ull) {
-            uint64_t sec = (now - last) / 1000000000ull;
-            int idx = atomic_load(&g_watch_stage_idx);
-            LOG("[RED] watchdog: no progress since second %llu, stuck at tick %u / stage %s", (unsigned long long)sec,
-                atomic_load(&g_watch_tick), g_watch_stage[idx]);
+            LOG("[RED] watchdog: no frame presented for %llu s", (unsigned long long)((now - last) / 1000000000ull));
             if (g_dump_hook) g_dump_hook();
             if (g_wait_dump) g_wait_dump();   // State of all blocking wait points on the graphics side (registered when nvn_mtl.m initializes)
             { const char *d = getenv("DM_WATCH_SAMPLE");   // Mac diagnostics: when stuck, sample itself for 1 second and write the thread stacks to this path
@@ -124,9 +99,6 @@ void dm_fault_hook_register(int (*fn)(void *addr, int is_write, void *uc)) {
     if (g_nfault_hook >= MAX_FAULT_HOOK) die("too many page fault hooks");
     g_fault_hook[g_nfault_hook++] = fn;
 }
-static void (*g_res_report)(uint32_t tick, const char *why);   // Resource count callback (registered by the graphics layer, called by diag.c per tick / event)
-void dm_res_report_register(void (*fn)(uint32_t tick, const char *why)) { g_res_report = fn; }
-void (*dm_res_report_cb(void))(uint32_t, const char *) { return g_res_report; }
 void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len)) {
     if (g_nwrite_prep >= MAX_FAULT_HOOK) die("too many host pre-write hooks");
     g_write_prep[g_nwrite_prep++] = fn;
@@ -140,7 +112,7 @@ void crash_set_trap_hook(int (*fn)(ucontext_t *uc)) { g_trap_hook = fn; }
 void crash_set_dump_hook(void (*fn)(void)) { g_dump_hook = fn; }
 void crash_set_wait_dump(void (*fn)(void)) { g_wait_dump = fn; }
 // Dump the current state on demand (without exiting): the iOS app has no no-progress watchdog, so when the smoke test fails it sends dump through DM_LOG_PORT to trigger this -- what each guest thread is waiting on + the graphics-side wait points, the same thing the watchdog prints
-void crash_dump_now(const char *why) { fprintf(stderr, "[dm] state dump (%s): tick %u / stage %s\n", why, atomic_load(&g_watch_tick), g_watch_stage[atomic_load(&g_watch_stage_idx)]); if (g_dump_hook) g_dump_hook(); if (g_wait_dump) g_wait_dump(); }
+void crash_dump_now(const char *why) { fprintf(stderr, "[dm] state dump (%s)\n", why); if (g_dump_hook) g_dump_hook(); if (g_wait_dump) g_wait_dump(); }
 // Only the first crashing thread prints its state: when several threads crash at once (Unity's job threads often do), the dumps used to interleave and the process hung in the dump without exiting.
 // Later threads stop in pause() until the process exits; the first thread re-entering (crashing again while printing, or the SIGALRM of the 15 s safety below) exits at once.
 static _Atomic uintptr_t g_crash_owner;

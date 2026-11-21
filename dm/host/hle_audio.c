@@ -1,7 +1,9 @@
-// nn::audio AudioOut: the game (FMOD nx output layer) appends PCM buffers block by block; once played the system puts them back on the "released" queue and signals the event.
-// Host: real audio output = CoreAudio AudioUnit (Mac DefaultOutput / iOS RemoteIO); silent sink = consumes buffers in real time (no sound, pacing matches the real device).
-//       iOS defaults to real audio output (the product must have sound), tests that want silence set DM_AUDIO=0 explicitly; Mac defaults to the silent sink (replay / gate checks are silent), DM_AUDIO=1 for real audio output.
-// The contents of AudioOut / AudioOutParameter are read and written only through the interfaces below; the host defines its own internal layout and only writes the front part of the structs (AudioOut: the SDK's own fields, au_info). AudioOutBuffer is the exception: it is the SDK's own struct (aout_buf, hle.h), filled and read by the SDK's own descriptor functions
+// The host's PCM outputs, in the shape of nn::audio's AudioOut: PCM blocks are appended to an output's queue; once played they go to its "released" queue and the release is signaled.
+// Three things play through one: the in-process audio renderer (dm_pcmout_*, hle_audren.c), an OutputStream of SDK 21's (below), and an AudioOut the
+// guest opens (OpenAudioOut, the one AudioOut call the game's modules name).
+// Host: real audio output = CoreAudio AudioUnit (DefaultOutput); silent sink = consumes buffers in real time (no sound, pacing matches the real device).
+//       The silent sink is the default (replay / gate checks are silent), DM_AUDIO=1 for real audio output.
+// Of the guest's AudioOut the host writes only the front, the SDK's own fields (au_info), and keeps its own state beside it (aout). A block is an AudioOutBuffer in the SDK's own layout (aout_buf, hle.h)
 #include "hle.h"
 #include "audio_input.h"
 #include <AudioToolbox/AudioToolbox.h>
@@ -23,21 +25,20 @@ typedef struct {
     int sink_pcm;                      // host DeviceSink blocks contain six channels plus their pre-clamped stereo fold
     int dev_ch;                        // channels the AudioUnit takes; six-channel guest/DeviceSink outputs follow the route, other outputs keep their count
     _Atomic int state;
-    _Atomic uint32_t vol;              // SetAudioOutVolume gain as float bits (1.0 at open), applied to the samples as they are pulled
     aout_buf *q[QMAX]; _Atomic uint32_t q_head, q_tail;       // Pending: written by the game side, read by the output side
     aout_buf *rel[RELMAX]; _Atomic uint32_t rel_head, rel_tail; // Released: written by the output side, read by the game side
     uint64_t pos;                      // Bytes already played of the current block
     AudioUnit au;
-    int start_phase, reset_pending, mute;   // a reset during start replaces the unit after the call returns
-    int unit_lost;                          // a new unit (media services reset, route change) could not be made: the next route change tries again
+    int start_phase, reset_pending, mute;   // reset_pending: a unit to replace while its start is in flight is replaced after that call returns
+    int unit_lost;                          // a new unit (route change) could not be made: the next route change tries again
     int closed;                             // Close returned while a start was in flight: that start's worker frees the output
     _Atomic int hold_device;               // callbacks output silence until the silent sink has joined
     int backend;                       // BK_*: the running consumer. Start, Stop and the background suspend change it only under g_aos_lock and act on it rather than re-deriving it from state and g_suspended
     pthread_t null_th; _Atomic int null_run;
     dispatch_semaphore_t notify_sem;
     pthread_t notify_th; _Atomic int notify_run, notify_pending, notify_armed;
-    dispatch_semaphore_t rel_sem;      // Host outputs only (dm_pcmout_open): signaled for each release, so the in-process audio renderer blocks instead of polling (dm_pcmout_wait)
-    int id;                            // open sequence number (#N in the log; tells simultaneous outputs apart, e.g. Engage's Wwise and Unity's built-in FMOD)
+    dispatch_semaphore_t rel_sem;      // Host outputs only (dm_pcmout_open_sink): signaled for each release, so the in-process audio renderer blocks instead of polling (dm_pcmout_wait)
+    int id;                            // open sequence number (#N in the log; tells simultaneous outputs apart)
     int nlog;                          // Start / Stop / Close lines logged so far (at most 32 per output)
     _Atomic uint64_t under_n, under_b; // underruns: times the pending queue was empty when the callback needed data / zero-filled bytes
     uint64_t st_calls, st_count, st_qsum, st_u0, st_ub0; uint32_t st_fmin, st_fmax;   // callback-owned accumulators
@@ -95,7 +96,6 @@ static void *event_notify(void *p) {
 // Take n bytes from the pending queue and hand them to the output side; once a whole block has played, move it to released and notify the ordinary thread.
 static void pull(aout *a, uint8_t *dst, uint64_t n) {
     int released = 0;
-    int16_t *s16 = (int16_t *)dst; uint64_t ns = n / 2;
     uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_relaxed);
     while (n) {
         uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_acquire);
@@ -116,11 +116,6 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
             atomic_store_explicit(&a->q_head, qh, memory_order_release);
             a->pos = 0; released = 1;
         }
-    }
-    uint32_t vb = atomic_load_explicit(&a->vol, memory_order_relaxed);
-    if (vb != 0x3f800000u) {   // the output's volume (SetAudioOutVolume), as the audout session applies it to the PCM16 it plays; saturating
-        float v; memcpy(&v, &vb, 4);
-        for (uint64_t i = 0; i < ns; i++) { float x = s16[i] * v; s16[i] = (int16_t)(x > 32767.f ? 32767.f : x < -32768.f ? -32768.f : x); }
     }
     if (released) {
         if (a->event) notify_release(a);   // the notify thread only signals the guest's event: outputs without one (the host's renderer output, games that poll) need no wake-up
@@ -169,12 +164,10 @@ static void pull_device(aout *a, uint8_t *dst, uint64_t bytes) {
     }
 }
 
-static _Atomic uint64_t g_render_calls;   // Cumulative sound card callbacks (lifecycle verification: must keep growing after resume)
-uint64_t dm_audio_render_calls(void) { return atomic_load_explicit(&g_render_calls, memory_order_relaxed); }
 static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
     (void)f; (void)ts; (void)bus; (void)frames;
     aout *a = ctx;
-    atomic_fetch_add_explicit(&g_render_calls, 1, memory_order_relaxed); atomic_fetch_add_explicit(&a->cb_n, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&a->cb_n, 1, memory_order_relaxed);
     {
         // At each 2000-callback checkpoint publish a snapshot for the watchdog: LOG takes a stdio lock and must never run here or in the release-event notifier.
         // A busy logger leaves its mailbox full; keep accumulating then, rather than waiting, overwriting its snapshot or losing counts.
@@ -197,6 +190,7 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
 }
 // A route check off the calling thread (dm_audio_route_changed): once for a burst of requests, since the flag is cleared before the check reads the route
 static _Atomic int g_route_queued;
+static void dm_audio_route_changed(void);   // the output route changed: recreate units whose route-dependent channel count changed (below)
 static void route_check(void *unused) { (void)unused; atomic_store(&g_route_queued, 0); dm_audio_route_changed(); }
 static void route_queue(void) { if (!atomic_exchange(&g_route_queued, 1)) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), NULL, route_check); }
 // Mac DefaultOutput's default 512 device frames can exceed the PCM a game has queued, producing zero-filled gaps.
@@ -363,7 +357,7 @@ static OSStatus au_create(aout *a, int route) {   // route: dm_audio_output_chan
     return st;
 }
 // OpenAudioOut runs on the game's thread, and creating the AudioUnit takes about 24 KB of stack (measured on the Mac: component lookup, instance, Initialize), more than some game threads have
-// left (Super Mario 3D World's save thread has 8 KB in all; Pokémon: Let's Go overflowed here at startup, PR #36). So it runs on a host thread, once per AudioOut (it predates the big-stack entry, which Start / Stop / Close use)
+// left (Super Mario 3D World's save thread has 8 KB in all; Pokémon: Let's Go overflowed here at startup, PR #36). So it runs on a host thread, once per AudioOut (it predates the big-stack entry, which start, stop and close rely on)
 static void *au_create_th(void *a) { return (void *)(intptr_t)au_create(a, dm_audio_output_channels()); }
 static void au_open(aout *a) {
     pthread_t t; void *r = NULL;
@@ -372,8 +366,9 @@ static void au_open(aout *a) {
 }
 // Silent sink: consumes in real time at 48 kHz every 5 ms. When more than 100 ms behind (iOS suspended the whole process in the background, SIGSTOP on the Mac), restart the count from now and do not make up the missed time --
 // making it up would pull hundreds of times in one go (seconds' worth), releasing all of the game's buffers and logging hundreds of underruns; a suspended console does not play that stretch either
+_Static_assert(DM_AUDIO_SINK_CHANNELS >= 6, "the silent sink's block holds the widest output: the renderer's, and no fewer than a guest output's six (au_channels_ok)");
 static void *null_sink(void *p) {
-    aout *a = p; uint8_t scratch[RATE / 200 * 2 * 8]; dm_host_helper_qos(QOS_CLASS_USER_INTERACTIVE);   // paces the game's audio in real time
+    aout *a = p; uint8_t scratch[RATE / 200 * 2 * DM_AUDIO_SINK_CHANNELS]; dm_host_helper_qos(QOS_CLASS_USER_INTERACTIVE);   // paces the game's audio in real time
     uint64_t bytes = (uint64_t)RATE / 200 * 2 * a->ch, t = now_ns();
     while (atomic_load_explicit(&a->null_run, memory_order_acquire)) {
         t += 5000000; uint64_t now = now_ns();
@@ -403,7 +398,7 @@ static void au_retry(aout *a, uint64_t now) {
 static void au_replace(aout *a, int route) {
     au_dispose(a->au);
     OSStatus st = au_create(a, route);
-    if (st) LOG("[RED] audio #%d: no AudioUnit after the media services reset or the route change (status %d): this output is silent until the next route change", a->id, (int)st);
+    if (st) LOG("[RED] audio #%d: no AudioUnit after the route change (status %d): this output is silent until the next route change", a->id, (int)st);
     a->unit_lost = st != 0;
     a->reset_pending = 0;
 }
@@ -513,18 +508,15 @@ static void *au_watchdog(void *p) {
 }
 static void au_watchdog_start(void) { pthread_t t; if (!pthread_create(&t, NULL, au_watchdog, NULL)) pthread_detach(t); }
 
-// AudioOutParameter = { int32 sampleRate; uint16 channelCount; uint16 _r; ... }, 0 = system default (48 kHz / 2 channels)
-HLE_FORCE("_ZN2nn5audio27InitializeAudioOutParameterEPNS0_17AudioOutParameterE", "audio output parameter defaults", void, h_au_InitParam, uint8_t *p) { memset(p, 0, 8); }
-// AudioOutInfo = { char name[256] }
-HLE_FORCE("_ZN2nn5audio13ListAudioOutsEPNS0_12AudioOutInfoEi", "audio output device list; 1 on the host", int, h_au_List, char *info, int n) {
-    if (n < 1) return 0;
-    memset(info, 0, 256); strcpy(info, "DeviceOut"); return 1;
-}
 // The front of the guest AudioOut as the SDK's OpenAudioOut fills it from the service's answer: sample rate, channel count, sample format, state (+0 / +4 / +8 / +0xc, the same in SDK 8, 12, 18 and 20;
-// its GetAudioOutSampleRate / ChannelCount / SampleFormat are single loads from there); CloseAudioOut sets the state to stopped and leaves the rest. Code outside the SDK reads these fields too:
+// the SDK's GetAudioOutSampleRate / ChannelCount / SampleFormat, which the host leaves to it, are single loads from there). Code outside the SDK reads these fields too:
 // middleware that checks the first word before it stops and closes its output skipped the close while the host left it zero, freed the PCM buffers and the host's consumer read freed memory (Luigi's Mansion 3, PR #109)
 static void au_info(void *g, int ch, int state) { uint32_t *f = g; f[0] = RATE; f[1] = (uint32_t)ch; f[2] = FMT_PCM16; f[3] = (uint32_t)state; }
 static void route_sync(int route);
+// The channel counts of an output the guest opens: audout takes 1, 2 or 6 (0 in the parameter: the default, 2) and refuses any other count. The silent sink's and the downmix's blocks are sized for these
+static int au_channels_ok(int ch) { return ch == 1 || ch == 2 || ch == 6; }
+// param: AudioOutParameter = { int32 sampleRate; uint16 channelCount; uint16 _r; ... }, 0 = system default (48 kHz / 2 channels). sink_pcm: the renderer's output, whose blocks have
+// DM_AUDIO_SINK_CHANNELS channels (dm_pcmout_open_sink)
 static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *param, void *lr, int sink_pcm) {
     static _Atomic int nopen;
     int ch = *(const uint16_t *)(param + 4); int rate = *(const int32_t *)param;
@@ -533,10 +525,14 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
         char sb[64]; LOG("[RED] AudioOut sample rate %d: audout takes 48 kHz only, the open fails with 0x699 (call site %s)", rate, site(lr, sb, sizeof sb));
         return 0x699u;
     }
+    if (!sink_pcm && !au_channels_ok(ch)) {   // ResultInvalidChannelCount, module 153 description 10
+        char sb[64]; LOG("[RED] AudioOut channel count %d: audout takes 1, 2 or 6, the open fails with 0x1499 (call site %s)", ch, site(lr, sb, sizeof sb));
+        return 0x1499u;
+    }
     aout *a = calloc(1, sizeof *a);
     const char *mute = getenv("DM_AUDIO_MUTE"); a->mute = mute && atoi(mute);
     pthread_mutex_init(&a->m, NULL); a->event = ev; a->ch = ch; a->dev_ch = ch; a->sink_pcm = sink_pcm;
-    atomic_init(&a->state, STATE_STOPPED); atomic_init(&a->vol, 0x3f800000u);
+    atomic_init(&a->state, STATE_STOPPED);
     atomic_init(&a->q_head, 0); atomic_init(&a->q_tail, 0);
     atomic_init(&a->rel_head, 0); atomic_init(&a->rel_tail, 0);
     atomic_init(&a->null_run, 0); atomic_init(&a->notify_run, 1);
@@ -561,16 +557,10 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
     au_info(g, ch, STATE_STOPPED);
     return RES_OK;
 }
-HLE_FORCE("_ZN2nn5audio12OpenAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventEPKcRKNS0_17AudioOutParameterE", "connect to the audout service; host AudioUnit / silent sink",
-          Result, h_au_Open, void *g, void *ev, const char *name, const uint8_t *param) { return au_open_at(g, ev, name, param, dm_bigstack_caller(__builtin_return_address(0)), 0); }
-// The two default-device overloads (Engage, SDK 12): as OpenAudioOut with the default device name; the overload without an event binds no release event (the game polls GetReleasedAudioOutBuffer)
-// SDK 22 dropped the release event from the parameter-carrying overload (Well Dweller calls this one; unbound it reached the SDK's audout session, which fails with 0xe15 and the game aborts)
+// SDK 22's OpenAudioOut takes no release event (Well Dweller calls this one; unbound it reached the SDK's audout session, which fails with 0xe15 and the game aborts). It is the
+// only AudioOut call the game's modules name: the rest of that API is the SDK's own
 HLE_FORCE("_ZN2nn5audio12OpenAudioOutEPNS0_8AudioOutEPKcRKNS0_17AudioOutParameterE", "connect to the audout service, no release event (SDK 22 overload)",
           Result, h_au_Open4, void *g, const char *name, const uint8_t *param) { return au_open_at(g, NULL, name, param, dm_bigstack_caller(__builtin_return_address(0)), 0); }
-HLE_FORCE("_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventERKNS0_17AudioOutParameterE", "connect to the audout service (default device); same as OpenAudioOut",
-          Result, h_au_OpenDef, void *g, void *ev, const uint8_t *param) { return au_open_at(g, ev, NULL, param, dm_bigstack_caller(__builtin_return_address(0)), 0); }
-HLE_FORCE("_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutERKNS0_17AudioOutParameterE", "connect to the audout service (default device, no event); same as OpenAudioOut",
-          Result, h_au_OpenDef0, void *g, const uint8_t *param) { return au_open_at(g, NULL, NULL, param, dm_bigstack_caller(__builtin_return_address(0)), 0); }
 static Result au_start_at(void *g, void *lr) {
     aout *a = ao(g);
     pthread_mutex_lock(&g_aos_lock);
@@ -582,13 +572,14 @@ static Result au_start_at(void *g, void *lr) {
     pthread_mutex_unlock(&g_aos_lock);
     return RES_OK;
 }
-// Start, Stop and Close run on the game's thread and call into Core Audio, which needs far more stack than a game thread may have left; they run on the big host stack (hle_bigstack.c).
+// Start, stop and close (au_start_at, au_stop_at, au_close) call into Core Audio, which needs far more stack than a game thread may have left: the entries that reach them run on
+// the big host stack (hle_bigstack.c), as every HLE_FORCE entry does, and the renderer's output on its own host-made thread.
 // The first AudioOutputUnitStart of the process sets up the Core Audio session (HALC_ProxyIOContext::StartIOProc -> +[AVAudioSession sharedInstance], which connects to the session service over XPC).
 // On the guest stack that ran off the stack's bottom with SIGBUS, sp in the guest stack block, in a frame that varies between runs (CFString formatting under NSXPCInterface, the Swift runtime's type
-// demangler under CAReporter); Arcade Archives RAINBOW ISLANDS 1.0.2, SDK 19.3.11, M1, macOS 27.2, PR #721. Stop (AudioOutputUnitStop) and Close (disposing the AudioUnit) talk to the same service.
-// AudioOutputUnitStart itself now runs on a host worker (au_start_device, issue #1030).
+// demangler under CAReporter); Arcade Archives RAINBOW ISLANDS 1.0.2, SDK 19.3.11, M1, macOS 27.2, PR #721. Stop (AudioOutputUnitStop) and close (disposing the AudioUnit) talk to the same service.
+// AudioOutputUnitStart itself runs on a host worker (au_start_device, issue #1030).
 // dm_bigstack_caller gives the game's call site back for the log line
-HLE_FORCE("_ZN2nn5audio13StartAudioOutEPNS0_8AudioOutE", "start playback", Result, h_au_Start, void *g) { return au_start_at(g, dm_bigstack_caller(__builtin_return_address(0))); }
+
 // After the backend stops, return even its partly played buffer. FMOD can wait for these releases before joining its output thread (Pokemon Brilliant Diamond 1.0.0, PR #190).
 // The stopped backend excludes the consumer; m excludes append/reclaim. Buffers appended while already stopped belong to the next Start, so only a started -> stopped transition calls this.
 static void au_release_pending(aout *a) {
@@ -615,7 +606,6 @@ static void au_stop_at(void *g, void *lr) {   // lr NULL: the stop inside Close,
     if (was == STATE_STARTED) au_release_pending(a);
     pthread_mutex_unlock(&g_aos_lock);
 }
-HLE_FORCE("_ZN2nn5audio12StopAudioOutEPNS0_8AudioOutE", "stop playback", void, h_au_Stop, void *g) { au_stop_at(g, dm_bigstack_caller(__builtin_return_address(0))); }
 static void au_close(void *g, void *lr) {
     au_note(ao(g), "Close", lr);
     au_stop_at(g, NULL);
@@ -635,32 +625,11 @@ static void au_close(void *g, void *lr) {
     if (!in_flight) aout_free(a);
     au_info(g, ch, STATE_STOPPED);
 }
-HLE_FORCE("_ZN2nn5audio13CloseAudioOutEPNS0_8AudioOutE", "close the audio output", void, h_au_Close, void *g) { au_close(g, dm_bigstack_caller(__builtin_return_address(0))); }
-HLE_FORCE("_ZN2nn5audio16GetAudioOutStateEPKNS0_8AudioOutE", "playback state", int, h_au_State, const void *g) { return atomic_load_explicit(&ao(g)->state, memory_order_acquire); }
-// Pokémon Legends: Z-A (SDK 19): Wwise's sink wakeup thread (main+0x30faae8) asks after every release event and marks the sink starved at 0; the SDK's own version read the audout session the host never made
-HLE_FORCE("_ZN2nn5audio22GetAudioOutBufferCountEPKNS0_8AudioOutE", "buffers appended and not yet played to the end (the one playing included)", unsigned, h_au_BufCount, const void *g) {
+// Append a block to play, and take back one that was played (NULL if none): the queues of the host's own users, the renderer's output and an OutputStream
+static unsigned h_au_Append(void *g, aout_buf *b) {
     aout *a = ao(g);
-    return atomic_load_explicit(&a->q_tail, memory_order_acquire) - atomic_load_explicit(&a->q_head, memory_order_acquire);
-}
-HLE_FORCE("_ZN2nn5audio21GetAudioOutSampleRateEPKNS0_8AudioOutE", "sample rate", int, h_au_Rate, const void *g) { (void)ao(g); return RATE; }
-HLE_FORCE("_ZN2nn5audio23GetAudioOutChannelCountEPKNS0_8AudioOutE", "channel count", int, h_au_Ch, const void *g) { return ao(g)->ch; }
-HLE_FORCE("_ZN2nn5audio15GetAudioOutNameEPKNS0_8AudioOutE", "device name; the host has only the default device", const char *, h_au_Name, const void *g) { (void)g; return "DeviceOut"; }
-HLE_FORCE("_ZN2nn5audio23GetAudioOutSampleFormatEPKNS0_8AudioOutE", "sample format; PCM16 only", int, h_au_Fmt, const void *g) { (void)ao(g); return FMT_PCM16; }
-// STEINS;GATE RE:BOOT (SDK 20) sets its movie sound's output volume right after opening it; the SDK's versions call the audout session the host never made (a null read at sdk+0x1f2314)
-HLE_FORCE("_ZN2nn5audio17SetAudioOutVolumeEPNS0_8AudioOutEf", "output volume; a gain on the samples the host plays", void, h_au_SetVol, void *g, float v) {
-    if (!(v >= 0.f)) v = 0.f; uint32_t b; memcpy(&b, &v, 4); atomic_store_explicit(&ao(g)->vol, b, memory_order_relaxed);
-}
-HLE_FORCE("_ZN2nn5audio17GetAudioOutVolumeEPKNS0_8AudioOutE", "output volume", float, h_au_GetVol, const void *g) {
-    uint32_t b = atomic_load_explicit(&ao(g)->vol, memory_order_relaxed); float v; memcpy(&v, &b, 4); return v;
-}
-
-// The buffer descriptor functions (both SetAudioOutBufferInfo overloads, GetAudioOutBufferDataPointer / BufferSize / DataSize) only fill and read the game's own struct and run in
-// the sdk, as AudioIn's do: aout_buf (hle.h) is that struct, so the host reads what they wrote. Until 2026-11 the host took three of them over to keep a private layout, and the ones
-// it left (GetAudioOutBufferBufferSize, the overload without a buffer size) read it wrong (docs/reference/audio.md)
-HLE_FORCE("_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBufferE", "append a buffer to play", unsigned, h_au_Append, void *g, aout_buf *b) {
-    aout *a = ao(g);
-    // Diagnostic switch DM_AUDIO_DUMP=<file>: every PCM block the game appends is written out as is (16-bit, 48 kHz, channel count per the OpenAudioOut log, usually 6). Used to judge "did a given sound play or not":
-    // cross-correlate the original game's audio against it (this is how the tier-one drop sound was verified). The file is opened only when the variable is set; when unset this costs only one extra cached check
+    // Diagnostic switch DM_AUDIO_DUMP=<file>: every PCM block appended is written out as is (16-bit, 48 kHz, channel count per the OpenAudioOut log: 8 for the renderer's output, its six channels and their stereo fold). Used to judge "did a given sound play or not":
+    // cross-correlate the original game's audio against it. The file is opened only when the variable is set; when unset this costs only one extra cached check
     { static FILE *df; static int on = -1; if (on < 0) { const char *e = getenv("DM_AUDIO_DUMP"); on = e != NULL; if (on && !(df = fopen(e, "wb"))) LOG("[RED] DM_AUDIO_DUMP cannot open %s", e); }
       if (df && b && b->ptr && b->size) fwrite(b->ptr, 1, (size_t)b->size, df); }
     pthread_mutex_lock(&a->m);
@@ -671,7 +640,7 @@ HLE_FORCE("_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBuff
     pthread_mutex_unlock(&a->m);
     return ok;      // bool: false when the queue is full (the real device has a limit too)
 }
-HLE_FORCE("_ZN2nn5audio25GetReleasedAudioOutBufferEPNS0_8AudioOutE", "get a played buffer; NULL if none", aout_buf *, h_au_Released, void *g) {
+static aout_buf *h_au_Released(void *g) {
     aout *a = ao(g); aout_buf *b = NULL;
     pthread_mutex_lock(&a->m);
     uint32_t rr = atomic_load_explicit(&a->rel_head, memory_order_relaxed);
@@ -681,29 +650,15 @@ HLE_FORCE("_ZN2nn5audio25GetReleasedAudioOutBufferEPNS0_8AudioOutE", "get a play
     return b;
 }
 
-// Audio input (a microphone): the host has none. SDL3's Switch audio driver lists the input devices when its audio starts (Absolum); the SDK's versions reach the audin service.
-// No device is listed and an open fails, so the calls that need an open AudioIn are never reached; they still answer without touching the guest object, in case a game ignores the open's result.
-// The buffer descriptor functions (SetAudioInBufferInfo, GetAudioInBufferDataPointer / Size) only fill and read the game's own struct and run in the sdk
-HLE_FORCE("_ZN2nn5audio12ListAudioInsEPNS0_11AudioInInfoEi", "audio input device list; the host has no microphone: 0 entries", int, h_ai_List, void *info, int n) { (void)info; (void)n; return 0; }
+// AudioIn (the audin service): the host has no microphone of that kind (it serves one only through the input streams below), so an AudioIn does not open; the SDK's own version
+// would reach the audin service
 static Result ai_open(const char *name, void *lr) {
     static _Atomic int once; char sb[64];
     if (!atomic_exchange(&once, 1)) LOG("audio input %s: the host has no microphone, the open fails (call site %s)", name ? name : "(default)", site(lr, sb, sizeof sb));
     return RES_FAIL;
 }
-HLE_FORCE("_ZN2nn5audio11OpenAudioInEPNS0_7AudioInEPNS_2os11SystemEventEPKcRKNS0_16AudioInParameterE", "connect to the audin service; no microphone on the host: fails",
-          Result, h_ai_Open, void *g, void *ev, const char *name, const void *param) { (void)g; (void)ev; (void)param; return ai_open(name, dm_bigstack_caller(__builtin_return_address(0))); }
 HLE_FORCE("_ZN2nn5audio11OpenAudioInEPNS0_7AudioInEPKcRKNS0_16AudioInParameterE", "connect to the audin service (no buffer event: Patrick's Parabox imports this one); no microphone on the host: fails",
           Result, h_ai_OpenNoEv, void *g, const char *name, const void *param) { (void)g; (void)param; return ai_open(name, dm_bigstack_caller(__builtin_return_address(0))); }
-HLE_FORCE("_ZN2nn5audio18OpenDefaultAudioInEPNS0_7AudioInEPNS_2os11SystemEventERKNS0_16AudioInParameterE", "connect to the audin service (default device); no microphone on the host: fails",
-          Result, h_ai_OpenDef, void *g, void *ev, const void *param) { (void)g; (void)ev; (void)param; return ai_open(NULL, dm_bigstack_caller(__builtin_return_address(0))); }
-HLE_FORCE("_ZN2nn5audio12StartAudioInEPNS0_7AudioInE", "start recording; never opened on the host: fails", Result, h_ai_Start, void *g) { (void)g; return RES_FAIL; }
-HLE_FORCE("_ZN2nn5audio11StopAudioInEPNS0_7AudioInE", "stop recording; never opened on the host", void, h_ai_Stop, void *g) { (void)g; }
-HLE_FORCE("_ZN2nn5audio12CloseAudioInEPNS0_7AudioInE", "close the audio input; never opened on the host", void, h_ai_Close, void *g) { (void)g; }
-HLE_FORCE("_ZN2nn5audio19AppendAudioInBufferEPNS0_7AudioInEPNS0_13AudioInBufferE", "append a recording buffer; never opened on the host: refused", unsigned, h_ai_Append, void *g, void *b) { (void)g; (void)b; return 0; }
-HLE_FORCE("_ZN2nn5audio24GetReleasedAudioInBufferEPNS0_7AudioInE", "get a recorded buffer; never opened on the host: none", void *, h_ai_Released, void *g) { (void)g; return NULL; }
-HLE_FORCE("_ZN2nn5audio20GetAudioInSampleRateEPKNS0_7AudioInE", "recording sample rate", int, h_ai_Rate, const void *g) { (void)g; return RATE; }
-HLE_FORCE("_ZN2nn5audio22GetAudioInChannelCountEPKNS0_7AudioInE", "recording channel count", int, h_ai_Ch, const void *g) { (void)g; return 2; }
-HLE_FORCE("_ZN2nn5audio22GetAudioInSampleFormatEPKNS0_7AudioInE", "recording sample format", int, h_ai_Fmt, const void *g) { (void)g; return FMT_PCM16; }
 
 // ---------- SDK 21's OutputStream (Xenoblade Chronicles 2's Switch 2 Edition, SDK 21.4.4) ----------
 // nn::audio::OpenOutputStream on a virtual output device (GetDefaultVirtualOutputDevice) takes a StreamFormat {sample format, channels, sample rate} and a capacity in frames; the game
@@ -743,7 +698,9 @@ static Result os_open(void *g, void *ev, const int32_t *fmt, int frames, void *l
     int f = fmt[0], ch = fmt[1], rate = fmt[2];
     if (f != OS_FLOAT && f != OS_PCM16) { LOG("[RED] OutputStream sample format %d: not supported, the open fails", f); return RES_FAIL; }
     if (rate && rate != RATE) { LOG("[RED] OutputStream sample rate %d: not supported (48 kHz only), the open fails", rate); return RES_FAIL; }
-    if (ch <= 0 || frames <= 0) return RES_FAIL;
+    // The stream plays on an AudioOut, with its channel counts. What the SDK answers to another count is not known: the host's failure, as for the format and the rate
+    if (!au_channels_ok(ch)) { LOG("[RED] OutputStream channel count %d: not supported (1, 2 or 6), the open fails", ch); return RES_FAIL; }
+    if (frames <= 0) return RES_FAIL;
     ostream *o = calloc(1, sizeof *o); if (!o) die("OutputStream calloc");
     pthread_mutex_init(&o->m, NULL); o->ch = ch; o->fmt = f; o->cap = frames; o->state = OS_STOPPED;
     uint8_t param[8] = {0}; *(int32_t *)param = RATE; *(uint16_t *)(param + 4) = (uint16_t)ch;
@@ -763,22 +720,8 @@ HLE_FORCE("_ZN2nn5audio16OpenOutputStreamEPNS0_16OutputStreamTypeEPNS_2os11Syste
     (void)buf; (void)size; (void)dev; (void)threshold;
     return os_open(g, ev, fmt, frames, dm_bigstack_caller(__builtin_return_address(0)));
 }
-HLE_FORCE("_ZN2nn5audio16OpenOutputStreamEPNS0_16OutputStreamTypeEPvmRKNS0_15AudioDeviceNameERKNS0_12StreamFormatEiNS_4util10BitFlagSetILi32ENS0_16OutputStreamFlagEEE",
-          "connect to auddmg:u (no event: the game polls); an AudioOut of the host's", Result, h_os_OpenNoEv, void *g, void *buf, size_t size, const char *dev, const int32_t *fmt, int frames, uint32_t flags) {
-    (void)buf; (void)size; (void)dev; (void)flags;
-    return os_open(g, NULL, fmt, frames, dm_bigstack_caller(__builtin_return_address(0)));
-}
 HLE_FORCE("_ZN2nn5audio17StartOutputStreamEPNS0_16OutputStreamTypeE", "start the stream's output", Result, h_os_Start, void *g) {
     ostream *o = os_of(g); o->state = OS_STARTED; return au_start_at(o->key, dm_bigstack_caller(__builtin_return_address(0)));
-}
-// Star Fox (Wwise 2024.1, main+0xbce9294) starts its main and passthrough streams together
-HLE_FORCE("_ZN2nn5audio18StartOutputStreamsEPKPNS0_16OutputStreamTypeEi", "start several streams' outputs", Result, h_os_StartN, void *const *gs, int n) {
-    void *lr = dm_bigstack_caller(__builtin_return_address(0));
-    for (int i = 0; i < n; i++) {
-        ostream *o = os_of(gs[i]); o->state = OS_STARTED;
-        Result r = au_start_at(o->key, lr); if (r) return r;
-    }
-    return RES_OK;
 }
 HLE_FORCE("_ZN2nn5audio16StopOutputStreamEPNS0_16OutputStreamTypeE", "stop the stream's output", void, h_os_Stop, void *g) {
     ostream *o = os_of(g); au_stop_at(o->key, dm_bigstack_caller(__builtin_return_address(0))); o->state = OS_STOPPED;
@@ -826,9 +769,6 @@ HLE_FORCE("_ZN2nn5audio17WriteOutputStreamEPNS0_16OutputStreamTypeEPKvi", "frame
     pthread_mutex_unlock(&o->m);
     return frames;
 }
-HLE_FORCE("_ZN2nn5audio19SetOutputStreamGainEPNS0_16OutputStreamTypeEfNS_8TimeSpanE", "stream gain: the AudioOut's volume (no fade)", void, h_os_Gain, void *g, float gain, int64_t fade) {
-    (void)fade; h_au_SetVol(os_of(g)->key, gain);
-}
 HLE_FORCE("_ZN2nn5audio31GetOutputStreamFilledFrameCountEPKNS0_16OutputStreamTypeE", "frames written and not yet played", int, h_os_Filled, const void *g) {
     ostream *o = os_of(g);
     pthread_mutex_lock(&o->m); os_reclaim(o); int n = o->queued; pthread_mutex_unlock(&o->m);
@@ -853,7 +793,6 @@ HLE_FORCE("_ZN2nn5audio26GetTrueRawAudioInputDeviceEPNS0_15AudioDeviceNameE", "r
     if (dm_audio_input_available()) dm_audio_input_device_name(name);
     else memset(name, 0, DM_AUDIO_INPUT_NAME_SIZE);
 }
-HLE_FORCE("_ZN2nn5audio31GetVirtualInputDevicePropertiesEPNS0_23VirtualDevicePropertiesERKNS0_15AudioDeviceNameE", "connect to auddmg:u; no such device", Result, h_is_Props, void *props, const char *name) { (void)props; (void)name; return RES_FAIL; }
 HLE_FORCE("_ZN2nn5audio15OpenInputStreamEPNS0_15InputStreamTypeEPvmRKNS0_15AudioDeviceNameERKNS0_12StreamFormatEi", "open a polling queue; hardware start is deferred until StartInputStream", Result, h_is_Open,
           void *g, void *buf, size_t size, const char *dev, const void *fmt, int frames) {
     (void)buf; (void)size;
@@ -879,28 +818,21 @@ HLE_FORCE("_ZN2nn5audio15ReadInputStreamEPNS0_15InputStreamTypeEPvi", "drain cap
     return dm_audio_input_read(s, buf, frames);
 }
 HLE_FORCE("_ZN2nn5audio30GetInputStreamFilledFrameCountEPKNS0_15InputStreamTypeE", "frames captured and not yet read", int, h_is_Filled, const void *g) { return dm_audio_input_filled(objmap_get(g)); }
-HLE_FORCE("_ZN2nn5audio20GetInputStreamFormatEPKNS0_15InputStreamTypeE", "input stream format: 48 kHz mono PCM16", os_format, h_is_Format, const void *g) { (void)g; return (os_format){OS_PCM16, 1, RATE}; }
 // The rest of the input stream calls. The SDK passes them to the stream'"'"'s Impl pointer, which is null for a type that never opened (sdk+0x1f7040 reads [Impl+0x340] first: SIGSEGV at address 0x340),
 // and only GetInputStreamState answers a null Impl itself (0, closed; sdk+0x1f6020). The Legend of Zelda: Ocarina of Time asks the state of its two microphone streams, purges them when they are not
 // started (main+0x336ee7c, the crash when a song is played), and reads their statistics each update (main+0x336d5d4); it opens them only when a virtual input device is listed, so it can use these calls even if the microphone is off.
-// For an unopened stream the state is closed, purge does nothing, statistics and frame counts are zero, and the gain is 1.
+// For an unopened stream the state is closed, purge does nothing, and the statistics and the filled frame count are zero.
 HLE_FORCE("_ZN2nn5audio19GetInputStreamStateEPKNS0_15InputStreamTypeE", "input stream state: closed, stopped or started", int, h_is_State, const void *g) { return dm_audio_input_state(objmap_get(g)); }
 HLE_FORCE("_ZN2nn5audio16PurgeInputStreamEPNS0_15InputStreamTypeE", "discard captured frames", void, h_is_Purge, void *g) { dm_audio_input_purge(objmap_get(g)); }
 HLE_FORCE("_ZN2nn5audio24GetInputStreamStatisticsEPNS0_15InputStreamTypeEb", "input stream statistics: none returned to the guest", os_stats, h_is_Stats, void *g, bool reset) { (void)g; (void)reset; os_stats s = {0}; return s; }
-HLE_FORCE("_ZN2nn5audio28GetInputStreamFreeFrameCountEPKNS0_15InputStreamTypeE", "free frames in the microphone queue", int, h_is_Free, const void *g) { return dm_audio_input_free(objmap_get(g)); }
-HLE_FORCE("_ZN2nn5audio32GetInputStreamCapacityFrameCountEPKNS0_15InputStreamTypeE", "microphone queue capacity", int, h_is_Capacity, const void *g) { return dm_audio_input_capacity(objmap_get(g)); }
-HLE_FORCE("_ZN2nn5audio18GetInputStreamGainEPKNS0_15InputStreamTypeE", "microphone stream gain", float, h_is_GetGain, const void *g) { return dm_audio_input_gain(objmap_get(g)); }
-HLE_FORCE("_ZN2nn5audio18SetInputStreamGainEPNS0_15InputStreamTypeEfNS_8TimeSpanE", "set microphone stream gain without a ramp", void, h_is_SetGain, void *g, float gain, int64_t ramp_ns) { (void)ramp_ns; dm_audio_input_set_gain(objmap_get(g), gain); }
 
 // Host-internal PCM output (used by the in-process audio renderer, see hle_audren.c): the same AudioOut machinery (real output / silent sink / background take-over), keyed by a host-allocated dummy object
-static void *pcmout_open(int ch, int sink_pcm) {
-    void *key = calloc(1, 64); uint8_t param[8] = {0}; *(uint16_t *)(param + 4) = (uint16_t)ch;
-    if (au_open_at(key, NULL, "AudioRenderer", param, NULL, sink_pcm)) die("host PCM output cannot be opened");
+void *dm_pcmout_open_sink(void) {
+    void *key = calloc(1, 64); uint8_t param[8] = {0}; *(uint16_t *)(param + 4) = DM_AUDIO_SINK_CHANNELS;
+    if (au_open_at(key, NULL, "AudioRenderer", param, NULL, 1)) die("host PCM output cannot be opened");
     ao(key)->rel_sem = dispatch_semaphore_create(0);
     return key;
 }
-void *dm_pcmout_open(int ch) { return pcmout_open(ch, 0); }
-void *dm_pcmout_open_sink(void) { return pcmout_open(DM_AUDIO_SINK_CHANNELS, 1); }
 // Wait until the output releases a block, at most ms milliseconds (spurious returns are fine: the caller checks dm_pcmout_released again)
 void dm_pcmout_wait(void *k, int ms) { dispatch_semaphore_wait(ao(k)->rel_sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)ms * 1000000)); }
 void dm_pcmout_start(void *k) { au_start_at(k, NULL); }
@@ -918,7 +850,7 @@ void dm_audio_suspend(int on) {
         for (int i = 0; i < AOMAX; i++) {
             aout *a = g_aos[i];
             if (!a || !a->au) continue;
-            // While suspended the silent sink consumes in real time instead: otherwise buffers are no longer released, the FMOD output thread waits forever and the game's audio pacing stalls (same for an incoming call interruption)
+            // While suspended the silent sink consumes in real time instead: otherwise buffers are no longer released and the game's audio pacing stalls
             if (on) {
                 au_halt(a);
                 if (a->backend == BK_NONE && atomic_load(&a->state) == STATE_STARTED) null_start(a);
@@ -937,23 +869,11 @@ static void au_reopen(aout *a, int route) {
     else { au_replace(a, route); if (a->backend == BK_NULL) au_request_start(a); }
 }
 // An output whose new unit could not be made (unit_lost): try again, and start it if it plays on the silent sink. Under g_aos_lock
-static void au_remake(aout *a, int route, const char *why) {
+static void au_remake(aout *a, int route) {
     if (au_create(a, route)) return;
     a->unit_lost = 0;
-    LOG("audio #%d: the output has an AudioUnit again after %s (%d channels)", a->id, why, a->dev_ch);
+    LOG("audio #%d: the output has an AudioUnit again after the route change (%d channels)", a->id, a->dev_ch);
     if (a->backend == BK_NULL) au_request_start(a);
-}
-// The media services were reset (iOS): every AudioUnit is invalid. Create each output's unit again and restart the ones that were playing; the front end has set the audio session up again first
-void dm_audio_reset(void) {
-    pthread_mutex_lock(&g_aos_lock);
-    int route = dm_audio_output_channels();
-    for (int i = 0; i < AOMAX; i++) {
-        aout *a = g_aos[i];
-        if (a && a->au) au_reopen(a, route);
-        else if (a && a->unit_lost && !a->reset_pending) au_remake(a, route, "the media services reset");
-    }
-    LOG("audio outputs set up again after the media services reset");
-    pthread_mutex_unlock(&g_aos_lock);
 }
 // Route change: a six-channel output whose unit takes a different count from what the route takes now gets a new unit at that count. Without this a unit keeps the count of the route
 // it was opened on: moved from HDMI 5.1 to the speakers or headphones, Core Audio's own 6 → 2 mapping keeps only the front pair (the center and the back channels go silent);
@@ -965,14 +885,14 @@ static void route_sync(int route) {
     if (g_suspended) return;
     for (int i = 0; i < AOMAX; i++) {
         aout *a = g_aos[i]; if (!a || a->reset_pending) continue;
-        if (!a->au) { if (a->unit_lost) au_remake(a, route, "the route change"); continue; }
+        if (!a->au) { if (a->unit_lost) au_remake(a, route); continue; }
         int want = unit_channels(a, route);
         if (want == a->dev_ch) continue;
         LOG("audio #%d: the output route takes %d channels now: the AudioUnit is replaced (%d → %d channels%s)", a->id, route, a->dev_ch, want, want == 2 && (a->sink_pcm || a->ch == 6) ? ", stereo fold by the host" : "");
         au_reopen(a, route);
     }
 }
-void dm_audio_route_changed(void) {
+static void dm_audio_route_changed(void) {
     pthread_mutex_lock(&g_aos_lock);
     int route = dm_audio_output_channels();   // a Core Audio / audio session read (it logs a change), as au_create makes under the lock too
     route_sync(route);

@@ -767,14 +767,13 @@ static pool_ent *g_pools; static int g_npool, g_cap;
 static int g_pidx_ok, g_plast = -1;   // whether the address→pool index is valid, the last hit (pool_find)
 static NSMutableArray *g_keep;                  // Holds the buffer references (pool_ent has non-owning pointers)
 static void as_drop_pool(const void *pool);   // caller holds g_mu, shared with AS registration
-static uint64_t g_pool_adds;
 static int g_pool_res_n;   // registered pools already in the residency set (for the memory readout; under g_mu)
 static __thread int t_tex_upload_lookup;   // set around a texture upload's read of its storage (pool lookups counted apart, mem_census)
 
 #define C1_BANK_SIZE (4u << 20)
 #define C1_DECL_SIZE (64u << 10)
 static NSMutableArray *g_c1_banks;
-static size_t g_c1_bank_off, g_c1_alloc_bytes, g_c1_data_bytes;
+static size_t g_c1_bank_off;
 static uint64_t g_c1_count;
 static NSMutableSet<NSString *> *g_c1_full;
 static int g_c1_full_valid;
@@ -882,7 +881,6 @@ static void mtl_init_once(void) {
     g_ev = [g_dev newSharedEvent];
     g_keep = [NSMutableArray array];
     g_nvn_deswz_gpu = nvn_deswz_gpu_init(g_dev) == 0;
-    dm_res_report_register(mtl_res_counts);
     if (!g_nvn_deswz_gpu) MLOG("[RED] GPU deswizzle init failed; swizzled textures fall back to the CPU");
     MLOG("Metal device %s", g_dev.name.UTF8String);
     udc_selftest();
@@ -1040,14 +1038,13 @@ static void pool_new_put(pool_new *n) {   // caller holds g_mu
     if (!n->buf) {
         int *ch = calloc(((n->b - n->a) >> 24) + 1, sizeof *ch); if (!ch) MDIE("pool chunk table");
         g_big[g_nbig++] = (big_pool){n->lo, n->hi, n->a, n->b, n->mem, ch, 0, [NSMutableArray array]};
-        g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1); g_pool_adds++; atomic_fetch_add(&g_big_n, 1);
+        g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1); atomic_fetch_add(&g_big_n, 1);
         static int nl; if (nl++ < 8) MLOG("memory pool %p+%llu MB: in chunks, wired as far as lookups reach", n->mem, (unsigned long long)(n->size >> 20));
         return;
     }
     if (g_npool == g_cap) { g_cap = g_cap ? g_cap * 2 : 64; g_pools = realloc_or_die(g_pools, g_cap * sizeof *g_pools, "the memory pool table"); }
     g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);   // the address index and the per-thread caches are invalid (pool_find, pc_get)
     g_pools[g_npool++] = (pool_ent){n->lo, n->hi, n->a, n->buf, n->buf.gpuAddress, n->mem, 0, clock_gettime_nsec_np(CLOCK_MONOTONIC), n->hi, REACH_END};   // not in the residency set yet: put in the first time it is addressed (pool_res)
-    g_pool_adds++;
     [g_keep addObject:n->buf];
 }
 void mtl_pool_add(const void *mem, uint64_t size) {
@@ -6729,7 +6726,6 @@ static id<MTLBuffer> c1_bank(size_t room) {
         memset(b.contents, 0, C1_BANK_SIZE);
         [g_c1_banks addObject:b];
         g_c1_bank_off = 0;
-        g_c1_alloc_bytes += C1_BANK_SIZE;
     }
     return g_c1_banks.lastObject;
 }
@@ -6750,7 +6746,6 @@ static void c1_store(NvShader *o) {
     size_t off = g_c1_bank_off;
     memcpy((uint8_t *)b.contents + off, o->rf.c1, len);
     g_c1_bank_off += dedicated ? C1_DECL_SIZE : need + 256u;
-    g_c1_data_bytes += len;
     g_c1_count++;
     o->c1buf = b;
     o->c1_gpu = b.gpuAddress;
@@ -18116,38 +18111,6 @@ static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
 static uint64_t g_present_n;
 uint64_t mtl_present_count(void) { return g_present_n; }   // Actual present count (heat attribution DM_HEAT computes the present frame rate)
-void mtl_res_snapshot(mtl_res_count *out) {
-    memset(out, 0, sizeof *out);
-    out->pso = g_pso.n;
-    out->cps = g_cps.n;
-    out->dss = g_dss.n;
-    out->shaders = (uint32_t)(g_shcache ? g_shcache.count : 0);
-    os_unfair_lock_lock(&g_c1_lock);
-    out->c1_bufs = (uint32_t)g_c1_banks.count; out->c1_alloc = g_c1_alloc_bytes; out->c1_data = g_c1_data_bytes;
-    os_unfair_lock_unlock(&g_c1_lock);
-    pthread_mutex_lock(&g_smu);
-    out->live_tex = own_stats_locked().live;
-    pthread_mutex_unlock(&g_smu);
-    pthread_mutex_lock(&g_mu);
-    out->pools = (uint32_t)g_npool;
-    out->pool_adds = g_pool_adds;
-    pthread_mutex_unlock(&g_mu);
-    os_unfair_lock_lock(&g_rmu);
-    out->view_slots = (uint32_t)g_ntreg;
-    for (int i = 0; i < g_ntreg; i++) if (g_treg[i].view) out->view_nonnull++;
-    for (int i = 0; i < g_nsreg; i++) if (g_sview[i]) out->sview_nonnull++;
-    os_unfair_lock_unlock(&g_rmu);
-}
-// Resource counts (read by long-run stability L3): the host calls it per game tick / event (every 250 ticks, loading screen dismissed, exit), not sampled by wall clock / present count.
-// Line format: [nvn] resource counts tick <tick number> <trigger>: <name> <value> ... (names contain no spaces, single-space separated); new fields are appended to the end of this line
-void mtl_res_counts(uint32_t tick, const char *why) {
-    mtl_res_count c;
-    mtl_res_snapshot(&c);
-    int dl, du; uint64_t da; nvn_dirty_slot_stats(&dl, &du, &da);
-    LOG("[nvn] resource counts tick %u %s: render_pipelines %u compute_pipelines %u shaders %u depth_stencil_states %u views_nonnull %u view_slots %u live_textures %u pools_live %u pools_total %llu sampler_views_nonnull %u dirty_ranges_live %d dirty_ranges_total %llu c1_buffers %u c1_bytes %llu c1_used %llu",
-        tick, why, c.pso, c.cps, c.shaders, c.dss, c.view_nonnull, c.view_slots, c.live_tex,
-        c.pools, (unsigned long long)c.pool_adds, c.sview_nonnull, dl, (unsigned long long)da, c.c1_bufs, (unsigned long long)c.c1_alloc, (unsigned long long)c.c1_data);
-}
 // Screenshot on request (used by DM_NVN_SHOT_UI): dm_gfx_shot_at(k, path) = take a screenshot at the kth frame after the current present frame; due requests are checked at every frame's present
 #define SHOTQ_MAX 8
 static struct { uint64_t frame; char path[1024]; } g_shotq[SHOTQ_MAX]; static int g_nshotq;
@@ -18542,14 +18505,11 @@ static MTLViewport present_viewport(double pw, double ph, double dw, double dh) 
 }
 // The shape the picture is shown in, whatever part of the texture it comes from. The Switch's compositor stretches a buffer's crop to the layer, so a crop only picks texels: Super
 // Mario Galaxy 2 draws its storybook cutscenes anamorphically into 1200x960 of a 1920x1080 swapchain (800x640 handheld). The layer fills the display, 16:9, unless the game sized it
-// (vi::CreateLayer with a size, hle_vi.c). A screen taller than 16:9 (DM_SCREEN_ASPECT, loader.c) counts only for a texture of its shape: only builds with screen-shape stubs render it.
-static _Atomic uint64_t g_layer_shape, g_screen_shape;   // w | h << 32, 0 = none
+// (vi::CreateLayer with a size, hle_vi.c).
+static _Atomic uint64_t g_layer_shape;   // w | h << 32, 0 = none
 void mtl_present_layer(uint32_t w, uint32_t h) { atomic_store(&g_layer_shape, (uint64_t)w | (uint64_t)h << 32); }
-void mtl_present_screen(uint32_t w, uint32_t h) { atomic_store(&g_screen_shape, (uint64_t)w | (uint64_t)h << 32); }
 static void present_shape(id<MTLTexture> src, double *w, double *h) {
-    uint64_t v = atomic_load(&g_screen_shape);
-    if (v && fabs(((double)src.width / src.height) / ((double)(uint32_t)v / (double)(v >> 32)) - 1) < 0.01) { *w = src.width; *h = src.height; return; }
-    v = atomic_load(&g_layer_shape);
+    (void)src; uint64_t v = atomic_load(&g_layer_shape);
     *w = v ? (double)(uint32_t)v : 1920; *h = v ? (double)(v >> 32) : 1080;
 }
 static MTLViewport present_fit(id<MTLTexture> src, double dw, double dh) { double w, h; present_shape(src, &w, &h); return present_viewport(w, h, dw, dh); }

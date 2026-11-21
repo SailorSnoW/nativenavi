@@ -1,5 +1,5 @@
 // Clock snapshot arithmetic (hle_time.c, from PR #36): CalculateSpanBetween and CalculateStandardUserSystemClockDifferenceByUser looked up by their mangled names in the real swforce
-// registrations, run on both host snapshot entries and on edited copies; the C library's local-time functions, UTC as on a Switch, against nn::time's local conversion (issue #2784)
+// registrations, run on host snapshots and on edited copies; the C library's local-time functions, UTC as on a Switch, against nn::time's local conversion (issue #2784)
 #include "../hle_time.c"
 #include <mach-o/getsect.h>
 
@@ -38,63 +38,47 @@ static void check_utc_libc(void) {
     CHECK(cal && cal(&ct, &ai, &save) == RES_OK && ct.day == 16 && ct.hour == 1 && ct.minute == 44 && ai.offset == 9 * 3600, "ToCalendarTime converts in the host zone (01:44 KST)");
     setenv("TZ", "UTC", 1); tzset();
 }
-// The SDK's detail:: periodic benefit claim, as guest_sym finds it: records what the host's public entry passed on and answers 7
-static const void *claim_args[5];
-static uint64_t fake_claim(void *ctx, const uint8_t *snap, const int64_t *max_penalty, const int64_t *acceptable, const void *callback) {
-    claim_args[0] = ctx; claim_args[1] = snap; claim_args[2] = max_penalty; claim_args[3] = acceptable; claim_args[4] = callback; return 7;
-}
-void *guest_sym(const char *name) {
-    return !strcmp(name, "_ZN2nn4time6detail39ClaimPeriodicBenefitWithUserSystemClockEPNS0_27PeriodicBenefitClaimContextERKNS0_13ClockSnapshotERKNS_8TimeSpanES9_PKNS0_25CheckCalendarTimeCallbackE") ? (void *)fake_claim : NULL;
-}
 static void put64(uint8_t *s, int off, int64_t v) { memcpy(s + off, &v, 8); }
 static int64_t get64(const uint8_t *s, int off) { int64_t v; memcpy(&v, s + off, 8); return v; }
 int main(void) {
     Result (*snap)(uint8_t *) = hook("_ZN2nn4time13ClockSnapshot29CreateWithStandardSystemClockEPS1_");
-    Result (*adj_snap)(uint8_t *) = hook("_ZN2nn4time13ClockSnapshot31CreateWithAdjustableSystemClockEPS1_");
     unsigned (*span)(int64_t *, const uint8_t *, const uint8_t *) = hook("_ZN2nn4time20CalculateSpanBetweenEPNS_8TimeSpanERKNS0_13ClockSnapshotES5_");
     int64_t (*udiff)(const uint8_t *, const uint8_t *) = hook("_ZN2nn4time48CalculateStandardUserSystemClockDifferenceByUserERKNS0_13ClockSnapshotES3_");
     check_utc_libc();
-    if (!snap || !adj_snap || !span || !udiff) { printf("time: %d checks, %d failed\n", checks, fails); return 1; }
+    if (!snap || !span || !udiff) { printf("time: %d checks, %d failed\n", checks, fails); return 1; }
     uint8_t a[0xd0], b[0xd0], c[0xd0]; int64_t ts = -1;
     // Before the first snapshot: h_time_GetCurrentTime reads DM_FIXED_TIME once and caches it
     setenv("DM_FIXED_TIME", "1700000000", 1);
     setenv("TZ", "UTC", 1); tzset();
     CHECK(snap(a) == RES_OK, "snapshot a");
     CHECK(a[0xcd] == 1, "standard snapshot type is 1");
-    // Both entries must stay inside the SDK's 0xd0-byte buffer, including the type near its end.
+    // The snapshot must stay inside the SDK's 0xd0-byte buffer, including the type near its end.
     uint8_t guarded[0xf0]; memset(guarded, 0xa5, sizeof guarded);
-    uint8_t *adjustable = guarded + 0x10;
-    CHECK(snap(adjustable) == RES_OK, "standard snapshot in guarded buffer");
-    int standard_guards_ok = 1;
-    for (int i = 0; i < 0x10; i++) standard_guards_ok &= guarded[i] == 0xa5 && guarded[0xe0 + i] == 0xa5;
-    CHECK(standard_guards_ok, "standard snapshot writes only its 0xd0 bytes");
-    memset(guarded, 0xa5, sizeof guarded);
-    CHECK(adj_snap(adjustable) == RES_OK, "adjustable snapshot");
+    uint8_t *second = guarded + 0x10;
+    CHECK(snap(second) == RES_OK, "snapshot in guarded buffer");
     int guards_ok = 1;
     for (int i = 0; i < 0x10; i++) guards_ok &= guarded[i] == 0xa5 && guarded[0xe0 + i] == 0xa5;
-    CHECK(guards_ok, "adjustable snapshot writes only its 0xd0 bytes");
-    CHECK(adjustable[0xcd] == 2, "adjustable snapshot type is 2");
-    CHECK(get64(adjustable, 0x40) == 1700000000, "adjustable user time follows the host clock");
-    // StandardSteadyClock::now(), the C++ clock form (SDK 3.7: 0 without the time service session): the steady clock's seconds, as GetCurrentTimePoint gives them
+    CHECK(guards_ok, "snapshot writes only its 0xd0 bytes");
+    CHECK(get64(second, 0x40) == 1700000000, "snapshot user time follows the host clock");
+    // StandardSteadyClock::now(), the C++ clock form (SDK 3.7: 0 without the time service session): the steady clock's seconds, as the time point getter gives them
     int64_t (*steady_now)(void) = hook("_ZN2nn4time19StandardSteadyClock3nowEv");
-    Result (*steady_tp)(uint8_t *) = hook("_ZN2nn4time19StandardSteadyClock19GetCurrentTimePointEPNS0_20SteadyClockTimePointE");
+    Result (*steady_tp)(uint8_t *) = hook("_ZN2nn4time38GetStandardSteadyClockCurrentTimePointEPNS0_20SteadyClockTimePointE");
     uint8_t tp0[24]; int64_t sn = steady_now ? steady_now() : -1;
     CHECK(steady_tp && steady_tp(tp0) == RES_OK && sn > 0 && llabs(sn - get64(tp0, 0)) <= 1, "StandardSteadyClock::now() is the steady clock's seconds, not 0");
     Result (*net)(int64_t *) = hook("_ZN2nn4time26StandardNetworkSystemClock14GetCurrentTimeEPNS0_9PosixTimeE");
     int64_t nt = -1;
     CHECK(net && net(&nt) == RES_OK && nt == 1700000000, "the network clock reads the host clock, as the user clock (saves are dated by it)");
-    const CalendarTime *cal = (const CalendarTime *)(adjustable + 0x50);
+    const CalendarTime *cal = (const CalendarTime *)(second + 0x50);
     CHECK(cal->year == 2023 && cal->month == 11 && cal->day == 14 && cal->hour == 22 && cal->minute == 13 && cal->second == 20,
-          "adjustable snapshot has the UTC calendar for the fixed time");
-    CHECK(!memcmp(adjustable + 0x20, adjustable, 0x20) && get64(adjustable, 0x48) == 1700000000 && !memcmp(adjustable + 0x58, adjustable + 0x50, 8) &&
-          !memcmp(adjustable + 0x78, adjustable + 0x60, 0x18), "snapshot network fields are the user clock's (context, time, calendar, its info)");
+          "snapshot has the UTC calendar for the fixed time");
+    CHECK(!memcmp(second + 0x20, second, 0x20) && get64(second, 0x48) == 1700000000 && !memcmp(second + 0x58, second + 0x50, 8) &&
+          !memcmp(second + 0x78, second + 0x60, 0x18), "snapshot network fields are the user clock's (context, time, calendar, its info)");
     int64_t (*net_now)(void) = hook("_ZN2nn4time26StandardNetworkSystemClock3nowEv");
     CHECK(net_now && net_now() == 1700000000, "the network clock's now() reads the host clock, as GetCurrentTime does");
-    CHECK(!memcmp(a + 0x98, adjustable + 0x98, 16), "both snapshots use the same steady clock source");
-    CHECK(udiff(a, adjustable) == 0, "changing snapshot type does not report a user clock change");
-    CHECK(!strcmp((const char *)adjustable + 0xa8, "UTC"), "adjustable snapshot carries the host time zone");
-    memcpy(b, a, sizeof b); b[0xcd] = 2;
-    CHECK(span(&ts, a, b) == 1 && ts == 0, "changing only the type leaves the elapsed span at zero");
+    CHECK(!memcmp(a + 0x98, second + 0x98, 16), "both snapshots use the same steady clock source");
+    CHECK(!strcmp((const char *)second + 0xa8, "UTC"), "snapshot carries the host time zone");
+    memcpy(b, a, sizeof b); b[0xcd] = 2;   // as the SDK marks a snapshot of the adjustable clocks
+    CHECK(span(&ts, a, b) == 1 && ts == 0 && udiff(a, b) == 0, "changing only the type leaves the elapsed span at zero and reports no user clock change");
     unsetenv("DM_FIXED_TIME");
     CHECK(span(&ts, a, a) == 1 && ts == 0, "span of a snapshot with itself is 0");
     memcpy(b, a, sizeof b); put64(b, 0x90, get64(a, 0x90) + 90);   // b: 90 s of steady clock later
@@ -111,13 +95,7 @@ int main(void) {
     b[0x10] ^= 1; CHECK(udiff(a, b) == 0, "user contexts of different steady sources: 0");
     b[0x10] ^= 1; a[0xcc] = b[0xcc] = 1; CHECK(udiff(a, b) == 0, "automatic correction on in both: 0");
     a[0xcc] = 0; CHECK(udiff(a, b) == 3600 * 1000000000LL, "automatic correction in one only: the difference");
-    // The periodic benefit claim skips the SDK's time service session check and hands every argument to its detail:: implementation, whose answer it returns
-    uint64_t (*claim)(void *, const uint8_t *, const int64_t *, const int64_t *, const void *) =
-        hook("_ZN2nn4time39ClaimPeriodicBenefitWithUserSystemClockEPNS0_27PeriodicBenefitClaimContextERKNS0_13ClockSnapshotERKNS_8TimeSpanES8_PKNS0_25CheckCalendarTimeCallbackE");
-    uint8_t ctx[0x100] = {0}; int64_t pen = 1, acc = 2; int cbk = 0;
-    CHECK(claim && claim(ctx, a, &pen, &acc, &cbk) == 7, "periodic benefit claim returns the SDK implementation's answer");
-    CHECK(claim_args[0] == ctx && claim_args[1] == a && claim_args[2] == &pen && claim_args[3] == &acc && claim_args[4] == &cbk, "periodic benefit claim passes every argument on");
-    // Its two service questions: the location the host's snapshots carry, and time points of no clock (a source ID no snapshot has)
+    // The periodic benefit claim's two service questions: the location the host's snapshots carry, and time points of no clock (a source ID no snapshot has)
     Result (*auto_upd)(uint8_t *) = hook("_ZN2nn4time6detail56GetStandardUserSystemClockAutomaticCorrectionUpdatedTimeEPNS0_20SteadyClockTimePointE");
     Result (*loc_upd)(char *, uint8_t *) = hook("_ZN2nn4time6detail35GetDeviceLocationNameAndUpdatedTimeEPNS0_12LocationNameEPNS0_20SteadyClockTimePointE");
     uint8_t tp[0x18], none[0x18] = {0}; char loc[0x24];
@@ -125,8 +103,7 @@ int main(void) {
     memset(tp, 0xaa, sizeof tp); memset(loc, 0xaa, sizeof loc);
     CHECK(loc_upd && loc_upd(loc, tp) == RES_OK && !memcmp(loc, a + 0xa8, sizeof loc) && !memcmp(tp, none, sizeof tp), "device location: the snapshot's name, a cleared time point");
     CHECK(memcmp(tp + 8, a + 0x90 + 8, 16), "the cleared time point's source ID is not the snapshots' steady clock");
-    // The network clock's context and the adjustable clocks (PR #1875): each is the user clock in every reader, its context the snapshot's, within the context's 0x20 bytes
-    // (DM_FIXED_TIME is read once, above, so the clocks still read 1700000000)
+    // The contexts of the network clock and of the adjustable clocks (PR #1875): each is the user clock's, as the snapshot carries it, within the context's 0x20 bytes
     static const char *ctx_hooks[] = {
         "_ZN2nn4time26StandardNetworkSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE",
         "_ZN2nn4time25AdjustableUserSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE",
@@ -139,16 +116,6 @@ int main(void) {
         for (int i = 0; i < 0x10; i++) ok &= g[i] == 0xa5 && g[0x30 + i] == 0xa5;
         CHECK(ok, ctx_hooks[h]);
     }
-    Result (*adj_net)(int64_t *) = hook("_ZN2nn4time28AdjustableNetworkSystemClock14GetCurrentTimeEPNS0_9PosixTimeE");
-    nt = -1; CHECK(adj_net && adj_net(&nt) == RES_OK && nt == 1700000000, "the adjustable network clock reads the host clock");
-    int64_t (*adj_now)(void) = hook("_ZN2nn4time25AdjustableUserSystemClock3nowEv");
-    int64_t (*adj_net_now)(void) = hook("_ZN2nn4time28AdjustableNetworkSystemClock3nowEv");
-    CHECK(adj_now && adj_now() == 1700000000 && adj_net_now && adj_net_now() == 1700000000, "the adjustable clocks' now() read the host clock");
-    int (*net_ts)(int64_t *) = hook("_ZN2nn4time44GetStandardNetworkSystemClockCurrentTimespecEP8timespec");
-    int (*adj_net_ts)(int64_t *) = hook("_ZN2nn4time46GetAdjustableNetworkSystemClockCurrentTimespecEP8timespec");
-    int64_t tsp[2] = {-1, -1}, tsq[2] = {-1, -1};
-    CHECK(net_ts && net_ts(tsp) == 0 && tsp[0] == 1700000000 && tsp[1] == 0 && adj_net_ts && adj_net_ts(tsq) == 0 && tsq[0] == 1700000000 && tsq[1] == 0,
-          "the network clocks' real-time getters read the host clock");
     printf("time: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

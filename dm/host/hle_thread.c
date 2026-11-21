@@ -26,11 +26,10 @@
 #define R_OUT_OF_RANGE 0xEE01u  // 119
 #define R_BAD_HANDLE  0xE401u   // 114
 #define R_BAD_STATE   0xFA01u   // 125
-#define R_OUT_OF_RES  0xCE01u   // 103
 #define WAITERS_BIT   0x40000000u
 #define H_CUR_THREAD  0xFFFF8000u
 
-enum { O_FREE, O_THREAD, O_EVENT_R, O_EVENT_W, O_READONLY_SHMEM, O_TRANSFER_MEMORY };
+enum { O_FREE, O_THREAD, O_EVENT_R, O_EVENT_W, O_TRANSFER_MEMORY };
 enum { MAX_SYNC_OBJECTS = 64 };
 typedef struct { void *obj; int type; } sync_ref_t;
 // Service-layer SystemEvent bindings (see hle_bind_system_event): guest SystemEventType address → the write-end handle of its kernel event.
@@ -54,7 +53,7 @@ typedef struct event { int signaled; int refs; } event_t;
 typedef struct thr {
     uint32_t handle; uint64_t id;
     uint64_t entry, arg, stack_top; int prio, core; uint64_t mask;
-    uint64_t born_ns, exit_ns; uint32_t born_tick, exit_tick;   // Time of creation / exit and the game tick at that time (for the state dump: did the job worker exit before the stall)
+    uint64_t born_ns, exit_ns;   // Time of creation / exit (for the state dump: did the job worker exit before the stall)
     int started, entered, exited, cancel;   // entered: its pthread has been dispatched and goes on to guest code
     pthread_t pt; pthread_cond_t cv;
     // Current wait: kind 0=none 1=lock 2=condition 3=address 4=synchronization object
@@ -195,23 +194,6 @@ static void hand_leave(thr_t *t) { hand_signal(t); t->nhand = 0; t->start_by = N
 // the priority-44 main thread set the flag long before the worker ends. Held until the worker exited, main set the flag afterwards, for good, and every later slot read was refused.
 // The first request of a started thread also waits until its starter is back in guest code, then for about a service round trip; only that time gives this order on Horizon
 // too. The wait is bounded: the starter may itself wait for a peer that needs this thread, and it is no error for this thread to go first
-// Connecting to a service takes the caller a few round trips, and threads it started on other cores run meanwhile. Mario Tennis Fever's boot stub builds its last decoder thread's arguments on its stack
-// (main+0x97c), starts that thread and calls nn::ro::Initialize, then reuses the same stack slots for a string (main+0xa04): on Horizon the thread has read them long before. The host's Initialize
-// returns at once, and the pthread started too late and read null (main+0x1dc0, once in a dozen boots). So this waits until the threads started so far have been dispatched
-// into guest code, then for a round trip. As in dm_thread_service_request, it models a time; the bound is for a thread the host cannot run
-#define SERVICE_CONNECT_WAIT_NS 50000000
-void dm_thread_service_connect(void) {
-    uint64_t end = now_ns() + SERVICE_CONNECT_WAIT_NS;
-    for (;;) {
-        int waiting = 0;
-        g_lock();
-        for (thr_t *t = g_all; t; t = t->all) if (t->started && !t->entered && !t->exited && !t->host_owned) waiting = 1;
-        g_unlock();
-        if (!waiting || now_ns() >= end) break;
-        usleep(50);
-    }
-    usleep(200);
-}
 #define SERVICE_START_WAIT_NS 5000000
 #define SERVICE_ROUND_TRIP_NS 200000
 void dm_thread_service_request(void) {
@@ -385,7 +367,6 @@ static void lock_acquire_for(thr_t *t, uint64_t addr, uint32_t tag) {
 
 // ---------- Threads ----------
 extern void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp);   // entry.S
-uint32_t (*dm_thread_tick_fn)(void);   // Gets the current game tick; registered when diag.c initializes (unit tests do not register it, the tick number is recorded as 0)
 void crash_thread_init(void);
 void guest_thread_init(void);   // thread.c: the single place that sets the per-thread TSD slots (x18, TLS, TLR)
 void guest_thread_set_id(uint64_t id);   // thread.c: the thread's ID in its TLR
@@ -399,7 +380,6 @@ static void qos_map_init(void) {
     if (d) sscanf(d, "%d,%d", &g_qos_e1, &g_qos_e2);
     if (g_qos_map) LOG("DM_QOS_MAP=1: guest threads get QoS by priority (≤%d interactive, ≤%d user-initiated, the rest utility)", g_qos_e1, g_qos_e2);
 }
-int dm_qos_map_on(void) { return g_qos_map; }
 static qos_class_t prio_qos(int prio) {
     if (!g_qos_map) return QOS_CLASS_USER_INTERACTIVE;
     return prio <= g_qos_e1 ? QOS_CLASS_USER_INTERACTIVE : prio <= g_qos_e2 ? QOS_CLASS_USER_INITIATED : QOS_CLASS_UTILITY;
@@ -450,7 +430,7 @@ static void thr_put(thr_t *t) {   // Holding G; drop a reference taken with t->r
 }
 static void wake_sync_waiters(const void *obj);
 static void thread_exit(thr_t *t) {
-    t->exit_ns = now_ns(); t->exit_tick = dm_thread_tick_fn ? dm_thread_tick_fn() : 0;
+    t->exit_ns = now_ns();
     // No logging here: the exit happens on the guest thread's own stack (some are only a dozen or so KiB), and a printf with floating point would blow the stack (real-device smoke test: SIGBUS when LibcurlResolver exits, backtrace fprintf → __dtoa). Only the time is recorded, and it is printed later in the state dump
     g_lock();
     t->exited = 1;
@@ -691,15 +671,7 @@ static const char *thr_name(thr_t *t, char *nb, size_t n) {   // SDK ThreadType+
         vm_read_overwrite(mach_task_self(), np, n - 1, (vm_address_t)nb, &got)) return "?";
     nb[got] = 0; return nb;
 }
-// All live guest threads (used by the sampler DM_SAMPLE=ms:*): fill the pthreads into out, return the count
-int thr_list(pthread_t *out, int max) {
-    int n = 0;
-    g_lock();
-    for (thr_t *t = g_all; t && n < max; t = t->all) if (!t->exited && t->started) out[n++] = t->pt;
-    g_unlock();
-    return n;
-}
-// Soak readings (DM_SOAK): handle table usage, live guest threads, total thread objects (including exited but not yet freed)
+// Handle table usage, live guest threads, total thread objects (including exited but not yet freed): the unit tests check with it that waits leak none (t_sync_wait.c)
 void thr_counts(int *handles, int *live, int *objs) {
     int nh = 0, nl = 0, no = 0;
     g_lock();
@@ -726,14 +698,6 @@ int thr_name_of(pthread_t pt, char *out, size_t n) {
     return ok;
 }
 uint32_t thr_cur_handle(void) { thr_t *t = pthread_getspecific(g_keythr); return t ? t->handle : 0; }   // Only reads TSD, usable in a signal handler
-// Find a live guest thread by thread name (used by the sampler); returns 0 if not found
-int thr_find_by_name(const char *name, pthread_t *out) {
-    char nb[32]; int ok = 0;
-    g_lock();
-    for (thr_t *t = g_all; t; t = t->all) if (!t->exited && !strcmp(thr_name(t, nb, sizeof nb), name)) { *out = t->pt; ok = 1; break; }
-    g_unlock();
-    return ok;
-}
 // State dump (called from crash.c on watchdog / crash; read-only, takes no lock): what each guest thread is waiting on and where its most recent SVC was issued from
 // During a state dump, take the backtrace of other guest threads: suspend → read registers → walk the frame pointer chain (both guest code and gate blocks keep the x29 chain) → resume; only main / sdk frames are printed
 static void thr_bt(thr_t *t) {
@@ -792,7 +756,7 @@ void svc_thread_dump(void) {
         uint8_t raw[64]; vm_size_t g3 = 0;                                                   // Raw 64 bytes of the object being waited on (the structure holding the read-write lock / condition variable): to see the counts and the owner
         int have_raw = (t->wkind == 1 || t->wkind == 2 || t->wkind == 3) && t->waddr && !vm_read_overwrite(mach_task_self(), t->waddr & ~0xfull, 64, (vm_address_t)raw, &g3) && g3 == 64;
         char life[96]; uint64_t nowns = now_ns();
-        if (t->exited) snprintf(life, sizeof life, " created at tick %u, exited at tick %u (%.1f s ago)", t->born_tick, t->exit_tick, (nowns - t->exit_ns) / 1e9); else if (!t->born_ns) snprintf(life, sizeof life, " present since process start"); else snprintf(life, sizeof life, " created at tick %u (%.1f s ago)", t->born_tick, (nowns - t->born_ns) / 1e9);
+        if (t->exited) snprintf(life, sizeof life, " exited %.1f s ago", (nowns - t->exit_ns) / 1e9); else if (!t->born_ns) snprintf(life, sizeof life, " present since process start"); else snprintf(life, sizeof life, " created %.1f s ago", (nowns - t->born_ns) / 1e9);
         fprintf(stderr, "[dm] thread %#x '%s' priority %d core %d mask %#llx CPU %.2fs svc %llu %s%s%s waits:%s addr=%#llx%s last svc %#x lr=%s+%#llx\n", t->handle, nm, t->prio, t->core, (unsigned long long)t->mask,
                 cpu, t->nsvc, t->exited ? "exited" : "", t->started ? "" : "not started", life, kinds[t->wkind & 7], t->waddr, own, t->last_svc,
                 m ? m->name : "?", m ? t->last_lr - (uint64_t)m->base : t->last_lr);
@@ -1113,7 +1077,7 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         // Core -2 (IdealCoreUseProcessValue) = the process's default ideal core (0 for this game), with an affinity mask of just that core - as in the Horizon kernel. It used to be recorded as -2 and GetCurrentProcessorNumber answered -2;
         //   SMBW's font engine picks its per-core engine slot by the current core number and crashed indexing with -2 (main +0x107dbc0, SequenceBackgroundWorker thread)
         t->prio = (int)regs[4]; t->core = (int)regs[5] >= 0 ? (int)regs[5] : 0; t->mask = 1ull << t->core;
-        t->born_ns = now_ns(); t->born_tick = dm_thread_tick_fn ? dm_thread_tick_fn() : 0;
+        t->born_ns = now_ns();
         g_lock(); t->handle = h_new(O_THREAD, t); t->id = g_next_id++; g_unlock();
         pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 1 << 20);
         pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);   // Host resources are reclaimed on exit (the guest waits through the handle, no join)
@@ -1362,10 +1326,7 @@ static int svc_thread_impl(int num, uint64_t *regs) {
             t->closed = 1;
             if (!t->started) pthread_cond_broadcast(&t->cv);   // a thread that never started ends now (thread_main)
             if (t->exited && !t->refs) thr_free(t);
-        } else if (i > 0 && i < MAX_H && g_h[i].type == O_READONLY_SHMEM) {
-            g_h[i].type = O_FREE; g_h[i].obj = NULL;
         } else if (i > 0 && i < MAX_H && g_h[i].type == O_TRANSFER_MEMORY) {
-            free(g_h[i].obj);
             g_h[i].type = O_FREE; g_h[i].obj = NULL;
         }
         g_unlock();
@@ -1375,31 +1336,9 @@ static int svc_thread_impl(int num, uint64_t *regs) {
     return 0;
 }
 
-uint32_t hle_new_readonly_shmem(const hle_readonly_shmem *memory) {
-    g_lock(); uint32_t h = h_new(O_READONLY_SHMEM, (void *)memory); g_unlock();
+uint32_t hle_new_transfer_memory(void) {   // CreateTransferMemory's handle (hle_svc.c): 0 when the table is full
+    g_lock(); uint32_t h = h_try_new(O_TRANSFER_MEMORY, NULL); g_unlock();
     return h;
-}
-const hle_readonly_shmem *hle_get_readonly_shmem(uint32_t handle) {
-    g_lock(); const hle_readonly_shmem *memory = h_peek(handle, O_READONLY_SHMEM); g_unlock();
-    return memory;
-}
-
-uint32_t hle_new_transfer_memory(hle_transfer_memory memory) {
-    hle_transfer_memory *object = malloc(sizeof *object);
-    if (!object) return 0;
-    *object = memory;
-    g_lock(); uint32_t h = h_try_new(O_TRANSFER_MEMORY, object); g_unlock();
-    if (!h) free(object);
-    return h;
-}
-
-int hle_get_transfer_memory(uint32_t handle, hle_transfer_memory *memory) {
-    g_lock();
-    const hle_transfer_memory *object = h_peek(handle, O_TRANSFER_MEMORY);
-    int found = object != NULL;
-    if (found) *memory = *object;
-    g_unlock();
-    return found;
 }
 
 // ---------- SystemEvent of the service layer ----------
@@ -1427,19 +1366,6 @@ uint32_t hle_dup_readable_handle(uint32_t h) {   // A second read end of the sam
     if (e) { e->refs++; r = h_new(O_EVENT_R, e); }
     g_unlock();
     return r;
-}
-uint32_t hle_new_event(uint32_t *write_end) {   // A new kernel event, as svcCreateEvent makes it, for a host service to copy to its client: its read end; its write end in *write_end, or none when NULL
-    event_t *e = calloc(1, sizeof *e); if (!e) die("event calloc");
-    e->refs = write_end ? 2 : 1;
-    g_lock(); uint32_t r = h_new(O_EVENT_R, e); if (write_end) *write_end = h_new(O_EVENT_W, e); g_unlock();
-    return r;
-}
-int hle_signal_event_handle(uint32_t write_end) {   // Signal a host-made kernel event (hle_new_event) by its write end, from any thread; 0 once that end is closed
-    g_lock();
-    event_t *e = h_get(write_end, O_EVENT_W);
-    if (e) { e->signaled = 1; wake_sync_waiters(e); }
-    g_unlock();
-    return e != NULL;
 }
 uint64_t hle_system_event_binding(void *ev) {
     uint64_t id = 0;
@@ -1480,16 +1406,6 @@ void hle_signal_system_event(void *ev) {   // An unbound one is bound on the spo
         if (!pthread_getspecific(g_keythr)) { static _Atomic int once; if (!atomic_exchange(&once, 1)) LOG("[RED] SystemEvent %p signalled off a guest thread after the game destroyed it: skipped", ev); return; }
         hle_bind_system_event(ev, 0);   // guest code (SVCs take G): outside the lock
     }
-}
-// Signal only a bound one, from any thread; 0 when it is not bound (never bound, or the game destroyed it). For state changes the front end reports (hle_hid.c: a controller
-// connected or removed), where binding on the spot is impossible off a guest thread and a destroyed event must not be bound again
-int hle_signal_bound_system_event(void *ev) {
-    g_lock();
-    pthread_mutex_lock(&g_se_lock); uint32_t wh = se_find(ev); pthread_mutex_unlock(&g_se_lock);
-    event_t *e = wh ? h_get(wh, O_EVENT_W) : NULL;
-    if (e) { e->signaled = 1; wake_sync_waiters(e); }
-    g_unlock();
-    return e != NULL;
 }
 void hle_clear_system_event(void *ev) {   // Clear a bound service-layer SystemEvent (any thread), as the service does when its condition ends; an unbound one has nothing to clear
     g_lock();

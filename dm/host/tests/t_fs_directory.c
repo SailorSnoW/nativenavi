@@ -118,7 +118,7 @@ int main(void) {
         CHECK(fcntl(fd, F_GETFD) == -1 && errno == EBADF, "CloseDirectory releases the successful handle's descriptor");
     }
 
-    // Reading fails partway: three names in a read-only folder (name index), a writable folder with a subfolder (path walk, listing, count, clean) and an overlay over a base
+    // Reading fails partway: three names in a read-only folder (name index), a writable folder with a subfolder (path walk, listing, count, recursive delete) and an overlay over a base
     char ro[1100], w[1100], sub[1200], ov[1100], q[1300];
     snprintf(ro, sizeof ro, "%s.ro", root); snprintf(w, sizeof w, "%s.w", root); snprintf(sub, sizeof sub, "%s/sub", w); snprintf(ov, sizeof ov, "%s.ov", root);
     mkdir(ro, 0755); mkdir(w, 0755); mkdir(sub, 0755); mkdir(ov, 0755);
@@ -178,8 +178,8 @@ int main(void) {
     snprintf(q, sizeof q, "%s/entry", ov); unlink(q); snprintf(q, sizeof q, "%s/ENTRY", ov2); unlink(q); snprintf(q, sizeof q, "%s/oa", ov2); unlink(q); rmdir(ov2);
 
     fail_reading(sub, 1);
-    CHECK(h_fs_CleanDirRec("w:/sub") != RES_OK, "a clean whose folder cannot be read fails");
-    CHECK(h_fs_CleanDirRec("w:/sub") == RES_OK && rmdir(sub) == 0, "then it empties the folder");
+    CHECK(h_fs_DeleteDirRec("w:/sub") != RES_OK && access(sub, F_OK) == 0, "a recursive delete whose folder cannot be read fails, and the folder stays");
+    CHECK(h_fs_DeleteDirRec("w:/sub") == RES_OK && access(sub, F_OK) != 0, "then it removes the folder");
     for (int i = 0; i < 3; i++) { snprintf(q, sizeof q, "%s/%s", ro, three[i]); unlink(q); snprintf(q, sizeof q, "%s/o%s", ov, three[i]); unlink(q); }
     CHECK(!rmdir(w) && !rmdir(ro) && !rmdir(ov), "remove the read-only, writable and overlay folders");
     CHECK(!unlink(file) && !rmdir(root), "remove the synthetic fixture");

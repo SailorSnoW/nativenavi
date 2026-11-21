@@ -4,6 +4,7 @@
 // DM_AUDIO_LIVE_PCM=<file> plays a prepared six-channel file instead of the tones (an ear check of a real speaker system).
 // Route change: build/t_audio_live 5 default="BlackHole 16ch" switch="BlackHole 2ch"@2 with DM_AUDIO_CAPTURE_DEVICE="BlackHole 2ch" records what the new device gets
 #include "../hle_audio.c"
+static unsigned au_queued(void *g) { aout *a = ao(g); return atomic_load(&a->q_tail) - atomic_load(&a->q_head); }   // blocks appended and not yet played to the end
 #include <time.h>
 #include <math.h>
 #include <string.h>
@@ -121,8 +122,8 @@ int main(int argc, char **argv) {
     if (def_name) { AudioDeviceID d = named_device(def_name); if (d == kAudioObjectUnknown) { puts("no such default device"); return 2; } set_default_output(d); }
     int route = dm_audio_output_channels();
     printf("route: %d channels\n", route);
-    static uint32_t out[16]; uint8_t prm[16]; h_au_InitParam(prm); *(uint16_t *)(prm + 4) = 6;
-    if (h_au_OpenDef0(out, prm) != RES_OK) { puts("open failed"); return 1; }
+    static uint32_t out[16]; uint8_t prm[16]; memset(prm, 0, 8); *(uint16_t *)(prm + 4) = 6;
+    if (h_au_Open4(out, NULL, prm) != RES_OK) { puts("open failed"); return 1; }
     aout *a = ao(out);
     printf("opened: guest %d channels, unit %d channels, downmix %s\n", a->ch, a->dev_ch, a->dev_ch == a->ch ? "no" : "yes");
     // Frequencies: front-left 440 Hz, front-right 660 Hz, center 880 Hz, LFE 60 Hz, back-left 1320 Hz, back-right 1760 Hz; 0.2 full scale each
@@ -133,24 +134,24 @@ int main(int argc, char **argv) {
     int16_t *pcm;
     if (pcm_path) {
         FILE *pf = fopen(pcm_path, "rb"); if (!pf) { printf("cannot open %s\n", pcm_path); return 2; }
-        if (fseek(pf, 0, SEEK_END)) { fclose(pf); h_au_Close(out); return 2; }
+        if (fseek(pf, 0, SEEK_END)) { fclose(pf); au_close(out, NULL); return 2; }
         long bytes = ftell(pf);
-        if (bytes <= 0 || bytes % 12 || fseek(pf, 0, SEEK_SET)) { puts("invalid PCM file"); fclose(pf); h_au_Close(out); return 2; }
+        if (bytes <= 0 || bytes % 12 || fseek(pf, 0, SEEK_SET)) { puts("invalid PCM file"); fclose(pf); au_close(out, NULL); return 2; }
         frames = (size_t)bytes / 12;
         pcm = malloc((size_t)bytes);
-        if (!pcm) { fclose(pf); h_au_Close(out); return 2; }
+        if (!pcm) { fclose(pf); au_close(out, NULL); return 2; }
         size_t read = fread(pcm, 12, frames, pf); fclose(pf);
-        if (read != frames) { puts("short read"); free(pcm); h_au_Close(out); return 2; }
+        if (read != frames) { puts("short read"); free(pcm); au_close(out, NULL); return 2; }
         secs = (int)(frames / RATE) + 1;
         printf("playing %s: %.1f s\n", pcm_path, (double)frames / RATE);
     } else {
         pcm = malloc(frames * 12);
-        if (!pcm) { h_au_Close(out); return 2; }
+        if (!pcm) { au_close(out, NULL); return 2; }
         for (size_t i = 0; i < frames; i++) for (int j = 0; j < 6; j++)
             pcm[6 * i + j] = (int16_t)lrint(0.2 * 32767 * sin(2 * M_PI * hz[j] * (double)i / RATE));
     }
     aout_buf b = {.ptr = pcm, .cap = frames * 12, .size = frames * 12};
-    if (!h_au_Append(out, &b)) { puts("append refused"); free(pcm); h_au_Close(out); return 1; }
+    if (!h_au_Append(out, &b)) { puts("append refused"); free(pcm); au_close(out, NULL); return 1; }
     const char *cap_path = getenv("DM_AUDIO_CAPTURE"); capture_t *cap = NULL;
     if (cap_path) {
         const char *cd = getenv("DM_AUDIO_CAPTURE_DEVICE");   // another device than the one playing at start (the switch target)
@@ -158,7 +159,7 @@ int main(int argc, char **argv) {
         UInt32 nch = (UInt32)atoi(getenv("DM_AUDIO_CAPTURE_CH") ? getenv("DM_AUDIO_CAPTURE_CH") : "6");
         cap = capture_start(dev, nch, (uint64_t)(secs + 2) * RATE);
     }
-    h_au_Start(out);
+    au_start_at(out, NULL);
     if (sw_name && sw_at >= 0) {
         usleep((useconds_t)sw_at * 1000000);
         AudioDeviceID d = named_device(sw_name);
@@ -173,8 +174,8 @@ int main(int argc, char **argv) {
     while (!h_au_Released(out) && now_ns() < until) usleep(10000);
     printf("block released %.2f s after start (%d s of audio)\n", (now_ns() - t_start) / 1e9, secs);
     usleep((useconds_t)secs * 1000000);
-    printf("state %d, queued %u, unit %d channels\n", atomic_load(&a->state), h_au_BufCount(out), a->dev_ch);
-    h_au_Close(out);
+    printf("state %d, queued %u, unit %d channels\n", atomic_load(&a->state), au_queued(out), a->dev_ch);
+    au_close(out, NULL);
     if (cap) capture_stop(cap, cap_path);
     free(pcm);
     puts("live probe done");

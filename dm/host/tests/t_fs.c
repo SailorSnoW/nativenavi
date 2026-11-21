@@ -6,8 +6,7 @@
 //   (4) DM_TEST_FS_FAIL=write:N:errno makes only the Nth save write fail, with writes before and after proceeding normally; that transaction's Commit is rejected, the committed version is unchanged, and the front end receives one notification;
 //      the next transaction commits normally, and the final save = the content of the next transaction;
 //   (5) remounting discards uncommitted content;
-//   (8) a save folder that cannot clone (ENOTSUP: HFS+, exFAT) mounts read-only and tells the front end; recursive deletes unlink symlinks and never empty their targets;
-//   (9) a save whose names hold backslashes (a host from before backslash paths) moves to today's names at mount, a taken name kept as it is.
+//   (8) a save folder that cannot clone (ENOTSUP: HFS+, exFAT) mounts read-only and tells the front end; recursive deletes unlink symlinks and never empty their targets.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +22,7 @@ static int fake_clonefile(const char *src, const char *dst, uint32_t flags);
 #undef pwrite
 #undef clonefile
 ssize_t pwrite(int, const void *, size_t, off_t);
+static const uint64_t k_user1[2] = {DM_UID0, DM_UID1};   // the save is user 1's
 static int g_clone_enotsup;                   // 1: clonefile fails as on HFS+ and exFAT (ENOTSUP), checked on disk images of both
 static int fake_clonefile(const char *src, const char *dst, uint32_t flags) {
     if (g_clone_enotsup) { errno = ENOTSUP; return -1; }
@@ -97,7 +97,6 @@ static void *vt_sym(const char *name) {
         { "_ZN2nn2fs10CreateFileEPKcl", (void *)vt_create_file },
         { "_ZN2nn2fs10DeleteFileEPKc", (void *)vt_path },
         { "_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", (void *)vt_path },
-        { "_ZN2nn2fs25CleanDirectoryRecursivelyEPKc", (void *)vt_path },
         { "_ZN2nn2fs15DeleteDirectoryEPKc", (void *)vt_path },
         { "_ZN2nn2fs10RenameFileEPKcS2_", (void *)vt_rename },
         { "_ZN2nn2fs15RenameDirectoryEPKcS2_", (void *)vt_rename },
@@ -122,68 +121,6 @@ int main(void) {
     char root[1024], save[1100], work[1200], p[1200];
     const char *sp = getenv("TMPDIR"); snprintf(root, sizeof root, "%s/t_fs.XXXXXX", sp ? sp : "/private/tmp");
     if (!mkdtemp(root)) { perror("mkdtemp"); return 1; }
-    {   // cache storage list: the <DM_TEMP>_cache<N> folders that exist when the list opens, in index order, a page at a time; a closed or foreign handle finds no list
-        char temp[1100], c[1200]; snprintf(temp, sizeof temp, "%s/temp", root); setenv("DM_TEMP", temp, 1);
-        uint64_t empty = 0; int count = -1; uint8_t rec[4 * 0x20];
-        CHECK(h_fs_OpenCacheList(&empty) == RES_OK && h_fs_ReadCacheList(&count, rec, empty, 4) == RES_OK && count == 0, "cache list: none on a fresh run");
-        h_fs_CloseCacheList(empty);
-        for (int i = 0; i < 4; i++) { static const char *names[] = {"_cache8", "_cache2", "_cache300", "_cache65535"}; snprintf(c, sizeof c, "%s%s", temp, names[i]); mkdir(c, 0755); }
-        snprintf(c, sizeof c, "%s_cache08", temp); mkdir(c, 0755);   // not a name cache_dir writes
-        snprintf(c, sizeof c, "%s_cache65536", temp); mkdir(c, 0755);
-        snprintf(c, sizeof c, "%s_cache9x", temp); mkdir(c, 0755);
-        snprintf(c, sizeof c, "%s_cache5", temp); put(c, "a file");
-        uint64_t l = 0; CHECK(h_fs_OpenCacheList(&l) == RES_OK && l, "cache list opens");
-        snprintf(c, sizeof c, "%s_cache6", temp); mkdir(c, 0755);   // after the open: the next list's
-        memset(rec, 0xff, sizeof rec);
-        CHECK(h_fs_ReadCacheList(&count, rec, l, 3) == RES_OK && count == 3 && rec[0] == 2 && rec[0x20] == 8 && rec[0x40] == 0x2c && rec[0x41] == 1, "cache list: first page in index order");
-        int zero = 1; for (int i = 4; i < 0x20; i++) zero &= !rec[i];
-        CHECK(zero && !rec[1] && !rec[2] && !rec[3], "cache list: an entry is the index and zeroed reserved bytes");
-        CHECK(h_fs_ReadCacheList(&count, rec, l, 3) == RES_OK && count == 1 && rec[0] == 0xff && rec[1] == 0xff, "cache list: second page, index 65535; nothing the open did not see");
-        CHECK(h_fs_ReadCacheList(&count, rec, l, 3) == RES_OK && count == 0, "cache list: the end");
-        uint64_t l2 = 0; CHECK(h_fs_OpenCacheList(&l2) == RES_OK && l2 != l && h_fs_ReadCacheList(&count, rec, l2, 4) == RES_OK && count == 4 && rec[0x40] == 8, "cache list: a new list sees the folder made since");
-        h_fs_CloseCacheList(l); h_fs_CloseCacheList(l);
-        CHECK(h_fs_ReadCacheList(&count, rec, l, 1) != RES_OK && count == 0, "cache list: a closed handle is no list");
-        CHECK(h_fs_ReadCacheList(&count, rec, 0x7bbd001230ull, 1) != RES_OK, "cache list: a handle never opened is no list");
-        h_fs_CloseCacheList(l2);
-        uint64_t many[17]; int opened = 0; for (int i = 0; i < 17; i++) opened += h_fs_OpenCacheList(&many[i]) == RES_OK;
-        CHECK(opened == 16, "cache list: 16 open at once, the 17th fails");
-        for (int i = 0; i < 16; i++) h_fs_CloseCacheList(many[i]);
-        CHECK(h_fs_OpenCacheList(&l) == RES_OK, "cache list: closed lists free their slots"); h_fs_CloseCacheList(l);
-        unsetenv("DM_TEMP");
-    }
-    {   // fs::GetCacheStorageMax: the application's control data, DM_CONTROL_NACP else control.nacp beside the RomFS
-        char ver[1100], rom[1200], control[1300]; snprintf(ver, sizeof ver, "%s/v65536", root); snprintf(rom, sizeof rom, "%s/RomFS", ver); mkdir(ver, 0755); mkdir(rom, 0755);
-        snprintf(control, sizeof control, "%s/control.nacp", ver);
-        unsetenv("DM_CONTROL_NACP"); setenv("DM_ROMFS", rom, 1);
-        int index = -1; int64_t size = -1;
-        CHECK(h_fs_CacheMax(&index, &size) != RES_OK && index == -1, "cache storage max: no control data is an error, not a guess");
-        static uint8_t nacp[0x4000]; const uint64_t max = 1715470336; memcpy(nacp + 0x3180, &max, 8); nacp[0x3188] = 43;
-        FILE *f = fopen(control, "wb"); fwrite(nacp, 1, sizeof nacp, f); fclose(f);
-        CHECK(h_fs_CacheMax(&index, &size) == RES_OK && index == 43 && size == 1715470336, "cache storage max: control.nacp beside the RomFS folder");
-        char slash[1300]; snprintf(slash, sizeof slash, "%s/", rom); setenv("DM_ROMFS", slash, 1); index = -1;
-        CHECK(h_fs_CacheMax(&index, &size) == RES_OK && index == 43, "cache storage max: a RomFS path with a trailing slash");
-        nacp[0x3188] = 7; nacp[0x3189] = 1; char other[1300]; snprintf(other, sizeof other, "%s/other.nacp", root);
-        f = fopen(other, "wb"); fwrite(nacp, 1, sizeof nacp, f); fclose(f); setenv("DM_CONTROL_NACP", other, 1);
-        CHECK(h_fs_CacheMax(&index, &size) == RES_OK && index == 0x107, "cache storage max: DM_CONTROL_NACP first, the index a u16");
-        put(other, "short"); CHECK(h_fs_CacheMax(&index, &size) != RES_OK, "cache storage max: a short file is an error");
-        unsetenv("DM_CONTROL_NACP");
-        // fs::GetCacheStorageSize: the size the storage was created with; a folder without a record takes the control data's default (here none, then 50 MB / 1 MB); no storage is an error
-        char temp[1100], c[1300]; snprintf(temp, sizeof temp, "%s/temp2", root); setenv("DM_TEMP", temp, 1);
-        int64_t journal = -1; size = -1;
-        CHECK(h_fs_CacheSize(&size, &journal, 3) == RES_TARGET_NOT_FOUND && size == -1, "cache storage size: no storage is ResultTargetNotFound");
-        CHECK(h_fs_CreateCache(3, 54198272, 180224) == RES_OK && h_fs_CacheSize(&size, &journal, 3) == RES_OK && size == 54198272 && journal == 180224, "cache storage size: the size it was created with");
-        CHECK(h_fs_CreateCache(3, 1 << 20, 1 << 20) == RES_OK && h_fs_CacheSize(&size, &journal, 3) == RES_OK && size == 54198272, "cache storage size: creating it again keeps its size");
-        uint64_t l = 0; int count = -1; uint8_t rec[2 * 0x20];
-        CHECK(h_fs_OpenCacheList(&l) == RES_OK && h_fs_ReadCacheList(&count, rec, l, 2) == RES_OK && count == 1 && rec[0] == 3, "cache storage size: the list skips the record beside the folder");
-        h_fs_CloseCacheList(l);
-        CHECK(h_fs_DeleteCache(3) == RES_OK && h_fs_CacheSize(&size, &journal, 3) == RES_TARGET_NOT_FOUND, "cache storage size: deleting removes the storage");
-        snprintf(c, sizeof c, "%s_cache3.size", temp); CHECK(access(c, F_OK), "cache storage size: deleting removes the record");
-        CHECK(h_fs_MountCache("cachet", 4) == RES_OK && h_fs_CacheSize(&size, &journal, 4) == RES_OK && size == 256 << 20 && journal == 256 << 20, "cache storage size: no record, no default: 256 MB");
-        const int64_t def[2] = {50 << 20, 1 << 20}; memcpy(nacp + 0x3170, def, sizeof def);
-        f = fopen(control, "wb"); fwrite(nacp, 1, sizeof nacp, f); fclose(f); setenv("DM_ROMFS", rom, 1);
-        CHECK(h_fs_CacheSize(&size, &journal, 4) == RES_OK && size == 50 << 20 && journal == 1 << 20, "cache storage size: no record: the control data's default");
-        unsetenv("DM_TEMP"); unsetenv("DM_ROMFS");
-    }
     char rom[1100], overlay[1100], rdata[1200], odata[1200], fn[1300], got[64];
     snprintf(rom, sizeof rom, "%s/rom", root); snprintf(overlay, sizeof overlay, "%s/overlay", root); snprintf(rdata, sizeof rdata, "%s/data", rom); snprintf(odata, sizeof odata, "%s/data", overlay);
     mkdir(rom, 0755); mkdir(overlay, 0755); mkdir(rdata, 0755); mkdir(odata, 0755);
@@ -277,39 +214,15 @@ int main(void) {
             cnt = 0; CHECK(h_fs_OpenDirectory(&h, "rom:/", DIRMODE_DIR | DIRMODE_FILE) == RES_OK && h_fs_ReadDirectory(&cnt, d8, h, 8) == RES_OK && cnt == 1 && !strcmp(d8[0].name, "data"), "the root lists the directory, not the marker (%lld)", (long long)cnt); h_fs_CloseDirectory(h);
         }
         unsetenv("DM_ROMFS_OVERLAY"); g_nmnt = 0;
-        snprintf(fn, sizeof fn, "%s/2.img", root); CHECK(!link(ip, fn), "stage a DLC image"); setenv("DM_AOC_DIR", root, 1);
-        size_t cache = 0;
-        CHECK(h_fs_QueryAocCache(&cache, 2) == RES_OK && cache == 176, "DLC image reports Horizon table size (176, got %zu)", cache);
-        CHECK(h_fs_MountAoc("aoc", 2, NULL, 0) == RES_OK && read_fs("aoc:/data/a", got, sizeof got) && !strcmp(got, "hello"), "DLC mounts and reads directly from its image");
-        {   // one mount name for each add-on in turn, unmounted in between (Pokémon Friends' AocVersionCheker: "AVCtitle")
-            memcpy(img + 32, "HELLO", 5); snprintf(fn, sizeof fn, "%s/3.img", root); f = fopen(fn, "wb"); fwrite(img, 1, sizeof img, f); fclose(f); memcpy(img + 32, "hello", 5);
-            int before = g_nmnt;
-            CHECK(h_fs_MountAoc("AVC", 2, NULL, 0) == RES_OK && read_fs("AVC:/data/a", got, sizeof got) && !strcmp(got, "hello"), "the first add-on under a name");
-            h_fs_Unmount("AVC"); CHECK(!h_fs_IsMounted("AVC"), "Unmount releases an add-on's name");
-            CHECK(!h_fs_IsMounted("") && !read_fs(":/data/a", got, sizeof got), "a released entry answers to no name, the empty one included");
-            CHECK(h_fs_MountAoc("AVC", 3, NULL, 0) == RES_OK && read_fs("AVC:/data/a", got, sizeof got) && !strcmp(got, "HELLO"), "the next add-on under that name shows its own files (got %s)", got);
-            h_fs_Unmount("AVC");
-            CHECK(h_fs_MountAoc("AVC", 2, NULL, 0) == RES_OK && read_fs("AVC:/data/a", got, sizeof got) && !strcmp(got, "hello") && g_nmnt == before + 2,
-                  "the first add-on again takes its entry back (%d entries for two add-ons)", g_nmnt - before);
-            CHECK(h_fs_MountAoc("AVC", 3, NULL, 0) == RES_OK && read_fs("AVC:/data/a", got, sizeof got) && !strcmp(got, "hello"), "a name still in use keeps its target, as before");
-            CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK, "mount the RomFS"); h_fs_Unmount("rom");
-            CHECK(h_fs_IsMounted("rom") && read_fs("rom:/data/c", got, sizeof got) && !strcmp(got, "xy"), "Unmount leaves the RomFS mounted, as every mount but an add-on's");
-        }
-        unsetenv("DM_AOC_DIR"); g_nmnt = 0;
-        {   // a file written as read from a damaged NSP (nx_extract --allow-damaged) still reads, and the mount counts it and the first open names it once
-            romfs_img *clean = img_open(ip); CHECK(clean && !clean->damaged, "a clean image has no damaged files"); romfs_image_close(clean);
-            e[2].flags = IMG_ENT_DAMAGED; memcpy(img + 39, e, sizeof e);
-            f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
-            CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK && g_mnt[0].img && g_mnt[0].img->damaged == 1, "a damaged file mounts, and is counted");
-            CHECK(g_mnt[0].img->e[2].flags == IMG_ENT_DAMAGED, "not named before its first open");
-            CHECK(read_fs("rom:/data/c", got, sizeof got) && !strcmp(got, "xy") && g_mnt[0].img->e[4].flags == 0, "opening a clean file names nothing");
-            CHECK(read_fs("rom:/data/a", got, sizeof got) && !strcmp(got, "hello") && g_mnt[0].img->e[2].flags == (IMG_ENT_DAMAGED | IMG_ENT_REPORTED), "the damaged file reads as written, and is named");
-            CHECK(read_fs("rom:/data/a", got, sizeof got) && !strcmp(got, "hello"), "and reads again");
-            g_nmnt = 0;
-            e[2].flags = 2; memcpy(img + 39, e, sizeof e); f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
-            CHECK(!img_open(ip), "an unknown flag on a file is refused");
-            e[2].flags = 0; e[1].flags = IMG_ENT_DAMAGED; memcpy(img + 39, e, sizeof e); f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
-            CHECK(!img_open(ip), "a damaged flag on a directory is refused");
+        CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK, "mount the RomFS"); h_fs_Unmount("rom");
+        CHECK(host_mounted("rom") && read_fs("rom:/data/c", got, sizeof got) && !strcmp(got, "xy"), "Unmount leaves the RomFS mounted");
+        g_nmnt = 0;
+        {   // an entry's flags byte is 0: an image with another value is not read
+            romfs_img *clean = img_open(ip); CHECK(clean != NULL, "the image opens by itself"); if (clean) romfs_image_close(clean);
+            e[2].flags = 1; memcpy(img + 39, e, sizeof e); f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
+            CHECK(!img_open(ip), "a flag on a file is refused");
+            e[2].flags = 0; e[1].flags = 1; memcpy(img + 39, e, sizeof e); f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
+            CHECK(!img_open(ip), "a flag on a directory is refused");
             e[1].flags = 0; memcpy(img + 39, e, sizeof e);
         }
         f = fopen(ip, "wb"); fwrite(img, 1, 39 + 50, f); fclose(f);   // cut off inside the index, as a copy stopped partway
@@ -318,7 +231,7 @@ int main(void) {
     snprintf(save, sizeof save, "%s/save", root); snprintf(work, sizeof work, "%s.work", save);
     mkdir(save, 0755); snprintf(p, sizeof p, "%s/a", save); put(p, "old");
     setenv("DM_SAVE", save, 1); setenv("DM_TEST_FS_FAIL", "write:5:28", 1);   // the 5th save write fails, errno 28 = ENOSPC
-    CHECK(h_fs_MountSave("save", NULL) == RES_OK, "mount the save");
+    CHECK(h_fs_MountSave("save", k_user1) == RES_OK, "mount the save");
 
     // Save write count: (1)=1st (2)=2nd (3)=3rd (4)=4th/5th/6th/7th (5)=8th
     printf("① pwrite returns 0\n");
@@ -360,7 +273,7 @@ int main(void) {
     printf("⑤ remounting discards uncommitted content\n");
     CHECK(write_save("save:/a", "v9") == RES_OK, "write a=v9 without committing");
     g_nmnt = 0;                                                        // simulate a process restart: clear the mount table
-    CHECK(h_fs_MountSave("save", NULL) == RES_OK, "remount");
+    CHECK(h_fs_MountSave("save", k_user1) == RES_OK, "remount");
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "new"), "work directory a is back to the committed version new");
     snprintf(p, sizeof p, "%s/b", work); CHECK(same(p, "7"), "work directory b = the committed 7");
 
@@ -390,13 +303,13 @@ int main(void) {
     // 6c Cloning the work directory at mount fails: do not exit; mount the committed directory read-only instead. Reads work, writes fail, commits are no-ops, the committed version is unchanged, and the front end is notified once; the next normal mount works as before
     setenv("DM_TEST_FS_FAILAT", "mountclone:1", 1); g_nmnt = 0; nf0 = g_nfail;
     snprintf(p, sizeof p, "rm -rf '%s'", work); system(p);
-    CHECK(h_fs_MountSave("save", NULL) == RES_OK && g_nfail == nf0 + 1, "mount returns success, front end notified once (actually %d times)", g_nfail - nf0);
+    CHECK(h_fs_MountSave("save", k_user1) == RES_OK && g_nfail == nf0 + 1, "mount returns success, front end notified once (actually %d times)", g_nfail - nf0);
     CHECK(read_fs("save:/a", got, sizeof got) && !strcmp(got, "ok2"), "the read-only mount reads the committed a=ok2 (read %s)", got);
     CHECK(write_save("save:/a", "zzz") != RES_OK, "writes fail");
     CHECK(h_fs_Commit("save") == RES_OK, "commit is a no-op");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok2"), "committed a is still ok2");
     unsetenv("DM_TEST_FS_FAILAT"); g_nmnt = 0;
-    CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok3") == RES_OK && h_fs_Commit("save") == RES_OK, "remount without injection: transactional as usual, writing a=ok3 and committing succeed");
+    CHECK(h_fs_MountSave("save", k_user1) == RES_OK && write_save("save:/a", "ok3") == RES_OK && h_fs_Commit("save") == RES_OK, "remount without injection: transactional as usual, writing a=ok3 and committing succeed");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "committed a = ok3");
 
     printf("⑦ backslash paths on a save\n");
@@ -424,29 +337,27 @@ int main(void) {
 
     printf("⑧ a save folder that cannot clone, and symlinks in recursive deletes\n");
     {   g_nmnt = 0; g_clone_enotsup = 1; int nf1 = g_nfail;
-        CHECK(h_fs_MountSave("save", NULL) == RES_OK && g_mnt[0].ro && g_nfail == nf1 + 1, "clonefile ENOTSUP: the committed save mounts read-only and the front end is told once");
+        CHECK(h_fs_MountSave("save", k_user1) == RES_OK && g_mnt[0].ro && g_nfail == nf1 + 1, "clonefile ENOTSUP: the committed save mounts read-only and the front end is told once");
         CHECK(read_fs("save:/a", got, sizeof got) && !strcmp(got, "ok3"), "the committed save still reads (a = %s)", got);
         CHECK(write_save("save:/a", "lost") != RES_OK, "a write is refused");
         snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "committed a is still ok3");
         g_clone_enotsup = 0; g_nmnt = 0;
-        CHECK(h_fs_MountSave("save", NULL) == RES_OK && !g_mnt[0].ro, "with cloning back, the save mounts writable");
+        CHECK(h_fs_MountSave("save", k_user1) == RES_OK && !g_mnt[0].ro, "with cloning back, the save mounts writable");
         char victim[1100], vf[1200], lnk[1200];
         snprintf(victim, sizeof victim, "%s/victim", root); mkdir(victim, 0755); snprintf(vf, sizeof vf, "%s/keep", victim); put(vf, "keep");
         CHECK(h_fs_CreateDirectory("save:/d") == RES_OK, "create save:/d");
         snprintf(lnk, sizeof lnk, "%s/d/lnk", work); CHECK(symlink(victim, lnk) == 0, "a symlink to a directory outside the save inside save:/d");
         CHECK(h_fs_DeleteDirRec("save:/d") == RES_OK && access(lnk, F_OK) && same(vf, "keep"), "DeleteDirectoryRecursively removes the symlink, not its target's files");
-        CHECK(h_fs_CreateDirectory("save:/d") == RES_OK && symlink(victim, lnk) == 0, "the same again in a new save:/d");
-        CHECK(h_fs_CleanDirRec("save:/d") == RES_OK && access(lnk, F_OK) && same(vf, "keep"), "CleanDirectoryRecursively removes the symlink, not its target's files");
         snprintf(lnk, sizeof lnk, "%s/lnk2", root); symlink(victim, lnk); errno = 0;
         CHECK(rm_tree(lnk) == -1 && errno == ENOTDIR && same(vf, "keep"), "rm_tree of a symlink to a directory refuses it (ENOTDIR) and leaves the target alone");
     }
 
     {   // Unmount follows who holds the mount: the host's table is permanent, the SDK's entry is released in the SDK, so the name can be mounted again
-        CHECK(h_fs_IsMounted("save"), "the host holds save");
+        CHECK(host_mounted("save"), "the host holds save");
         h_fs_Unmount("cache"); CHECK(1, "Unmount with no SDK in the process is a no-op");
         t_guest_sym = sdk_sym; g_sdk_cache_mounted = 1;
         h_fs_Unmount("save");
-        CHECK(!g_sdk_asked && !g_sdk_unmounts && h_fs_IsMounted("save"), "a host mount stays and the SDK is not asked");
+        CHECK(!g_sdk_asked && !g_sdk_unmounts && host_mounted("save"), "a host mount stays and the SDK is not asked");
         h_fs_Unmount("nowhere");
         CHECK(g_sdk_asked == 1 && !g_sdk_unmounts, "a name in neither table is a no-op (the SDK's Unmount would abort on it)");
         h_fs_Unmount(NULL);
@@ -464,7 +375,7 @@ int main(void) {
     {   int32_t et = -1; uint64_t h = 0; size_t n = 0; int64_t sz = 0, cnt = 0; DirectoryEntry de[4]; char b[16] = {0}; int calls;
         CHECK(h_fs_GetEntryType(&et, "vtapi:/VoiceText") == RES_PATH_NOT_FOUND, "with no SDK in the process, a name the host does not hold is not found");
         t_guest_sym = vt_sym;
-        CHECK(h_fs_IsMounted("vtapi") && h_fs_IsPathMounted("vtapi:/VoiceText") && !h_fs_IsMounted("nowhere"), "IsMounted and IsPathMounted answer from the SDK's table too");
+        CHECK(h_fs_IsPathMounted("vtapi:/VoiceText") && h_fs_IsPathMounted("save:/a") && !h_fs_IsPathMounted("nowhere:/x"), "IsPathMounted answers from the host's table and the SDK's");
         calls = g_vt_calls;
         CHECK(h_fs_GetEntryType(&et, "vtapi:/VoiceText") == RES_OK && et == ENT_DIR && g_vt_calls == calls + 1, "GetEntryType on the RAM disk is the SDK's");
         CHECK(h_fs_CreateDirectory("vtapi:/VoiceText/vt") == RES_OK && h_fs_CreateFile("vtapi:/VoiceText/vt/new", 4) == RES_OK && g_vt_calls == calls + 3, "CreateDirectory and CreateFile on the RAM disk are the SDK's");
@@ -484,7 +395,7 @@ int main(void) {
         CHECK(g_vt_dirs_closed == 1 && g_vt_calls == calls + 1 && !sdk_handle_known(VT_DIR), "CloseDirectory closes it in the SDK and forgets it");
         calls = g_vt_calls;
         CHECK(h_fs_RenameFile("vtapi:/VoiceText/vt/new", "vtapi:/VoiceText/vt/old") == RES_OK && h_fs_DeleteFile("vtapi:/VoiceText/vt/old") == RES_OK
-              && h_fs_DeleteDirRec("vtapi:/VoiceText/vt") == RES_OK && h_fs_CleanDirRec("vtapi:/VoiceText") == RES_OK && h_fs_DeleteDir("vtapi:/VoiceText") == RES_OK && g_vt_calls == calls + 5,
+              && h_fs_DeleteDirRec("vtapi:/VoiceText/vt") == RES_OK && h_fs_DeleteDir("vtapi:/VoiceText") == RES_OK && g_vt_calls == calls + 4,
               "RenameFile, DeleteFile and the directory deletes on the RAM disk are the SDK's");
         calls = g_vt_calls;
         CHECK(h_fs_RenameFile("vtapi:/VoiceText/vt/vtpath.ini", "save:/vtpath.ini") == RES_RENAME_OTHER_FS && g_vt_calls == calls, "a rename between the SDK's mount and the host's is refused as two mounts and reaches neither");
@@ -493,45 +404,6 @@ int main(void) {
               "the host's own mounts never ask the SDK");
         CHECK(h_fs_GetEntryType(&et, "nowhere:/x") == RES_PATH_NOT_FOUND && g_vt_calls == calls, "a name in neither table is still not found");
         t_guest_sym = NULL;
-    }
-
-    printf("⑨ saves named by a host before backslash paths\n");
-    {   char old[1100], q[1300], r[1300]; struct stat ost; uint64_t h = 0; DirectoryEntry de[32]; int64_t cnt = 0;
-        snprintf(old, sizeof old, "%s/oldsave", root); mkdir(old, 0755);
-        setenv("DM_SAVE", old, 1);
-#define OLD(rel) (snprintf(q, sizeof q, "%s/%s", old, rel), q)
-        put(OLD("\\savedata0.bin"), "one");                               // save:\savedata0.bin
-        put(OLD("\\sub\\deep.bin"), "deep");                              // save:\sub\deep.bin: one file in the root, its folder never made
-        mkdir(OLD("\\dir"), 0755); put(OLD("\\dir/in"), "in");            // save:\dir then save:\dir/in: a folder, as the old host made it
-        put(OLD("\\dir\\f"), "f");                                        // save:\dir\f: beside that folder, not in it
-        mkdir(OLD("plain"), 0755); put(OLD("plain/\\x"), "x");            // deeper in an ordinary folder
-        put(OLD("both.bin"), "new"); put(OLD("\\both.bin"), "old");       // the game wrote a new save under today's host: that one stays what it reads
-        mkdir(OLD("m"), 0755); put(OLD("m/b"), "mb"); put(OLD("m/same"), "newer");
-        mkdir(OLD("\\m"), 0755); put(OLD("\\m/a"), "ma"); put(OLD("\\m/same"), "older");   // a folder with both names: merged, a taken name kept
-        put(OLD("foo"), "small"); put(OLD("\\Foo"), "big");               // differs only in case, which Horizon's paths tell apart
-        put(OLD("\\..\\up"), "up");                                       // would leave the save
-        put(OLD("keep"), "kept");
-        g_nmnt = 0;
-        CHECK(h_fs_MountSave("save", NULL) == RES_OK && !g_mnt[0].ro, "the save mounts");
-        CHECK(read_fs("save:\\savedata0.bin", got, sizeof got) && !strcmp(got, "one") && read_fs("save:/savedata0.bin", got, sizeof got) && !strcmp(got, "one"), "save:\\savedata0.bin finds the old file");
-        CHECK(same(OLD("savedata0.bin"), "one") && lstat(OLD("\\savedata0.bin"), &ost), "the committed save has the new name and not the old");
-        CHECK(read_fs("save:\\sub\\deep.bin", got, sizeof got) && !strcmp(got, "deep"), "a file with its folder in its name gets the folder");
-        CHECK(read_fs("save:/dir/in", got, sizeof got) && !strcmp(got, "in") && read_fs("save:/dir/f", got, sizeof got) && !strcmp(got, "f") && lstat(OLD("\\dir"), &ost), "a folder and a file that named it become one folder");
-        CHECK(read_fs("save:/plain/x", got, sizeof got) && !strcmp(got, "x"), "a name deeper in the save");
-        CHECK(read_fs("save:/both.bin", got, sizeof got) && !strcmp(got, "new") && same(OLD("\\both.bin"), "old"), "a taken name is not overwritten, and the old file stays");
-        CHECK(read_fs("save:/m/a", got, sizeof got) && !strcmp(got, "ma") && read_fs("save:/m/b", got, sizeof got) && !strcmp(got, "mb") && read_fs("save:/m/same", got, sizeof got) && !strcmp(got, "newer") && same(OLD("\\m/same"), "older"), "folders merge, and a taken name in them stays too");
-        CHECK(read_fs("save:/Foo", got, sizeof got) && !strcmp(got, "big") && read_fs("save:/foo", got, sizeof got) && !strcmp(got, "small"), "names that differ in case stay two files");
-        snprintf(r, sizeof r, "%s/up", root); CHECK(same(OLD("\\..\\up"), "up") && lstat(r, &ost), "a name with .. stays where it is");
-        CHECK(read_fs("save:/keep", got, sizeof got) && !strcmp(got, "kept"), "an ordinary name is untouched");
-        CHECK(h_fs_OpenDirectory(&h, "save:/", DIRMODE_FILE) == RES_OK && h_fs_ReadDirectory(&cnt, de, h, 32) == RES_OK, "the root lists");
-        int foo = 0, Foo = 0; for (int64_t i = 0; i < cnt; i++) { foo += !strcmp(de[i].name, "foo"); Foo += !strcmp(de[i].name, "Foo"); }
-        CHECK(foo == 1 && Foo == 1, "the listing shows foo and Foo");
-        CHECK(h_fs_DeleteFile("save:/savedata0.bin") == RES_OK && h_fs_Commit("save") == RES_OK, "the game erases the moved file and commits");
-        g_nmnt = 0;
-        CHECK(h_fs_MountSave("save", NULL) == RES_OK && h_fs_OpenFile(&h, "save:/savedata0.bin", MODE_READ) != RES_OK, "an erased file stays erased at the next mount");
-        CHECK(read_fs("save:/both.bin", got, sizeof got) && !strcmp(got, "new") && read_fs("save:/m/a", got, sizeof got) && !strcmp(got, "ma"), "a second mount changes nothing else");
-#undef OLD
-        g_nmnt = 0;
     }
 
     char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); system(cmd);

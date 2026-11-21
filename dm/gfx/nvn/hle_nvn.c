@@ -2649,20 +2649,6 @@ static void fstep_tick(const win_t *o, int c) {
         t0 = t; v0 = vs; memset(held, 0, sizeof held); drain_n = drain_cut = 0;
     }
 }
-// The crop a present shows: the window's own (nvnWindowSetCrop), else the vi layer's (vi::SetLayerCrop, hle_vi.c); on the Switch both become the crop of the buffer queued to the layer.
-// Link's Awakening crops only its layer: in handheld mode it draws 1280x720 into its 1920x1080 window textures and crops the layer to that. A layer crop that does not fit the
-// texture is reported once and the whole texture shown, as before the layer crop was read here. lc receives the layer crop
-void dm_vi_layer_crop(int c[4]);   // hle_vi.c: x, y, w, h the game last cropped its layer to (all 0 = none)
-static const int *present_crop(const int win[4], int tw, int th, int lc[4]) {
-    if (win[2] || win[3]) return win;   // the window's own crop (present_crop_rect checks it)
-    dm_vi_layer_crop(lc);
-    if (!lc[2] || !lc[3]) return win;   // no layer crop either: the whole texture
-    if (lc[0] + lc[2] > tw || lc[1] + lc[3] > th) {
-        static int once; if (!once++) LOG("[RED] vi layer crop %d,%d %dx%d does not fit the window texture %dx%d: the present shows the whole texture", lc[0], lc[1], lc[2], lc[3], tw, th);
-        return win;
-    }
-    return lc;
-}
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     (void)q; win_t *o = (win_t *)w; o->presents++;
     if (fps_high()) high_cap_tick();
@@ -2694,9 +2680,9 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     gfx_enter();
     uint64_t t0 = now_ns();
     if (idx >= 0 && idx < o->ntex && idx < 4) {   // enqueue only, return immediately
-        const tex_t *t = CTX(o->tex[idx]); int lc[4]; const int *crop = present_crop(o->crop, (int)t->d.width, (int)t->d.height, lc);
+        const tex_t *t = CTX(o->tex[idx]);
         nvn_queue_present_release(o->ticket[idx]);
-        o->ticket[idx] = nvn_queue_present((queue_t *)q,t,present_period(o) / 1e9,crop);
+        o->ticket[idx] = nvn_queue_present((queue_t *)q,t,present_period(o) / 1e9,o->crop);   // the window's crop (nvnWindowSetCrop; present_crop_rect checks it)
     }
     gfx_leave();
     // Diagnostic DM_NVN_PRESENT_FINISH=1 (off by default): a present returns once the GPU has run the frame, so the game never runs ahead of the GPU
@@ -2779,7 +2765,6 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         uint64_t g0, g1; if (frame_rec() && mtl_gpu_span(f - 8, &g0, &g1)) { trow(f - 8, "@gpu_beg_ms", (g0 - g_t0_ns) / 1e6); trow(f - 8, "@gpu_end_ms", (g1 - g_t0_ns) / 1e6); } }
     prev_in = t0; prev_pass = ps; prev_draw = dr;
     dump_frame();
-    { void dm_vi_frame_queued(uint64_t); dm_vi_frame_queued(g_frame); }   // the layer's frame history (hle_vi.c), numbered as GetLatestFrameNumber
     if (g_frame % TWIN == 0) tsummary(g_frame);
     // GPU replay carries the submitted frame, even when a later CPU frame is already queued.
     // Real-device semantics: present only enqueues and returns immediately; this frame's display time is scheduled by the pacer, and the texture can be acquired again only at "display time + one period" (blocking in AcquireTexture)

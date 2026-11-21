@@ -9,7 +9,7 @@ enum { DM_AUDIO_INPUT_PCM16 = 2, DM_AUDIO_INPUT_CHANNELS = 1, DM_AUDIO_INPUT_RAT
 
 #define DM_AUDIO_INPUT_DEVICE "AudioVirtualInput"
 
-// Platform hooks. The iOS host intentionally keeps the existing no-input behavior.
+// Platform hooks (audio_input_mac.m; the tests have their own).
 int dm_audio_input_platform_device_available(void); // Checks hardware and granted permission without prompting.
 int dm_audio_input_platform_prepare(void);     // Prepares capture only when launcher permission is granted; never prompts.
 int dm_audio_input_platform_start(void);
@@ -26,12 +26,8 @@ int dm_audio_input_start(dm_audio_input_stream *stream);
 void dm_audio_input_stop(dm_audio_input_stream *stream);
 void dm_audio_input_purge(dm_audio_input_stream *stream);
 int dm_audio_input_state(const dm_audio_input_stream *stream);
-int dm_audio_input_capacity(const dm_audio_input_stream *stream);
 int dm_audio_input_filled(const dm_audio_input_stream *stream);
-int dm_audio_input_free(const dm_audio_input_stream *stream);
 int dm_audio_input_read(dm_audio_input_stream *stream, void *dst, int frames);
-float dm_audio_input_gain(const dm_audio_input_stream *stream);
-void dm_audio_input_set_gain(dm_audio_input_stream *stream, float gain);
 
 // The platform callback supplies planar Float32 samples at the device sample rate.
 // Conversion and fan-out use preallocated queues and do not take locks.

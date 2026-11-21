@@ -3,7 +3,6 @@
 // destruction and address / handle reuse always happen before the first tick.
 #include "../hle_thread.c"
 #include <assert.h>
-#include <mach-o/getsect.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -40,8 +39,6 @@ void dm_mii_default_charinfo(void *out) { memset(out, 0, 0x58); }
 #undef pthread_create
 #undef pthread_detach
 #undef nanosleep
-void dm_applet_enter(const char *name) { (void)name; }   // hle_oe.c: the shop stand-ins hold the game out of focus
-void dm_applet_leave(void) {}
 
 struct dm_flags g_flag;
 module_t *g_mod;
@@ -59,13 +56,10 @@ uint64_t guest_ns(void) { return now_ns(); }
 int dm_detclock_enabled(void) { return 0; }
 __thread uint64_t dm_clock_reads;   // guest clock reads per thread (hle_os.c in the host; thr_yield reads it)
 int dm_guest_as_contains(uintptr_t addr) { (void)addr; return 0; }
-int dm_sdk_major(void) { return 20; }
 int dm_game_imports(const char *prefix) { (void)prefix; return 1; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 void dm_backtrace(uint64_t fp) { (void)fp; }
 uint32_t hle_hid_connected_npad(void) { return 0; }
-uint32_t dm_native_image_blank(uint32_t w, uint32_t h) { (void)w; (void)h; return 0; }   // hle_codec_video.c: GameChat's camera storage
-void dm_native_image_blank_free(uint32_t handle) { (void)handle; }
 static uint32_t create_event(void *p, int mode, int interprocess) {
     (void)mode; assert(interprocess);
     uint64_t r[32] = {0}; assert(svc_thread(0x45, r) && !r[0]);
@@ -140,66 +134,23 @@ static void copied_read_end(void) {
     uint64_t r[32] = {copy}; assert(svc_thread(0x16, r) && !r[0]);
     g_lock(); assert(!h_peek(copy, O_EVENT_R)); g_unlock();
 }
-static void transfer_memory_handles(void) {
-    uint32_t handle = hle_new_transfer_memory((hle_transfer_memory){0x4000, 0x1000, 0});
-    uint32_t other = hle_new_transfer_memory((hle_transfer_memory){0x8000, 0x2000, 1});
-    uint32_t event = hle_new_event(NULL);
-    hle_transfer_memory memory;
-    assert(handle && other && event && handle != other && other != event && handle != event);
-    assert(!hle_get_transfer_memory(event, &memory));
-    assert(hle_get_transfer_memory(handle, &memory) && memory.address == 0x4000 && memory.size == 0x1000 && memory.owner_perm == 0);
-    uint64_t regs[32] = {handle};
-    assert(svc_thread(0x16, regs) && !regs[0]);
-    assert(!hle_get_transfer_memory(handle, &memory));
-    assert(hle_get_transfer_memory(other, &memory) && memory.address == 0x8000 && memory.size == 0x2000 && memory.owner_perm == 1);
+static void transfer_memory_handles(void) {   // a transfer memory handle shares the table with events and closes like one
+    uint32_t handle = hle_new_transfer_memory(), other = hle_new_transfer_memory();
+    uint64_t regs[32] = {0}; assert(svc_thread(0x45, regs) && !regs[0]);
+    uint32_t wh = (uint32_t)regs[1], rh = (uint32_t)regs[2];
+    assert(handle && other && handle != other && other != rh && handle != rh && other != wh && handle != wh);
+    regs[0] = handle; assert(svc_thread(0x16, regs) && !regs[0]);
+    g_lock(); assert(g_h[handle - 0x1000].type == O_FREE && g_h[other - 0x1000].type == O_TRANSFER_MEMORY); g_unlock();
     regs[0] = other; assert(svc_thread(0x16, regs) && !regs[0]);
-    regs[0] = event; assert(svc_thread(0x16, regs) && !regs[0]);
-}
-// Resolve exactly the SDK imports the service watcher calls, through the host's normal force-hook table.
-static void *purchase_hook(const char *name) {
-    extern const struct mach_header_64 _mh_execute_header;
-    unsigned long bytes = 0;
-    const hle_force_ent *entries = (const hle_force_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swforce", &bytes);
-    for (size_t i = 0; i < bytes / sizeof *entries; i++) if (!strcmp(entries[i].name, name)) return (void *)entries[i].fn;
-    fprintf(stderr, "missing purchased-item hook: %s\n", name); abort();
-}
-typedef struct { void *guest; test_event *(*get)(void); test_event *event; } purchase_reader;
-static void *purchase_read(void *arg) {
-    purchase_reader *reader = arg;
-    pthread_setspecific(g_keythr, reader->guest);
-    reader->event = reader->get();
-    return NULL;
-}
-static void purchased_event(void) {
-    void (*init)(void) = purchase_hook("_ZN2nn2ec24InitializePurchasedEventEv");
-    void (*init_all)(void) = purchase_hook("_ZN2nn2ec27InitializeAllPurchasedEventEv");
-    void (*init_app)(const uint64_t *) = purchase_hook("_ZN2nn2ec27InitializeAllPurchasedEventERKNS_13ApplicationIdE");
-    void (*finish)(void) = purchase_hook("_ZN2nn2ec22FinalizePurchasedEventEv");
-    test_event *(*get)(void) = purchase_hook("_ZN2nn2ec17GetPurchasedEventEv");
-    unsigned (*pop)(void *) = purchase_hook("_ZN2nn2ec20PopPurchasedItemInfoEPNS0_17PurchasedItemInfoE");
-    unsigned (*pop_private)(void *) = purchase_hook("_ZN2nn2ec20PopPurchasedItemInfoEPNS0_27PurchasedItemInfoForPrivateE");
-    init();
-    pthread_t threads[4]; purchase_reader readers[4];
-    for (unsigned i = 0; i < 4; ++i) {
-        readers[i] = (purchase_reader){pthread_getspecific(g_keythr), get, NULL};
-        assert(!pthread_create(&threads[i], NULL, purchase_read, &readers[i]));
-    }
-    for (unsigned i = 0; i < 4; ++i) assert(!pthread_join(threads[i], NULL));
-    test_event *ev = get();
-    for (unsigned i = 0; i < 4; ++i) assert(readers[i].event == ev);
-    assert(ev && g_nse == 1 && !signalled(ev));
-    uint64_t regs[32] = {0, (uintptr_t)&ev->rh, 1, 0};
-    assert(svc_thread(0x18, regs) && regs[0] == R_TIMEOUT);
-    uint64_t marker = 0xfeedface;
-    assert(!pop(&marker) && !pop_private(&marker) && marker == 0xfeedface);
-    finish(); init_all(); finish(); init_app(&marker);
-    assert(get() && g_nse == 1 && !signalled(get())); finish();
+    regs[0] = rh; assert(svc_thread(0x16, regs) && !regs[0]);
+    regs[0] = wh; assert(svc_thread(0x16, regs) && !regs[0]);
+    g_lock(); assert(g_h[other - 0x1000].type == O_FREE); g_unlock();
 }
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     struct rlimit lim = {0, 0}; setrlimit(RLIMIT_CORE, &lim);
-    void (*tests[])(void) = {duplicate, capacity, reuse, rebind, host_signal, copied_read_end, purchased_event, transfer_memory_handles};
-    const char *names[] = {"duplicate vi registration", "rapid vi event replacement", "storage and handle reuse by another service", "vi rebind at reused storage", "host skip and guest lazy binding", "copied read end of a bound event", "offline purchased-item watcher", "typed transfer-memory handles"};
+    void (*tests[])(void) = {duplicate, capacity, reuse, rebind, host_signal, copied_read_end, transfer_memory_handles};
+    const char *names[] = {"duplicate vi registration", "rapid vi event replacement", "storage and handle reuse by another service", "vi rebind at reused storage", "host skip and guest lazy binding", "copied read end of a bound event", "typed transfer-memory handles"};
     int failed = 0;
     for (unsigned i = 0; i < sizeof tests / sizeof *tests; i++) {
         pid_t pid = fork(); assert(pid >= 0);

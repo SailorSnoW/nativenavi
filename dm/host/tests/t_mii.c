@@ -1,13 +1,10 @@
 // hle_mii.c unit test: the console's Mii database (<DM_SYSTEM_DIR>/save/8000000000000030/MiiDatabase.dat). A StoreData's bit fields unpack into the CharInfo fields they hold
-// (eyebrow y 3 higher), a file with a wrong CRC, size or version leaves the database empty, and Get lists the database's Miis (source 0) before the six default ones (source 1).
-// AppendMii adds the default Mii after them, keeps it in <DM_SYSTEM_DIR>/host/MiiDatabase.dat (the console's file untouched), and a later start lists it again
+// (eyebrow y 3 higher), a file with a wrong CRC, size or version leaves the database empty, GetIndex finds a Mii of the database by its create ID, and the default Mii (an amiibo's
+// owner) is none of them
 #include "../hle_mii.c"
+#include <sys/stat.h>
 #include <unistd.h>
-static uint64_t g_entropy = 0x0123456789abcdefull;
-uint64_t dm_entropy64(void) { return g_entropy += 0x1111; }
 const char *dm_system_dir(char *buf, size_t n) { (void)buf; (void)n; const char *v = getenv("DM_SYSTEM_DIR"); return v ? v : "build/t_mii.none"; }
-void dm_applet_enter(const char *name) { (void)name; }
-void dm_applet_leave(void) {}
 
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL " __VA_ARGS__); puts(""); fails++; } } while (0)
@@ -51,39 +48,21 @@ int main(void) {
     FILE *f = fopen(p, "wb"); CHECK(f && fwrite(db, 1, sizeof db, f) == sizeof db, "write the database"); if (f) fclose(f);
     setenv("DM_SYSTEM_DIR", root, 1);
     CHECK(h_mii_Init(NULL) == RES_OK && g_mii_n == 2, "Initialize reads the database: %d", g_mii_n);
-    CHECK(h_mii_Count(NULL, MII_SRC_DATABASE) == 2 && h_mii_Count(NULL, MII_SRC_DEFAULT) == 6 && h_mii_Count(NULL, 3) == 8, "counts");
-    struct __attribute__((packed)) { mii_charinfo c; uint32_t source; } el[10]; int n = -1;
-    CHECK(h_mii_GetE(NULL, &n, el, 10, 3) == RES_OK && n == 8, "Get of both: %d", n);
-    CHECK(el[0].source == 0 && el[1].source == 0 && el[2].source == 1 && !memcmp(el[0].c.create_id, a + 0x30, 16), "the database's Miis first, then the defaults");
-    CHECK(h_mii_GetE(NULL, &n, el, 1, 3) == RES_OK && n == 1, "Get stops at the room given");
     int idx = -1;
-    CHECK(h_mii_Index(NULL, &idx, &el[0].c) == RES_OK && idx == 0, "GetIndex by create ID");
-    CHECK(h_mii_Index(NULL, &idx, &el[2].c) == MII_RES_NOT_FOUND, "a default Mii is not in the database");
-    mii_charinfo latest = el[1].c; latest.height = 7;
-    CHECK(h_mii_Latest(NULL, &latest, MII_SRC_DATABASE) == RES_OK && latest.height == c[1].height, "UpdateLatest gives the database's copy");
-
-    // AppendMii: the default Mii after the console's two, kept in the host's file; the console's file is not written
-    struct stat before; stat(p, &before);
-    int ai = -1;
-    CHECK(h_mii_Append(&ai) == RES_OK && ai == 2 && g_mii_n == 3 && g_mii_own == 2, "AppendMii adds entry 2: %d, %d Miis", ai, g_mii_n);
-    CHECK(h_mii_Updated(NULL, MII_SRC_DEFAULT) == 0 && h_mii_Updated(NULL, MII_SRC_DATABASE) == 1 && h_mii_Updated(NULL, MII_SRC_DATABASE) == 0, "IsUpdated once, for the database");
-    CHECK(h_mii_Count(NULL, MII_SRC_DATABASE) == 3 && h_mii_GetE(NULL, &n, el, 10, 3) == RES_OK && n == 9 && el[2].source == 0 && el[3].source == 1, "Get lists the new Mii in the database");
-    mii_charinfo made = el[2].c;
-    CHECK(made.nickname[0] == 'n' && made.height == 64 && memcmp(made.create_id, el[0].c.create_id, 16), "the default Mii, with a create ID of its own");
-    CHECK(h_mii_Index(NULL, &idx, &made) == RES_OK && idx == 2, "GetIndex finds the new Mii");
-    struct stat after; stat(p, &after);
-    CHECK(after.st_size == before.st_size && after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec && after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec, "the console's file is not written");
-    char hp[256]; snprintf(hp, sizeof hp, "%s/host/MiiDatabase.dat", root);
-    CHECK(stat(hp, &after) == 0 && after.st_size == MII_HOST_HEAD + (off_t)sizeof(mii_charinfo), "the host's file holds one Mii: %lld bytes", (long long)after.st_size);
-    // the next start lists it again, with the same create ID
-    memset(g_mii_db, 0, sizeof g_mii_db); mii_db_load();
-    CHECK(g_mii_n == 3 && g_mii_own == 2 && !memcmp(g_mii_db[2].create_id, made.create_id, 16), "a later start reads the host's Mii back: %d", g_mii_n);
-    // a host file that is not the host's database is refused and lists nothing
-    FILE *hf = fopen(hp, "r+b"); if (hf) { fputc('X', hf); fclose(hf); }
-    mii_db_load(); CHECK(g_mii_n == 2, "a damaged host file is refused: %d", g_mii_n);
-    // a full database cancels
-    g_mii_n = MII_DB_MAX; CHECK(h_mii_Append(&ai) == MII_RES_CANCELED, "a full database cancels"); g_mii_n = 2;
-    unlink(hp); snprintf(hp, sizeof hp, "%s/host", root); rmdir(hp);
+    CHECK(h_mii_Index(NULL, &idx, &c[0]) == RES_OK && idx == 0 && h_mii_Index(NULL, &idx, &c[1]) == RES_OK && idx == 1, "GetIndex by create ID");
+    mii_charinfo other = c[1]; other.create_id[3] ^= 1; idx = 5;
+    CHECK(h_mii_Index(NULL, &idx, &other) == MII_RES_NOT_FOUND && idx == -1, "another create ID is not in the database");
+    // the default Mii: the system's parameters under a fixed create ID of UUID version 4, in no database
+    mii_charinfo def, again; memset(&def, 0xff, sizeof def); dm_mii_default_charinfo(&def); dm_mii_default_charinfo(&again);
+    CHECK(def.nickname[0] == 'n' && def.nickname[6] == 'e' && def.nickname[7] == 0 && def.height == 64 && def.build == 64 && def.gender == 0 && def.favorite_color == 0 && def.reserved == 0, "the default Mii's fields");
+    CHECK((def.create_id[6] & 0xf0) == 0x40 && (def.create_id[8] & 0xc0) == 0x80 && !memcmp(&def, &again, sizeof def), "its create ID is a version 4 UUID, the same each time");
+    CHECK(h_mii_Index(NULL, &idx, &def) == MII_RES_NOT_FOUND, "the default Mii is not in the database");
+    h_mii_Fin(NULL); CHECK(h_mii_Index(NULL, &idx, &c[0]) == RES_OK && idx == 0, "Finalize releases nothing");
+    // a console file that is not a database is refused and lists nothing; the good one reads again
+    f = fopen(p, "r+b"); if (f) { fputc('X', f); fclose(f); }
+    mii_db_load(); CHECK(g_mii_n == 0 && h_mii_Index(NULL, &idx, &c[0]) == MII_RES_NOT_FOUND, "a damaged console file is refused: %d", g_mii_n);
+    f = fopen(p, "wb"); if (f) { fwrite(db, 1, sizeof db, f); fclose(f); }
+    mii_db_load(); CHECK(g_mii_n == 2, "the database reads again: %d", g_mii_n);
     unlink(p); snprintf(p, sizeof p, "%s/save/8000000000000030", root); rmdir(p); snprintf(p, sizeof p, "%s/save", root); rmdir(p); rmdir(root);
 
     printf("t_mii: %s\n", fails ? "FAILED" : "all checks pass");

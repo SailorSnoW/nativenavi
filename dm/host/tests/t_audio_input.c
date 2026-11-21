@@ -31,10 +31,10 @@ static void test_fanout_and_polling(void) {
     for (int i = 0; i < 12; i++) samples[i] = i / 16.0f;
     dm_audio_input_stream *a = dm_audio_input_open(DM_AUDIO_INPUT_PCM16, 1, 48000, 8);
     dm_audio_input_stream *b = dm_audio_input_open(DM_AUDIO_INPUT_PCM16, 1, 48000, 8);
-    assert(a && b && dm_audio_input_state(a) == 1 && dm_audio_input_capacity(a) == 8);
+    assert(a && b && dm_audio_input_state(a) == 1 && a->capacity == 8);
     assert(dm_audio_input_start(a) == 0 && dm_audio_input_start(b) == 0 && starts == 1);
     feed(samples, 12, 48000);
-    assert(dm_audio_input_filled(a) == 8 && dm_audio_input_free(a) == 0);
+    assert(dm_audio_input_filled(a) == 8);
     int16_t aa[8], bb[8];
     assert(dm_audio_input_read(a, aa, 8) == 8);
     assert(dm_audio_input_read(b, bb, 8) == 8);
@@ -52,21 +52,19 @@ static void test_fanout_and_polling(void) {
     assert(closes == before + 1);
 }
 
-static void test_conversion_and_gain(void) {
+static void test_conversion(void) {
     const uint32_t input_frames = 44101;  // one second plus one source sample
     float *input = malloc(input_frames * sizeof *input);
     assert(input);
     for (uint32_t i = 0; i < input_frames; i++) input[i] = 0.25f;
     dm_audio_input_stream *s = dm_audio_input_open(DM_AUDIO_INPUT_PCM16, 1, 48000, 48064);
     assert(s && dm_audio_input_start(s) == 0);
-    dm_audio_input_set_gain(s, 2.0f);
     feed(input, input_frames, 44100.0);
     int converted = dm_audio_input_filled(s);
     assert(converted == 48001);  // one second plus one source sample becomes one second plus one target sample
-    assert(dm_audio_input_gain(s) == 2.0f);
     int16_t *output = malloc(48001 * sizeof *output);
     assert(output && dm_audio_input_read(s, output, 48001) == 48001);
-    for (int i = 0; i < 48001; i++) assert(output[i] == 16384);
+    for (int i = 0; i < 48001; i++) assert(output[i] == 8192);
     dm_audio_input_close(s);
     free(output); free(input);
 }
@@ -108,14 +106,14 @@ static void test_microphone_gain_preserves_headroom(void) {
 static void test_rollover(void) {
     enum { CAPACITY = 4800, BEFORE_WRAP = 1000 };
     dm_audio_input_stream *s = dm_audio_input_open(DM_AUDIO_INPUT_PCM16, 1, 48000, CAPACITY);
-    assert(s && dm_audio_input_start(s) == 0 && dm_audio_input_capacity(s) == CAPACITY);
+    assert(s && dm_audio_input_start(s) == 0 && s->capacity == CAPACITY);
     uint32_t cursor = UINT32_MAX - BEFORE_WRAP + 1;
     atomic_store(&s->head, cursor);
     atomic_store(&s->tail, cursor);
     float samples[CAPACITY + 1];
     for (int i = 0; i <= CAPACITY; i++) samples[i] = i < BEFORE_WRAP ? 0.125f : 0.25f;
     feed(samples, CAPACITY + 1, 48000);
-    assert(dm_audio_input_filled(s) == CAPACITY && dm_audio_input_free(s) == 0);
+    assert(dm_audio_input_filled(s) == CAPACITY);
     int16_t out[CAPACITY];
     assert(dm_audio_input_read(s, out, CAPACITY) == CAPACITY);
     for (int i = 0; i < CAPACITY; i++) assert(out[i] == (int16_t)(samples[i] * 32768.0f));
@@ -187,7 +185,7 @@ int main(void) {
     assert(setenv("DM_MIC", "1", 1) == 0);
     assert(setenv("DM_MIC_GAIN", "1", 1) == 0);
     test_fanout_and_polling();
-    test_conversion_and_gain();
+    test_conversion();
     test_microphone_gain_preserves_headroom();
     test_rollover();
     test_opt_in_and_start_failure();

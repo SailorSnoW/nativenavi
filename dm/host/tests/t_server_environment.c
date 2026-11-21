@@ -4,7 +4,6 @@
 #include <mach-o/getsect.h>
 
 static int unexpected, checks, failed;
-void hle_bind_system_event(void *ev, int autoclear) { (void)ev; (void)autoclear; unexpected++; }
 void dm_applet_enter(const char *name) { (void)name; unexpected++; }
 void dm_applet_leave(void) { unexpected++; }
 // hle_offline.c's socket overloads go to the host's sockets (hle_net.c): none may run here
@@ -48,7 +47,7 @@ int main(void) {
         // oe::ServerEnvironmentType 1 is lp1 (the game's enum-to-name table): the type agrees with the identifier. oe::GetServerEnvironmentType reaches it through the sdk's PLT
         CHECK(type() == 1, "the server environment type is retail lp1 (1)");
     }
-    CHECK(unexpected == 0, "environment queries need no event, applet or network operation");
+    CHECK(unexpected == 0, "environment queries need no applet or network operation");
     printf("server environment: %d checks, %d failed\n", checks, failed);
     return failed != 0;
 }

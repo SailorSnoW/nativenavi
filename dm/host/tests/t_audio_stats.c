@@ -81,11 +81,11 @@ int main(void) {
     report_entered = dispatch_semaphore_create(0); report_allow = dispatch_semaphore_create(0);
     report_done = dispatch_semaphore_create(0); released_event = dispatch_semaphore_create(0);
     uint32_t out[16] = {0}; uint8_t prm[8] = {0}, ev[64] = {0};
-    CHECK(!h_au_OpenDef(out, ev, prm), "open output with a guest release event");
+    CHECK(!au_open_at(out, ev, NULL, prm, NULL, 0), "open output with a guest release event");
     atomic_store(&ao(out)->state, STATE_STARTED); atomic_store(&block_report, 1);
     CHECK(render(out, 2000, 1), "PCM and release order at first statistics boundary");
     CHECK(!atomic_load(&callback_io), "callback never enters stdio or its stream lock");
-    if (atomic_load(&callback_io)) { h_au_Close(out); return 1; } // old code fails here, without waiting for a helper that never logs
+    if (atomic_load(&callback_io)) { au_close(out, NULL); return 1; } // old code fails here, without waiting for a helper that never logs
     pthread_t logger; CHECK(!pthread_create(&logger, NULL, drain_stats, NULL), "run the watchdog's actual statistics drain");
     CHECK(wait_for(report_entered), "hold the diagnostic writer outside the callback");
     CHECK(render(out, 6000, 1), "a blocked diagnostic writer never stops PCM or guest release events");
@@ -100,16 +100,16 @@ int main(void) {
     CHECK(strstr(lines[0], "device callbacks 2000: 1\xe2\x80\x93" "2 frames") && strstr(lines[0], "1.0 blocks queued") && strstr(lines[0], "in these 2000, 0 underruns, 0.0 ms"), "first report preserves frame range, queue depth and underrun fields");
     CHECK(strstr(lines[1], "device callbacks 4000:") && strstr(lines[1], "in these 2000,"), "next pending snapshot is preserved");
     CHECK(strstr(lines[2], "device callbacks 10000:") && strstr(lines[2], "in these 6000,"), "a full mailbox merges later windows without losing their counts");
-    h_au_Close(out);
+    au_close(out, NULL);
 
     // The watchdog's local report may outlive the output; Close owns any newer pending snapshot.
     atomic_store(&signals, 0);
-    CHECK(!h_au_OpenDef(out, ev, prm), "open another output with a guest event");
+    CHECK(!au_open_at(out, ev, NULL, prm, NULL, 0), "open another output with a guest event");
     atomic_store(&ao(out)->state, STATE_STARTED); atomic_store(&block_report, 1);
     CHECK(render(out, 2000, 0), "publish a close-case report");
     CHECK(!pthread_create(&logger, NULL, drain_stats, NULL) && wait_for(report_entered), "hold a copied watchdog report");
     CHECK(render(out, 2000, 0), "publish a second report before close");
-    h_au_Close(out);
+    au_close(out, NULL);
     CHECK(atomic_load(&reports) == 4, "close drains the pending snapshot while the watchdog retains only a local copy");
     dispatch_semaphore_signal(report_allow); pthread_join(logger, NULL);
     CHECK(atomic_load(&reports) == 5, "the watchdog logs its copied report after the output was freed");
@@ -119,12 +119,12 @@ int main(void) {
     // One buffer per event repeatedly crosses the notifier's disarm/recheck
     // boundary. Bulk PCM stress can coalesce releases and miss a stranded wake.
     atomic_store(&signals, 0);
-    CHECK(!h_au_OpenDef(out, ev, prm), "open output for release-handoff stress");
+    CHECK(!au_open_at(out, ev, NULL, prm, NULL, 0), "open output for release-handoff stress");
     atomic_store(&ao(out)->state, STATE_STARTED);
     CHECK(render(out, 100000, 1), "every individual release handoff makes progress");
     CHECK(atomic_load(&signals) == 100000, "all 100000 event-driven buffers are released");
     CHECK(!atomic_load(&callback_io), "release-handoff stress keeps diagnostics off the callback");
-    h_au_Close(out);
+    au_close(out, NULL);
     dispatch_release(report_entered); dispatch_release(report_allow); dispatch_release(report_done); dispatch_release(released_event);
     printf("audio callback statistics: %d checks, %d failures\n", checks, failures);
     return failures != 0;

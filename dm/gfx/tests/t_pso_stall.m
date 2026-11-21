@@ -215,7 +215,7 @@ int main(void) { @autoreleasepool {
     EXPECT("fixed: built", 1, g_pre_built);
     EXPECT("fixed: no failure list", 0, [NSFileManager.defaultManager fileExistsAtPath:failp]);
 
-    // a pulling library the app does not carry (an IPA packed without _bp.metallib, then DM_PSO_MTL4=1): into a fresh archive folder
+    // a pulling library the app does not carry (a library that lacks its _bp.metallib): into a fresh archive folder
     NSString *arch3 = [root stringByAppendingPathComponent:@"archive3"], *stamp3 = [arch3 stringByAppendingPathComponent:@"prebuilt.tsv"];
     [NSFileManager.defaultManager createDirectoryAtPath:arch3 withIntermediateDirectories:YES attributes:nil error:nil];
     g_arch_dir = arch3; g_arch4 = @[]; g_arch4p = @[];
@@ -245,7 +245,7 @@ int main(void) { @autoreleasepool {
     EXPECT("old stamp: nothing compiled", 0, g_pre_built);
     EXPECT("old stamp: both from the archive", 2, g_pre_archived);
     EXPECT("old stamp: the stamp says all", 1, [slurp(stamp3) hasSuffix:@"libs\tall\n"]);
-    // the library as one image beside its folder, as the Mac app and the IPA carry it (dm/tools/shader_lib.py pack, msl_image.h): its files are found there, and a pixel shader
+    // the library as one image beside its folder, as the Mac app carries it (dm/tools/shader_lib.py pack, msl_image.h): its files are found there, and a pixel shader
     // the library lacks is named by its file
     NSString *packer = [[@(__FILE__) stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"../../tools/shader_lib.py"];
     EXPECT("image: packed", 0, sh([NSString stringWithFormat:@"python3 %@ pack %@ > /dev/null", packer, msl]));

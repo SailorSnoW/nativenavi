@@ -12,8 +12,6 @@ module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t *g_mod; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
-static int g_layer_crop[4];   // what the vi layer crop (hle_vi.c) answers: x, y, w, h, all 0 = none
-void dm_vi_layer_crop(int c[4]) { memcpy(c, g_layer_crop, sizeof g_layer_crop); }
 #ifdef CROP_LEGACY_HEADER
 #include CROP_LEGACY_HEADER
 #define ENCODE legacy_present_encode
@@ -276,22 +274,6 @@ int main(int argc, char **argv) { @autoreleasepool {
 #endif
     h_nvnWindowFinalize((NVNwindow *)&win);
 #ifndef CROP_LEGACY_HEADER
-    {   // A window without a crop of its own presents by the vi layer crop (Link's Awakening in handheld mode: 1280x720 of its 1920x1080 window textures, cropped through vi::SetLayerCrop)
-        int none[4]={0},lay[4]={0,4,4,4},over[4]={0,0,16,16},lc[4];
-        memset(g_layer_crop,0,sizeof g_layer_crop);EXPECT("no window or layer crop: the whole texture",1,present_crop(none,8,8,lc)==none);
-        memcpy(g_layer_crop,lay,sizeof lay);const int *r=present_crop(none,8,8,lc);EXPECT("no window crop: the layer crop",1,r==lc&&!memcmp(lc,lay,sizeof lay));
-        EXPECT("the window's own crop wins over the layer crop",1,present_crop(br,8,8,lc)==br);
-        memcpy(g_layer_crop,over,sizeof over);EXPECT("a layer crop larger than the texture: the whole texture",1,present_crop(none,8,8,lc)==none);
-        memcpy(g_layer_crop,lay,sizeof lay);win_t w2={.ntex=1};w2.tex[0]=(NVNtexture *)&tex;
-        mtl_present_progress(&before,&done);
-        nvn_queue_test_hold(1);
-        present(&queue,(NVNwindow *)&w2,0);memset(g_layer_crop,0,sizeof g_layer_crop);
-        nvn_queue_test_hold(0);
-        uint64_t t2=display_ticket(w2.ticket[0],before);
-        pthread_mutex_lock(&g_pq_mu);int got=t2 && memcmp(g_pq[(t2-1)%PQ].crop,lay,sizeof lay)==0;pthread_mutex_unlock(&g_pq_mu);
-        EXPECT("real QueuePresent: a window without a crop queues the layer crop",1,got);
-        h_nvnWindowFinalize((NVNwindow *)&w2);
-    }
     {   // The crop only picks texels; the picture has the layer's shape (Super Mario Galaxy 2's storybook cutscenes: 1200x960 of a 1920x1080 swapchain, shown at 16:9, issue #949)
         const int W=64,H=36,TW=64,TH=36;MTLTextureDescriptor *td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:TW height:TH mipmapped:NO];td.storageMode=MTLStorageModeShared;td.usage=MTLTextureUsageShaderRead;
         id<MTLTexture> sw=[g_dev newTextureWithDescriptor:td];uint8_t *sp=malloc(TW*TH*4);
@@ -314,11 +296,6 @@ int main(int argc, char **argv) { @autoreleasepool {
             }
         }
         mtl_present_layer(4,3);present_shape(sw,&sa,&sb);EXPECT("a sized layer gives its own shape",4*(int)sb,3*(int)sa);mtl_present_layer(0,0);
-        MTLTextureDescriptor *td2=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1920 height:1344 mipmapped:NO];td2.storageMode=MTLStorageModePrivate;td2.usage=MTLTextureUsageShaderRead;
-        id<MTLTexture> tall=[g_dev newTextureWithDescriptor:td2];
-        present_shape(tall,&sa,&sb);EXPECT("a taller texture without DM_SCREEN_ASPECT: 16:9",1080,(int)sb);
-        mtl_present_screen(1920,1344);present_shape(tall,&sa,&sb);EXPECT("DM_SCREEN_ASPECT: a texture that follows it keeps the taller shape",1344,(int)sb);
-        present_shape(sw,&sa,&sb);EXPECT("DM_SCREEN_ASPECT: a 16:9 texture of a build without stubs stays 16:9",1080,(int)sb);mtl_present_screen(0,0);
         // The front end's layout and the mouse follow the same shape, not the crop's (front_picture_shape): a real present of the 5:4 crop
         tex_t st={.magic=MAGIC('T', 'E', 'X', 0), .serial =10002};st.d.width=TW;st.d.height=TH;st.d.depth=st.d.levels=1;st.d.format=NVN_FORMAT_RGBA8;st.d.target=NVN_TEXTURE_TARGET_2D;serial_put(st.serial,sw);
         win_t w3={.ntex=1};w3.tex[0]=(NVNtexture *)&st;set((NVNwindow *)&w3,crop54[0],crop54[1],crop54[2],crop54[3]);

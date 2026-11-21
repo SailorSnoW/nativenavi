@@ -11,21 +11,17 @@ QUIET = $(if $(findstring -fsanitize,$(SAN)),,2>/dev/null)
 # the game profile the tests are built for: Ocarina of Time's unless GAME names another
 GAME ?= 0400486024DEC000
 GINC = -I../gen/$(GAME) -I../../games/$(GAME)
-$(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../romfs_image.h
+$(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit $(B)/t_fs_commit_tsan: ../romfs_image.h
 GAME_H = ../gen/$(GAME)/game_profile.h
-run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_friends $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_output_stream $(B)/t_audio_spsc $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pollwait $(B)/t_clockwait $(B)/t_pause $(B)/t_pause_stress $(B)/t_pctl $(B)/t_sf $(B)/t_time $(B)/t_shared_font $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_pad_hid $(B)/t_switch2
-	$(B)/t_language
+run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_motion $(B)/t_heap_size $(B)/t_oe $(B)/t_friends $(B)/t_fs $(B)/t_fs_commit $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_output_stream $(B)/t_audio_spsc $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pollwait $(B)/t_clockwait $(B)/t_pause $(B)/t_pause_stress $(B)/t_pctl $(B)/t_sf $(B)/t_time $(B)/t_shared_font $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_pad_hid $(B)/t_switch2
 	$(B)/t_heap_size
-	$(B)/t_touch
-	$(B)/t_gesture
 	$(B)/t_oe $(QUIET)
 	$(B)/t_friends
 	$(B)/t_fs $(QUIET)
 	$(B)/t_fs_mutation $(QUIET)
-	TMPDIR="$(abspath $(B))" $(B)/t_fs_commit_list
+	TMPDIR="$(abspath $(B))" $(B)/t_fs_commit
 	$(B)/t_thread_leak
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case $(QUIET)
-	TMPDIR="$(abspath $(B))" $(B)/t_mii_sysdata $(QUIET)
 	$(B)/t_audio
 	$(B)/t_output_stream
 	$(B)/t_mii
@@ -53,9 +49,7 @@ run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B
 	$(B)/t_system_event
 	$(B)/t_codec_opus
 	$(B)/t_codec_video
-	$(B)/t_nv
 	$(B)/t_objmap
-	$(B)/t_vi_history $(QUIET)
 	TMPDIR="$(abspath $(B))" $(B)/t_nfc
 	$(B)/t_motion
 	$(B)/t_motion_apple
@@ -109,8 +103,8 @@ $(B)/t_audren_layout: t_audren_layout.c ../hle_audren.c ../hle.h ../dm.h $(GAME_
 .PHONY: audren-layout
 audren-layout: $(B)/t_audren_layout
 	$(B)/t_audren_layout
-$(B)/t_system_event: t_system_event.c ../hle_thread.c ../hle_sdk16.c ../hle_misc.c ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-frame-address -I.. $(GINC) -o $@ t_system_event.c ../hle_misc.c ../hle_bigstack.c
+$(B)/t_system_event: t_system_event.c ../hle_thread.c ../hle_sdk16.c ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-frame-address -I.. $(GINC) -o $@ t_system_event.c ../hle_bigstack.c
 .PHONY: system-event
 system-event: $(B)/t_system_event
 	$(B)/t_system_event
@@ -121,14 +115,10 @@ $(B)/t_mods: t_mods.c ../hle_mods.c ../dm.h $(GAME_H) | $(B)
 $(GAME_H): FORCE
 	$(MAKE) -C .. game_profile GAME=$(GAME)
 $(B)/t_heap_size: t_heap_size.c ../hle_svc.c ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -fsanitize=undefined -I.. $(GINC) -o $@ t_heap_size.c -framework CoreFoundation
+	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -fsanitize=undefined -I.. $(GINC) -o $@ t_heap_size.c
 .PHONY: heap_size
 heap_size: $(B)/t_heap_size
 	$(B)/t_heap_size
-$(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_touch.c ../hle_touch.c
-$(B)/t_gesture: t_gesture.c ../hle_touch.c ../front.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_gesture.c ../hle_touch.c
 $(B)/t_thread_leak: t_thread_leak.c ../thread.c ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_thread_leak.c
 $(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle_account_users.c ../account_users.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
@@ -144,16 +134,13 @@ $(B)/t_fs_directory: t_fs_directory.c t_fs_stub.c ../hle_fs.c ../hle_account_use
 fs-directory: $(B)/t_fs_directory
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_directory
 run: fs-directory
-$(B)/t_fs_commit_list: t_fs_commit_list.c t_fs_stub.c ../hle_fs.c ../hle_account_users.c ../account_users.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_fs_commit_list.c t_fs_stub.c ../hle_bigstack.c ../hle_account_users.c
-$(B)/t_fs_commit_list_tsan: t_fs_commit_list.c t_fs_stub.c ../hle_fs.c ../hle_account_users.c ../account_users.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -fsanitize=thread -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_fs_commit_list.c t_fs_stub.c ../hle_bigstack.c ../hle_account_users.c
+$(B)/t_fs_commit: t_fs_commit.c t_fs_stub.c ../hle_fs.c ../hle_account_users.c ../account_users.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_fs_commit.c t_fs_stub.c ../hle_bigstack.c ../hle_account_users.c
+$(B)/t_fs_commit_tsan: t_fs_commit.c t_fs_stub.c ../hle_fs.c ../hle_account_users.c ../account_users.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -fsanitize=thread -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_fs_commit.c t_fs_stub.c ../hle_bigstack.c ../hle_account_users.c
 .PHONY: fs-tsan
-fs-tsan: $(B)/t_fs_commit_list_tsan
-	TMPDIR="$(abspath $(B))" $(B)/t_fs_commit_list_tsan
-run: $(B)/t_mii_sysdata
-$(B)/t_mii_sysdata: t_mii_sysdata.c ../hle_fs.c ../hle_account_users.c ../account_users.h ../hle_mii.c ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_mii_sysdata.c ../hle_bigstack.c ../hle_account_users.c -lz
+fs-tsan: $(B)/t_fs_commit_tsan
+	TMPDIR="$(abspath $(B))" $(B)/t_fs_commit_tsan
 $(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle_account_users.c ../account_users.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_fs_case.c ../hle_bigstack.c ../hle_account_users.c
 AUDIO_INPUT_STUB = ../audio_input.c audio_input_platform_stub.c
@@ -210,26 +197,17 @@ $(B)/t_sf: t_sf.c ../hle_sf.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_sf.c
 $(B)/t_shared_font: t_shared_font.c ../hle_sdk16.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -Wno-frame-address -I.. $(GINC) -o $@ t_shared_font.c
-# nn::vi::ListFrameHistory: the SDK's FrameInfo, newest first, from the present queue's progress
-run: $(B)/t_vi_history
-$(B)/t_vi_history: t_vi_history.c ../../gfx/hle_vi.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_vi_history.c
-run: $(B)/t_nv
-$(B)/t_nv: t_nv.c ../../gfx/hle_nv.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_nv.c
 # The guest object side table: linear probing with backward-shift deletion keeps every key once and reachable
 run: $(B)/t_objmap
 $(B)/t_objmap: t_objmap.c ../hle_os.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_objmap.c
-# nn::nfc answered without nfc:user (NFC disabled), beside the nfp no-tag answers
+# nn::nfp answered without nfp:user: with no tag, and with a scanned amiibo file
 run: $(B)/t_nfc
 $(B)/t_nfc: t_nfc.c ../hle_sdk16.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-frame-address -I.. $(GINC) -o $@ t_nfc.c
 .PHONY: nfc
 nfc: $(B)/t_nfc
 	TMPDIR="$(abspath $(B))" $(B)/t_nfc
-$(B)/t_language: t_language.c ../hle_sdk16.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-frame-address -fsanitize=address,undefined -I.. $(GINC) -o $@ t_language.c
 $(B)/t_motion: t_motion.c ../motion_fusion.h | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -o $@ t_motion.c -lm
 run: $(B)/t_motion_apple
@@ -239,13 +217,13 @@ run: $(B)/t_pad_apple
 $(B)/t_pad_apple: t_pad_apple.m ../pad_apple.h ../dm_input.h | $(B)
 	$(CLANG) -O1 -g -fobjc-arc -Wall -Werror -I.. -o $@ t_pad_apple.m -framework Foundation -framework GameController
 run: $(B)/t_account
-$(B)/t_account: t_account.c ../hle_account.c ../hle_account_users.c ../account_users.h ../front.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
+$(B)/t_account: t_account.c ../hle_account.c ../hle_account_users.c ../account_users.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function $(GINC) -o $@ t_account.c ../hle_account_users.c ../hle_bigstack.c
 run: account-saves
 .PHONY: account-saves
 account-saves: $(B)/t_account_save
 	$(B)/t_account_save
-$(B)/t_account_save: t_account_save.c t_fs_stub.c ../hle_account.c ../hle_account_users.c ../account_users.h ../hle_fs.c ../hle_bigstack.c ../hle.h ../front.h $(GAME_H) | $(B)
+$(B)/t_account_save: t_account_save.c t_fs_stub.c ../hle_account.c ../hle_account_users.c ../account_users.h ../hle_fs.c ../hle_bigstack.c ../hle.h ../romfs_image.h ../front.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_account_save.c t_fs_stub.c ../hle_account_users.c ../hle_bigstack.c
 run: $(B)/t_home_quit $(B)/t_home_quit_mac
 $(B)/t_home_quit: t_home_quit.c ../home_quit.h | $(B)
@@ -325,7 +303,7 @@ tsan: $(B)/t_audio_spsc_tsan $(B)/t_hid_tsan
 	$(B)/t_audio_spsc_tsan
 	TMPDIR="$(abspath $(B))" $(B)/t_hid_tsan
 
-MEM_FLAGS = -O1 -Wall -Werror -Wno-unused-function -Imemory_profile -I.. -framework CoreFoundation
+MEM_FLAGS = -O1 -Wall -Werror -Wno-unused-function -Imemory_profile -I..
 MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../hle_guestthread.c ../hle.h ../dm.h
 $(B)/t_svc_memory: $(MEM_DEPS) | $(B)
 	$(CLANG) $(MEM_FLAGS) -fsanitize=undefined -o $@ t_svc_memory.c
@@ -348,15 +326,7 @@ memory-dirty: $(B)/t_svc_memory_dirty
 	$(B)/t_svc_memory_dirty
 memory-profile: $(B)/t_svc_memory
 	DM_TEST_BUILD=$(B) $(PYTHON) test_memory_profile.py
-# The same test with the guest's memory in files (DM_GUEST_FILE, hle_svc.c), one file and then 64 MB files, made in the build folder; its last line says how many files held it
-# (0: the files could not be made there, and the guest stayed anonymous)
-GUEST_FILE_ENV = DM_GUEST_FILE=1 DM_GUEST_FILE_MIN_FREE=0 DM_GUEST_FILE_DIR="$(abspath $(B))"
-.PHONY: memory-file
-memory-file: $(B)/t_svc_memory $(B)/t_svc_memory_16k
-	$(GUEST_FILE_ENV) $(B)/t_svc_memory
-	$(GUEST_FILE_ENV) DM_GUEST_FILE_CHUNK=64M $(B)/t_svc_memory
-	$(GUEST_FILE_ENV) DM_GUEST_FILE_CHUNK=64M $(B)/t_svc_memory_16k
-run: memory memory-dirty memory-profile memory-file
+run: memory memory-dirty memory-profile
 
 # A native blocking notification wait must release the thread's guest core.
 $(B)/t_notify_sched: t_notify_sched.c t_condvar_stub.c ../hle_thread.c ../hle_oe.c ../hle.h ../dm.h $(GAME_H) | $(B)
@@ -383,7 +353,7 @@ include ../../sanitizers/sanitizers.mk
 asan:
 	@$(call san_fresh,$(B)/asan,$(ASAN_FLAGS))
 	$(ASAN_ENV) $(MAKE) B=$(B)/asan SAN="$(ASAN_FLAGS)" run
-TSAN_T = t_audio t_audio_stats t_audio_device t_thread_leak t_oe t_fs_commit_list t_fs_case t_condvar t_condvar_old t_preempt t_system_event t_notify_sched t_handoff_wait t_altstack t_sync_wait
+TSAN_T = t_audio t_audio_stats t_audio_device t_thread_leak t_oe t_fs_commit t_fs_case t_condvar t_condvar_old t_preempt t_system_event t_notify_sched t_handoff_wait t_altstack t_sync_wait
 TSAN_T += t_net_eventfd t_net_loopback t_account
 tsan-threads:
 	@$(call san_fresh,$(B)/tsan,$(TSAN_FLAGS))
@@ -397,7 +367,7 @@ tsan-threads-run: $(addprefix $(B)/,$(TSAN_T))
 	$(B)/t_audio_device
 	$(B)/t_thread_leak
 	$(B)/t_oe
-	TMPDIR="$(abspath $(B))" $(B)/t_fs_commit_list
+	TMPDIR="$(abspath $(B))" $(B)/t_fs_commit
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case
 	$(B)/t_condvar
 	$(B)/t_condvar_old

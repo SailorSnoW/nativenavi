@@ -170,15 +170,15 @@ void *objmap_del(const void *key) { assert(key == object.key); void *value = obj
 void hle_signal_system_event(void *g) { (void)g; }
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
-int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }   // hle_svc.c: no guest address space in the unit test, so the big-stack take-overs (Start / Stop / CloseAudioOut, hle_bigstack.c) run on the calling host stack
+int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }   // hle_svc.c: no guest address space in the unit test, so the big-stack entries (hle_bigstack.c) run on the calling host stack
 void dm_host_helper_qos(qos_class_t q) { (void)q; }
 
 static void *guest_start(void *out) {
-    assert(h_au_Start(out) == RES_OK);
+    assert(au_start_at(out, NULL) == RES_OK);
     dispatch_semaphore_signal(guest_returned);
     return NULL;
 }
-static void *guest_close(void *out) { h_au_Close(out); dispatch_semaphore_signal(guest_closed); return NULL; }
+static void *guest_close(void *out) { au_close(out, NULL); dispatch_semaphore_signal(guest_closed); return NULL; }
 static int signaled(dispatch_semaphore_t s, int seconds) {
     return dispatch_semaphore_wait(s, dispatch_time(DISPATCH_TIME_NOW, seconds * (int64_t)NSEC_PER_SEC)) == 0;
 }
@@ -234,9 +234,10 @@ static void blocked_start(void *out) {
     start_result = kAudioUnitErr_FailedInitialization;
     dispatch_semaphore_signal(start_allowed);
     assert(signaled(start_entered, 4));
-    // Reset while the retry blocks. The old unit stays alive until Start returns, then its replacement starts.
+    // The unit is to be replaced (au_reopen, as a route change does for a six-channel output) while the retry blocks. The old unit stays alive until Start returns, then its replacement starts.
     start_result = noErr;
-    dm_audio_reset(); assert(unit.disposals == 0);
+    pthread_mutex_lock(&g_aos_lock); au_reopen(a, dm_audio_output_channels()); pthread_mutex_unlock(&g_aos_lock);
+    assert(unit.disposals == 0);
     dispatch_semaphore_signal(start_allowed);
     assert(signaled(device_stopped, 1) && signaled(start_entered, 2));
     assert(unit.disposals == 1);
@@ -318,9 +319,9 @@ int main(void) {
     setenv("DM_AUDIO", "1", 1); unsetenv("DM_DBG_AU_FRAMES");
     test_route_without_output();
     unit.device = 1; unit.rate = 48000; unit.range = (AudioValueRange){15, 4096}; unit.frames = 512;
-    uint32_t out[16] = {0}; uint8_t prm[16]; h_au_InitParam(prm);
+    uint32_t out[16] = {0}; uint8_t prm[16]; memset(prm, 0, 8);
     check_open_publication = 1;
-    assert(h_au_OpenDef0(out, prm) == RES_OK);
+    assert(h_au_Open4(out, NULL, prm) == RES_OK);
     check_open_publication = 0;
     assert(unit.frames == 240 && unit.writes == 1 && unit.input_formats == 1 && unit.device_listener && unit.format_listener);
 
@@ -360,8 +361,8 @@ int main(void) {
     unit.route_ch = 6; unit.device = 5; unit.rate = 48000; unit.frames = 512; unit.format_ch = 0; unit.layout_tag = 0;
     assert(dm_audio_output_channels() == 6);
     assert(dm_audio_route() == 6);   // the game threads' read: the last route a host thread read
-    uint32_t out6[16] = {0}; uint8_t prm6[16]; h_au_InitParam(prm6); *(uint16_t *)(prm6 + 4) = 6;
-    assert(h_au_OpenDef0(out6, prm6) == RES_OK);
+    uint32_t out6[16] = {0}; uint8_t prm6[16]; memset(prm6, 0, 8); *(uint16_t *)(prm6 + 4) = 6;
+    assert(h_au_Open4(out6, NULL, prm6) == RES_OK);
     aout *six = ao(out6);
     assert(six->ch == 6 && six->dev_ch == 6 && unit.format_ch == 6 && unit.layout_tag == kAudioChannelLayoutTag_MPEG_5_1_A);
     static int16_t six_pcm[240 * 6];
@@ -374,14 +375,14 @@ int main(void) {
     au_render(six, NULL, NULL, 0, 240, &bl6);
     assert(memcmp(got6, six_pcm, sizeof got6) == 0);
     assert(h_au_Released(out6) == &blk);
-    h_au_Close(out6);
+    au_close(out6, NULL);
     assert(!object.key && unit.disposals == 3);
 
     // Six-channel output on a stereo route: the unit takes stereo and the host downmixes (front 1.0, center and back 0.707, LFE 0.251, Q15).
     unit.route_ch = 2; unit.device = 6; unit.format_ch = 0; unit.layout_tag = 0;
     assert(dm_audio_output_channels() == 2);
     uint32_t out2[16] = {0};
-    assert(h_au_OpenDef0(out2, prm6) == RES_OK);
+    assert(h_au_Open4(out2, NULL, prm6) == RES_OK);
     aout *dn = ao(out2);
     assert(dn->ch == 6 && dn->dev_ch == 2 && unit.format_ch == 2 && unit.layout_tag == 0);
     static int16_t fr_pcm[240 * 6];
@@ -397,14 +398,14 @@ int main(void) {
     au_render(dn, NULL, NULL, 0, 240, &bl2);
     assert(st2[0] == 7659 && st2[1] == 9366);   // L = 1000 + 0.707 × 3000 + 0.251 × 4000 + 0.707 × 5000, R = 2000 + 0.707 × 3000 + 0.251 × 4000 + 0.707 × 6000
     assert(st2[2 * 238] == 32767 && st2[2 * 238 + 1] == 32767 && st2[2 * 239] == -32768 && st2[2 * 239 + 1] == -32768);
-    h_au_Close(out2);
+    au_close(out2, NULL);
     assert(!object.key && unit.disposals == 4);
     unit.route_ch = 2; unit.device = 1;
 
     // Route change mid-session (HDMI 5.1 to the speakers and back): the unit's own notification leads to a new unit at the route's count, off the notifying thread.
     unit.route_ch = 6; unit.device = 7; unit.format_ch = 0; unit.layout_tag = 0;
     uint32_t outr[16] = {0};
-    assert(h_au_OpenDef0(outr, prm6) == RES_OK);
+    assert(h_au_Open4(outr, NULL, prm6) == RES_OK);
     aout *rt = ao(outr);
     assert(rt->dev_ch == 6 && unit.format_ch == 6 && unit.layout_tag == kAudioChannelLayoutTag_MPEG_5_1_A && unit.disposals == 4);
     unit.route_ch = 2; unit.layout_tag = 0;
@@ -426,19 +427,19 @@ int main(void) {
     assert(wait_dev_ch(rt, 2) && rt->au && !rt->unit_lost && unit.format_ch == 2);
     unit.route_ch = 6; dm_audio_route_changed();
     assert(wait_dev_ch(rt, 6) && unit.disposals == 9);
-    h_au_Close(outr);
+    au_close(outr, NULL);
     assert(!object.key && unit.disposals == 10);
     // A stereo output stays stereo on a six-channel route (the guest writes two channels): a route change leaves its unit alone
     uint32_t outs[16] = {0};
-    assert(h_au_OpenDef0(outs, prm) == RES_OK && ao(outs)->dev_ch == 2 && unit.format_ch == 2);
+    assert(h_au_Open4(outs, NULL, prm) == RES_OK && ao(outs)->dev_ch == 2 && unit.format_ch == 2);
     unit.route_ch = 2; changed(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0);
     usleep(100000); dm_audio_route_changed(); unit.route_ch = 6; changed(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0);
     usleep(100000); dm_audio_route_changed(); assert(ao(outs)->dev_ch == 2 && unit.disposals == 10);
-    h_au_Close(outs);
+    au_close(outs, NULL);
     assert(!object.key && unit.disposals == 11);
     // A mono output goes to a mono unit as the guest writes it, on either route (it is not downmixed as six channels)
-    unit.layout_tag = 0; uint32_t outm[16] = {0}; uint8_t prm1[16]; h_au_InitParam(prm1); *(uint16_t *)(prm1 + 4) = 1;
-    assert(h_au_OpenDef0(outm, prm1) == RES_OK && ao(outm)->dev_ch == 1 && unit.format_ch == 1 && unit.layout_tag == 0);
+    unit.layout_tag = 0; uint32_t outm[16] = {0}; uint8_t prm1[16]; memset(prm1, 0, 8); *(uint16_t *)(prm1 + 4) = 1;
+    assert(h_au_Open4(outm, NULL, prm1) == RES_OK && ao(outm)->dev_ch == 1 && unit.format_ch == 1 && unit.layout_tag == 0);
     static int16_t mono_pcm[240];
     for (int i = 0; i < 240; i++) mono_pcm[i] = (int16_t)(100 + i);
     aout_buf mb = {.ptr = mono_pcm, .cap = sizeof mono_pcm, .size = sizeof mono_pcm};
@@ -448,7 +449,7 @@ int main(void) {
     au_render(ao(outm), NULL, NULL, 0, 3, &blm);
     assert(m3[0] == 100 && m3[1] == 101 && m3[2] == 102);
     unit.route_ch = 2; dm_audio_route_changed(); assert(ao(outm)->dev_ch == 1 && unit.disposals == 11);
-    h_au_Close(outm);
+    au_close(outm, NULL);
     assert(!object.key && unit.disposals == 12);
     unit.route_ch = 2; unit.device = 1;
 

@@ -191,7 +191,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     put([bundle stringByAppendingFormat:@"/%@-prewarm-09.mtl4a", gpu], @"not an archive");   // Metal crashes on such a file: never handed to it
     // the bundle form without a work folder: a failure, not an empty success
     EXPECT("bundle form without a work folder: fails", 1, run_self(@[@"--tool", root], @{@"DM_PSO_PREBUILD": @"tool", @"DM_PSO_ARCHIVE": @"off", @"DM_PSO_PREBUILD_OUT": [root stringByAppendingPathComponent:@"out3"], @"DM_PSO_MANIFEST": @"", @"DM_PSO_BUNDLE": @"off"}, [root stringByAppendingPathComponent:@"tool3.log"]));
-    // the device form (the NSP script's --platform mac, regress.py): the lists' bases go into the device's archive, with no pipelines script and no files for an app
+    // the device form (scripts/build_app.py --platform mac, regress.py): the lists' bases go into the device's archive, with no pipelines script and no files for an app
     NSString *devarch = [root stringByAppendingPathComponent:@"devarch"];
     EXPECT("device form: exit 0", 0, run_self(@[@"--tool", root], @{@"DM_PSO_PREBUILD": @"tool", @"DM_PSO_ARCHIVE": devarch, @"DM_PSO_PREBUILD_OUT": @"", @"DM_PSO_MANIFEST": @"", @"DM_PSO_BUNDLE": @"off"}, [root stringByAppendingPathComponent:@"tool4.log"]));
     EXPECT("device form: the 5 bases compiled into the device's archive", 1, [slurp([root stringByAppendingPathComponent:@"tool4.log"]) containsString:@"(bases 5 compiled, 0 from the archives)"] && mtl4a(devarch).count > 0);

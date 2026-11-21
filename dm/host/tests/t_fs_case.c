@@ -17,6 +17,7 @@ struct dm_flags g_flag; uint64_t g_t0_ns;
 uint64_t now_ns(void) { return 0; }
 void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
 static int checks, fails;
+static const uint64_t k_user1[2] = {DM_UID0, DM_UID1};   // the save is user 1's
 #define CHECK(c, text) do { checks++; int ok = !!(c); fails += !ok; printf("%s %s\n", ok ? "✓" : "✗", text); } while (0)
 static int content(const char *path, const char *want) {
     uint64_t h; if (h_fs_OpenFile(&h, path, MODE_READ)) return 0;
@@ -49,7 +50,7 @@ int main(void) {
     if (!mkdtemp(root)) { perror("mkdtemp"); return 2; }
     snprintf(save, sizeof save, "%s/save", root); mkdir(save, 0755);
     snprintf(p, sizeof p, "%s/Legacy", save); FILE *f = fopen(p, "w"); fputs("old", f); fclose(f);
-    setenv("DM_SAVE", save, 1); CHECK(h_fs_MountSave("save", NULL) == RES_OK, "mount the existing save");
+    setenv("DM_SAVE", save, 1); CHECK(h_fs_MountSave("save", k_user1) == RES_OK, "mount the existing save");
     uint64_t h = 0; int32_t type = -1;
     CHECK(content("save:/Legacy", "old"), "the existing name with its case is readable");
     Result r = h_fs_OpenFile(&h, "save:/legacy", 1); if (!r) h_fs_CloseFile(h);
@@ -78,7 +79,7 @@ int main(void) {
     CHECK(content("save:/LEGACY", "old") && content("save:/legacy", "lower"), "the rename does not overwrite the other guest file");
     CHECK(h_fs_GetEntryType(&type, "save:/Legacy") == RES_PATH_NOT_FOUND, "the old guest name is gone");
     CHECK(h_fs_Commit("save") == RES_OK, "commit both case variants of the files and directories");
-    g_nmnt = 0; CHECK(h_fs_MountSave("save", NULL) == RES_OK, "remount the committed save");
+    g_nmnt = 0; CHECK(h_fs_MountSave("save", k_user1) == RES_OK, "remount the committed save");
     CHECK(content("save:/LEGACY", "old") && content("save:/legacy", "lower"), "commit + remount keeps the separate names/content");
     CHECK(content("save:/Dir/X", "upper") && content("save:/dir/X", "lower"), "commit + remount keeps the separate directories");
     CHECK(listed("save:/", "LEGACY", ENT_FILE) && listed("save:/", "legacy", ENT_FILE), "after commit + remount the listing misses no mapped name");
@@ -89,20 +90,6 @@ int main(void) {
     CHECK(listed("save:/", "plain", ENT_FILE) && !listed("save:/", "legacy", ENT_FILE), "rename updates the listing, the old name is gone");
     CHECK(mount("rom", save, 1) == RES_OK && content("rom:/LEGACY", "old"), "a read-only mount reads mapped names");
     CHECK(h_fs_GetEntryType(&type, "rom:/Legacy") == RES_PATH_NOT_FOUND, "a read-only mount also looks up by exact case");
-    const uint64_t uid[2] = {DM_UID0, DM_UID1};
-    // MountSaveDataReadOnly: this game's own save data is its committed save (Nintendo Switch Sports Resort mounts it as SaveReadOnly), another program's has none
-    CHECK(h_fs_MountSaveRO("SaveReadOnly", DM_GAME_PROGRAM_ID, uid) == RES_OK, "this game's own save data mounts read-only");
-    CHECK(content("SaveReadOnly:/LEGACY", "old") && h_fs_GetEntryType(&type, "SaveReadOnly:/plain") == RES_PATH_NOT_FOUND, "it reads the committed save, not the work directory's uncommitted files");
-    CHECK(h_fs_CreateFile("SaveReadOnly:/new", 0) != RES_OK && h_fs_GetEntryType(&type, "save:/new") == RES_PATH_NOT_FOUND, "it refuses writes");
-    CHECK(h_fs_MountSaveRO("OtherRO", DM_GAME_PROGRAM_ID ^ 0x1000, uid) == 0x7d402u, "another program's save data: TargetNotFound");
-    snprintf(p, sizeof p, "%s/fresh", root); setenv("DM_SAVE", p, 1);
-    CHECK(h_fs_MountSaveRO("FreshRO", DM_GAME_PROGRAM_ID, uid) == RES_OK && h_fs_GetEntryType(&type, "FreshRO:/") == RES_OK && type == ENT_DIR,
-          "a first launch with no committed save mounts an empty one");
-    unsetenv("DM_SAVE");
-    CHECK(h_fs_MountSaveRO("NoSaveRO", DM_GAME_PROGRAM_ID, uid) == 0x7d402u, "no save folder (DM_SAVE unset): TargetNotFound, no exit");
-    snprintf(p, sizeof p, "%s/afile", root); FILE *af = fopen(p, "w"); if (af) fclose(af); setenv("DM_SAVE", p, 1);   // a file, not a folder
-    CHECK(h_fs_MountSaveRO("FileRO", DM_GAME_PROGRAM_ID, uid) == 0x7d402u, "a save path that is a file: TargetNotFound, no exit");
-    setenv("DM_SAVE", save, 1);
     CHECK(h_fs_CreateDirectory("save:/Trail/") == RES_OK && listed("save:/", "Trail", ENT_DIR), "a trailing slash on create directory does not become an empty name");
     CHECK(h_fs_CreateFile("save:/.dm-case-1", 0) == RES_OK && write_text("save:/.dm-case-1", "real"), "a real guest name with the alias prefix can be created");
     CHECK(content("save:/.dm-case-1", "real") && content("save:/LEGACY", "old"), "a physical alias does not pose as a real guest name");
@@ -127,8 +114,6 @@ int main(void) {
 }
 // the guest address space (hle_svc.c): the unit test has none, so every stack is a host stack (hle_bigstack.c)
 int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }
-// main's imports (loader.c) and the MiiModel stand-in (hle_mii.c): no main module, no system data
+// the loader's symbol lookup (loader.c): no modules, so no SDK
 void *guest_sym(const char *name) { (void)name; return NULL; }
-int dm_game_imports(const char *prefix) { (void)prefix; return 0; }
-int dm_mii_standin(const char *dir) { (void)dir; return 0; }
 void dm_thread_service_request(void) {}

@@ -14,7 +14,7 @@ struct dm_audio_input_stream {
     int16_t *samples;
     uint32_t capacity, sample_mask;
     _Atomic uint32_t head, tail;
-    _Atomic uint32_t gain_bits, user_gain_bits;
+    _Atomic uint32_t user_gain_bits;
     _Atomic uint64_t dropped, captured, read, read_requests, underruns, zero_fill;
     _Atomic uint64_t pre_squares, post_squares, level_samples;
     _Atomic uint32_t pre_peak, post_peak;
@@ -121,7 +121,6 @@ dm_audio_input_stream *dm_audio_input_open(int format, int channels, int rate, i
     s->capacity = (uint32_t)capacity_frames;
     s->sample_mask = storage - 1;
     atomic_init(&s->head, 0); atomic_init(&s->tail, 0);
-    atomic_init(&s->gain_bits, float_bits(1.0f));
     atomic_init(&s->user_gain_bits, float_bits(input_user_gain()));
     atomic_init(&s->dropped, 0); atomic_init(&s->captured, 0); atomic_init(&s->read, 0); atomic_init(&s->read_requests, 0); atomic_init(&s->underruns, 0); atomic_init(&s->zero_fill, 0);
     atomic_init(&s->pre_squares, 0); atomic_init(&s->post_squares, 0); atomic_init(&s->level_samples, 0);
@@ -218,8 +217,6 @@ int dm_audio_input_state(const dm_audio_input_stream *s) {
     return state;
 }
 
-int dm_audio_input_capacity(const dm_audio_input_stream *s) { return s ? (int)s->capacity : 0; }
-
 static void input_report_if_due(dm_audio_input_stream *s) {
     uint64_t now = monotonic_ns(), last = atomic_load_explicit(&s->last_report_ns, memory_order_relaxed);
     if (!now || now - last < 2000000000ull || !atomic_compare_exchange_strong_explicit(&s->last_report_ns, &last, now, memory_order_relaxed, memory_order_relaxed)) return;
@@ -238,12 +235,11 @@ static void input_report_if_due(dm_audio_input_stream *s) {
     uint32_t pre_peak = atomic_exchange_explicit(&s->pre_peak, 0, memory_order_relaxed);
     uint32_t post_peak = atomic_exchange_explicit(&s->post_peak, 0, memory_order_relaxed);
     float user_gain = bits_float(atomic_load_explicit(&s->user_gain_bits, memory_order_relaxed));
-    float game_gain = bits_float(atomic_load_explicit(&s->gain_bits, memory_order_relaxed));
-    fprintf(stderr, "[dm] audio input: device=\"%s\" uid=\"%s\" rate=%.0f channels=%d captured=%llu read=%llu read_requests=%llu underruns=%llu zero_fill=%llu dropped=%llu gain=%.2fx game_gain=%.2fx pre_peak=%.1f dBFS pre_rms=%.1f dBFS post_peak=%.1f dBFS post_rms=%.1f dBFS resampler=%.6f\n",
+    fprintf(stderr, "[dm] audio input: device=\"%s\" uid=\"%s\" rate=%.0f channels=%d captured=%llu read=%llu read_requests=%llu underruns=%llu zero_fill=%llu dropped=%llu gain=%.2fx pre_peak=%.1f dBFS pre_rms=%.1f dBFS post_peak=%.1f dBFS post_rms=%.1f dBFS resampler=%.6f\n",
             name, uid, rate, channels,
             (unsigned long long)captured, (unsigned long long)read, (unsigned long long)requests,
             (unsigned long long)underruns, (unsigned long long)zero, (unsigned long long)dropped,
-            user_gain, game_gain, dbfs(pre_peak, pre_squares, samples, 0), dbfs(pre_peak, pre_squares, samples, 1),
+            user_gain, dbfs(pre_peak, pre_squares, samples, 0), dbfs(pre_peak, pre_squares, samples, 1),
             dbfs(post_peak, post_squares, samples, 0), dbfs(post_peak, post_squares, samples, 1),
             rate > 0.0 ? rate / DM_AUDIO_INPUT_RATE : 0.0);
 }
@@ -255,12 +251,6 @@ int dm_audio_input_filled(const dm_audio_input_stream *s) {
     uint32_t n = tail - head;
     input_report_if_due((dm_audio_input_stream *)s);
     return n > s->capacity ? (int)s->capacity : (int)n;
-}
-
-int dm_audio_input_free(const dm_audio_input_stream *s) {
-    if (!s) return 0;
-    int filled = dm_audio_input_filled(s);
-    return s->capacity - filled;
 }
 
 int dm_audio_input_read(dm_audio_input_stream *s, void *dst, int frames) {
@@ -287,26 +277,12 @@ int dm_audio_input_read(dm_audio_input_stream *s, void *dst, int frames) {
     return (int)n;
 }
 
-float dm_audio_input_gain(const dm_audio_input_stream *s) {
-    return s ? bits_float(atomic_load_explicit(&s->gain_bits, memory_order_relaxed)) : 1.0f;
-}
-
-void dm_audio_input_set_gain(dm_audio_input_stream *s, float gain) {
-    if (!s) return;
-    if (!(gain >= 0.0f)) gain = 0.0f;
-    if (gain > 8.0f) gain = 8.0f;
-    atomic_store_explicit(&s->gain_bits, float_bits(gain), memory_order_relaxed);
-}
-
 static void input_push_sample(float value, dm_audio_input_stream *const *streams, input_level_window *levels) {
     if (!(value == value)) value = 0.0f;
     for (int i = 0; i < INPUT_MAX; i++) {
         dm_audio_input_stream *s = streams[i];
         if (!s || atomic_load_explicit(&s->state, memory_order_relaxed) != INPUT_STARTED) continue;
-        float user_gain = bits_float(atomic_load_explicit(&s->user_gain_bits, memory_order_relaxed));
-        float game_gain = bits_float(atomic_load_explicit(&s->gain_bits, memory_order_relaxed));
-        float gain = user_gain * game_gain;
-        if (gain > 8.0f) gain = 8.0f;
+        float gain = bits_float(atomic_load_explicit(&s->user_gain_bits, memory_order_relaxed));   // DM_MIC_GAIN, 1 to 8
         float sample = soft_limit(value * gain);
         level_add(&levels[i], value, sample);
         uint32_t tail = atomic_load_explicit(&s->tail, memory_order_relaxed);

@@ -1,9 +1,7 @@
-// friends service unit test: presence is accepted (Twelve Minutes stops its start-up on a failed UserPresence::Initialize, seedds/nxnative#217),
-// while the calls that would reach the service still fail. Expected results are hand-written, not taken from the implementation.
+// friends service unit test: the calls that would reach the friends service fail at once, and each takeover is registered under the exact name the game's modules reference
+// (a missing or misspelled overload would run the SDK's friends client instead). Expected results are hand-written, not taken from the implementation.
 #include "../hle_friends.c"
 #include <mach-o/getsect.h>
-void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
-void hle_signal_system_event(void *g) { (void)g; }
 extern const struct mach_header_64 _mh_execute_header;
 static int checks, fails;
 #define CHECK(c, s) do { checks++; int ok = !!(c); fails += !ok; printf("%s %s\n", ok ? "✓" : "✗", s); } while (0)
@@ -19,30 +17,18 @@ static void *hook(const char *name) {
     return count == 1 ? fn : NULL;
 }
 int main(void) {
-    uint8_t presence[0x100] = {0}, uid[16] = {1};
-    CHECK(h_fr_UpInit(presence, uid) == RES_OK, "UserPresence::Initialize succeeds");
-    CHECK(h_fr_UpDesc(presence, "in game") == RES_OK, "UserPresence::SetDescription succeeds");
-    CHECK(h_fr_UpCommit(presence) == RES_OK, "UserPresence::Commit succeeds");
-    CHECK(h_fr_NqInit(presence, uid) == RES_FAIL, "NotificationQueue::Initialize still fails");
-    CHECK(h_fr_OpenSession(uid) == RES_FAIL, "DeclareOpenOnlinePlaySession still fails");
-    // Resolve the actual takeovers: a missing or misspelled overload would run the SDK's friends client instead (PR #2162).
-    Result (*key_uid)(void *, const void *, int) = hook("_ZN2nn7friends29GetPlayHistoryRegistrationKeyEPNS0_26PlayHistoryRegistrationKeyERKNS_7account3UidEb");
-    Result (*key_no_uid)(void *, int) = hook("_ZN2nn7friends29GetPlayHistoryRegistrationKeyEPNS0_26PlayHistoryRegistrationKeyEb");
-    uint8_t key[0x100], before[sizeof key];
-    memset(before, 0xa5, sizeof before);
-    const int local_args[] = {0, 1, 0x100, 0x101};   // guest bools may leave the upper register bits set (hle.h)
-    for (size_t i = 0; i < sizeof local_args / sizeof *local_args; i++) {
-        if (key_uid) {
-            memcpy(key, before, sizeof key);
-            CHECK(key_uid(key, uid, local_args[i]) == RES_FAIL, "play history key with Uid is unavailable");
-            CHECK(!memcmp(key, before, sizeof key), "failed key query with Uid leaves output untouched");
-        }
-        if (key_no_uid) {
-            memcpy(key, before, sizeof key);
-            CHECK(key_no_uid(key, local_args[i]) == RES_FAIL, "play history key without Uid is unavailable");
-            CHECK(!memcmp(key, before, sizeof key), "failed key query without Uid leaves output untouched");
-        }
-    }
+    uint8_t obj[0x100], before[sizeof obj], uid[16] = {1}, ids[8] = {0};
+    memset(before, 0xa5, sizeof before); memcpy(obj, before, sizeof obj);
+    Result (*profiles)(void *, void *, const void *, const void *, int) = hook("_ZN2nn7friends14GetProfileListEPNS0_12AsyncContextEPNS0_7ProfileERKNS_7account3UidEPKNS5_23NetworkServiceAccountIdEi");
+    Result (*update)(void *, const void *, const void *, int) = hook("_ZN2nn7friends16UpdateFriendInfoEPNS0_6FriendERKNS_7account3UidEPKNS3_23NetworkServiceAccountIdEi");
+    Result (*queue)(void *, const void *) = hook("_ZN2nn7friends17NotificationQueue10InitializeERKNS_7account3UidE");
+    Result (*blocked)(int *, void *, const void *, int, int) = hook("_ZN2nn7friends18GetBlockedUserListEPiPNS_7account23NetworkServiceAccountIdERKNS2_3UidEii");
+    if (profiles) CHECK(profiles(NULL, obj, uid, ids, 1) == RES_FAIL && !memcmp(obj, before, sizeof obj), "GetProfileList fails and leaves the profiles untouched");
+    if (update) CHECK(update(obj, uid, ids, 1) == RES_FAIL && !memcmp(obj, before, sizeof obj), "UpdateFriendInfo fails and leaves the friends untouched");
+    if (queue) CHECK(queue(obj, uid) == RES_FAIL && !memcmp(obj, before, sizeof obj), "NotificationQueue::Initialize fails");
+    int count = 7;
+    if (blocked) CHECK(blocked(&count, obj, uid, 0, 4) == RES_FAIL && count == 0 && !memcmp(obj, before, sizeof obj), "GetBlockedUserList fails with an empty list");
+    if (blocked) CHECK(blocked(NULL, obj, uid, 0, 4) == RES_FAIL, "GetBlockedUserList takes a null count");
     printf("t_friends: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

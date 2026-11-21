@@ -1,9 +1,7 @@
-// Local profiles belong to this app's save store. A tiny registry beside DM_SAVE
-// survives process restarts without becoming part of any user's save transaction.
+// Local profiles belong to this app's save store: a tiny registry beside DM_SAVE, read here,
+// outside any user's save transaction. A store without one has user 1 only.
 #include "dm.h"
 #include "account_users.h"
-#include <fcntl.h>
-#include <unistd.h>
 
 static pthread_mutex_t g_users_lock = PTHREAD_MUTEX_INITIALIZER;
 static char g_users_path[1024];
@@ -23,7 +21,7 @@ static void users_load(void) {
     if (g_users_loaded && !strcmp(path, g_users_path)) return;
     strlcpy(g_users_path, path, sizeof g_users_path);
     g_users_loaded = 1; g_users_mask = 1;
-    if (!*path) return;   // user 1 still exists without a save store; creation cannot persist
+    if (!*path) return;   // user 1 still exists without a save store
     FILE *f = fopen(path, "r");
     if (!f && errno == ENOENT) return;
     unsigned mask = 0; char extra;
@@ -41,25 +39,4 @@ unsigned dm_account_users(void) {
 int dm_account_user(const void *uid) {
     int i = dm_uid_user(uid);
     return i >= 0 && (dm_account_users() & (1u << i)) ? i : -1;
-}
-int dm_account_create_user(int user) {
-    if (user < 1 || user >= DM_USERS) return -1;
-    pthread_mutex_lock(&g_users_lock); users_load();
-    int result = -1, fd = -1; char tmp[1100] = "";
-    if (!g_users_mask || !g_users_path[0] || (g_users_mask & (1u << user))) goto done;
-    snprintf(tmp, sizeof tmp, "%s.XXXXXX", g_users_path);
-    fd = mkstemp(tmp);
-    if (fd < 0) goto done;
-    unsigned mask = g_users_mask | (1u << user);
-    char data[64]; int n = snprintf(data, sizeof data, "nxnative-users-1 %02x\n", mask);
-    if (write(fd, data, n) != n || fsync(fd)) goto done;
-    if (close(fd)) { fd = -1; goto done; }
-    fd = -1;
-    if (rename(tmp, g_users_path)) goto done;
-    g_users_mask = mask; result = 0;
-done:
-    if (fd >= 0) close(fd);
-    if (result && tmp[0]) unlink(tmp);
-    if (result) LOG("[RED] account: could not persist user %d in %s", user + 1, g_users_path[0] ? g_users_path : "an unset DM_SAVE");
-    pthread_mutex_unlock(&g_users_lock); return result;
 }

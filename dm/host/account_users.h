@@ -13,7 +13,5 @@ static inline int dm_uid_user(const void *uid) {
 }
 // A bit per registered user, or 0 on an unreadable/corrupt registry. Never includes session state.
 unsigned dm_account_users(void);
-// Register an unused slot durably before exposing it to a game. 0 on success, -1 on failure.
-int dm_account_create_user(int user);
 // Registered UID -> slot, -1 for an unknown UID. NULL is not a guest account.
 int dm_account_user(const void *uid);

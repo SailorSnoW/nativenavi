@@ -79,15 +79,14 @@ static int profile_modules(const char *dir, const char **names) {
     return DM_GAME_NMOD;
 }
 
-// Host loading (independent of UIKit / Metal): read the NSO, relocate, forced take-over, probes / tick gate / keys, start prefetch. By default it runs synchronously in main;
-// the iOS front end can call dm_host_preload_start(same arguments) at the very start of the App's main() so that it runs first on a background thread, in parallel with the UIKit startup chain (⓪ + ① ≈ max(UIKit chain, host loading)).
+// Host loading (independent of AppKit / Metal): read the NSOs, relocate, forced take-over, probes, keys, start prefetch
 static pthread_key_t g_race_keys[512];
 static unsigned g_race_n, g_race_want;
 static void *keyrace_thread(void *unused);
-static void host_preload(int argc, char **argv) {
+static void host_load(int argc, char **argv) {
     g_t0_ns = proc_start_mono_ns();
     flags_init();
-    { void dm_diag_samplers_start(void); dm_diag_samplers_start(); }   // DM_MEMSTAT / DM_THRCPU (memstat.m): after the iOS front end has set the env files' switches
+    { void dm_diag_samplers_start(void); dm_diag_samplers_start(); }   // DM_MEMSTAT / DM_THRCPU (memstat.m)
     if (argc < 2) die("usage: dmhost <dir> [mod...] [-- game arguments...]");
     // Time zone: a game gets local time from nn::time (ToCalendarTime / ToPosixTime, hle_time.c), which converts with the host's zone, so its screens show this machine's time.
     // The guest C library's localtime / mktime stay UTC, as on a Switch. Only deterministic comparison (DM_FIXED_TIME) pins the host to UTC: the same replay must convert to the same
@@ -137,34 +136,15 @@ static void host_preload(int argc, char **argv) {
     if (g_flag.bootprof) LOG("① breakdown (after loading): probes / keys %.1f ms, stub report %.1f ms", (tb - ta) / 1e6, (now_ns() - tb) / 1e6);
     { void loader_hash_log(void); loader_hash_log(); }   // DM_LOADHASH=1: address-independent hash of the load result (loader.c)
 }
-static struct { int argc; char **argv; pthread_t th; _Atomic int started; } g_pre;
-static void *preload_thread(void *a) { (void)a; host_preload(g_pre.argc, g_pre.argv); return NULL; }
 static void *keyrace_thread(void *unused) {
     (void)unused;
     for (unsigned i = 0; i < g_race_want; i++) if (pthread_key_create(&g_race_keys[g_race_n++], NULL)) break;
     return NULL;
 }
-// Start host loading early. When to call: as one of the first things in the process (iOS: in the App's main() before entering UIApplicationMain); the environment variables loading needs must already be set
-// (DM_ROMFS / DM_SAVE / DM_TEMP etc. and the cwd -- loading and the prefetch start read them); the arguments must be identical, item by item, to those of the later dm_main (a difference reports a failure and exits).
-// May be called only once; if not called, loading is synchronous inside main and behavior is exactly as before this call existed. Does not depend on UIKit / Metal.
-void dm_host_preload_start(int argc, char **argv) {
-    if (atomic_exchange(&g_pre.started, 1)) return;
-    g_pre.argc = argc; g_pre.argv = calloc((size_t)argc + 1, sizeof(char *));
-    for (int i = 0; i < argc; i++) g_pre.argv[i] = strdup(argv[i]);
-    pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8 << 20);
-    if (pthread_create(&g_pre.th, &a, preload_thread, NULL)) die("dm_host_preload_start: cannot start the thread");
-}
 int main(int argc, char **argv) {
     { int mtl_pso_prebuild_tool(void); int r = mtl_pso_prebuild_tool(); if (r) return r == 2; }   // DM_PSO_PREBUILD=tool: what a first start would build, made with no game (nvn_mtl.m)
-    if (getenv("DM_PRELOAD")) dm_host_preload_start(argc, argv);   // Exercise the early-start path on Mac (on iOS it is called from the App's main())
-    if (atomic_load(&g_pre.started)) {
-        pthread_join(g_pre.th, NULL);
-        int same = argc == g_pre.argc; for (int i = 0; same && i < argc; i++) same = !strcmp(argv[i], g_pre.argv[i]);
-        if (!same) die("[RED] dm_host_preload_start arguments differ from main's");
-        void crash_thread_init(void); crash_thread_init();   // The signal alternate stack is per thread: loading installed it on another thread, so add it for this thread
-        LOG("host loading already finished early in the background (dm_host_preload_start)");
-    } else host_preload(argc, argv);
-    { void dm_fps_state_apply(void); dm_fps_state_apply(); }   // frame rate and render scale into the frame step state page (loader.c): the iOS launcher sets them after the loading began
+    host_load(argc, argv);
+    { void dm_fps_state_apply(void); dm_fps_state_apply(); }   // the frame rate target and the dynamic resolution switch into the frame step state page (loader.c)
     front_run(guest_main);
     return 0;
 }

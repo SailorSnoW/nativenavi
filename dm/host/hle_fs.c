@@ -29,7 +29,7 @@ enum { DIRMODE_DIR = 1, DIRMODE_FILE = 2 };
 typedef struct { char name[0x301]; uint8_t pad0[3]; int8_t type; uint8_t pad1[3]; int64_t size; } DirectoryEntry;
 _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry layout");
 
-#define MAX_MOUNT 512   // Monster Hunter Rise mounts every add-on content it owns (aoc0 … : 252 licences in the folder) right after the first-boot settings: 16 ended in "mount table full"
+#define MAX_MOUNT 512   // the table is permanent (Unmount frees no entry), so it is sized far above the names a game mounts
 // Save transactions (HLE audit items 1–3): on the real device a save can be rolled back as a whole before commit, and after a crash / kill a remount sees only the version from the last Commit.
 // Host: at mount, the committed directory commit (= $DM_SAVE) is clonefile'd as a whole tree into the working directory <commit>.work (APFS copy-on-write, nearly zero cost), and the mount points at the working directory,
 // all game reads and writes happen in the working directory; Commit = clonefile(work → <commit>.new), then renamex_np(RENAME_SWAP) swaps it atomically with commit, then the swapped-out old version is deleted.
@@ -51,16 +51,14 @@ typedef struct {
     romfs_img *img;                  // non-NULL: dir is a RomFS image file
     int ro;
     int romfs;                       // the game's RomFS: reads look in the overlay folders first (DM_ROMFS_OVERLAY, dm_fs_overlay_set)
-    int aoc;                         // add-on content: Unmount releases the name (mount_aoc)
-    int released;                    // an add-on content entry after its Unmount: kept for open handles and a later mount of its image, matched by no name (mnt_is)
     int txn_root;                    // canonical mount entry for this backing transaction, or -1
     _Atomic int poison;              // failure state belongs to this backing, not to the process
     _Atomic uint64_t first_write_ns;
 } mount_t;
 static mount_t g_mnt[MAX_MOUNT];   // commit non-empty = transactional save mount
 static int g_nmnt;
-// Whether entry m is mounted under the n-byte name s; a released entry (aoc_release) is under none
-static int mnt_is(const mount_t *m, const char *s, size_t n) { return !m->released && strlen(m->name) == n && !strncmp(m->name, s, n); }
+// Whether entry m is mounted under the n-byte name s
+static int mnt_is(const mount_t *m, const char *s, size_t n) { return strlen(m->name) == n && !strncmp(m->name, s, n); }
 static int mnt_named(const mount_t *m, const char *name) { return mnt_is(m, name, strlen(name)); }
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_path_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -96,7 +94,7 @@ static void save_poison_txn(int txn, int e) {
 static void save_poison(int e) { // Test helper: poison the first mounted transaction.
     for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].txn_root == i) { save_poison_txn(i, e); return; }
 }
-// The default weak implementation only logs (Mac); the iOS front end provides a strong implementation of the same name that shows a native alert. Called on the game thread, the front end switches to the main thread itself
+// The default weak implementation only logs; a front end that shows the failure provides a strong one of the same name (the unit tests count the calls with theirs). Called on the game thread
 __attribute__((weak)) void front_save_failed(int err) { LOG("front_save_failed(errno=%d): no front end attached (default weak implementation)", err); }
 // DM_FSLOG=<file>: each ReadFile logs one TSV line "seconds since boot\tguest path\toffset\tlength\tguest buffer address" (which bytes boot read, for offline reverse lookup against the manifest)
 static FILE *g_fslog; static char *g_fdpath[4096]; static pthread_mutex_t g_fslog_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -126,7 +124,6 @@ static romfs_img *img_open(const char *path) {
     romfs_img *m = romfs_image_open(path);
     if (m) LOG("fs RomFS image %s: %llu entries", path, (unsigned long long)m->n);
     else LOG("[RED] fs RomFS image %s is not a complete image (copied in part? errno=%d)", path, errno);
-    if (m && m->damaged) LOG("[RED] fs RomFS image %s: damaged files %llu: they failed the NCA's hash check when it was extracted (a damaged NSP, --allow-damaged); a crash or a wrong picture may come from their bytes", path, (unsigned long long)m->damaged);
     return m;
 }
 // The entry a path names in an image: each component is a binary search of its directory's children, which the packer sorted by name (bytes, a shorter prefix first)
@@ -187,7 +184,6 @@ static int img_path(const char *p, int *mi, int64_t *k) {
     }
     return 0;
 }
-static void save_old_names(const char *from, const char *to);
 static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     pthread_once(&g_txn_lock_once, txn_locks_init);
     PATH_LOCK(); pthread_mutex_lock(&g_lock);
@@ -201,7 +197,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
         }
     if (g_nmnt >= MAX_MOUNT) die("mount table full");
     strlcpy(g_mnt[g_nmnt].name, name, sizeof g_mnt[0].name);
-    g_mnt[g_nmnt].ro = ro; g_mnt[g_nmnt].aoc = 0; g_mnt[g_nmnt].released = 0; g_mnt[g_nmnt].overlay[0] = 0; g_mnt[g_nmnt].commit[0] = 0;
+    g_mnt[g_nmnt].ro = ro; g_mnt[g_nmnt].overlay[0] = 0; g_mnt[g_nmnt].commit[0] = 0;
     g_mnt[g_nmnt].txn_root = -1;
     atomic_store(&g_mnt[g_nmnt].poison, 0);
     atomic_store(&g_mnt[g_nmnt].first_write_ns, 0);
@@ -212,13 +208,12 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     // (each of these three failures used to call die: with the phone's storage full the game exited as soon as it mounted its saves)
     int txn_err = 0, k = 0;
     while (txn && k < g_nmnt && strcmp(g_mnt[k].commit, dir)) k++;
-    if (txn && k < g_nmnt) {   // a second name for a save already mounted (account and device save data are one host save): it shares that transaction, whose pending writes a new clone would drop
+    if (txn && k < g_nmnt) {   // a second name for a save already mounted: it shares that transaction, whose pending writes a new clone would drop
         strlcpy(g_mnt[g_nmnt].commit, g_mnt[k].commit, sizeof g_mnt[0].commit); strlcpy(g_mnt[g_nmnt].dir, g_mnt[k].dir, sizeof g_mnt[0].dir);
         g_mnt[g_nmnt].txn_root = g_mnt[k].txn_root;
     } else if (txn) {
         char work[1100], neu[1100]; snprintf(work, sizeof work, "%s.work", dir); snprintf(neu, sizeof neu, "%s.new", dir);
         mkdir(dir, 0755);
-        save_old_names(dir, dir);
         const char *why = NULL;
         if (!access(work, F_OK) && rm_tree(work)) why = "cannot clear the work directory left over from last time";
         else if (!access(neu, F_OK) && rm_tree(neu)) why = "cannot clear the .new left over from last time";
@@ -237,7 +232,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     struct stat ist;
     if (ro && !txn) {   // game files: a RomFS folder, or a RomFS image file in its place
         // A path that is neither is a stale or mistyped one (an old run command still naming the RomFS folder a rebuild replaced with RomFS.img): stop here, not at the game's
-        // first failed read (Echoes of Wisdom crashed 0.3 s after nnMain, GitHub issue #615). Add-on content and system data check their own paths before they mount
+        // first failed read (Echoes of Wisdom crashed 0.3 s after nnMain, GitHub issue #615)
         if (stat(dir, &ist) || !(S_ISDIR(ist.st_mode) || S_ISREG(ist.st_mode)))
             die("the game files %s (%s:) are missing: neither a folder nor a RomFS image (the rom mount is DM_ROMFS, or $DM_ROOT/romfs when DM_ROMFS is unset)", dir, name);
         if (S_ISREG(ist.st_mode) && !(g_mnt[g_nmnt].img = img_open(dir))) die("the game files %s are not a complete RomFS image", dir);
@@ -250,48 +245,6 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     return RES_OK;
 }
 static Result mount(const char *name, const char *dir, int ro) { return mount_ex(name, dir, ro, 0); }
-
-// Add-on content under a name the game gives back. On Horizon Unmount releases the name and the next mount under it gets the add-on it names: Pokémon Friends'
-// AocVersionCheker mounts each add-on as "AVCtitle", reads its AocVersion/AocVersion_<label>.json and unmounts it. The host's table keeps its entries, as an open
-// image file names its entry by index (IMG_HANDLE): Unmount marks an add-on's entry released (aoc_release; it keeps its name for the log, and no name lookup matches it, mnt_is), and a later mount of the same image takes that entry back,
-// so cycling through the add-ons does not grow the table. A name still in use keeps its target, as mount_ex does for every mount.
-static Result mount_aoc(const char *name, const char *dir) {
-    {
-        PATH_LOCK(); pthread_mutex_lock(&g_lock);
-        int back = -1;
-        for (int i = 0; i < g_nmnt; i++) {
-            if (mnt_named(&g_mnt[i], name)) { pthread_mutex_unlock(&g_lock); return RES_OK; }
-            if (g_mnt[i].released && !strcmp(g_mnt[i].dir, dir)) back = i;
-        }
-        if (back >= 0) {
-            strlcpy(g_mnt[back].name, name, sizeof g_mnt[0].name); g_mnt[back].released = 0;
-            pthread_mutex_unlock(&g_lock);
-            LOG("fs mount %s: → %s (read-only, the entry it had before its unmount)", name, dir);
-            return RES_OK;
-        }
-        pthread_mutex_unlock(&g_lock);
-    }
-    Result r = mount(name, dir, 1);   // mount_ex logs it
-    if (r == RES_OK) {
-        PATH_LOCK(); pthread_mutex_lock(&g_lock);
-        for (int i = g_nmnt - 1; i >= 0; i--) if (mnt_named(&g_mnt[i], name)) { g_mnt[i].aoc = 1; break; }
-        pthread_mutex_unlock(&g_lock);
-    }
-    return r;
-}
-// Unmount of an add-on content mount: the name is released, the entry and its image stay (a handle left open still reads the image it opened). 1 if the name was one
-static int aoc_release(const char *name) {
-    PATH_LOCK(); pthread_mutex_lock(&g_lock);
-    for (int i = 0; i < g_nmnt; i++)
-        if (g_mnt[i].aoc && mnt_named(&g_mnt[i], name)) {
-            g_mnt[i].released = 1;
-            pthread_mutex_unlock(&g_lock);
-            LOG("fs unmount %s: add-on content released (%s)", name, g_mnt[i].dir);
-            return 1;
-        }
-    pthread_mutex_unlock(&g_lock);
-    return 0;
-}
 
 // APFS is case-insensitive by default, Horizon paths are case-sensitive: every component is looked up exactly by guest name.
 // Ordinary host names are unchanged; only when a name collides on the host is a separate physical name chosen, with the guest name stored in an xattr.
@@ -511,7 +464,6 @@ static int host_path_ex(const char *p, char *out, size_t n, int *ro, int create)
     }
     errno = ENOENT; return 0;
 }
-static int host_path(const char *p, char *out, size_t n, int *ro) { return host_path_ex(p, out, n, ro, 0); }
 static int set_guest_name(const char *hp, const char *path) {
     char fwd[1024]; path = fwd_slashes(path, fwd, sizeof fwd);
     const char *end = path + strlen(path); while (end > path && end[-1] == '/') end--;
@@ -523,50 +475,6 @@ static int set_guest_name(const char *hp, const char *path) {
     if (strcmp(physical, guest)) return setxattr(hp, FS_GUEST_NAME, guest, strlen(guest), 0, XATTR_NOFOLLOW);
     if (!removexattr(hp, FS_GUEST_NAME, XATTR_NOFOLLOW) || errno == ENOATTR) return 0;
     return -1;
-}
-// Hosts before fwd_slashes took a backslash in a save path as part of the name: save:\savedata0.bin is the file "\savedata0.bin", and save:\dir\f the file "\dir\f" in the save's root.
-// Such a name can no longer be reached, so the save reads as empty. At each mount of a committed save, every entry with one moves to the name the game asks for today: entries in from go to
-// to, folders on the way are made, and a folder that already exists there is merged. A rename keeps the contents and is atomic, and a kill partway is finished by the next mount, so this needs
-// no transaction and no record of what was done. An entry whose new name is taken (the game wrote a new save since), or that would leave its folder (".."), stays as it is.
-static void save_old_names(const char *from, const char *to) {
-    DIR *d = opendir(from); if (!d) return;
-    char **names = NULL; size_t count = 0, cap = 0; struct dirent *e;   // read first: a directory that changes while it is read can skip entries
-    while ((e = readdir(d))) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        if (count == cap) { char **w = realloc(names, (cap = cap ? cap * 2 : 16) * sizeof *names); if (!w) break; names = w; }
-        if (!(names[count] = strdup(e->d_name))) break;
-        count++;
-    }
-    closedir(d);
-    int same = !strcmp(from, to);
-    for (size_t i = 0; i < count; i++) {
-        char src[1280], dst[1280], guest[0x301], part[0x301] = ""; struct stat st, ds;
-        snprintf(src, sizeof src, "%s/%s", from, names[i]);
-        if (lstat(src, &st) || !guest_name(from, names[i], guest, sizeof guest)) continue;
-        int isdir = S_ISDIR(st.st_mode);
-        if (same && !strchr(guest, '\\')) { if (isdir) save_old_names(src, src); continue; }   // nearly every entry: no lookup in a folder that may be large
-        strlcpy(dst, to, sizeof dst);
-        int ok = 1;
-        for (const char *s = guest; ok && *s; ) {
-            while (*s == '\\') s++;
-            size_t k = strcspn(s, "\\"); if (!k) break;
-            memcpy(part, s, k); part[k] = 0; s += k;
-            while (*s == '\\') s++;
-            ok = strcmp(part, ".") && strcmp(part, "..") && path_component(dst, sizeof dst, part, 1, 0);
-            if (ok && *s) {   // a folder on the way
-                if (!lstat(dst, &ds)) ok = S_ISDIR(ds.st_mode);
-                else ok = !mkdir(dst, 0755) && !set_guest_name(dst, part);
-            }
-        }
-        if (!ok) LOG("save: %s stays as it is: it has no place under today's path rules", src);
-        else if (lstat(dst, &ds)) {
-            if (rename(src, dst) || set_guest_name(dst, part)) LOG("save: %s could not become %s (errno=%d)", src, dst, errno);
-            else { LOG("save: %s is now %s (a name from a host before backslashes separated paths)", src, dst); if (isdir) save_old_names(dst, dst); }
-        } else if (isdir && S_ISDIR(ds.st_mode)) { save_old_names(src, dst); rmdir(src); }   // rmdir refuses a folder that still holds an entry that stayed
-        else LOG("save: %s stays as it is: %s already exists (the game cannot see the old one)", src, dst);
-    }
-    for (size_t i = 0; i < count; i++) free(names[i]);
-    free(names);
 }
 static Result err_res(const char *op, const char *path) {
     if (errno == ENOENT || errno == ENOTDIR) { if (g_flag.fs) LOG("fs %s not found: %s", op, path); return RES_PATH_NOT_FOUND; }   // Logged under DM_FS=1 (the game often probes with "not found", not logged by default)
@@ -614,96 +522,8 @@ HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv; rom → host RomFS directory", 
     }
     return r;
 }
-// Add-on content (DLC) RomFS: DM_AOC_DIR/<index>/, extracted from the player's DLC NSPs by the packing script; mounted read-only, using the directory index like rom.
-// The owned index list is reported by the aoc calls in hle_misc.c from the same directory; the game only mounts indices it was given, and a missing directory answers "target not found" (fs 2-1002, as on hardware without that DLC)
-#define RES_TARGET_NOT_FOUND 0x7D402u   // fs module 2, description 1002
-// The cache a Query…CacheSize asks for is, on Horizon, the RomFS's file table as RomFsFileSystem::GetRequiredWorkingMemorySize sizes it: the directory and file hash tables (4 bytes a bucket)
-// and entries (0x18 / 0x20 bytes plus the name, padded to 4). The host reads the files directly and needs no cache, but games take it from heaps sized for the real answer:
-// Mario Kart 8 Deluxe mounts its add-on content (two files) with a cache from its 0x3130-byte AocHeap, and with a 4 KB answer the decryption buffer that follows came back null (main+0x87376c).
-static size_t romfs_buckets(size_t n) {   // the hash table size of the RomFS builder: 3 below 3 entries, odd below 19, else the next number with no prime factor up to 17
-    if (n < 3) return 3;
-    if (n < 19) return n | 1;
-    while (!(n % 2 && n % 3 && n % 5 && n % 7 && n % 11 && n % 13 && n % 17)) n++;
-    return n;
-}
-static void romfs_tables(const char *dir, size_t *ndir, size_t *dbytes, size_t *nfile, size_t *fbytes, int depth) {
-    DIR *d = opendir(dir); struct dirent *e; char hp[1280], g[256];
-    if (!d) return;
-    while ((e = readdir(d))) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..") || !guest_name(dir, e->d_name, g, sizeof g)) continue;
-        size_t name = (strlen(g) + 3) & ~(size_t)3;
-        if (e->d_type == DT_DIR) {
-            ++*ndir; *dbytes += 0x18 + name;
-            if (depth < 64 && snprintf(hp, sizeof hp, "%s/%s", dir, e->d_name) < (int)sizeof hp) romfs_tables(hp, ndir, dbytes, nfile, fbytes, depth + 1);
-        } else { ++*nfile; *fbytes += 0x20 + name; }
-    }
-    closedir(d);
-}
-static size_t romfs_work_size(const char *dir) {
-    size_t ndir = 1, dbytes = 0x18, nfile = 0, fbytes = 0;   // the root directory has an entry with an empty name
-    struct stat st;
-    if (!stat(dir, &st) && S_ISREG(st.st_mode)) {
-        romfs_img *m = img_open(dir);
-        if (!m) return 0x1000;
-        for (uint64_t k = 1; k < m->n; k++) {
-            const img_ent *e = &m->e[k]; size_t name = (e->nlen + 3) & ~(size_t)3;
-            if (e->type) { nfile++; fbytes += 0x20 + name; }
-            else { ndir++; dbytes += 0x18 + name; }
-        }
-        romfs_image_close(m);
-    } else romfs_tables(dir, &ndir, &dbytes, &nfile, &fbytes, 0);
-    return 4 * romfs_buckets(ndir) + dbytes + 4 * romfs_buckets(nfile) + fbytes;
-}
-static int aoc_dir(char *dir, size_t n, int index) {
-    const char *base = getenv("DM_AOC_DIR"); struct stat st;
-    if (base && *base && snprintf(dir, n, "%s/%d.img", base, index) < (int)n && !stat(dir, &st) && S_ISREG(st.st_mode)) return 1;
-    return base && *base && snprintf(dir, n, "%s/%d", base, index) < (int)n && !stat(dir, &st) && S_ISDIR(st.st_mode);
-}
-HLE_FORCE("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", "fsp-srv; add-on content reads the host directory directly, the cache is the size of its RomFS file table", Result, h_fs_QueryAocCache, size_t *out, int index) {
-    char dir[1024];
-    *out = aoc_dir(dir, sizeof dir, index) ? romfs_work_size(dir) : 0x1000;   // an index the host does not have: the earlier minimum; the mount then fails
-    return RES_OK;
-}
-HLE_FORCE("_ZN2nn2fs17MountAddOnContentEPKciPvm", "fsp-srv; add-on content → DM_AOC_DIR/<index> (read-only)", Result, h_fs_MountAoc, const char *name, int index, void *cache, size_t sz) {
-    (void)cache; (void)sz; char dir[1024];
-    if (!aoc_dir(dir, sizeof dir, index)) {
-        LOG("fs mount add-on content %s: index %d does not exist (DM_AOC_DIR=%s)", name, index, getenv("DM_AOC_DIR") ? getenv("DM_AOC_DIR") : "unset");
-        return RES_TARGET_NOT_FOUND;
-    }
-    return mount_aoc(name, dir);
-}
-// System data archives are firmware content, which the host does not ship. A player can supply their own console's: <DM_SYSTEM_DIR>/sysdata/<id as 16 hex digits>/ holds an archive's
-// RomFS files, mounted read-only. Without it, the two Mii model archives are the host's stand-in, one directory of files in their shared layout with every part blank (hle_mii.c
-// dm_mii_standin), written into <DM_TEMP>_sysdata/mii: the Switch's MiiModel, 0100000000000802 (Mario Kart 8 Deluxe mounts it as MiiResource: and builds Mii heads from it at boot, for
-// the title screen's demo race), and the Switch 2's, 0400000000000849 (Nintendo Switch Sports Resort mounts it as MiiResource:; refused, the game went on with an empty Mii resource and,
-// minutes later in two-player Avioneta, read its texture file's part sizes through a null pointer, main+0x1cdcfb4 under main+0x1cd2e30). Any other archive answers "target not found",
-// as for a title that is not installed
-#define SYSDATA_MIIMODEL 0x0100000000000802ull
-#define SYSDATA_MIIMODEL_SW2 0x0400000000000849ull
-int dm_mii_standin(const char *dir);
-// The player's own console files: $DM_SYSTEM_DIR (default $DM_ROOT/run/platform/system), shared by every game: system data here, the Mii databases in hle_mii.c
+// The player's own console files: $DM_SYSTEM_DIR (default $DM_ROOT/run/platform/system). The console's Mii database is read from it (hle_mii.c)
 const char *dm_system_dir(char *buf, size_t n) { return envdir("DM_SYSTEM_DIR", "run/platform/system", buf, n); }
-static int sysdata_own(char *dir, size_t n, uint64_t id) {
-    char t[1024]; const char *sys = dm_system_dir(t, sizeof t); struct stat st;
-    return *sys && snprintf(dir, n, "%s/sysdata/%016llx", sys, (unsigned long long)id) < (int)n && !stat(dir, &st) && S_ISDIR(st.st_mode);
-}
-static int sysdata_dir(char *dir, size_t n, uint64_t id) {
-    char t[1024];
-    if (sysdata_own(dir, n, id)) return 1;
-    if ((id != SYSDATA_MIIMODEL && id != SYSDATA_MIIMODEL_SW2) || snprintf(dir, n, "%s_sysdata/mii", envdir("DM_TEMP", "run/platform/temp", t, sizeof t)) >= (int)n) return 0;
-    return dm_mii_standin(dir);
-}
-HLE_FORCE("_ZN2nn2fs29QueryMountSystemDataCacheSizeEPmNS_3ncm12SystemDataIdE", "fsp-srv; system data reads the host directory directly, the cache is the size of its RomFS file table", Result, h_fs_QuerySysDataCache, size_t *out, uint64_t id) {
-    char dir[1024];
-    *out = sysdata_dir(dir, sizeof dir, id) ? romfs_work_size(dir) : 0x1000;
-    return RES_OK;
-}
-HLE_FORCE("_ZN2nn2fs15MountSystemDataEPKcNS_3ncm12SystemDataIdEPvm", "fsp-srv; system data: the console's own from DM_SYSTEM_DIR, else the host's stand-in for the Switch's and the Switch 2's Mii model data", Result, h_fs_MountSysData, const char *name, uint64_t id, void *cache, size_t sz) {
-    (void)cache; (void)sz; char dir[1024];
-    if (!sysdata_dir(dir, sizeof dir, id)) { LOG("[RED] fs mount system data %s: the host has no %016llx (a console's own goes in <DM_SYSTEM_DIR>/sysdata/%016llx)", name, (unsigned long long)id, (unsigned long long)id); return RES_TARGET_NOT_FOUND; }
-    char own[1024]; if (sysdata_own(own, sizeof own, id)) LOG("fs mount system data %s: %016llx from %s", name, (unsigned long long)id, dir);
-    return mount(name, dir, 1);
-}
 static int host_mounted(const char *name) {
     PATH_LOCK();
     for (int i = 0; name && i < g_nmnt; i++) if (mnt_named(&g_mnt[i], name)) return 1;
@@ -772,8 +592,6 @@ static Result sdk_opened(Result r, uint64_t *out, const char *close_sym) {
 }
 #define SDK_PATH(path, sym, type, ...) do { __typeof__(type) sdk_f = (__typeof__(type))sdk_path_call(path, sym); if (sdk_f) return sdk_f(__VA_ARGS__); } while (0)
 #define SDK_HANDLE(h, sym, type, fail, ...) do { if (sdk_handle_known(h)) { __typeof__(type) sdk_f = (__typeof__(type))sdk_handle_sym(h, sym); return sdk_f ? sdk_f(__VA_ARGS__) : (fail); } } while (0)
-// IsMounted: the original SDK checks its own mount table, which the host's mounts never enter. Engage (IL2CPP) uses it to check whether "rom:" is mounted before opening a file; a "no" fails with an invalid-parameter error (0x57) and global-metadata.dat cannot be opened
-HLE_FORCE("_ZN2nn2fs9IsMountedEPKc", "fsp-srv; looks up the host mount table, then the SDK's own (a RAM disk)", int, h_fs_IsMounted, const char *name) { return host_mounted(name) || sdk_mounted(name); }   // bool in w0: 1 / 0
 // IsPathMounted / GetPathLengthMax: the SDK's C library (nnmusl) checks every path with them before it calls nn::fs (sdk+0x8ef50, under open / stat / opendir), and the original SDK answers from
 // its own empty mount table. Ace Attorney Investigations Collection (Unity 2022 IL2CPP): File.Exists → SystemNative_Stat → stat → open failed with no nn::fs call at all, so Addressables
 // never found StreamingAssets/aa/settings.json and the game crashed on a null asset (main+0x31100ec; found by armyja, GitHub issue #18). The mount name is the part before ':', as in FindFileSystem
@@ -803,158 +621,10 @@ HLE_FORCE("_ZN2nn2fs26GetUtf16EntryNameLengthMaxEPbPmPKc", "fsp-srv; host mounts
 HLE_FORCE("_ZN2nn2fs21MountTemporaryStorageEPKc", "fsp-srv; temporary storage → host directory", Result, h_fs_MountTemp, const char *name) {
     char b[1024]; return mount(name, envdir("DM_TEMP", "run/platform/temp", b, sizeof b), 0);
 }
-// Cache storage (Tears of the Kingdom; its first list call opened fsp-srv and aborted in sm::Initialize): storage <index> is the host folder <temporary storage>_cache<index>,
-// created when it is created or mounted; creating an existing one succeeds
-static const char *cache_dir(int index, char *b, size_t n) { char t[1024]; snprintf(b, n, "%s_cache%d", envdir("DM_TEMP", "run/platform/temp", t, sizeof t), index); return b; }
-// The list is the cache storages that exist, as on Horizon: a fresh run has none, and a later one finds those an earlier run created (or a player copied in). Open takes a snapshot, one readdir of the
-// temporary storage's parent for the folders cache_dir names (canonical decimal, index 0..65535), in index order; Read hands it out a page at a time, Close frees it. The handle the game holds
-// is a list number, never a host pointer: a closed or foreign handle finds no list
-typedef struct { uint64_t id; int n, next; uint16_t *index; } cache_list;
-static cache_list g_cache_lists[16];
-static uint64_t g_cache_list_id;
-static pthread_mutex_t g_cache_list_lock = PTHREAD_MUTEX_INITIALIZER;
-static int cmp_u16(const void *a, const void *b) { return (int)*(const uint16_t *)a - (int)*(const uint16_t *)b; }
-static int cache_list_scan(uint16_t **out) {
-    char path[1100]; cache_dir(0, path, sizeof path); path[strlen(path) - 1] = 0;   // "<temporary storage>_cache"
-    char *leaf = strrchr(path, '/'); const char *dir = ".", *prefix = path;
-    if (leaf) { *leaf = 0; dir = *path ? path : "/"; prefix = leaf + 1; }
-    *out = NULL; DIR *d = opendir(dir); if (!d) return 0;
-    size_t pl = strlen(prefix); int n = 0, cap = 0; struct dirent *e;
-    while ((e = readdir(d))) {
-        const char *s = e->d_name + pl; char *end; struct stat st;
-        if (strncmp(e->d_name, prefix, pl) || *s < '0' || *s > '9' || (*s == '0' && s[1])) continue;
-        unsigned long i = strtoul(s, &end, 10);
-        if (*end || i > 0xFFFF || fstatat(dirfd(d), e->d_name, &st, 0) || !S_ISDIR(st.st_mode)) continue;
-        if (n == cap) { uint16_t *v = realloc(*out, (size_t)(cap = cap ? cap * 2 : 16) * sizeof **out); if (!v) break; *out = v; }
-        (*out)[n++] = (uint16_t)i;
-    }
-    closedir(d);
-    if (n) qsort(*out, (size_t)n, sizeof **out, cmp_u16);
-    return n;
-}
-static cache_list *cache_list_find(uint64_t h) {   // under g_cache_list_lock
-    for (size_t i = 0; h && i < sizeof g_cache_lists / sizeof *g_cache_lists; i++) if (g_cache_lists[i].id == h) return &g_cache_lists[i];
-    return NULL;
-}
-HLE_FORCE("_ZN2nn2fs20OpenCacheStorageListEPNS0_22CacheStorageListHandleE", "fsp-srv; cache storage list: the cache folders that exist", Result, h_fs_OpenCacheList, uint64_t *h) {
-    uint16_t *index; int n = cache_list_scan(&index);
-    pthread_mutex_lock(&g_cache_list_lock);
-    cache_list *l = NULL; for (size_t i = 0; !l && i < sizeof g_cache_lists / sizeof *g_cache_lists; i++) if (!g_cache_lists[i].id) l = &g_cache_lists[i];
-    if (l) { *l = (cache_list){.id = ++g_cache_list_id, .n = n, .index = index}; *h = l->id; }
-    pthread_mutex_unlock(&g_cache_list_lock);
-    if (!l) { free(index); LOG("[RED] fs::OpenCacheStorageList: %zu lists open, none closed", sizeof g_cache_lists / sizeof *g_cache_lists); return RES_FAIL; }
-    LOG("fs cache storage list: %d", n); return RES_OK;
-}
-HLE_FORCE("_ZN2nn2fs20ReadCacheStorageListEPiPNS0_16CacheStorageInfoENS0_22CacheStorageListHandleEi", "fsp-srv; cache storage list: the cache folders that exist", Result, h_fs_ReadCacheList,
-          int *n, void *info, uint64_t h, int max) {
-    pthread_mutex_lock(&g_cache_list_lock);
-    cache_list *l = cache_list_find(h); *n = 0;
-    for (; l && l->next < l->n && *n < max; (*n)++) {   // CacheStorageInfo: 0x20 bytes, the index (s32) first, the rest reserved (zero)
-        uint8_t *e = (uint8_t *)info + (size_t)*n * 0x20; int32_t i = l->index[l->next++];
-        memset(e, 0, 0x20); memcpy(e, &i, sizeof i);
-    }
-    pthread_mutex_unlock(&g_cache_list_lock);
-    if (!l) { LOG("[RED] fs::ReadCacheStorageList: handle %#llx is no open list", (unsigned long long)h); return RES_FAIL; }
-    return RES_OK;
-}
-HLE_FORCE("_ZN2nn2fs21CloseCacheStorageListENS0_22CacheStorageListHandleE", "fsp-srv; cache storage list", void, h_fs_CloseCacheList, uint64_t h) {
-    pthread_mutex_lock(&g_cache_list_lock);
-    cache_list *l = cache_list_find(h); uint16_t *index = l ? l->index : NULL;
-    if (l) *l = (cache_list){0};
-    pthread_mutex_unlock(&g_cache_list_lock);
-    free(index);
-}
-// A cache storage's size is the one it was created with (GetCacheStorageSize reports it, as Horizon does): CreateCacheStorage writes it beside the folder, <folder>.size = "<data> <journal>"
-// (the list skips that name). Creating one that exists keeps its record, as its size does not change; a folder with no record (made by MountCacheStorage, an older host or the player) gets none
-static const char *cache_size_path(int index, char *b, size_t n) { char d[1100]; snprintf(b, n, "%s.size", cache_dir(index, d, sizeof d)); return b; }
-static void cache_size_put(int index, int64_t size, int64_t journal) {
-    char p[1200], t[1300]; cache_size_path(index, p, sizeof p); snprintf(t, sizeof t, "%s.tmp", p);
-    if (!access(p, F_OK)) return;
-    FILE *f = fopen(t, "w"); int bad = !f || fprintf(f, "%lld %lld\n", (long long)size, (long long)journal) < 0;
-    if (f && fclose(f)) bad = 1;
-    if (bad || rename(t, p)) { LOG("[RED] fs cache storage %d: cannot record its size in %s (%s)", index, p, strerror(errno)); unlink(t); }
-}
-HLE_FORCE("_ZN2nn2fs18CreateCacheStorageEill", "fsp-srv; cache storage → host directory, its size recorded beside it", Result, h_fs_CreateCache, int index, int64_t size, int64_t journal) {
-    char b[1100]; LOG("fs create cache storage %d (%lld bytes, journal %lld) → %s", index, (long long)size, (long long)journal, cache_dir(index, b, sizeof b));
-    if (mkdir(b, 0755) && errno != EEXIST) { LOG("[RED] fs create cache storage %d: %s", index, strerror(errno)); return RES_FAIL; }
-    cache_size_put(index, size, journal); return RES_OK;
-}
-HLE_FORCE("_ZN2nn2fs17MountCacheStorageEPKci", "fsp-srv; cache storage → host directory", Result, h_fs_MountCache, const char *name, int index) {
-    char b[1100]; cache_dir(index, b, sizeof b); mkdir(b, 0755); return mount(name, b, 0);
-}
-HLE_FORCE("_ZN2nn2fs18DeleteCacheStorageEi", "fsp-srv; cache storage → deletes the host directory", Result, h_fs_DeleteCache, int index) {
-    char b[1100]; rm_tree(cache_dir(index, b, sizeof b)); unlink(cache_size_path(index, b, sizeof b)); return RES_OK;
-}
-HLE_FORCE("_ZN2nn2fs17MountCacheStorageEPKc", "fsp-srv; cache storage 0 → host directory (SDK 11 one-argument form, Monster Hunter Rise)", Result, h_fs_MountCache0, const char *name) { return h_fs_MountCache(name, 0); }
-// Save data size (Monster Hunter Rise, SDK 11): the save directory has no size of its own, so it reports 256 MB of data and journal, more than a game asks for; extending succeeds without doing anything
-HLE_FORCE("_ZN2nn2fs15GetSaveDataSizeEPlS1_RKNS_7account3UidE", "fsp-srv; save data size: 256 MB data + 256 MB journal", Result, h_fs_SaveSize, int64_t *size, int64_t *journal, const void *uid) {
-    (void)uid; if (size) *size = 256 << 20; if (journal) *journal = 256 << 20; return RES_OK;
-}
-// The largest save data the game may extend to (Octopath Traveler 0, SDK 19: Unreal's save system asks before its first save, about 13 minutes in; the SDK's version read the fsp-srv
-// object the host never made, SIGSEGV at GetSaveDataSizeMax+0xbc), the size of a cache storage and the free space of a mount: the same 256 MB the save data size reports, more than a game asks for
-HLE_FORCE("_ZN2nn2fs18GetSaveDataSizeMaxEPlS1_", "fsp-srv; largest save data size: 256 MB data + 256 MB journal", Result, h_fs_SaveSizeMax, int64_t *size, int64_t *journal) {
-    if (size) *size = 256 << 20; if (journal) *journal = 256 << 20; return RES_OK;
-}
-// The application's control data (control.nacp: nn::ns::ApplicationControlProperty, 0x4000 bytes, little-endian), which Horizon serves the SDK from the installed title: DM_CONTROL_NACP, else
-// control.nacp beside the RomFS (the NSP script's extraction folder <version>/{RomFS,control.nacp}, the Mac app's Resources). 0 = len bytes read at off
-static int control_read(off_t off, void *out, size_t len) {
-    char p[1100], b[1024]; const char *e = getenv("DM_CONTROL_NACP");
-    if (e && *e) snprintf(p, sizeof p, "%s", e);
-    else {
-        snprintf(p, sizeof p, "%s", envdir("DM_ROMFS", "romfs", b, sizeof b));
-        size_t k = strlen(p); while (k > 1 && p[k - 1] == '/') p[--k] = 0;
-        char *sl = strrchr(p, '/'); if (sl) sl[1] = 0; else p[0] = 0;
-        strlcat(p, "control.nacp", sizeof p);
-    }
-    int fd = open(p, O_RDONLY); ssize_t r = fd < 0 ? -1 : pread(fd, out, len, off);
-    if (fd >= 0) close(fd);
-    if (r != (ssize_t)len) { LOG("[RED] control data: %s %s", p, fd < 0 ? "is missing" : "is too short"); return -1; }
-    return 0;
-}
-// The cache storage limits the application declares: CacheStorageDataAndJournalSizeMax (s64 at 0x3180) and CacheStorageIndexMax (u16 at 0x3188). Without the SDK's service the call read a null
-// object (Just Dance 25.0.3, SDK 14: SIGSEGV at sdk+0x34fb44, issue #1049). No control data: an error, not a guessed limit
-HLE_FORCE("_ZN2nn2fs18GetCacheStorageMaxEPiPl", "fsp-srv; cache storage limits from the application's control data", Result, h_fs_CacheMax, int *index, int64_t *size) {
-    uint8_t c[10]; if (control_read(0x3180, c, sizeof c)) return RES_TARGET_NOT_FOUND;
-    int64_t sz; memcpy(&sz, c, sizeof sz); int i = c[8] | c[9] << 8;
-    if (index) *index = i;
-    if (size) *size = sz;
-    LOG("fs cache storage max: index %d, %lld bytes of data and journal", i, (long long)sz); return RES_OK;
-}
-// The size a cache storage was created with (its record, CreateCacheStorage above). A folder without one: the application's default cache storage size from its control data (CacheStorageSize
-// and CacheStorageJournalSize, s64 at 0x3170 / 0x3178), else 256 MB of each, more than a game asks for. No storage: ResultTargetNotFound, as on Horizon
-HLE_FORCE("_ZN2nn2fs19GetCacheStorageSizeEPlS1_i", "fsp-srv; cache storage size: the size it was created with", Result, h_fs_CacheSize, int64_t *size, int64_t *journal, int index) {
-    char b[1200]; struct stat st;
-    if (stat(cache_dir(index, b, sizeof b), &st) || !S_ISDIR(st.st_mode)) { LOG("fs cache storage size %d: no such storage", index); return RES_TARGET_NOT_FOUND; }
-    long long s = 0, j = 0; const char *from = "its record"; FILE *f = fopen(cache_size_path(index, b, sizeof b), "r");
-    if (!f || fscanf(f, "%lld %lld", &s, &j) != 2) {
-        int64_t c[2] = {0, 0}; from = "the control data's default";
-        if (control_read(0x3170, c, sizeof c) || (!c[0] && !c[1])) { c[0] = c[1] = 256 << 20; from = "no record and no default: 256 MB"; }
-        s = c[0]; j = c[1];
-    }
-    if (f) fclose(f);
-    if (size) *size = s;
-    if (journal) *journal = j;
-    LOG("fs cache storage size %d: %lld bytes, journal %lld (%s)", index, s, j, from); return RES_OK;
-}
 HLE_FORCE("_ZN2nn2fs16GetFreeSpaceSizeEPlPKc", "fsp-srv; free space of a mount: 256 MB (the host directory has no size limit of its own)", Result, h_fs_FreeSpace, int64_t *out, const char *path) {
     (void)path; if (out) *out = 256 << 20; return RES_OK;
 }
-HLE_FORCE("_ZN2nn2fs14ExtendSaveDataERKNS_7account3UidEll", "fsp-srv; extend save data: the host directory has no size limit", Result, h_fs_ExtendSave, const void *uid, int64_t size, int64_t journal) {
-    (void)uid; LOG("fs extend save data to %lld bytes (journal %lld): nothing to do", (long long)size, (long long)journal); return RES_OK;
-}
-HLE_FORCE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", "fsp-srv; the save directory is created at mount time", Result, h_fs_EnsureSave, const void *uid) { (void)uid; return RES_OK; }
-// Another application's save data (Tears of the Kingdom asks by application ID and would mount it read-only): the host keeps only this game's own save, which exists once mounted
-HLE_FORCE("_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE", "fsp-srv; only this game's own save data exists", int, h_fs_SaveExisting, uint64_t app, const void *uid) {
-    return app == DM_GAME_PROGRAM_ID && dm_account_user(uid) >= 0;
-}
-// A read-only mount of an application's save data. Another program's: the host has none. This game's own: its committed account save, read-only, as Horizon mounts the save
-// data of that application and user (IsSaveDataExisting above says it exists, and on the console the system creates it at the first launch). Nintendo Switch Sports Resort mounts
-// its own save as SaveReadOnly at boot; refused, the game aborted at the first boot that found an account save (main+0x349d880 checks that the mount it reads from is named
-// SaveReadOnly, and calls the abort at main+0x3917260 otherwise), so every run after its first save stopped about 48 s in
-// Without a save folder it answers TargetNotFound, as before, and the game's own MountSaveData stops the run with the reason
-// PR #2846's stable per-user paths. Unknown UIDs never fall back to player 1.
-// Additional users are local: the current cloud-sync format holds only the
-// primary account and device save. Each directory has its own existing transaction.
+// Each registered user has a save directory of its own, with its own transaction: user 1's is DM_SAVE, user N's is <DM_SAVE>_userN
 static int user_save_dir(char *dd, size_t cap, const char *save, int user) {
     size_t n = strlen(save); while (n > 1 && save[n - 1] == '/') n--;
     if (!n || n >= cap) return -1;
@@ -965,24 +635,8 @@ static int user_save_dir(char *dd, size_t cap, const char *save, int user) {
     }
     return 0;
 }
-static Result mount_own_save_ro(const char *name, int user) {
-    const char *d = getenv("DM_SAVE");
-    if (!d || !*d) { LOG("[RED] fs read-only mount of this game's save data %s: DM_SAVE is not set, answered as no save data", name); return 0x7d402u; }   // fs ResultTargetNotFound
-    char dd[1024]; if (user_save_dir(dd, sizeof dd, d, user)) return RES_FAIL;
-    // A first launch has no committed save yet: an empty one, as the console's new save data. The folder is checked here, since mount_ex would stop on a missing one as on missing game files
-    struct stat st;
-    if (mkdir(dd, 0755) && errno != EEXIST) { LOG("[RED] fs read-only mount of this game's save data %s: cannot create the save folder %s (errno=%d), answered as no save data", name, dd, errno); return 0x7d402u; }
-    if (stat(dd, &st) || !S_ISDIR(st.st_mode)) { LOG("[RED] fs read-only mount of this game's save data %s: the save folder %s is not a folder, answered as no save data", name, dd); return 0x7d402u; }
-    return mount_ex(name, dd, 1, 0);
-}
-HLE_FORCE("_ZN2nn2fs21MountSaveDataReadOnlyEPKcNS_13ApplicationIdERKNS_7account3UidE", "fsp-srv; this game's own save data read-only (the committed save); another program's: none", Result, h_fs_MountSaveRO, const char *name, uint64_t app, const void *uid) { dm_thread_service_request();
-    int user = dm_account_user(uid);
-    if (app == DM_GAME_PROGRAM_ID) return user >= 0 ? mount_own_save_ro(name, user) : 0x7d402u;
-    LOG("[RED] fs read-only mount of another program's save data %s: program %016llx, the host has none", name, (unsigned long long)app); return 0x7d402u;   // fs ResultTargetNotFound
-}
 HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv; each registered account has its own host save transaction", Result, h_fs_MountSave, const char *name, const void *uid) { dm_thread_service_request();
-    // NULL is the host's internal primary/device-save route, not a guest UID.
-    int user = uid ? dm_account_user(uid) : 0;
+    int user = dm_account_user(uid);   // an unknown UID never falls back to user 1
     if (user < 0) return 0x7d402u;
     // No default directory: silently landing on a directory with no characters distorts the "character select" measurement (this once caused a misjudgment). Runs always use a fresh copy of save_ref
     const char *d = getenv("DM_SAVE");
@@ -990,26 +644,9 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv; each regis
     char dd[1024]; if (user_save_dir(dd, sizeof dd, d, user)) return RES_FAIL;
     return mount_ex(name, dd, 0, 1);
 }
-// Device save data: one save for the console instead of one per user. Animal Crossing: New Horizons keeps its island there (3.0.3's main mounts no account save data at all); the host
-// has one player, so it is the host save directory with its transaction, as the account save. Its size and extension follow the account save's.
-// A game that mounts both is given two saves, as on Horizon: the device save is <DM_SAVE>_device, a transaction of its own. Mario Kart 8 Deluxe mounts CommonSave (device) and then
-// UserSave (account, main+0x8b0c84), and at boot its save manager deletes CommonSave:/userdata.dat (main+0x8b1910, through its file device's DeleteFile); in one shared directory that
-// was UserSave's own userdata.dat, so every boot started a new save. Decided by main's imports: of the games on hand only this one imports both, and ACNH's islands stay where they are
-HLE_FORCE("_ZN2nn2fs19MountDeviceSaveDataEPKc", "fsp-srv; device save data → the host save directory (one player, as the account save), or a save of its own when main mounts account save data too", Result, h_fs_MountDeviceSave, const char *name) { dm_thread_service_request();
-    if (!dm_game_imports("_ZN2nn2fs13MountSaveData")) return h_fs_MountSave(name, NULL);
-    const char *d = getenv("DM_SAVE");
-    if (!d) die("DM_SAVE is not set: point it at a writable copy of a save directory");
-    char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;
-    strlcat(dd, "_device", sizeof dd);
-    return mount_ex(name, dd, 0, 1);
-}
-HLE_FORCE("_ZN2nn2fs21GetDeviceSaveDataSizeEPlS1_", "fsp-srv; device save data size: 256 MB data + 256 MB journal", Result, h_fs_DeviceSaveSize, int64_t *size, int64_t *journal) { return h_fs_SaveSize(size, journal, NULL); }
-HLE_FORCE("_ZN2nn2fs20ExtendDeviceSaveDataEll", "fsp-srv; extend device save data: the host directory has no size limit", Result, h_fs_ExtendDeviceSave, int64_t size, int64_t journal) { return h_fs_ExtendSave(NULL, size, journal); }
-// The restore flag marks save data the system restored from a backup (cloud save data backup), which a game may check once and then clear with the commit option below; the host never restores
-HLE_FORCE("_ZN2nn2fs22GetSaveDataRestoreFlagEPbPKc", "fsp-srv; save data restored from a backup: never", Result, h_fs_RestoreFlag, uint8_t *out, const char *name) { (void)name; *out = 0; return RES_OK; }
-static _Atomic uint64_t g_save_commits;   // number of successful commits (used by the front end when going to background to wait for "the game's current save has been committed")
-uint64_t dm_fs_commit_count(void) { return atomic_load(&g_save_commits); }
-// Both Commit overloads share this transaction engine. Caller holds the path
+static _Atomic uint64_t g_save_commits;   // number of successful commits
+uint64_t dm_fs_commit_count(void) { return atomic_load(&g_save_commits); }   // the unit tests tell a published commit from a refused one by it
+// Commit's transaction engine. Caller holds the path
 // and mount locks; front-end failure notification is delivered after unlocking.
 static Result commit_mount_locked(int i, int *notify_error) {
     int txn = g_mnt[i].txn_root;
@@ -1071,45 +708,13 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv; transactional save: the whole work d
     if (notify_error) front_save_failed(notify_error);
     return r;
 }
-// A mount list is atomic only when every name addresses the same host backing
-// transaction. Validate the whole list first. Independent save trees cannot be
-// swapped atomically together, so refuse them without publishing either tree.
-// Writable mounts without a transaction (cache / temporary storage, journaled on
-// Horizon) are already on disk: skipped, as the single-name Commit returns OK.
-HLE_FORCE("_ZN2nn2fs6CommitEPKPKci", "fsp-srv; commit a validated mount list sharing one host save transaction; independent multi-save commits are unsupported", Result, h_fs_CommitList, const char *const *names, int count) { dm_thread_service_request();
-    if (count < 0 || count > MAX_MOUNT || (count && !names)) return RES_FAIL;
-    if (!count) return RES_OK;
-    PATH_LOCK(); pthread_mutex_lock(&g_lock);
-    int target = -1, notify_error = 0; Result r = RES_FAIL;
-    for (int k = 0; k < count; k++) {
-        if (!names[k] || strnlen(names[k], sizeof g_mnt[0].name) == sizeof g_mnt[0].name) goto out;
-        int i = 0; while (i < g_nmnt && !mnt_named(&g_mnt[i], names[k])) i++;
-        if (i == g_nmnt || g_mnt[i].ro) goto out;
-        if (!g_mnt[i].commit[0]) continue;
-        if (target >= 0 && (strcmp(g_mnt[target].commit, g_mnt[i].commit) || strcmp(g_mnt[target].dir, g_mnt[i].dir))) {
-            LOG("[RED] Commit mount list spans independent host saves; refused without a partial commit");
-            goto out;
-        }
-        if (target < 0) target = i;
-    }
-    r = target < 0 ? RES_OK : commit_mount_locked(target, &notify_error);
-out:
-    pthread_mutex_unlock(&g_lock);
-    if (notify_error) front_save_failed(notify_error);
-    return r;
-}
-// The overload with a CommitOption (Animal Crossing: New Horizons 3.0.3): its only flag clears the restore flag, which the host never sets
-HLE_FORCE("_ZN2nn2fs6CommitEPKcRKNS0_12CommitOptionE", "fsp-srv; same as Commit (the option only clears the restore flag)", Result, h_fs_CommitOpt, const char *name, const void *opt) { (void)opt; return h_fs_Commit(name); }
-// SDK 11's old name: CommitSaveData(mount name) is the later Commit (Metroid Dread)
-HLE_FORCE("_ZN2nn2fs14CommitSaveDataEPKc", "fsp-srv; same as Commit (SDK 11's old name)", Result, h_fs_CommitSaveData, const char *name) { return h_fs_Commit(name); }
-// The host's mount table is permanent, so unmounting one of its names changes nothing, except an add-on content mount's, whose name is released (aoc_release, mount_aoc:
-// a game may mount the next add-on under it). A mount call the host does not take over runs in the SDK and registers in the SDK's own table
+// The host's mount table is permanent, so unmounting one of its names changes nothing. A mount call the host does not take over runs in the SDK and registers in the SDK's own table
 // (nn::fs::MountRamDisk), and only the SDK can release it. Paper Mario: The Thousand-Year Door unmounts its "cache" RAM disk, frees the buffer and mounts it again, which with the entry left
 // behind failed with MountNameAlreadyExists and aborted (main+0x303b74, GitHub issue #1012). The SDK's Unmount aborts on a name it does not hold, hence its IsMounted first; a name in
 // neither table stays a no-op. No host lock is held across the SDK's calls, which take the SDK's own locks and free guest memory
-HLE_FORCE("_ZN2nn2fs7UnmountEPKc", "fsp-srv; host mounts are permanent, a no-op, but an add-on content mount releases its name; a mount in the SDK's own table (RAM disk) is released there", void, h_fs_Unmount, const char *name) {
+HLE_FORCE("_ZN2nn2fs7UnmountEPKc", "fsp-srv; host mounts are permanent, a no-op; a mount in the SDK's own table (RAM disk) is released there", void, h_fs_Unmount, const char *name) {
     if (!name) return;
-    if (host_mounted(name)) { aoc_release(name); return; }
+    if (host_mounted(name)) return;
     int (*sdk_is_mounted)(const char *) = guest_sym("_ZN2nn2fs9IsMountedEPKc");
     void (*sdk_unmount)(const char *) = guest_sym("_ZN2nn2fs7UnmountEPKc");
     if (!sdk_is_mounted || !sdk_unmount || !sdk_is_mounted(name)) return;
@@ -1126,9 +731,6 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
         if (k < 0) return err_res("open", path);
         if (!g_mnt[mi].img->e[k].type) return RES_PATH_NOT_FOUND;
         if (mode & (MODE_WRITE | MODE_APPEND)) { LOG("fs write to a read-only mount: %s", path); return RES_FAIL; }
-        img_ent *ent = &g_mnt[mi].img->e[k];   // a damaged file is named once, at its first open
-        if ((ent->flags & IMG_ENT_DAMAGED) && !(__atomic_fetch_or(&ent->flags, IMG_ENT_REPORTED, __ATOMIC_RELAXED) & IMG_ENT_REPORTED))
-            LOG("[RED] fs %s failed the NCA's hash check when it was extracted (a damaged NSP, --allow-damaged); its bytes may be wrong", path);
         *out = FH_OUT(IMG_HANDLE(mi, k));
         if (g_flag.fs) LOG("fs open [%.2fs] %s mode=%d → image entry %lld", (now_ns() - g_t0_ns) / 1e9, path, mode, (long long)k);
         return RES_OK;
@@ -1297,28 +899,6 @@ HLE_FORCE("_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", "fsp-srv → recursive de
     SDK_PATH(path, "_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", Result (*)(const char *), path);
     HP_ACCESS(path, 0, 1); RW(); return rm_tree(hp) ? save_path_error("rmtree", path) : RES_OK;
 }
-// empty a directory and keep the directory itself (13 Sentinels)
-HLE_FORCE("_ZN2nn2fs25CleanDirectoryRecursivelyEPKc", "fsp-srv → recursively deletes the directory's contents and keeps the directory (only inside writable mounts)", Result, h_fs_CleanDirRec, const char *path) { dm_thread_service_request();
-    SDK_PATH(path, "_ZN2nn2fs25CleanDirectoryRecursivelyEPKc", Result (*)(const char *), path);
-    HP_ACCESS(path, 0, 1); RW();
-    DIR *d = opendir(hp); if (!d) return save_path_error("cleandir", path);
-    struct dirent *e; char c[1024]; int rc = 0;
-    while ((e = dir_next(d))) {
-        snprintf(c, sizeof c, "%s/%s", hp, e->d_name);
-        if ((rc = rm_entry(c))) break;
-    }
-    int err = errno; closedir(d);
-    if (rc || err) { errno = err; return save_path_error("cleandir", path); }
-    return RES_OK;
-}
-// file data cache (a global read cache in the fs process): the host reads through the page cache and leaves the buffer unused
-HLE_FORCE("_ZN2nn2fs25EnableGlobalFileDataCacheEPvm", "fsp-srv global read cache; unused by the host", void, h_fs_EnableGlobalCache, void *buf, size_t sz) { (void)buf; (void)sz; }
-// the same cache for one file (SDK 11, Big Brain Academy: Brain vs. Brain; the game does not read the result)
-HLE_FORCE("_ZN2nn2fs29EnableIndividualFileDataCacheEPKcPvm", "fsp-srv read cache for one file; unused by the host", Result, h_fs_EnableFileCache, const char *path, void *buf, size_t sz) {
-    (void)path; (void)buf; (void)sz; return RES_OK;
-}
-HLE_FORCE("_ZN2nn2fs30DisableIndividualFileDataCacheEPKc", "fsp-srv read cache for one file; unused by the host", void, h_fs_DisableFileCache, const char *path) { (void)path; }
-HLE_FORCE("_ZN2nn2fs26DisableGlobalFileDataCacheEv", "fsp-srv global read cache; unused by the host (DRAGON QUEST XI S's nninitStartup turns it off again after its start-up thread)", void, h_fs_DisableGlobalCache, void) {}
 // SDK 11 (Metroid Dread): delete an empty directory
 HLE_FORCE("_ZN2nn2fs15DeleteDirectoryEPKc", "fsp-srv → rmdir(2) (the directory must be empty)", Result, h_fs_DeleteDir, const char *path) { dm_thread_service_request();
     SDK_PATH(path, "_ZN2nn2fs15DeleteDirectoryEPKc", Result (*)(const char *), path);
@@ -1339,7 +919,7 @@ static Result rename_entry(const char *from, const char *to) {
     return RES_OK;
 }
 // Horizon's RenameFile and RenameDirectory find each path's file system by its mount name and refuse two before touching either (the two accessors must be one, ResultRenameToOtherFileSystem):
-// so a rename never reaches a read-only mount from a writable one, and account and device saves, one folder on the host, are two mounts here as there. On one mount, the SDK's mount is the SDK's
+// so a rename never reaches a read-only mount from a writable one, and two names of one save, one folder on the host, are two mounts here as there. On one mount, the SDK's mount is the SDK's
 static Result rename_any(const char *from, const char *to, const char *sym) {
     char a[0x30], b[0x30];
     if (path_mount_name(from, a, sizeof a) && path_mount_name(to, b, sizeof b) && strcmp(a, b)) { LOG("fs rename %s → %s: two mounts, refused", from, to); return RES_RENAME_OTHER_FS; }
@@ -1538,8 +1118,6 @@ HLE_FORCE("_ZN2nn2fs22GetDirectoryEntryCountEPlNS0_15DirectoryHandleE", "fsp-srv
     if (err) { errno = err; return err_res("readdir", h->path); }
     *out = n; return RES_OK;
 }
-// Whether save data exists: the host's save directory is created at mount time, so from the game's point of view it always exists (EnsureSaveData always succeeds too)
-HLE_FORCE("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "fsp-srv; save data always exists (returns bool)", unsigned, h_fs_SaveExists, const void *uid) { (void)uid; return 1; }
 // File system access log and thread priority: on the real device both ask fsp-srv (the access log switch lives in the service); the host has no access log and priority does not affect pread
 HLE_FORCE("_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", "fsp-srv; file read priority, ignored by the host", void, h_fs_SetPrio, int prio) { (void)prio; }
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEj", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLogMask, unsigned mask) { (void)mask; return 0; }

@@ -77,10 +77,10 @@ static int same(const char *p, const char *s) {
     char b[64] = {0}; FILE *f = fopen(p, "r"); if (!f) return 0;
     size_t n = fread(b, 1, sizeof b, f); fclose(f); return n == strlen(s) && !memcmp(b, s, n);
 }
-enum action { OPEN_WRITE, OPEN_APPEND, CREATE, DELETE, MKDIR, RMDIR, CLEAN, TREE, RENAME, RENAME_DIR, READ, STAT };
+enum action { OPEN_WRITE, OPEN_APPEND, CREATE, DELETE, MKDIR, RMDIR, TREE, RENAME, RENAME_DIR, READ, STAT };
 static Result act(enum action a, const char *mount_name) {
     char p[80], to[80]; uint64_t h = 0; int32_t t;
-    const char *leaf = a == CREATE || a == MKDIR ? "new" : a == RMDIR || a == CLEAN || a == TREE || a == RENAME_DIR ? "dir" : "file";
+    const char *leaf = a == CREATE || a == MKDIR ? "new" : a == RMDIR || a == TREE || a == RENAME_DIR ? "dir" : "file";
     snprintf(p, sizeof p, "%s:/%s", mount_name, leaf); snprintf(to, sizeof to, "%s:/renamed", mount_name);
     switch (a) {
     case OPEN_WRITE: case OPEN_APPEND: case READ: {
@@ -91,7 +91,6 @@ static Result act(enum action a, const char *mount_name) {
     case DELETE: return h_fs_DeleteFile(p);
     case MKDIR: return h_fs_CreateDirectory(p);
     case RMDIR: return h_fs_DeleteDir(p);
-    case CLEAN: return h_fs_CleanDirRec(p);
     case TREE: return h_fs_DeleteDirRec(p);
     case RENAME: return h_fs_RenameFile(p, to);
     case RENAME_DIR: return h_fs_RenameDir(p, to);
@@ -107,7 +106,6 @@ int main(void) {
         {"delete lookup", DELETE, "lookup", EIO, 1, "alias"},
         {"mkdir lookup", MKDIR, "lookup", EIO, 1, "alias"},
         {"rmdir lookup", RMDIR, "lookup", EIO, 1, "alias"},
-        {"clean lookup", CLEAN, "lookup", EIO, 1, "alias"},
         {"tree lookup", TREE, "lookup", EIO, 1, "alias"},
         {"rename lookup", RENAME, "lookup", EIO, 1, "alias"},
         {"directory rename lookup", RENAME_DIR, "lookup", EIO, 1, "alias"},
@@ -121,7 +119,6 @@ int main(void) {
         {"mkdir", MKDIR, "mkdir", ENOSPC, 1, "alias"},
         {"directory name", MKDIR, "metadata", EIO, 1, "alias"},
         {"rmdir", RMDIR, "rmdir", EIO, 1, "alias"},
-        {"clean child", CLEAN, "unlink", EIO, 1, "alias"},
         {"tree child", TREE, "unlink", EIO, 1, "alias"},
         {"rename", RENAME, "rename", EIO, 1, "alias"},
         {"directory rename", RENAME_DIR, "rename", EIO, 1, "alias"},

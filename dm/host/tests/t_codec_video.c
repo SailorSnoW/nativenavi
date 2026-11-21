@@ -20,7 +20,8 @@ static OSStatus vt_test_create(CFAllocatorRef, CMVideoFormatDescriptionRef, CFDi
 #include <unistd.h>
 #include "movie_vt_data.h"
 
-static _Atomic int vt_callback_error, vt_refuse_create, vt_refused;
+static _Atomic int vt_callback_error, vt_hold_create, vt_held, vt_release;
+static movie_vt_control *vt_hold_control;   // the decoder whose next session is held
 static _Atomic int vt_double_loss, vt_initial_failed;
 static _Thread_local OSStatus vt_create_status;
 static mav1 *vt_callback_av1;
@@ -40,9 +41,10 @@ static OSStatus vt_test_decode(VTDecompressionSessionRef session, CMSampleBuffer
 }
 static OSStatus vt_test_create(CFAllocatorRef allocator, CMVideoFormatDescriptionRef format, CFDictionaryRef specification, CFDictionaryRef attributes,
                                 const VTDecompressionOutputCallbackRecord *callback, VTDecompressionSessionRef *session) {
-    if (atomic_exchange(&vt_refuse_create, 0)) {
-        *session = NULL; dm_movie_active(0); atomic_store(&vt_refused, 1);
-        return kVTVideoDecoderNotAvailableNowErr;
+    if (atomic_exchange(&vt_hold_create, 0)) {   // the hardware takes its time over this session: until the test lets it go on, or its decoder is cancelled, which it then refuses
+        atomic_store(&vt_held, 1);
+        while (!atomic_load(&vt_release) && !movie_vt_cancelled(vt_hold_control)) usleep(200);
+        if (!atomic_load(&vt_release)) { *session = NULL; return kVTVideoDecoderNotAvailableNowErr; }
     }
     vt_create_status = VTDecompressionSessionCreate(allocator, format, specification, attributes, callback, session);
     return vt_create_status;
@@ -140,38 +142,38 @@ static void vt_av1_random_access(void) {
     a.seq[2] |= 8;   // reduced_still_picture_header implies a shown key frame
     assert(av1_key(&a, hidden, sizeof hidden));
 }
+// A session lost while a packet is decoded is made again on the decoder's thread, and the stream replayed into it. While that session is being made: nothing (the packet's
+// picture comes), a Flush or a Stop (the packet is dropped and a new stream starts), or Finalize (it returns)
 static void vt_worker_lifecycle(void) {
-    {
-        for (int action = 0; action < 4; action++) {
-            _Alignas(16) uint8_t dec[0x400] = {0}; uint64_t id;
-            const uint8_t *packet = av1; size_t size = sizeof av1;
-            assert(!cv_dec_init(dec, 64, 64, 1, 3));
-            cv_dec *d = cv_of(dec); vt_callback_av1 = d->av1;
-            assert(!cv_dec_submit(&id, dec, packet, size, 1000, false)); settle(dec);
-            assert(d->nheld == 1 && d->held_ts[0] == 1000);
-            assert(d->av1->vs && !d->av1->soft);
-            atomic_store(&vt_callback_error, 1);
-            atomic_store(&vt_refused, 0); atomic_store(&vt_refuse_create, 1);
-            assert(!cv_dec_submit(&id, dec, packet, size, 2000, false));
-            alarm(5);   // a lifecycle cancellation deadlock is a test failure
-            while (!atomic_load(&vt_refused)) usleep(200);
-            pthread_mutex_lock(&d->mu); assert(d->busy && d->nheld == 1 && !d->eos_pending); pthread_mutex_unlock(&d->mu);
-            if (action == 3) assert(!cv_dec_fin(dec));   // Finalize must finish while still inactive
-            else {
-                if (action) {   // Flush or Stop cancels the interrupted packet, then a new stream can start
-                    assert(!cv_dec_reset(dec, action == 2)); settle(dec);
-                    assert(!d->nheld && !cv_dec_submit(&id, dec, packet, size, 3000, true));
-                }
-                dm_movie_active(1); settle(dec);
-                assert(d->nheld == (action ? 1 : 2));
-                assert(d->held_ts[action ? 0 : 1] == (action ? 3000 : 2000));
-                assert(!cv_dec_fin(dec));
+    for (int action = 0; action < 4; action++) {
+        _Alignas(16) uint8_t dec[0x400] = {0}; uint64_t id;
+        const uint8_t *packet = av1; size_t size = sizeof av1;
+        assert(!cv_dec_init(dec, 64, 64, 1, 3));
+        cv_dec *d = cv_of(dec); vt_callback_av1 = d->av1;
+        assert(!cv_dec_submit(&id, dec, packet, size, 1000, false)); settle(dec);
+        assert(d->nheld == 1 && d->held_ts[0] == 1000);
+        assert(d->av1->vs && !d->av1->soft);
+        atomic_store(&vt_callback_error, 1);
+        vt_hold_control = &d->vt; atomic_store(&vt_held, 0); atomic_store(&vt_release, 0); atomic_store(&vt_hold_create, 1);
+        assert(!cv_dec_submit(&id, dec, packet, size, 2000, false));
+        alarm(5);   // a cancellation deadlock is a test failure
+        while (!atomic_load(&vt_held)) usleep(200);
+        pthread_mutex_lock(&d->mu); assert(d->busy && d->nheld == 1 && !d->eos_pending); pthread_mutex_unlock(&d->mu);
+        if (action == 3) assert(!cv_dec_fin(dec));   // Finalize must finish while the session is still being made
+        else {
+            if (action) {   // Flush or Stop cancels the interrupted packet, then a new stream can start
+                assert(!cv_dec_reset(dec, action == 2)); settle(dec);
+                assert(!d->nheld && !cv_dec_submit(&id, dec, packet, size, 3000, true));
             }
-            dm_movie_active(1); alarm(0);
-            vt_callback_av1 = NULL;
+            atomic_store(&vt_release, 1); settle(dec);
+            assert(d->nheld == (action ? 1 : 2));
+            assert(d->held_ts[action ? 0 : 1] == (action ? 3000 : 2000));
+            assert(!cv_dec_fin(dec));
         }
+        vt_hold_control = NULL; alarm(0);
+        vt_callback_av1 = NULL;
     }
-    puts("VideoToolbox workers: callback invalidation, inactive session refusal, resume, Flush, Stop and Finalize");
+    puts("VideoToolbox workers: callback invalidation, the session made again, and Flush, Stop and Finalize while it is being made");
 }
 int main(void) {
     bool test_av1 = vt_av1_available();
@@ -382,16 +384,9 @@ int main(void) {
         assert(nm[0] == 0 && nm[3] == 255 && nm[ns * 15 + 31 * 4 + 3] == 255);
         h_cv_poolfin(pt); assert(!dm_native_image(ha, &nm, &nz, &nw, &nh, &ns)); free(m);
     }
-    {   // Blank native images (GameChat's camera pictures with no camera): zeroed storage with room for 16 bytes a pixel, apart from the decoder pools' handles, gone once freed
-        uint32_t a = dm_native_image_blank(384, 216), b = dm_native_image_blank(384, 216), nw, nh, ns; uint8_t *nm = NULL; uint64_t nz;
-        assert(a && b && a != b && a >> 31 && b >> 31);
-        assert(dm_native_image(a, &nm, &nz, &nw, &nh, &ns) && nw == 384 && nh == 216 && ns >= 384 * 16 && ns % 64 == 0 && nz >= (uint64_t)ns * 216);
-        for (uint64_t k = 0; k < nz; k++) assert(!nm[k]);
-        dm_native_image_blank_free(a); assert(!dm_native_image(a, &nm, &nz, &nw, &nh, &ns)); assert(dm_native_image(b, &nm, &nz, &nw, &nh, &ns));
-        dm_native_image_blank_free(b); dm_native_image_blank_free(b); dm_native_image_blank_free(0x100);   // twice, and a decoder pool's handle: nothing happens
-        uint32_t k[BLANK_MAX + 1]; for (int i = 0; i < BLANK_MAX; i++) assert((k[i] = dm_native_image_blank(32, 32)));
-        assert(!(k[BLANK_MAX] = dm_native_image_blank(32, 32)));   // full
-        for (int i = 0; i < BLANK_MAX; i++) dm_native_image_blank_free(k[i]);
+    {   // A handle no pool holds names no picture
+        uint32_t nw, nh, ns; uint8_t *nm = NULL; uint64_t nz;
+        assert(!dm_native_image(0, &nm, &nz, &nw, &nh, &ns) && !dm_native_image(0x80000001u, &nm, &nz, &nw, &nh, &ns));
     }
     printf("t_codec_video: all passed\n");
     return 0;

@@ -271,7 +271,7 @@ int mav1_decode(mav1 *a, const uint8_t *data, size_t n, int64_t ts, mav1_picture
     if (changed) movie_vt_clear(&a->history);
     if (seq && (changed || !a->vs)) {
         int opened = av1_open(a, seq, seqn);
-        if (opened < 0) return 0;   // Stop / Flush / Finalize cancelled a lifecycle wait
+        if (opened < 0) return 0;   // Stop / Flush / Finalize cancelled the session being made
         if (!opened) {   // a stream VideoToolbox does not take: dav1d from this temporal unit on (it holds the sequence header)
             LOG("[movie] AV1: dav1d decodes the stream instead"); av1_close(a); a->soft = 1;
             return decode_dav1d(a, data, n, ts, out);

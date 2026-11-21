@@ -2,6 +2,7 @@
 #include "../hle_net.c"
 __thread _Atomic int dm_host_work;
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -73,8 +74,8 @@ int main(void) {
     assert(h_sk_Select(other + 1, rs, NULL, NULL, zero) == 2 && rs[0] == ((1ull << event) | (1ull << other)));
     assert(h_sk_Recv(other, data, sizeof data, 0) == 4 && !memcmp(data, "ping", 4));
     unsigned long count; assert(h_sk_EventFdRead(event, &count) == 0 && count == 1);
-    count = 7; assert(h_nsk_Write(event, &count, sizeof count) == sizeof count);
-    count = 0; assert(h_nsk_Read(event, &count, sizeof count) == sizeof count && count == 7);
+    count = 7; assert(h_sk_Write(event, &count, sizeof count) == sizeof count);
+    count = 0; assert(h_sk_Read(event, &count, sizeof count) == sizeof count && count == 7);
 
     // Excess datagrams are dropped at the receiver; bounded queue pressure never exposes an unbounded allocation or blocks a sender.
     for (unsigned i = 0; i < SK_PACKET_MAX + 10; i++) assert(h_nsk_Send(self, "q", 1, 0) == 1);
