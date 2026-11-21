@@ -309,7 +309,7 @@ class ExternalRegistry(unittest.TestCase):
 
 class RewriteKey(unittest.TestCase):
     def test_patch_files_of_the_games_builds(self):
-        spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+        spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
         nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
         tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, tmp)
         gid = '0400486024DEC000'   # Ocarina of Time: function-matched rules in its own patches.py, which names no build
@@ -325,7 +325,7 @@ class RewriteKey(unittest.TestCase):
         self.assertNotIn(REPO / 'dm/games' / gid / 'patches.py', nsp.profile_files(g))   # only the rewrite step reads it
 
     def test_patch_files_of_a_provisional_profile(self):
-        spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+        spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
         nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
         tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, tmp)
         bid = '5e' * 16   # a build that no repository profile knows

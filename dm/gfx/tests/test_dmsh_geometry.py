@@ -142,7 +142,7 @@ class GeometryReader(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='dmsh_geometry_test_') as d:
             src = Path(d) / 'reader.metal'
             src.write_text(dmsh_geometry.reader(mask_reader()))
-            for sdk in ('macosx', 'iphoneos'):
+            for sdk in ('macosx',):
                 with self.subTest(sdk=sdk):
                     r = subprocess.run(['xcrun', '-sdk', sdk, 'metal',
                                         '-fmodules-cache-path=' + d + '/modules', '-fsyntax-only', str(src)],
@@ -239,7 +239,7 @@ class PassthroughCompiler(unittest.TestCase):
                             self.assertTrue('kernel void main0(' in src, 'geometry compute entry must return void')
                             self.assertFalse('out.gl_ViewportIndex' in src, 'viewport index must go through the emitted vertex record')
                         metal = work / f'viewport{t}{suffix}.metal'; metal.write_text(src)
-                        for sdk in ('macosx', 'iphoneos'):
+                        for sdk in ('macosx',):
                             result = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-fmodules-cache-path=' + directory + '/modules',
                                                      '-c', str(metal), '-o', str(metal) + '.' + sdk + '.air'], capture_output=True, text=True)
                             self.assertEqual(result.returncode, 0, result.stderr)
@@ -278,7 +278,7 @@ class PassthroughCompiler(unittest.TestCase):
                                       geometry=dict(layout, stride=res['geometry_stride']))
                     (work / f'pass{t}.json').write_text(json.dumps(reflection))
                     metal = work / f'pass{t}.metal'; metal.write_text(src)
-                    for sdk in ('macosx', 'iphoneos'):
+                    for sdk in ('macosx',):
                         air = work / f'pass{t}.{sdk}.air'
                         r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-fmodules-cache-path=' + d + '/modules',
                                             '-c', str(metal), '-o', str(air)], capture_output=True, text=True)
@@ -521,7 +521,7 @@ class MeshPassthrough(unittest.TestCase):
             vertex = vertex.replace('out.gl_Position = in.m_0', 'out.gl_Position = float4(in.m_0.xy, 0, 1)')
             source = dmsh_mesh.compose(vertex, lean, reads) + '\nfragment float4 mesh_pixel() { return float4(1, 0, 0, 1); }\n'
             metal = work / 'pid.metal'; metal.write_text(source)
-            for sdk in ('macosx', 'iphoneos'):
+            for sdk in ('macosx',):
                 air = work / f'{sdk}.air'
                 r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fmodules-cache-path=' + directory + '/modules',
                                     str(metal), '-o', str(air)], capture_output=True, text=True)
@@ -595,7 +595,7 @@ vertex main0_out main0(uint v [[vertex_id]], uint i [[instance_id]])
 """
             path = work / 'vertex.metal'; path.write_text(vertex + dmsh_geometry.capture(vertex)); sources.append(path)
             for path in sources if os.environ.get('DMSH_TEST_METAL') == '1' or os.environ.get('DMSH_TEST_GPU') == '1' else []:
-                for sdk in ('macosx', 'iphoneos'):
+                for sdk in ('macosx',):
                     air = path.with_suffix('.' + sdk + '.air')
                     result = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fmodules-cache-path=' + directory + '/modules', str(path), '-o', str(air)], capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr[-3000:])

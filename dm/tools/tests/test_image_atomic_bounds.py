@@ -5,8 +5,7 @@ Portable tests require Python. To exercise the actual rebuilt offline compiler:
   DMSH_TEST_XLATE=/absolute/path/to/dmsh_xlate python3 -m unittest discover \
     -s dm/tools/tests -p test_image_atomic_bounds.py -v
 Requires spirv-val on PATH (spirv-cross is the in-repo build, dm/gfx/tools/spirv_cross_bin); optionally DMSH_TEST_METAL=1 on Mac
-also compiles and links each generated MSL file. DMSH_TEST_METAL_SDKS defaults
-to macosx; set macosx,iphoneos to check both SDKs with the production flags.
+also compiles and links each generated MSL file with the build's own flags.
 Set DMSH_TEST_GPU=1 with DMSH_TEST_METAL=1 to execute the returning buffer
 fixtures (buffer, 2D, 2D-array and 3D textures) on a Mac GPU and check returned
 values and surrounding sentinels.
@@ -29,8 +28,8 @@ ROOT = Path(__file__).resolve().parents[3]
 RYU = ROOT / 'dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader'
 spec = importlib.util.spec_from_file_location('dmsh_atomic', ROOT / 'dm/gfx/tools/dmsh_atomic.py')
 atomic = importlib.util.module_from_spec(spec); spec.loader.exec_module(atomic)
-sys.path[:0] = [str(ROOT / 'dm/gfx/tools'), str(ROOT / 'dm/ios/tools')]
-import dmsh_chain, ios_metal   # noqa: E402  (the builds' Metal compiles)
+sys.path.insert(0, str(ROOT / 'dm/gfx/tools'))
+import dmsh_chain   # noqa: E402  (the build's Metal compile)
 import dmsh_abi   # noqa: E402
 TBIAS_BANK = dmsh_abi.TBIAS_BANK
 SPIRV_CROSS = ROOT / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'   # the build dmsh_build.py runs (dmsh_chain.SPIRV_CROSS)
@@ -322,11 +321,8 @@ class Compiler(unittest.TestCase):
     def compile_metal(self, msl, work, key, gpu=None):
         if os.environ.get('DMSH_TEST_METAL') != '1':
             return
-        metal_sdks = os.environ.get('DMSH_TEST_METAL_SDKS', 'macosx').split(',')
-        self.assertTrue(metal_sdks and all(sdk in ('macosx', 'iphoneos') for sdk in metal_sdks),
-                        'DMSH_TEST_METAL_SDKS must be macosx, iphoneos or macosx,iphoneos')
-        for sdk in metal_sdks:
-            metal = dmsh_chain.MAC_METAL if sdk == 'macosx' else ios_metal.METAL   # the builds' own compiles
+        for sdk in ('macosx',):
+            metal = dmsh_chain.MAC_METAL   # the build's own compile
             air = work / (key + '.' + sdk + '.air')
             library = work / (key + '.' + sdk + '.metallib')
             subprocess.run([*metal,str(msl),'-o',str(air)],check=True)

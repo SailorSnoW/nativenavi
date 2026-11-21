@@ -1,8 +1,7 @@
-"""Signed integer overflow wraps in translated shaders (-fwrapv in dmsh_chain.py MAC_METAL, ios_metal.py METAL, vk_shaders.py and gl_shaders.py): SPIR-V, GLSL and the Switch's GPUs wrap,
+"""Signed integer overflow wraps in translated shaders (-fwrapv in dmsh_chain.py MAC_METAL): SPIR-V, GLSL and the Switch's GPUs wrap,
 while MSL leaves it undefined, and without the flag the compiler folds Ocarina of Time's low-half extraction (an IMAD by 65536, then a shift right by 16) to the whole word. On this Mac's GPU,
-with the chain's own compile command, the idioms below give the wrapped results; the iPhone command keeps the shift."""
+with the chain's own compile command, the idioms below give the wrapped results."""
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -11,8 +10,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 TOOLS = ROOT / 'dm/gfx/tools'
-sys.path.insert(0, str(ROOT / 'dm/ios/tools'))
-import ios_metal  # noqa: E402
 
 
 sys.path.insert(0, str(TOOLS))
@@ -78,11 +75,6 @@ int main(int argc, char **argv) {
 class WrappingOverflow(unittest.TestCase):
     def test_every_compile_wraps(self):
         self.assertIn('-fwrapv', mac_metal())
-        self.assertIn('-fwrapv', ios_metal.METAL)
-        for tool in ('vk_shaders.py', 'gl_shaders.py'):
-            calls = re.findall(r"\['xcrun', '-sdk', sdk, 'metal', '-c'[^\]]*\]", (TOOLS / tool).read_text())
-            self.assertTrue(calls, tool)
-            for c in calls: self.assertIn("'-fwrapv'", c, tool)
 
     @unittest.skipUnless(shutil.which('xcrun') and shutil.which('clang'), 'needs Xcode and Metal')
     def test_gpu_wraps(self):
@@ -96,19 +88,6 @@ class WrappingOverflow(unittest.TestCase):
             r = subprocess.run([str(root / 'run'), str(root / 'test.metallib')], capture_output=True, text=True)
             if r.returncode == 2: self.skipTest('no Metal device')
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    @unittest.skipUnless(shutil.which('xcrun'), 'needs Xcode and Metal')
-    def test_ios_keeps_the_shift(self):
-        # the iPhone command's IR keeps the shift left by 16 that the sign extension starts from (it compiles for no device here)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / 'test.metal').write_text(KERNEL.replace('int b =', 'int b = 0; //').replace('int c =', 'int c = 0; //'))
-            subprocess.run(ios_metal.METAL + ['-S', '-emit-llvm', str(root / 'test.metal'), '-o', str(root / 'test.ll')], check=True, capture_output=True)
-            body = (root / 'test.ll').read_text()
-            body = body[body.index('@check('):]
-            body = body[:body.index('\n}\n')]
-            self.assertRegex(body, r'shl i32 %\S+, 16\n')
-
 
 if __name__ == '__main__':
     unittest.main()

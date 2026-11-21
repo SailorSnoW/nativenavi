@@ -10,7 +10,7 @@ endif
 endif
 GAME_H = gen/$(GAME)/game_profile.h
 include ../mac/min_os.mk
-# -O2 as the other native code here (libvpx, dav1d, the launcher; the iOS host builds at Xcode Release's -Os). Not -O3 (no measured gain over -O2) and not -flto, which moves
+# -O2 as the other native code here (libvpx, dav1d, the launcher). Not -O3 (no measured gain over -O2) and not -flto, which moves
 # hle_bigstack.c's inline-assembly entry apart from its return path (SIGBUS in dm_bigstack_enter on Breath of the Wild, PR #556)
 CFLAGS=-O2 -g -Wall -Wno-unused-function -mmacosx-version-min=$(MACOS_MIN)
 # One job per core unless the command line sets -j: the host and the libraries below build one object per source (GNU make 3.81, the system's, takes -j from MAKEFLAGS set here)
@@ -22,7 +22,7 @@ SRC=main.c loader.c hle.c crash.c probe.c thread.c save_sync.c memstat.m haptics
 # NVN null device + nn::vi + the Vulkan layer (dm/gfx/)
 # Sources under dm/gfx, dm/gfx/nvn, dm/gfx/tex, dm/gfx/vk and dm/gfx/gl are included by wildcard (tests/ and metal/ do not go into the host): adding a file does not touch this line
 GFX=$(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m ../gfx/vk/*.m ../gfx/gl/*.m))
-# Third party: libvpx ships the VP8 and VP9 decoder sources (movie decoding, hle_movie.c), with its configuration headers in config/ (arm64, shared by Mac and iOS). Built separately into a static library, file by file, so host changes do not recompile it
+# Third party: libvpx ships the VP8 and VP9 decoder sources (movie decoding, hle_movie.c), with its configuration headers in config/ (arm64). Built separately into a static library, file by file, so host changes do not recompile it
 VPX=../third_party/libvpx
 VPX_SRC=$(sort $(shell find $(VPX) -name '*.c'))
 VPX_OBJ=$(patsubst $(VPX)/%.c,gen/vpx/%.o,$(VPX_SRC))
@@ -46,10 +46,9 @@ gen/dav1d/%.o: $(DAV1D)/% $(DAV1D_H) ../mac/min_os.mk
 $(DAV1D_LIB): $(DAV1D_OBJ)
 	rm -f $@; ar rcs $@ $^
 # The host's own Metal shaders (dm/gfx/msl/*.metal) compiled for MSL_SDK into gen/msl-<sdk>/host_msl_gen.h (dm/gfx/tools/host_msl.py; dm/gfx/nvn/host_msl.m loads them), so the host
-# compiles no MSL at run time. The iOS build (dm/ios/tools/gen_build.py) makes it with MSL_SDK=iphoneos, for the app's deployment target (MSL_MIN_iphoneos, as project.yml)
+# compiles no MSL at run time
 MSL_SDK ?= macosx
 MSL_MIN_macosx = $(MACOS_MIN)
-MSL_MIN_iphoneos = 26.0
 MSL_SRC = $(sort $(wildcard ../gfx/msl/*.metal))
 MSL_H = gen/msl-$(MSL_SDK)/host_msl_gen.h
 # Recheck the toolchain and target on every build; the generator keeps the header unchanged when its inputs match.

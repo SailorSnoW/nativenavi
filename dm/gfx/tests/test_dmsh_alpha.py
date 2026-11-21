@@ -99,7 +99,7 @@ class AlphaVariant(unittest.TestCase):
     def test_compiles_on_both_platforms(self):
         with tempfile.TemporaryDirectory() as d:
             for name, src in (('base', BASE), ('args', ARGS), ('early', BASE.replace('fragment main0_out main0(', '[[ early_fragment_tests ]] fragment main0_out main0('))):
-                for sdk in ('macosx', 'iphoneos'):
+                for sdk in ('macosx',):
                     with self.subTest(shader=name, sdk=sdk):
                         try: compile_lib(variant(src)[0], pathlib.Path(d), name + '_' + sdk, sdk)
                         except subprocess.CalledProcessError as e: self.fail(e.stderr)

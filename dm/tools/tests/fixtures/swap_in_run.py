@@ -14,7 +14,7 @@ from pathlib import Path
 script, root, fault = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 repo = script.resolve().parents[1]
 sys.path[:0] = [str(repo / 'dm/games'), str(repo / 'dm/tools'), str(repo / 'dm/gfx/tools')]
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', script)
+spec = importlib.util.spec_from_file_location('build_app', script)
 assert spec is not None and spec.loader is not None
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 tmp, dst = root / 'new.partial', root / 'out'

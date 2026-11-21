@@ -1,4 +1,4 @@
-// Launcher settings, validation and persistence. Shared by the iOS UI, the Mac app's settings window (dm/mac/Launcher.swift) and the native storage regression test.
+// Launcher settings, validation and persistence, for the Mac app's settings window (Launcher.swift).
 import Foundation
 import Combine
 
@@ -6,7 +6,7 @@ struct Setting: Decodable, Identifiable {
     let env, kind, label, note, def: String
     let section: String?   // heading on the settings screen; absent in older bundles
     let needs: String?     // "<VAR>=<value>": a sub-setting, drawn only while that setting has that value
-    let level: String?     // "basic": shown first (the Mac window's Basic settings); any other or none: Advanced settings. The iPhone keeps one list
+    let level: String?     // "basic": shown first (the Mac window's Basic settings); any other or none: Advanced settings
     let base: Base?        // render scale: the 3D views' size at 1.0, docked and handheld, for the size in pixels (the Mac window)
     struct Base: Decodable { let docked, handheld: [Int] }
     let options: [[String]]?   // choice: [value, label]
@@ -34,17 +34,9 @@ struct Setting: Decodable, Identifiable {
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
-// The Frame rate row offers 120 only where the screen shows it: on an iPhone or iPad the host's reading of the game's screen (front_ios.m front_screen_max_fps: 60 on a screen
-// below 120 Hz and in Low Power Mode, where the host holds 60 anyway, hle_nvn.c high_cap_tick). The value in use stays listed, so a choice made on another screen is not dropped.
-// The Mac app's window keeps every option: its display can change under the window
+// The window keeps every option of a row: the Mac's display can change under it
 func offeredOptions(_ s: Setting, current: String?) -> [[String]] {
-    let options = s.options ?? []
-    #if canImport(UIKit)
-    guard s.env == "DM_FPS_TARGET", front_screen_max_fps() < 120 else { return options }
-    return options.filter { $0[0] != "120" || $0[0] == current }
-    #else
-    return options
-    #endif
+    return s.options ?? []
 }
 
 final class LauncherModel: ObservableObject {

@@ -8,7 +8,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[3]
 RUN = Path(__file__).resolve().parent / 'fixtures/swap_in_run.py'
-SCRIPT = REPO / 'scripts/build_ipa_from_nsp.py'
+SCRIPT = REPO / 'scripts/build_app.py'
 
 
 def tree(p, tag):   # 3 folders of 4 files, each file naming its tree: 12 unlinks to delete it

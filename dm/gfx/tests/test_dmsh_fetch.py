@@ -208,7 +208,7 @@ class ProjectiveSample(unittest.TestCase):
     def test_compiles_on_both_platforms(self):
         v, _ = dmsh_fetch.fold(FS, BINDINGS)
         with tempfile.TemporaryDirectory() as d:
-            for sdk in ('macosx', 'iphoneos'):
+            for sdk in ('macosx',):
                 with self.subTest(sdk=sdk):
                     try: compile_lib(v, pathlib.Path(d), 'fs_' + sdk, sdk)
                     except subprocess.CalledProcessError as e: self.fail(e.stderr)
@@ -238,7 +238,7 @@ class PixelPositionSample(unittest.TestCase):
     def test_compiles_on_both_platforms(self):
         v, _ = dmsh_fetch.fold(FS_POS, BINDINGS)
         with tempfile.TemporaryDirectory() as d:
-            for sdk in ('macosx', 'iphoneos'):
+            for sdk in ('macosx',):
                 with self.subTest(sdk=sdk):
                     try: compile_lib(v, pathlib.Path(d), 'pos_' + sdk, sdk)
                     except subprocess.CalledProcessError as e: self.fail(e.stderr)
@@ -329,7 +329,7 @@ class OutputMappingOnly(unittest.TestCase):
     def test_compiles_on_both_platforms(self):
         v, _ = dmsh_fetch.fold(FS_OM, [], om_only_ok=True)
         with tempfile.TemporaryDirectory() as d:
-            for sdk in ('macosx', 'iphoneos'):
+            for sdk in ('macosx',):
                 with self.subTest(sdk=sdk):
                     try: compile_lib(v, pathlib.Path(d), 'om_' + sdk, sdk)
                     except subprocess.CalledProcessError as e: self.fail(e.stderr)
@@ -387,7 +387,7 @@ class OtherEntryPoints(unittest.TestCase):
                 v, meta = dmsh_fetch.fold(u, BINDINGS)
                 self.assertIsNotNone(v, meta)
                 with tempfile.TemporaryDirectory() as d:
-                    for sdk in ('macosx', 'iphoneos'):
+                    for sdk in ('macosx',):
                         try: tile_library(v, pathlib.Path(d), name + sdk, set(info['alpha'] + info['logic']), sdk)
                         except subprocess.CalledProcessError as e: self.fail(e.stderr)
 

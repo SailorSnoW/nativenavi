@@ -60,7 +60,7 @@ python3 -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic "backports.zstd; 
 **3. Build**, with your game folder and your `prod.keys`:
 
 ```
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys
+python3 scripts/build_app.py ~/Games/MarioWonder -k ~/keys/prod.keys
 ```
 
 The IPA appears in the game's folder. The first build takes 30–60 minutes and needs free disk space of about twice the game's size plus 10 GB; building again is much faster.
@@ -82,7 +82,7 @@ A Switch 2 game is built from one [NUP](https://github.com/a55uka/nup) container
 **From a `.nup` file**, which holds the base game, its updates and DLC in one file. Give the file, or a folder that holds it:
 
 ```
-python3 scripts/build_ipa_from_nsp.py ~/Games/DonkeyKongBananza.nup --platform mac-app
+python3 scripts/build_app.py ~/Games/DonkeyKongBananza.nup --platform mac-app
 ```
 
 Hyrule Warriors: Age of Imprisonment is played this way: its 47 GB NUP unpacks in under five minutes. A NUP that carries the game's control data (its NACP) and icon gives the app the game's name and icon; otherwise the name comes from the game's profile and the app has no icon unless you give it one with `--icon <image>` (`ICON` in Spyder; a JPEG or PNG of any size).
@@ -103,7 +103,7 @@ A NUP without the base game also works, when its base package is empty or it has
 ```
 
 ```
-python3 scripts/build_ipa_from_nsp.py ~/Games/DonkeyKongBananza --platform mac-app
+python3 scripts/build_app.py ~/Games/DonkeyKongBananza --platform mac-app
 ```
 
 An update's folder alone will do (no `base/`), and so will `exefs/` and `romfs/` directly in the folder, as `nup extract` writes them, which count as `base/`. The app has no icon, because the folder holds none; `--icon <image>` (`ICON` in Spyder) gives it one. To turn such a folder into a NUP: `nup pack ~/Games/DonkeyKongBananza game.nup`.

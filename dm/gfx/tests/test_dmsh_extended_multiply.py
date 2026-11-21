@@ -110,7 +110,7 @@ class ExtendedMultiply(unittest.TestCase):
             root = Path(tmp)
             (root / 'test.metal').write_text(mul_extended(HEAD + KERNEL))
             (root / 'run.m').write_text(RUNNER)
-            for sdk in ('macosx', 'iphoneos'):
+            for sdk in ('macosx',):
                 subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-O2', '-fpreserve-invariance', str(root / 'test.metal'), '-o', str(root / f'{sdk}.air')], check=True, capture_output=True)
             subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', str(root / 'macosx.air'), '-o', str(root / 'test.metallib')], check=True, capture_output=True)
             subprocess.run(['clang', '-fobjc-arc', '-O1', str(root / 'run.m'), '-framework', 'Metal', '-framework', 'Foundation', '-o', str(root / 'run')], check=True, capture_output=True)

@@ -163,7 +163,7 @@ class Rewrite(unittest.TestCase):
             root = Path(directory)
             for name, src in (('grass', GRASS), ('kernel', KERNEL), ('integer', INTEGER)):
                 msl = root / (name + '.metal'); msl.write_text(border_emu(src))
-                for sdk in ('macosx', 'iphoneos'):
+                for sdk in ('macosx',):
                     with self.subTest(shader=name, sdk=sdk):
                         r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fmodules-cache-path=' + str(root / sdk), str(msl), '-o', str(root / f'{name}_{sdk}.air')], capture_output=True, text=True)
                         self.assertEqual(r.returncode, 0, r.stderr)

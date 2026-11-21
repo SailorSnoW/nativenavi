@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
 import dmsh_chain  # noqa: E402
 import own_compilers  # noqa: E402
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
 assert spec and spec.loader
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
@@ -39,7 +39,7 @@ class CheckTools(unittest.TestCase):
             return own_compilers.check_tools(), out.getvalue()
 
     def test_other_metal_stops(self):
-        for key in ('metal_macosx', 'metal_iphoneos'):
+        for key in ('metal_macosx',):
             with self.assertRaises(SystemExit) as e: self.check([mismatch(key, OTHER)])
             msg = str(e.exception.code)
             self.assertTrue(msg.startswith('[RED] '), msg)
@@ -58,7 +58,7 @@ class CheckTools(unittest.TestCase):
             self.assertEqual(own_compilers.selected_xcode(), '')
 
     def test_other_metal_allowed(self):
-        bad, out = self.check([mismatch('metal_macosx', OTHER), mismatch('metal_iphoneos', OTHER)], allow=True)
+        bad, out = self.check([mismatch('metal_macosx', OTHER)], allow=True)
         self.assertEqual(bad, [])
         self.assertTrue(out.startswith('note: built with this Mac\'s compilers'), out)
         self.assertIn(f'metal_macosx {OTHER} (tested: {LOCKED["metal_macosx"]})', out); self.assertIn('DM_ALLOW_OTHER_METAL=1', out)
@@ -75,13 +75,6 @@ class CheckTools(unittest.TestCase):
             got, out = self.check(bad)
             self.assertEqual(got, want); self.assertEqual(out, '')
 
-    def test_missing_ios_compiler_fails_only_for_ios(self):   # a Mac-only build (DMSH_TARGETS=mac) on a Mac without Xcode's iOS platform
-        missing = mismatch('metal_iphoneos', 'missing')
-        for targets, want in (('mac', []), ('mac,ios', [missing]), ('ios', [missing])):
-            with self.subTest(targets=targets), mock.patch.dict(os.environ, {'DMSH_TARGETS': targets}):
-                self.assertEqual(self.check([missing])[0], want)
-        with mock.patch.dict(os.environ, {'DMSH_TARGETS': 'mac'}): self.assertEqual(self.check([mismatch('metal_macosx', 'missing')])[0], [mismatch('metal_macosx', 'missing')])
-
     def test_check_metal(self):   # --check-metal, as the NSP script runs it: the message when it would stop, '' otherwise
         for actual, allow, stops in ((LOCKED['metal_macosx'], False, False), (OTHER, False, True), (OTHER, True, False), ('missing', False, False)):
             env = {k: v for k, v in os.environ.items() if k != own_compilers.ALLOW}
@@ -89,7 +82,7 @@ class CheckTools(unittest.TestCase):
             with mock.patch.object(own_compilers, 'metal_version', lambda sdk, a=actual: a), mock.patch.dict(os.environ, env, clear=True):
                 msg = own_compilers.check_metal()
             self.assertEqual(bool(msg), stops, (actual, allow))
-            if stops: self.assertIn(f'metal_macosx {OTHER}', msg); self.assertIn(f'metal_iphoneos {OTHER}', msg)
+            if stops: self.assertIn(f'metal_macosx {OTHER}', msg)
 
 
 class NspScript(unittest.TestCase):
@@ -129,8 +122,9 @@ class NspScript(unittest.TestCase):
         g = types.SimpleNamespace(table=lambda n: self.tmp / n, dir=self.tmp)
         for allow in (False, True):
             with mock.patch.object(nsp, 'ALLOW_OTHER_METAL', allow), mock.patch.object(nsp, 'run', fake_run), mock.patch.object(nsp, 'PROG', mock.Mock()), \
-                    mock.patch.object(nsp, 'chain_of', lambda repo: '0123456789ab'), self.assertRaises(nsp.BuildError):
-                nsp.build_shaders(sys.executable, REPO, self.tmp / 'shader', REPO / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate', {'WORK': str(self.tmp)}, self.tmp, g, pkg_key=None, mac=True)
+                    mock.patch.object(nsp, 'chain_of', lambda repo: '0123456789ab'), mock.patch.object(nsp, 'shader_profile_key', lambda *a: 'profile'), \
+                    mock.patch.object(nsp, 'fingerprint', lambda *a, **k: 'K'), self.assertRaises(nsp.BuildError):
+                nsp.build_shaders(sys.executable, REPO, self.tmp / 'shader', REPO / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate', {'WORK': str(self.tmp)}, self.tmp, g, 'package key')
             self.assertEqual(ran[-1].get('DM_ALLOW_OTHER_METAL'), '1' if allow else None)
 
 

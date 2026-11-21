@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# A game in a NUP container (one .nup file: https://github.com/a55uka/nup, SPEC.md v1) → the layout build_ipa_from_nsp.py extracts NSPs into. build_ipa_from_nsp.py calls this when it is given
+# A game in a NUP container (one .nup file: https://github.com/a55uka/nup, SPEC.md v1) → the layout build_app.py extracts NSPs into. build_app.py calls this when it is given
 # a .nup file, or a folder that holds one, and goes on with its other steps; run on its own, this script does only this step.
 # A NUP holds the same packages as a dump folder (scripts/pack_dump.py): the base game, updates by version and DLC by title ID, each an exefs/ and romfs/ tree, its files stored raw or as one zstd
 # frame each, with a SHA-256 per file. Its files are not encrypted, so it needs no keys. Unlike a dump it may carry control data in each package's meta block: the NACP and the icon. Its name,
@@ -442,7 +442,7 @@ def pack_dlc(n, app, dlc, aoc, say=print):   # {DLC title ID: package} → aoc/<
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Pack a game in a NUP container into the extraction layout of build_ipa_from_nsp.py')
+    ap = argparse.ArgumentParser(description='Pack a game in a NUP container into the extraction layout of build_app.py')
     ap.add_argument('nup', type=Path, help='the .nup file')
     ap.add_argument('--version', type=int, help='the update version to pack (default: the newest in the container; 0 = the base game)')
     ap.add_argument('--program', type=int, help='a NUP holding several programs of one application (a Switch 2 Edition of a Switch 1 game): the index of the one to pack (default: the highest)')

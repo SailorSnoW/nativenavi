@@ -1,4 +1,4 @@
-// Host front end (Mac: front_mac.m; iOS: dm/ios separately implements the same-named interface).
+// Host front end (front_mac.m).
 #pragma once
 #include <stdlib.h>
 // Metal reads HUD switches when the first device is made. Called before host preload and again after the launcher applies its settings; explicit environment values win.

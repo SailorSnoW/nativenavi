@@ -23,11 +23,15 @@ def record(key, body=b''):   # a record as shader_split.py writes it: the marker
     return b'BTCDBTCD' + bytes.fromhex(key) + bytes(0x28) + body
 
 
-def u8(name, data):   # one file in a Wii U8 archive (as Shaders/Shaders.arc)
-    names = b'\0' + name + b'\0'; data_offset = 0x60
-    header = struct.pack('>4I', 0x55aa382d, 0x20, 24 + len(names), data_offset) + bytes(16)
-    nodes = struct.pack('>6I', 0x01000000, 0, 2, 1, data_offset, len(data)) + names
-    return header + nodes + bytes(data_offset - len(header) - len(nodes)) + data
+def ndsr(stages):   # an NDSR pack (agl's upscaler pack) of minimal NVN2 shaders, one per SPH word 0
+    data = bytearray(0x40); data[:4] = b'NDSR'
+    for i, sph in enumerate(stages):
+        ctl = bytearray(0x48); ctl[:8] = bytes.fromhex('34127698c9000000')
+        code = struct.pack('<I', sph) + bytes(0x7c)
+        struct.pack_into('<I', ctl, 0x44, len(code))
+        struct.pack_into('<4I', data, 0x10 + 16 * i, len(data), len(ctl) << 4, len(data) + len(ctl), len(code) << 4)
+        data += ctl + code
+    return bytes(data)
 
 
 class Lookup(unittest.TestCase):
@@ -75,13 +79,13 @@ class Lookup(unittest.TestCase):
 
 
 class Split(unittest.TestCase):
-    def test_each_record_carries_the_key_of_its_map_row(self):   # the whole split of one GLSLC program (a vertex and a pixel shader) in a U8 archive
+    def test_each_record_carries_the_key_of_its_map_row(self):   # the whole split of one NDSR pack (a vertex and a pixel shader)
         with tempfile.TemporaryDirectory() as t:
-            t = Path(t); rom = t / 'RomFS'; (rom / 'Shaders').mkdir(parents=True)
-            (rom / 'Shaders/Shaders.arc').write_bytes(u8(b'program.glslc', fz.glslc([fz.VS, fz.PS])))
+            t = Path(t); rom = t / 'RomFS'; (rom / 'Lib').mkdir(parents=True)
+            (rom / 'Lib/agl_ndsr.pck').write_bytes(ndsr([0x0461, 0x1462]))
             main = t / 'main'; main.write_bytes(b'NSO0' + bytes(0xfc))   # an NSO header of three empty segments
             out = [t / n for n in ('pkg', 'map.tsv', 'facts.tsv', 'pairs.tsv', 'pso.tsv')]
-            r = subprocess.run([sys.executable, TOOLS / 'shader_split.py', rom, main, *out], capture_output=True, text=True, env=dict(os.environ, DM_GAME='0400486024DEC000', J='1'))
+            r = subprocess.run([sys.executable, TOOLS / 'shader_split.py', rom, main, *out], capture_output=True, text=True, env=dict(os.environ, J='1'))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertNotIn('[RED]', r.stdout)
             rows = [ln.split('\t') for ln in out[1].read_text().splitlines() if not ln.startswith('#') and ln.split('\t')[0].endswith('.bin')]

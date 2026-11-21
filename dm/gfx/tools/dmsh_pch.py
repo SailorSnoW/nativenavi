@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# A precompiled header for the shader libraries' Metal compiles (dmsh_build.py mac_compile, ios_metal.compile). Each compile is a new metal process, and most of its front end was instantiating
+# A precompiled header for the shader libraries' Metal compiles (dmsh_build.py mac_compile). Each compile is a new metal process, and most of its front end was instantiating
 # Metal's texture classes again: about 90 ms for each of the argument buffer's texture types and for its memory_coherence_device copy, 80% of a typical shader's front end (GitHub issue #1036).
 # The module cache holds those templates, not their instantiations; this header holds the instantiations, so a compile reads them instead of making them.
 # The translated source stays as it was: the header only adds the two includes the sources start with and completes classes, and declares no name. A class left out of CLASSES costs only its
 # time. The output is byte-identical (checked on a shader of every kind in make(), so a compiler that behaves otherwise builds without the header), so -include-pch is not in the compile records
-# (dmsh_build.py MAC_RECORD, ios_metal.RECORD), and like dmsh_mtlcache.py this file is not part of the chain version: it never changes the code in an output, it only makes one faster and keeps the source's name out of it (_run).
+# (dmsh_build.py MAC_RECORD), and like dmsh_mtlcache.py this file is not part of the chain version: it never changes the code in an output, it only makes one faster and keeps the source's name out of it (_run).
 # One header per compile convention, made at the first compile of a process (about 2 s) and removed when it ends. Environment: DMSH_PCH=0 compiles without it.
 import atexit, os, shutil, subprocess, sys, tempfile, threading
 

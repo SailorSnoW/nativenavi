@@ -51,7 +51,7 @@ class TitleIds(unittest.TestCase):
     def test_the_scan_reaches_the_host(self):   # an empty or narrowed scan would pass the check above
         files = {str(p.relative_to(REPO)) for p in docs_patches.host_files()}
         self.assertLessEqual({'dm/host/main.c', 'dm/gfx/nvn/nvn_mtl.m', 'dm/gfx/nvn/nvn_capture.inc'}, files)
-        self.assertTrue(any(f.startswith('dm/ios/') and f.endswith('.swift') for f in files))
+        self.assertTrue(any(f.startswith('dm/mac/') and f.endswith('.swift') for f in files))
         self.assertFalse([f for f in files if '/tests/' in f])
 
     def test_comments_are_left_out(self):

@@ -1,28 +1,23 @@
-"""NSP script --work-dir / WORK_DIR: the build folder is the folder given, as it is, and the IPA (or Mac app) defaults to the folder holding it; without it the
-build folder is <title ID>_build in the NSP folder and the IPA is in the NSP folder. The provisional profile goes in <build folder>/profile (copied once from the
-default place when --work-dir is new). The run stops at the prerequisite check; no game files, keys or Xcode needed."""
+"""build_app.py --work-dir / WORK_DIR: the build folder is the folder given, as it is; without it the build folder is <title ID>_build in the NUP's folder.
+A derived profile goes in <build folder>/profile, or where --profile-out / PROFILE_OUT says. The run stops at the prerequisite check; no game files or Xcode needed."""
 import importlib.util
 import os
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/games'))
 import game
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
-if spec is None or spec.loader is None: raise ImportError('scripts/build_ipa_from_nsp.py')
+spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
+if spec is None or spec.loader is None: raise ImportError('scripts/build_app.py')
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
-TID = 0x0400486024DEC000   # a game with a profile in dm/games
-
-
-def profile_ipa():
-    profile = game.by_title(TID)
-    assert profile, 'no profile for the test game'
-    return profile.get('ipa')
+TID = 0x0400486024DEC000   # the game's profile in dm/games
+VER = 131072   # the version it registers
 
 
 class Stop(Exception): pass
@@ -32,89 +27,81 @@ class WorkDir(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory(); self.addCleanup(td.cleanup)
         self.tmp = Path(td.name).resolve()
-        self.nsps = self.tmp / 'nsps'; self.nsps.mkdir()
-        (self.tmp / 'prod.keys').write_text('test')
+        self.nups = self.tmp / 'nups'; self.nups.mkdir()
+        self.nup = self.nups / 'game.nup'; self.nup.write_bytes(b'NUP\0' + bytes(60))
 
-    def plan(self, *opts, setting=''):
-        """What main decides before it extracts anything: DM_ROOT (the build folder) and the IPA path the console reports; self.nsz_work is the build folder
-        the NSZ conversions were given (None: the default)"""
-        fam = {'base': self.nsps / 'base.nsp', 'updates': [], 'dlc': []}
-        args = nsp.parse_args([str(self.nsps), '-k', str(self.tmp / 'prod.keys'), *opts])
+    def plan(self, *opts, setting='', given=None):
+        """What main decides before it unpacks anything: DM_ROOT (the build folder) and what the console said"""
+        fam = {'base': None, 'updates': [(VER, types.SimpleNamespace(name='update'))], 'dlc': [], 'nup': None}
+        args = nsp.parse_args([str(given or self.nup), *opts])
         said, seen = [], {}
         def stop(env, *a): seen.update(env); raise Stop()
-        with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'scan_nsps', return_value=(TID, fam)), \
-             mock.patch.object(nsp, 'decompress_nsz', return_value=fam) as nsz, mock.patch.object(nsp, 'nsp_versions', return_value={'v0': fam['base']}), \
+        with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'scan_nup', return_value=(TID, fam)), \
+             mock.patch.object(nsp, 'apple_silicon', return_value=True), mock.patch.object(nsp, 'check_native_python'), \
              mock.patch.object(nsp, 'WORK_DIR', setting), mock.patch.object(nsp, 'check_prereqs', side_effect=stop), \
              mock.patch.object(nsp, 'say', side_effect=said.append):
             with self.assertRaises(Stop): nsp.main(args)
-        self.nsz_work = nsz.call_args.args[5]
-        ipa = next(m.split(': ', 1)[1] for m in said if m.startswith('output IPA: '))
-        return Path(seen['DM_ROOT']), Path(ipa)
+        return Path(seen['DM_ROOT']), said
 
     def test_default(self):
-        ipa = profile_ipa()
-        self.assertEqual(self.plan(), (self.nsps / f'{TID:016X}_build', self.nsps / ipa))
-        self.assertIsNone(self.nsz_work)
+        self.assertEqual(self.plan()[0], self.nups / f'{TID:016X}_build')
+        self.assertEqual(self.plan(given=self.nups)[0], self.nups / f'{TID:016X}_build')   # the folder that holds the NUP, given in its place
 
-    def test_option_moves_the_build_folder_and_the_default_ipa(self):
-        ipa = profile_ipa()
+    def test_option_moves_the_build_folder(self):
         out = self.tmp / 'builds' / 'mine'
-        self.assertEqual(self.plan('--work-dir', str(out)), (out, out.parent / ipa))
-        self.assertEqual(self.nsz_work, out)   # the NSZ conversions are build files too
+        work, said = self.plan('--work-dir', str(out))
+        self.assertEqual(work, out)
+        self.assertIn(f'build folder (the unpacked game files in extract/, kept for the next build): {out}', said)
 
     def test_setting_does_the_same(self):
-        ipa = profile_ipa()
         out = self.tmp / 'elsewhere'
-        self.assertEqual(self.plan(setting=str(out)), (out, out.parent / ipa))
-        self.assertEqual(self.nsz_work, out)
+        self.assertEqual(self.plan(setting=str(out))[0], out)
 
-    def test_out_names_the_ipa_whatever_the_build_folder(self):
-        out, ipa = self.plan('--work-dir', str(self.tmp / 'w'), '-o', str(self.tmp / 'x.ipa'))
-        self.assertEqual((out, ipa), (self.tmp / 'w', self.tmp / 'x.ipa'))
+    def test_out_must_be_an_app(self):
+        with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'apple_silicon', return_value=True), mock.patch.object(nsp, 'check_native_python'), \
+             mock.patch.object(nsp, 'scan_nup', return_value=(TID, {'base': None, 'updates': [(VER, types.SimpleNamespace(name='update'))], 'dlc': [], 'nup': None})), \
+             mock.patch.object(nsp, 'check_prereqs', side_effect=Stop), mock.patch.object(nsp, 'say'):
+            with self.assertRaises(nsp.BuildError) as e: nsp.main(nsp.parse_args([str(self.nup), '-o', str(self.tmp / 'x.ipa')]))
+            self.assertIn('must end in .app', str(e.exception))
+            with self.assertRaises(Stop): nsp.main(nsp.parse_args([str(self.nup), '-o', str(self.tmp / 'x.app')]))
+            with self.assertRaises(Stop): nsp.main(nsp.parse_args([str(self.nup), '--platform', 'mac', '-o', str(self.tmp / 'x.ipa')]))   # a development build makes no app: not looked at
+
+    def test_another_game_stops(self):
+        with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'apple_silicon', return_value=True), mock.patch.object(nsp, 'check_native_python'), \
+             mock.patch.object(nsp, 'scan_nup', return_value=(0x0100000000010000, {'base': None, 'updates': [], 'dlc': [], 'nup': None})), mock.patch.object(nsp, 'say'):
+            with self.assertRaises(nsp.BuildError) as e: nsp.main(nsp.parse_args([str(self.nup)]))
+        self.assertIn('no game profile for 0100000000010000', str(e.exception))
 
     def test_profile_folder(self):
-        args = lambda *o: nsp.parse_args([str(self.nsps), *o])
-        default = self.nsps / f'{TID:016X}_build' / 'profile'
-        with mock.patch.object(nsp, 'WORK_DIR', ''), mock.patch.object(nsp, 'PROFILE_OUT', ''), mock.patch.object(nsp, 'say'):
-            self.assertEqual(nsp.profile_folder(args(), self.nsps, TID), default)
-            work = self.tmp / 'w'
-            self.assertEqual(nsp.profile_folder(args('--work-dir', str(work)), self.nsps, TID), work / 'profile')
-            self.assertFalse(work.exists())   # no profile to migrate: nothing is made
+        args = lambda *o: nsp.parse_args([str(self.nup), *o])
+        work = self.tmp / 'w'
+        with mock.patch.object(nsp, 'WORK_DIR', ''), mock.patch.object(nsp, 'PROFILE_OUT', ''):
+            self.assertEqual(nsp.profile_folder(args(), work), work / 'profile')
+            self.assertFalse(work.exists())   # nothing is made
             elsewhere = self.tmp / 'p'
-            self.assertEqual(nsp.profile_folder(args('--work-dir', str(work), '--profile-out', str(elsewhere)), self.nsps, TID), elsewhere)
-            # the setting does the same as the option
-            with mock.patch.object(nsp, 'WORK_DIR', str(work)):
-                self.assertEqual(nsp.profile_folder(args(), self.nsps, TID), work / 'profile')
+            self.assertEqual(nsp.profile_folder(args('--profile-out', str(elsewhere)), work), elsewhere)
+            with mock.patch.object(nsp, 'PROFILE_OUT', str(elsewhere)):   # the setting does the same as the option
+                self.assertEqual(nsp.profile_folder(args(), work), elsewhere)
 
     def test_the_builds_own_profile_is_not_taken_as_registered(self):
-        # a provisional or derived profile in the folder this script writes them to, reached through DM_GAMES_DIR (the bring-up recipe the script prints; DM_GAMES_FIRST as a
-        # derived build sets it): main took it for a registered one, and derived it onto itself (Chained Echoes)
-        own, ipa = self.nsps / f'{TID:016X}_build' / 'profile', profile_ipa(); (own / f'{TID:016X}').mkdir(parents=True)
-        mine = game.by_title(TID); assert mine, 'no profile for the test game'
+        # a derived profile in the folder this script writes them to, reached through DM_GAMES_DIR (DM_GAMES_FIRST as a derived build sets it): main would take it for a
+        # registered one, and derive it onto itself
+        own = self.nups / f'{TID:016X}_build' / 'profile'; (own / f'{TID:016X}').mkdir(parents=True)
+        mine = game.by_title(TID); assert mine, 'no profile for the game'
         text = (mine.dir / 'game.tsv').read_text(encoding='utf-8')
-        (own / f'{TID:016X}' / 'game.tsv').write_text(text.replace(f'ipa\t{ipa}\n', 'ipa\tOwnCopy.ipa\n'), encoding='utf-8')
-        with mock.patch.dict(os.environ, {'DM_GAMES_DIR': str(own), 'DM_GAMES_FIRST': '1'}), mock.patch.object(nsp, 'PROFILE_OUT', ''):
+        (own / f'{TID:016X}' / 'game.tsv').write_text(text + 'own_copy\tyes\n', encoding='utf-8')
+        with mock.patch.dict(os.environ, {'DM_GAMES_DIR': str(own), 'DM_GAMES_FIRST': '1'}), mock.patch.object(nsp, 'PROFILE_OUT', ''), mock.patch.object(nsp, 'WORK_DIR', ''):
             found = game.by_title(TID); assert found
-            self.assertEqual(found.get('ipa'), 'OwnCopy.ipa')   # what the lookup finds without the rule
-            self.assertIn(own, nsp.own_profile_folders(nsp.parse_args([str(self.nsps)]), self.nsps, TID))
-            self.assertIn(own, nsp.own_profile_folders(nsp.parse_args([str(self.nsps), '--work-dir', str(self.tmp / 'w')]), self.nsps, TID))   # a profile from before --work-dir too
-            self.assertEqual(self.plan()[1], self.nsps / ipa)   # dm/games' profile, not the own copy
-
-    def test_profile_migrates_once_and_keeps_the_original(self):
-        old = self.nsps / f'{TID:016X}_build' / 'profile' / f'{TID:016X}'; old.mkdir(parents=True)
-        (old / 'game.tsv').write_text('old')
-        work = self.tmp / 'w'
-        with mock.patch.object(nsp, 'WORK_DIR', ''), mock.patch.object(nsp, 'PROFILE_OUT', ''), mock.patch.object(nsp, 'say'):
-            got = nsp.profile_folder(nsp.parse_args([str(self.nsps), '--work-dir', str(work)]), self.nsps, TID)
-            self.assertEqual(got, work / 'profile')
-            self.assertEqual((got / f'{TID:016X}' / 'game.tsv').read_text(), 'old')
-            self.assertEqual((old / 'game.tsv').read_text(), 'old')   # the original stays
-            (got / f'{TID:016X}' / 'game.tsv').write_text('edited'); (old / 'game.tsv').write_text('newer old')
-            nsp.profile_folder(nsp.parse_args([str(self.nsps), '--work-dir', str(work)]), self.nsps, TID)
-            self.assertEqual((got / f'{TID:016X}' / 'game.tsv').read_text(), 'edited')   # a profile there is not overwritten
-            other = self.tmp / 'x'; (other / 'profile').mkdir(parents=True)
-            nsp.profile_folder(nsp.parse_args([str(self.nsps), '--work-dir', str(other)]), self.nsps, TID)
-            self.assertEqual(list((other / 'profile').iterdir()), [])   # a folder that already has a profile is left alone
+            self.assertEqual(found.get('own_copy', ''), 'yes')   # what the lookup finds without the rule
+            folders = nsp.own_profile_folders(nsp.parse_args([str(self.nup)]), self.nups, TID)
+            self.assertIn(own, folders)
+            self.assertIn(own, nsp.own_profile_folders(nsp.parse_args([str(self.nup), '--work-dir', str(self.tmp / 'w')]), self.nups, TID))   # a profile from before --work-dir too
+            self.assertIn((self.tmp / 'w' / 'profile').resolve(), nsp.own_profile_folders(nsp.parse_args([str(self.nup), '--work-dir', str(self.tmp / 'w')]), self.nups, TID))
+            kept = game.by_title(TID, folders); assert kept
+            self.assertEqual(kept.get('own_copy', ''), '')   # dm/games' profile, not the own copy
+            self.assertEqual(kept.dir.resolve(), (REPO / 'dm/games' / f'{TID:016X}').resolve())
+            _, said = self.plan()
+            self.assertIn(f'game profile: {TID:016X}', said)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
-"""NSP script progress (scripts/build_ipa_from_nsp.py --progress): the json mode's events, a count held back and sent by the ticker, a failed step's log tail,
-and the human modes' lines; no game files, keys or Xcode needed (temporary files only in a temporary folder)."""
+"""build_app.py progress (--progress): the json mode's events, a count held back and sent by the ticker, a failed step's log tail,
+and the human modes' lines; no game files or Xcode needed (temporary files only in a temporary folder)."""
 import contextlib
 import importlib.util
 import io
@@ -11,8 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-SCRIPT = Path(__file__).resolve().parents[3] / 'scripts/build_ipa_from_nsp.py'
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', SCRIPT)
+SCRIPT = Path(__file__).resolve().parents[3] / 'scripts/build_app.py'
+spec = importlib.util.spec_from_file_location('build_app', SCRIPT)
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
 class OneTick:
@@ -91,7 +91,7 @@ class Json(unittest.TestCase):
     def test_game(self):   # which game the app is (issue #1627): the event, then the message for people
         app, icon = Path('/b/Zelda.app'), Path('/b/x/extract/v131072/icon.jpg')
         nsp.say_game(0x0400486024DEC000, 'The Legend of Zelda', '1.0', 'org.nxnative.0400486024dec000', app, icon)
-        nsp.say_game(0x0400486024DEC000, 'Zelda', '1.0', 'b', None, None)   # an Xcode project, a game without an icon
+        nsp.say_game(0x0400486024DEC000, 'Zelda', '1.0', 'b', None, None)   # no app path, a game without an icon
         es = self.events()
         self.assertEqual([e['ev'] for e in es], ['game', 'say', 'game', 'say'])
         self.assertEqual({k: v for k, v in es[0].items() if k != 't'}, {'ev': 'game', 'title_id': '0400486024DEC000', 'name': 'The Legend of Zelda', 'version': '1.0',
@@ -99,14 +99,14 @@ class Json(unittest.TestCase):
         self.assertIn(f'; app: {app}', es[1]['msg'])
         self.assertEqual((es[2]['out'], es[2]['icon']), (None, None))
         self.assertNotIn('; app:', es[3]['msg'])
-        self.prog.mode = 'lines'; nsp.say_game(1, 'Zelda', '1.0', 'b', Path('/b/z.ipa'), None)   # the human modes get only the message
+        self.prog.mode = 'lines'; nsp.say_game(1, 'Zelda', '1.0', 'b', Path('/b/z.app'), None)   # the human modes get only the message
         self.assertNotIn('"ev"', self.out.getvalue().splitlines()[-1])
 
 class ShadersStale(unittest.TestCase):
     """build_shaders tells a front end (event shaders_stale, json mode) that cached libraries cannot be reused, once, before it rebuilds them"""
     class Stop(Exception): pass
 
-    def run_step(self, mode, chain_dir=None, digest='aaaa', stamp=None, caches=None, keys=('x',), mac=True, reuse=False):
+    def run_step(self, mode, chain_dir=None, digest='aaaa', stamp=None, caches=None, keys=('x',), reuse=False):
         out = io.StringIO()
         with tempfile.TemporaryDirectory() as tmp:
             sh = Path(tmp) / 'sh'
@@ -126,10 +126,10 @@ class ShadersStale(unittest.TestCase):
                  mock.patch.object(nsp, 'chain_tables', return_value=True):
                 args = ('py', Path(tmp), sh, Path(tmp) / 'xlate', {'WORK': tmp}, Path(tmp), g)
                 if reuse:
-                    nsp.build_shaders(*args, pkg_key='P', mac=mac)
+                    nsp.build_shaders(*args, 'P')
                     build.assert_not_called()
                 else:
-                    with self.assertRaises(self.Stop): nsp.build_shaders(*args, mac=mac)
+                    with self.assertRaises(self.Stop): nsp.build_shaders(*args, 'P')
         return out.getvalue()
 
     def events(self, text): return [e for e in (json.loads(l) for l in text.splitlines()) if e['ev'] == 'shaders_stale']
@@ -152,30 +152,10 @@ class ShadersStale(unittest.TestCase):
         self.assertEqual(len(es), 1)
         self.assertEqual([es[0][k] for k in ('reason', 'old', 'new', 'count')], ['chain', 'b-OLD', 'b-NEW', 2])
 
-    def test_current_mac_does_not_hide_stale_ios(self):
-        caches = [('cache', 'b-NEW', ('x',), 'aaaa'), ('ios', 'b-OLD', ('x',), 'aaaa')]
-        es = self.events(self.run_step('json', caches=caches, mac=False))
-        self.assertEqual(len(es), 1)
-        self.assertEqual([es[0][k] for k in ('reason', 'count')], ['chain', 2])
-
     def test_count_uses_current_keys_not_historical_copies(self):
         caches = [('cache', 'b-OLD', ('a', 'removed'), 'aaaa'), ('cache', 'b-OLDER', ('a',), 'aaaa')]
         es = self.events(self.run_step('json', caches=caches, keys=('a', 'b', 'b')))
         self.assertEqual(es[0]['count'], 2)   # a and b, once each; removed is no longer built
-
-    def test_count_includes_both_selected_targets(self):
-        caches = [('cache', 'b-NEW', ('x',), 'aaaa'), ('ios', 'b-NEW', ('x',), 'aaaa')]
-        es = self.events(self.run_step('json', caches=caches, digest='bbbb', mac=False))
-        self.assertEqual([es[0][k] for k in ('reason', 'count')], ['inputs', 2])
-
-    def test_ios_only_count_excludes_old_mac_libraries(self):
-        caches = [('cache', 'b-OLD', ('x',), 'aaaa'), ('ios', 'b-OLD', ('x',), 'aaaa')]
-        es = self.events(self.run_step('json', caches=caches, mac=False))
-        self.assertEqual(es[0]['count'], 1)
-
-    def test_unselected_mac_stamp_has_no_event(self):
-        caches = [('cache', 'b-NEW', (), 'old'), ('ios', 'b-NEW', ('x',), 'aaaa')]
-        self.assertEqual(self.events(self.run_step('json', caches=caches, mac=False)), [])
 
     def test_completed_current_chain_ignores_old_folders(self):
         caches = [('cache', 'b-OLD', ('x',), 'old'), ('cache', 'b-NEW', ('x',), 'aaaa')]
@@ -212,12 +192,12 @@ class Cli(unittest.TestCase):
 
     def test_json_error(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r = subprocess.run([sys.executable, '-B', str(SCRIPT), '--progress', 'json', str(Path(tmp) / 'missing'), '-k', str(Path(tmp) / 'keys')],
+            r = subprocess.run([sys.executable, '-B', str(SCRIPT), '--progress', 'json', str(Path(tmp) / 'missing')],
                                capture_output=True, text=True, timeout=30)
         self.assertEqual((r.returncode, r.stderr), (1, ''))
         es = [json.loads(l) for l in r.stdout.splitlines()]
         self.assertTrue(es and all(e['ev'] == 'say' for e in es))
-        self.assertIn('[RED] not a folder:', es[-1]['msg'])
+        self.assertIn('[RED] no such file or folder:', es[-1]['msg'])
 
 class HumanModes(unittest.TestCase):
     def test_lines(self):

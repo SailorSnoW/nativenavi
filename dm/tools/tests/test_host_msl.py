@@ -74,13 +74,10 @@ class HostMSL(unittest.TestCase):
         for d in dirs: (self.root / d).mkdir(parents=True, exist_ok=True)
         (self.root / 'dm/games/game.py').touch()
 
-    def test_mac_and_ios_use_their_deployment_targets(self):
+    def test_the_libraries_take_the_hosts_deployment_target(self):
         self.make()
         minimum = (self.root / 'dm/mac/min_os.mk').read_text().split('MACOS_MIN := ')[1].split()[0]
         self.assertIn(f'-mmacosx-version-min={minimum}', self.compiles()[-1])
-        self.make('MSL_SDK=iphoneos')
-        self.assertIn('-mios-version-min=26.0', self.compiles()[-1])
-        self.assertIn('iphoneos', self.compiles()[-1])
 
     def test_compiler_installation_recovers_without_cleaning(self):
         self.env['TEST_METAL_VERSION'] = ''
@@ -157,7 +154,7 @@ class HostMSL(unittest.TestCase):
             self.assertEqual(len(builds), 4)
 
     def test_nsp_packer_generates_and_fingerprints_the_header(self):
-        nsp = script('build_ipa_from_nsp')
+        nsp = script('build_app')
         self.host_dirs(nsp.HOST_DIRS)
         real_run = subprocess.run
         out = self.root / 'packed/dmhost'
@@ -189,48 +186,6 @@ class HostMSL(unittest.TestCase):
             self.source.write_text('kernel void changed() {}\n')
             nsp.build_mac_host(self.root, out, self.env, logs, NS(id=GAME))
             self.assertEqual(len(builds), 3)
-
-    def test_decoder_identity_normalizes_only_chain_and_verifies_executable(self):
-        nsp = script('build_ipa_from_nsp')
-        self.host_dirs(nsp.HOST_DIRS)
-        out = self.root / 'packed/dmhost'; logs = self.root / 'logs'; logs.mkdir()
-        chain = self.root / nsp.CHAIN_H; chain.write_text('#define DMSH_CHAIN "aaaaaaaaaaaa"\n')
-        decoder = self.root / 'dm/host/hle_oodle.c'; decoder.write_text('void decode(void) {}\n')
-        profile = self.root / f'dm/host/gen/{GAME}/game_profile.h'; profile.parent.mkdir(parents=True); profile.write_text('#define HEAP 1\n')
-        toolchain, builds = ['compiler 1'], []
-        def run(cmd, log, env=None, cwd=None):
-            if f'gen/{GAME}/dmhost' in cmd:
-                builds.append(cmd)
-                built = self.root / f'dm/host/gen/{GAME}/dmhost'; built.parent.mkdir(parents=True, exist_ok=True); built.write_bytes(f'host {len(builds)}'.encode())
-        def command(cmd, **kw):
-            return NS(returncode=0, stdout=DRY if cmd[0] == 'make' else toolchain[0], stderr='')
-        with patch.object(nsp, 'apple_silicon', return_value=True), patch.object(nsp, 'run', side_effect=run), patch.object(nsp.subprocess, 'run', side_effect=command):
-            def build(): return nsp.build_mac_host(self.root, out, self.env, logs, NS(id=GAME))
-            build()
-            record = out.with_name(out.name + '.decoder.json')
-            self.assertTrue(record.is_file(), 'a managed host needs verified decoder provenance')
-            first = nsp.decoder_host_key(out)
-            self.assertIsNotNone(first)
-            chain.write_text('#define DMSH_CHAIN "bbbbbbbbbbbb"\n'); build()
-            self.assertEqual(nsp.decoder_host_key(out), first)
-            self.assertEqual(len(builds), 2, 'the runtime host still rebuilds for a new chain')
-            for change in (lambda: decoder.write_text('void decode(void) { fixed(); }\n'),
-                           lambda: profile.write_text('#define HEAP 2\n'),
-                           lambda: toolchain.__setitem__(0, 'compiler 2'),
-                           lambda: chain.write_text(chain.read_text() + '#define OTHER_INPUT 1\n')):
-                before = nsp.decoder_host_key(out)
-                change(); build()
-                self.assertNotEqual(nsp.decoder_host_key(out), before)
-            before = nsp.decoder_host_key(out)
-            out.write_bytes(b'replaced without rebuilding')
-            self.assertIsNone(nsp.decoder_host_key(out))
-            build(); self.assertEqual(nsp.decoder_host_key(out), before)
-            record.write_text('[]')
-            self.assertIsNone(nsp.decoder_host_key(out))
-            build(); self.assertEqual(nsp.decoder_host_key(out), before)
-            record.unlink()
-            self.assertIsNone(nsp.decoder_host_key(out))
-            build(); self.assertEqual(nsp.decoder_host_key(out), before)
 
 
 if __name__ == '__main__':

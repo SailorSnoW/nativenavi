@@ -254,7 +254,7 @@ class RtCompile(unittest.TestCase):
         env = lift('rt_finish', dmsh_rt_compile=helper, TOOL_FP=b'', CODE_FP='', PROFILE_ROWS=b'',
                    digests={}, rule_fps={}, cache_lookup=Mock(return_value=(False, 'miss')),
                    restore_cache=Mock(), output_of=Mock(), publish_cache=Mock(), commit=Mock(),
-                   w='/tmp', out='/tmp/out', IOSOUT=None, TARGETS={'mac'}, XLATE='xlate', SPIRV_CROSS='cross',
+                   w='/tmp', out='/tmp/out', XLATE='xlate', SPIRV_CROSS='cross',
                    CHAIN='chain', MTL=SimpleNamespace(compile=Mock(), with_compiler=Mock()),
                    PRE_STATS=Counter(), os=__import__('os'), json=json, subprocess=subprocess)
         self.assertEqual(env['rt_finish'](self.plan), ('rt_library', 'RT failed', 'bad RT module', None))
@@ -286,23 +286,6 @@ class RtCompile(unittest.TestCase):
         exec(compile(ast.Module(body=[plan_statement], type_ignores=[]), 'dmsh_build.py', 'exec'), env)
         self.assertEqual(seen, [('a', b'a'), ('b', b'b')])
 
-    def test_cache_requires_ios_rt_source_without_changing_ordinary_outputs(self):
-        with tempfile.TemporaryDirectory(prefix='dm-rt-cache-test-') as tmp:
-            out, ios = (Path(tmp) / label for label in ('mac', 'ios'))
-            out.mkdir(); ios.mkdir()
-            for directory in (out, ios):
-                for key in ('rt_library', 'a' * 16):
-                    for ext in ('.json', '.metallib'):
-                        (directory / (key + '_b' + ext)).write_text('test cache artifact')
-                    if directory == out:
-                        (directory / (key + '_b.metal')).write_text('test source artifact')
-            env = lift('cache_outputs', out=str(out), IOSOUT=str(ios), TARGETS={'mac', 'ios'},
-                       cache_path=lambda digest: digest, dmsh_rt_compile=rt, os=os)
-            self.assertIsNotNone(env['cache_outputs']('a' * 16, 'digest'))
-            self.assertIsNone(env['cache_outputs']('rt_library', 'digest'))
-            (ios / 'rt_library_b.metal').write_text('test source artifact')
-            self.assertIsNotNone(env['cache_outputs']('rt_library', 'digest'))
-
     def test_partial_image_drops_old_rt_and_preserves_unselected_ordinary_library(self):
         with tempfile.TemporaryDirectory(prefix='dm-rt-publish-test-') as tmp:
             old, out = (Path(tmp) / label for label in ('old', 'new'))
@@ -314,12 +297,12 @@ class RtCompile(unittest.TestCase):
             store = SimpleNamespace(names=lambda prefix: [], delete_prefix=Mock())
             writer = Mock()
             env = lift('owned_output', 'publish_library', want={'a' * 16}, dmsh_rt_compile=rt,
-                       label_dir=lambda label: str(out), STAGE='stage/test',
+                       out=str(out), STAGE='stage/test',
                        shader_lib=SimpleNamespace(image_of=lambda d: d + '.img', write=writer),
-                       OLD_IMAGE={'mac': old}, OUT_KEY=re.compile(r'([0-9a-f]{16}|rt_library)_b'),
+                       OLD_IMAGE=old, OUT_KEY=re.compile(r'([0-9a-f]{16}|rt_library)_b'),
                        dmsh_chain=SimpleNamespace(STAMP='inputs.tsv'), STAMP_BEFORE='same', INPUTS='same',
                        STORE=store, os=os, shutil=shutil)
-            env['publish_library']('mac')
+            env['publish_library']()
             published = writer.call_args.args[0]
             self.assertEqual(set(published), {'b' * 16 + '_b.metallib', 'inputs.tsv', 'rt_library_b.json'})
             self.assertEqual(published['rt_library_b.json'], str(new_rt))

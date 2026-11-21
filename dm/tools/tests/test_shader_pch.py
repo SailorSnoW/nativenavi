@@ -17,7 +17,6 @@ sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
 sys.path.insert(0, str(REPO / 'dm/ios/tools'))
 import dmsh_chain  # noqa: E402
 import dmsh_pch  # noqa: E402
-import ios_metal  # noqa: E402
 
 MAC = dmsh_chain.MAC_METAL   # the build's Mac compile
 SHADERS = {
@@ -113,10 +112,6 @@ class RealCompiler(Tmp):
     def test_mac_output_is_byte_identical(self):
         self.check_identical(MAC)
 
-    @unittest.skipUnless(has_sdk('iphoneos'), 'no iOS Metal compiler')
-    def test_ios_output_is_byte_identical(self):
-        self.check_identical(ios_metal.METAL)
-
     def check_no_name(self, metal, header):
         pch = dmsh_pch.make(metal)[0] if header else None
         if header: self.assertTrue(pch)
@@ -131,10 +126,6 @@ class RealCompiler(Tmp):
     @unittest.skipUnless(has_sdk('macosx'), 'no macOS Metal compiler')
     def test_a_mac_library_does_not_depend_on_the_source_name(self):
         self.check_no_name(MAC, True); self.check_no_name(MAC, False)
-
-    @unittest.skipUnless(has_sdk('iphoneos'), 'no iOS Metal compiler')
-    def test_an_ios_library_does_not_depend_on_the_source_name(self):
-        self.check_no_name(ios_metal.METAL, True); self.check_no_name(ios_metal.METAL, False)
 
     @unittest.skipUnless(has_sdk('macosx'), 'no macOS Metal compiler')
     def test_a_shader_with_an_error_raises_as_a_plain_compile_does(self):
@@ -151,34 +142,31 @@ class RealCompiler(Tmp):
 
 
 class BracketDepth(Tmp):
-    """-fbracket-depth=1024 in every library compile (dmsh_build.py METAL_DEPTH, ios_metal.DEPTH): Ocarina of Time's compute shaders 1f78730053feb036 and e172bd7ec218ab8e nest 259
+    """-fbracket-depth=1024 in every library compile (dmsh_build.py METAL_DEPTH): Ocarina of Time's compute shaders 1f78730053feb036 and e172bd7ec218ab8e nest 259
     brackets deep, past the front end's 256. The records do not name it, so it must change no output of a source within the default limit"""
     DEEP = '#include <metal_stdlib>\nusing namespace metal;\nkernel void main0(device uint* o [[buffer(0)]]) { o[0] = ' + '(' * 300 + '1u' + ')' * 300 + '; }\n'
 
-    def test_the_build_and_ios_take_the_same_depth(self):   # dmsh_build.py is a script, so its value is read from its source
+    def depth(self):   # dmsh_build.py is a script, so its value is read from its source
         tree = ast.parse((REPO / 'dm/gfx/tools/dmsh_build.py').read_text())
-        mac = next(ast.literal_eval(n.value) for n in ast.walk(tree) if isinstance(n, ast.Assign) and [getattr(t, 'id', None) for t in n.targets] == ['METAL_DEPTH'])
-        self.assertEqual(mac, ios_metal.DEPTH)
-        self.assertNotIn('bracket', ios_metal.RECORD)
+        return next(ast.literal_eval(n.value) for n in ast.walk(tree) if isinstance(n, ast.Assign) and [getattr(t, 'id', None) for t in n.targets] == ['METAL_DEPTH'])
+
+    def test_the_build_raises_the_depth(self):
+        self.assertEqual(self.depth(), ['-fbracket-depth=1024'])
 
     def check(self, metal):
         deep = self.tmp / 'deep.metal'; deep.write_text(self.DEEP)
         with self.assertRaises(subprocess.CalledProcessError): subprocess.run([*metal, '-x', 'metal', str(deep), '-o', str(self.tmp / 'deep0.air')], check=True, capture_output=True)
-        dmsh_pch.compile(metal + ios_metal.DEPTH, str(deep), str(self.tmp / 'deep.air'))
+        dmsh_pch.compile(metal + self.depth(), str(deep), str(self.tmp / 'deep.air'))
         self.assertTrue((self.tmp / 'deep.air').is_file())
         for name, body in SHADERS.items():   # within the limit: the same bytes
             src = self.tmp / f'{name}.metal'; src.write_text('#include <metal_stdlib>\nusing namespace metal;\n' + body)
             out = []
-            for extra in ([], ios_metal.DEPTH):
+            for extra in ([], self.depth()):
                 with open(src, 'rb') as f: out.append(subprocess.run([*metal, *extra, '-x', 'metal', '-', '-o', '-'], stdin=f, check=True, capture_output=True).stdout)
             self.assertEqual(out[0], out[1], name)
 
     @unittest.skipUnless(has_sdk('macosx'), 'no macOS Metal compiler')
     def test_mac(self): self.check(MAC)
-
-    @unittest.skipUnless(has_sdk('iphoneos'), 'no iOS Metal compiler')
-    def test_ios(self): self.check(ios_metal.METAL)
-
 
 if __name__ == '__main__':
     unittest.main()

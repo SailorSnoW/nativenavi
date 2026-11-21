@@ -32,9 +32,9 @@ class Toolchain(unittest.TestCase):
         self.assertEqual(named, [self.xcode], f'dm/gfx/tools/own_compilers.py: XCODE_VERSION is not CI\'s {self.xcode}')
 
     def test_nsp_script_names_the_same_xcode(self):
-        named = re.findall(r'Xcode (\d+\.\d+)', (REPO / 'scripts/build_ipa_from_nsp.py').read_text())
-        self.assertTrue(named, 'scripts/build_ipa_from_nsp.py names no Xcode version')
-        self.assertEqual(set(named), {self.xcode}, f'scripts/build_ipa_from_nsp.py: the tested Xcode is not CI\'s {self.xcode}')
+        named = re.findall(r'Xcode (\d+\.\d+)', (REPO / 'scripts/build_app.py').read_text())
+        self.assertTrue(named, 'scripts/build_app.py names no Xcode version')
+        self.assertEqual(set(named), {self.xcode}, f'scripts/build_app.py: the tested Xcode is not CI\'s {self.xcode}')
 
 
 if __name__ == '__main__':

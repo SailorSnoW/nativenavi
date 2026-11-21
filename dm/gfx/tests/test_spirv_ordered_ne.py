@@ -165,14 +165,6 @@ class OrderedNotEqual(unittest.TestCase):
     def test_all_scalar_and_vector_modules_translate(self):
         self.assertEqual(len(self.shaders), 8)
 
-    @unittest.skipUnless(os.environ.get('DMSH_TEST_METAL') and shutil.which('xcrun'), 'set DMSH_TEST_METAL=1 for iOS compilation')
-    def test_ios_compiles_scalar_and_vector_comparisons(self):
-        sys.path.insert(0, str(TOOLS.parents[1] / 'ios/tools'))
-        import ios_metal
-        for bits, width, stem in self.shaders:
-            with self.subTest(bits=bits, width=width):
-                self.checked([*ios_metal.METAL, str(stem.with_suffix('.metal')), '-o', str(stem.with_suffix('.ios.air'))])
-
     @unittest.skipUnless(os.environ.get('DMSH_TEST_GPU') and sys.platform == 'darwin', 'set DMSH_TEST_GPU=1 for Metal GPU readback')
     def test_gpu_preserves_ordered_and_unordered_results(self):
         (self.work / 'run.m').write_text(RUNNER)

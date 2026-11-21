@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare the SDK surface of two Switch games: dynamic symbols of NSO modules + this repo's HLE hook names.
 Usage: nso_syms.py <repo dm/host dir> <gameA ExeFS | -> <gameB ExeFS>   (A = the game the host already supports, B = the new one; - = no reference game, compare with the host hooks only)
-dm/games/profile_guess.py imports it (dynsyms, host_hooks) to guess a provisional profile."""
+"""
 import collections, glob, os, re, struct, sys
 
 def load(path):   # the module's image without bss (its dynamic tables lie in ro and data); nso.Error (a ValueError) on a damaged file

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # Route B offline build: original Switch shaders → SPIR-V (dmsh_xlate, the Ryujinx translator) → spirv-cross MSL → metallib + replay reflection JSON.
-# No translation at runtime (iOS has no JIT): build output goes into the shader cache directory, file name = Switch control segment key (dm_ctl_sha16, same as column 4 of shader_map.tsv) + "_b".
+# No translation at runtime: build output goes into the shader cache directory, file name = Switch control segment key (dm_ctl_sha16, same as column 4 of shader_map.tsv) + "_b".
 # Source of query answers: the answer table in the game profile, dm/games/<id>/shader_facts.tsv (dmsh_facts.py) - texture types, vertex attribute / fragment output component types, compute thread group size and shared memory.
-# Usage: dmsh_build.py <Switch package dir> <output cache dir> [key...] (no keys = all); build output is the image <output cache dir>/b-<chain version>.img (same for IOSOUT; dm/tools/shader_lib.py), for the chain version see dmsh_chain.py.
+# Usage: dmsh_build.py <Switch package dir> <output cache dir> [key...] (no keys = all); build output is the image <output cache dir>/b-<chain version>.img (dm/tools/shader_lib.py), for the chain version see dmsh_chain.py.
 # The folder b-<chain version>/ beside it holds only the shaders in flight: a finished shader's files go into the shader cache (cas-<chain>.db, under stage/), and the image is written from there
 # at the end (publish_library), so a build, stopped or not, leaves a few files and not one per shader output (Octopath Traveler 0, stopped in its compile: 68,230 files). The translator's
 # working files go into a folder per batch of shaders, removed when the batch is done; a working folder whose build is gone is removed at the next start (sweep_work).
-# A full build (no keys) also stamps both directories with the game and the digest of its profile inputs (inputs.tsv) and writes the profile's c1_full.tsv and cb_extent.tsv (c1_guard.py, cb_extent.py)
-# from its Mac outputs. One output directory per game: the chain version is the same for every game   Environment: DM_GAME=game profile (required, dm/games/<id>), XLATE=path to the translation tool (default the in-repo dmsh_xlate_bin), DMSH_CAS=the compile cache (shader_cache.py): a folder, whose cas-<chain>.db this build writes (default the output cache dir), or one file, DMSH_PREFILL=Mac library root[=iOS library root] (separated by :, their b-*/ go into the MSL-keyed compile cache first; sibling b-*/ always do), J=concurrency, DMSH_PROCS=processes that finish shaders (default J; 0 = threads of this process, see fin_worker)
+# A full build (no keys) also stamps the directory with the game and the digest of its profile inputs (inputs.tsv) and writes the profile's c1_full.tsv and cb_extent.tsv (c1_guard.py, cb_extent.py)
+# from its Mac outputs. One output directory per game: the chain version is the same for every game   Environment: DM_GAME=another game profile than Ocarina of Time's (a derived one), XLATE=path to the translation tool (default the in-repo dmsh_xlate_bin), DMSH_CAS=the compile cache (shader_cache.py): a folder, whose cas-<chain>.db this build writes (default the output cache dir), or one file, DMSH_PREFILL=library roots (separated by :, their b-*/ go into the MSL-keyed compile cache first; sibling b-*/ always do), J=concurrency, DMSH_PROCS=processes that finish shaders (default J; 0 = threads of this process, see fin_worker)
 # Build output: <key>_b.metallib, <key>_b.json (replay reflection, including drv_reads, the runtime read offsets into driver segments c0 / c2), <key>_b.metal (MSL)
-# Environment IOSOUT=dir: the same MSL also goes through dm/ios/tools/ios_metal.compile to produce an iphoneos metallib + reflection (chain_metal records the iOS compile convention)
 # Final summary: success / failure counts and the distribution of reasons; distribution of driver segment read offsets (those outside the range the replay layer can fill are listed separately);
 # a [RED] line per shader that built but lost something (shader_regressions.report_losses), which does not change the exit status
 import atexit, inspect, multiprocessing, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf
@@ -28,22 +27,9 @@ XLATE = os.environ.get('XLATE', os.path.join(dmsh_chain.XLATE_DIR, 'dmsh_xlate')
 SPIRV_CROSS = dmsh_chain.SPIRV_CROSS   # the in-repo build the lock records
 FACTS = dmsh_facts.load()
 if not os.path.exists(dmsh_facts.TABLE): sys.exit(f'[RED] no answer table {dmsh_facts.TABLE} (it comes with the game profile; an empty table = every query answered with defaults)')
-IOSOUT = os.environ.get('IOSOUT')   # destination for requested iOS libraries (iphoneos metallib + reflection)
-# Which metallibs this run builds: DMSH_TARGETS=mac,ios (default: both when IOSOUT is set, else mac). The Mac
-# sources and reflection are written even when 'mac' is left out (the profile's c1_full / cb_extent tables are
-# made from them), so an iOS-only build skips only the macOS compile, about half of the Metal work.
-TARGETS = {t.strip() for t in (os.environ.get('DMSH_TARGETS') or ('mac,ios' if IOSOUT else 'mac')).split(',') if t.strip()}
-if not TARGETS or not TARGETS <= {'mac', 'ios'}: sys.exit(f'[RED] DMSH_TARGETS takes mac and/or ios: {",".join(sorted(TARGETS)) or "empty"}')
-if 'ios' in TARGETS and not IOSOUT: sys.exit('[RED] DMSH_TARGETS asks for iOS libraries without IOSOUT')
-if 'ios' not in TARGETS: IOSOUT = None   # every side library, cache, cleanup and stamp follows the same selection
-IOS_PULL = os.environ.get('DMSH_IOS_PULL') != '0'   # DMSH_IOS_PULL=0: no iOS pulling libraries, when nothing in the app reads them (the NSP script's ios_wants_pulling). The reflection is the same: its 'pull' comes from the variant, not from the compile
-if IOSOUT:
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../ios/tools')); import ios_metal
-    IOSOUT = os.path.join(IOSOUT, 'b-' + CHAIN); os.makedirs(IOSOUT, exist_ok=True)
 import shader_lib, romfs   # dm/tools (on the path shader_regressions puts it): the library's image, which this build writes (publish_library)
-for _d in [out] + ([IOSOUT] if IOSOUT else []):   # one chain version serves every game, so b-<V>/ alone does not keep two games' libraries apart
-    _g = shader_lib.read_stamp(_d).get('game')
-    if _g and _g != GAME.id: sys.exit(f'[RED] {_d} holds the shader libraries of game {_g}, not {GAME.id}: give each game its own output directory')
+_g = shader_lib.read_stamp(out).get('game')   # one chain version serves every game, so b-<V>/ alone does not keep two games' libraries apart
+if _g and _g != GAME.id: sys.exit(f'[RED] {out} holds the shader libraries of game {_g}, not {GAME.id}: give each game its own output directory')
 MAP = str(GAME.table('shader_map.tsv'))
 BF_WANT_FILE = str(GAME.table('bf_want.tsv'))
 BF_WANT = {line.strip() for line in open(BF_WANT_FILE) if line.strip() and not line.lstrip().startswith('#')} if os.path.exists(BF_WANT_FILE) else set()
@@ -65,12 +51,12 @@ def xcrun_out(*args): return subprocess.run(['xcrun', '-sdk', 'macosx', *args], 
 MAC_RUN = [xcrun_out('-f', 'metal'), '-isysroot', xcrun_out('--show-sdk-path'), *dmsh_chain.MAC_METAL[4:]]
 MAC_LINK = [xcrun_out('-f', 'metallib')]
 # -fbracket-depth: the front end stops at 256 nested brackets ("bracket nesting level exceeded maximum of 256"). Ocarina of Time's compute shaders 1f78730053feb036 and e172bd7ec218ab8e
-# (3.5 MB of MSL each) nest 259 deep in one expression and were left out. A source within the default limit compiles to the same bytes with it (checked on macOS and iOS), so, like the
-# precompiled header, the records do not name it and the Metal cache keeps its libraries. ios_metal.DEPTH is the same
+# (3.5 MB of MSL each) nest 259 deep in one expression and were left out. A source within the default limit compiles to the same bytes with it (checked), so, like the
+# precompiled header, the records do not name it and the Metal cache keeps its libraries
 METAL_DEPTH = ['-fbracket-depth=1024']
 # The outer shader cache restores compiled libraries directly, before the MSL compile cache can check their compiler. Keep override builds separate there too.
-METAL_FP = dmsh_mtlcache.compiler_id('macosx') + ('\0iphoneos\0' + dmsh_mtlcache.compiler_id('iphoneos') if IOSOUT else '')
-def mac_compile(msl, air, lib):   # same interface as ios_metal.compile; the precompiled header and METAL_DEPTH change no output, so MAC_RECORD does not name them (dmsh_pch.py)
+METAL_FP = dmsh_mtlcache.compiler_id('macosx')
+def mac_compile(msl, air, lib):   # as dmsh_mtlcache.Cache calls it; the precompiled header and METAL_DEPTH change no output, so MAC_RECORD does not name them (dmsh_pch.py)
     dmsh_pch.compile(MAC_RUN + METAL_DEPTH, msl, air)
     subprocess.run([*MAC_LINK, air, '-o', lib], check=True)
 
@@ -103,7 +89,7 @@ def tool_fingerprint():
     sc = subprocess.run([SPIRV_CROSS, '--version'], capture_output=True, text=True, timeout=30)
     return ('lock\0' + open(dmsh_chain.LOCK).read() + '\0options\0' + dmsh_chain.options() +
             '\0xlate\0' + dmsh_chain.xlate_source_sha() + '\0spirv-cross\0' + sc.stdout + sc.stderr +
-            '\0xc\0' + repr(XC) + '\0mac\0' + MAC_RECORD + '\0ios\0' + (ios_metal.RECORD if IOSOUT else '') + '\0metal\0' + METAL_FP)
+            '\0xc\0' + repr(XC) + '\0mac\0' + MAC_RECORD + '\0metal\0' + METAL_FP)
 
 # The profile keys that change how a shader is built (nvn_*, shader_*), as dmsh_chain.inputs takes them: part of every shader's cache key
 PROFILE_ROWS = dmsh_chain.profile_rows(GAME)
@@ -127,24 +113,21 @@ CAS_USED = '_b_cas.txt'   # in the Mac library directory b-<V>/: the cache_path 
 # A finished shader's outputs are staged in the cache, under a name of this output folder's, and leave the disk (commit); the image is written from them at the end (publish_library).
 # A stopped build leaves them there, and the next build of this folder clears them first: its shaders come back from the cache entries publish_cache wrote
 STAGE = 'stage/' + hashlib.sha256(os.path.realpath(out).encode()).hexdigest()[:16]
-def label_dir(label) -> str: return out if label == 'mac' else IOSOUT or ''   # '' when this build makes no iPhone libraries
-
-def output(label, name):
+def output(name):
     """An output file's bytes: on disk while its shader is in flight, else staged; for a partial build, a shader it does not build is read from the image it builds on. None when there is none"""
     try:
-        if label_dir(label):
-            with open(os.path.join(label_dir(label), name), 'rb') as f: return f.read()
+        with open(os.path.join(out, name), 'rb') as f: return f.read()
     except FileNotFoundError: pass
-    data = STORE.get(f'{STAGE}/{label}/{name}')   # put before its file is removed (commit), so a file gone meanwhile is found here
+    data = STORE.get(f'{STAGE}/mac/{name}')   # put before its file is removed (commit), so a file gone meanwhile is found here
     if data is not None or not want: return data
-    m = OUT_KEY.match(name); old = OLD_IMAGE.get(label)
-    if old is None or not m or owned_output(m.group(1)): return None   # a product this build makes has no older outputs: the start removed them
-    try: return (old / name).read_bytes()
+    m = OUT_KEY.match(name)
+    if OLD_IMAGE is None or not m or owned_output(m.group(1)): return None   # a product this build makes has no older outputs: the start removed them
+    try: return (OLD_IMAGE / name).read_bytes()
     except OSError: return None
 
-def output_of(label, name) -> bytes:   # an output its shader has just written or restored: there is one
-    data = output(label, name)
-    if data is None: raise FileNotFoundError(f'{label}/{name}: no such output')
+def output_of(name) -> bytes:   # an output its shader has just written or restored: there is one
+    data = output(name)
+    if data is None: raise FileNotFoundError(f'{name}: no such output')
     return data
 
 def commit(key='', names=None):
@@ -152,24 +135,20 @@ def commit(key='', names=None):
     and all of them stay on disk, where publish_library finds them too"""
     staged = []
     with STORE.batch():
-        for label in ('mac', 'ios'):
-            d = label_dir(label)
-            if not d: continue
-            for n in (names if names is not None else [n for n in os.listdir(d) if n.startswith(key + '_')]):
-                p = os.path.join(d, n)
-                if n.startswith('.') or '.tmp' in n or not os.path.isfile(p): continue
-                STORE.put_file(f'{STAGE}/{label}/{n}', p); staged.append(p)
+        for n in (names if names is not None else [n for n in os.listdir(out) if n.startswith(key + '_')]):
+            p = os.path.join(out, n)
+            if n.startswith('.') or '.tmp' in n or not os.path.isfile(p): continue
+            STORE.put_file(f'{STAGE}/mac/{n}', p); staged.append(p)
     if not STORE.full:
         for p in staged: os.unlink(p)
 
-def publish_library(label):
+def publish_library():
     """The library's image <dir>.img from the staged outputs and the files left on disk (these win), and for a partial build the image it builds on, less the outputs of the keys it built
     (and its stamp, when the profile's inputs changed). Then the folder and the staged entries go. When the image cannot be written, the staged outputs go back into the folder, which works as it is"""
-    d = label_dir(label); image = shader_lib.image_of(d); prefix = f'{STAGE}/{label}/'
+    d = out; image = shader_lib.image_of(d); prefix = f'{STAGE}/mac/'
     files = {}
-    old = OLD_IMAGE.get(label)
-    if old is not None:
-        for p in old.iterdir():
+    if OLD_IMAGE is not None:
+        for p in OLD_IMAGE.iterdir():
             m = OUT_KEY.match(p.name)
             if (m and owned_output(m.group(1))) or (p.name == dmsh_chain.STAMP and STAMP_BEFORE != INPUTS): continue
             files[p.name] = str(p)
@@ -184,36 +163,28 @@ def publish_library(label):
     STORE.delete_prefix(prefix)
     shutil.rmtree(d, ignore_errors=True)
 
-def cache_outputs(key, digest, cached=False):
-    root = cache_path(digest); files = {}
-    for label, directory in (('mac', out), ('ios', IOSOUT)):
-        if not directory: continue
-        # fin(), paired vertex padding and the profile tables also need these on an iOS-only cache hit.
-        required = [key + '_b.json'] + ([key + '_b.metal'] if label == 'mac' or key == dmsh_rt_compile.KEY else [])
-        if label in TARGETS: required.append(key + '_b.metallib')
-        have = STORE.names(f'{root}/{label}/') if cached else set()
-        names = required + [key + s + ext for s in ('_bg0', '_bg1', '_bg2', '_bg3', '_bg4', '_bgv', '_bl0', '_bl1', '_bl3') for ext in ('.metallib', '.json', '.metal')
-                            if (label == 'mac' or ext != '.metal') and (ext != '.metallib' or label in TARGETS)]
-        found = [n for n in names if (f'{root}/{label}/{n}' in have if cached else os.path.exists(os.path.join(directory, n)))]
-        if not all(n in found for n in required): return None
-        files[label] = found
-    return root, files
+def cache_outputs(key, digest, cached=False):   # → (the cache entry's root, the shader's outputs it holds, or the output folder does), None when one every shader has is missing
+    root = cache_path(digest)
+    required = [key + '_b.json', key + '_b.metal', key + '_b.metallib']   # fin(), paired vertex padding and the profile tables need the source and the reflection
+    have = STORE.names(f'{root}/mac/') if cached else set()
+    names = required + [key + s + ext for s in ('_bg0', '_bg1', '_bg2', '_bg3', '_bg4', '_bgv', '_bl0', '_bl1', '_bl3') for ext in ('.metallib', '.json', '.metal')]
+    found = [n for n in names if (f'{root}/mac/{n}' in have if cached else os.path.exists(os.path.join(out, n)))]
+    if not all(n in found for n in required): return None
+    return root, found
 
 def restore_cache(key, digest):
     found = cache_outputs(key, digest, cached=True)
     if not found: return False
-    root, files = found
-    for label, names in files.items():
-        directory = out if label == 'mac' else IOSOUT
-        for name in names:
-            src = f'{root}/{label}/{name}'; dst = os.path.join(directory, name)
-            if name.endswith('.json'):
-                data = STORE.get(src)
-                if data is None: return False   # pruned by another build since the look above: a miss, which builds it
-                tmp = dst + '.tmp-' + str(os.getpid()) + '-' + str(threading.get_ident())
-                with open(tmp, 'wb') as f: f.write(re.sub(rb'("chain"\s*:\s*")[^"]*"', rb'\g<1>' + CHAIN.encode() + b'"', data, count=1))
-                os.replace(tmp, dst)
-            elif not STORE.to_file(src, dst): return False
+    root, names = found
+    for name in names:
+        src = f'{root}/mac/{name}'; dst = os.path.join(out, name)
+        if name.endswith('.json'):
+            data = STORE.get(src)
+            if data is None: return False   # pruned by another build since the look above: a miss, which builds it
+            tmp = dst + '.tmp-' + str(os.getpid()) + '-' + str(threading.get_ident())
+            with open(tmp, 'wb') as f: f.write(re.sub(rb'("chain"\s*:\s*")[^"]*"', rb'\g<1>' + CHAIN.encode() + b'"', data, count=1))
+            os.replace(tmp, dst)
+        elif not STORE.to_file(src, dst): return False
     return True
 
 def cache_lookup(key, digest, rule_fp, code_fp):   # whether the cache holds the shader's outputs; they are restored when the shader is finished (fin), so they are on disk only while it is in flight
@@ -228,27 +199,25 @@ def cache_lookup(key, digest, rule_fp, code_fp):   # whether the cache holds the
 
 def publish_cache(key, digest, rule_fp, code_fp):
     # Paired pixel MSL is an input to vs_pad; a diagnostic build without it must not cache an incomplete vertex shader under a complete dependency key.
-    if any(output('mac', ps + '_b.metal') is None for ps in PAIRS.get(key, ())): return
+    if any(output(ps + '_b.metal') is None for ps in PAIRS.get(key, ())): return
     found = cache_outputs(key, digest)
     if not found: return
-    root, files = found
+    root, names = found
     with STORE.batch():   # a stop leaves the whole entry or none of it
-        for label, names in files.items():
-            for name in names:
-                src = os.path.join(out if label == 'mac' else IOSOUT, name)
-                if name.endswith('.json'):
-                    value = json.load(open(src))
-                    for field in ('fetch', 'vin', 'pull', 'alpha', 'logic', 'chain_metal_cut'):
-                        value.pop(field, None)   # fin regenerates the side libraries and records how the base was built for each target
-                    STORE.put(f'{root}/{label}/{name}', json.dumps(value, ensure_ascii=False, indent=1).encode())
-                else: STORE.put_file(f'{root}/{label}/{name}', src)
+        for name in names:
+            src = os.path.join(out, name)
+            if name.endswith('.json'):
+                value = json.load(open(src))
+                for field in ('fetch', 'vin', 'pull', 'alpha', 'logic', 'chain_metal_cut'):
+                    value.pop(field, None)   # fin regenerates the side libraries and records how the base was built
+                STORE.put(f'{root}/mac/{name}', json.dumps(value, ensure_ascii=False, indent=1).encode())
+            else: STORE.put_file(f'{root}/mac/{name}', src)
         STORE.put(cache_meta_path(key), json.dumps({'digest': digest, 'rule_fp': rule_fp, 'code_fp': code_fp}).encode())
 
-def write_refl(key, refl, cut_targets=()):
-    for target, d in (('mac', out),) + ((('ios', IOSOUT),) if IOSOUT else ()):
-        recorded = MTL.with_compiler(target, refl)
-        if target in cut_targets: recorded['chain_metal_cut'] = True
-        atomic_json(os.path.join(d, key + '_b.json'), recorded)
+def write_refl(key, refl, cut=False):   # cut: the base library was cut from one compile with its side libraries (vs_libraries)
+    recorded = MTL.with_compiler('mac', refl)
+    if cut: recorded['chain_metal_cut'] = True
+    atomic_json(os.path.join(out, key + '_b.json'), recorded)
 
 VIN_STATS = collections.Counter()
 PULL_STATS = collections.Counter()
@@ -260,12 +229,11 @@ def pull_finish(key, full, refl):
     MSL-keyed Metal cache with the chain's flags; reflection 'pull' names its entry points, the layout block's buffer index and the inputs. Shaders without stage inputs get none
     (their pipelines have no vertex descriptor anyway), nor does a shader the variant does not fit (stale libraries removed). Changes refl; the caller writes it"""
     if refl['stage'] != 'vs': return refl
-    libs = [os.path.join(out, key + '_bp.metallib')] + ([os.path.join(IOSOUT, key + '_bp.metallib')] if IOSOUT else [])
+    lib = os.path.join(out, key + '_bp.metallib')
     refl.pop('pull', None)
     def drop():
-        for p in libs:
-            try: os.unlink(p)
-            except FileNotFoundError: pass
+        try: os.unlink(lib)
+        except FileNotFoundError: pass
     v, info = dmsh_pull.variant(full)
     if not v:
         PULL_STATS['no stage input' if info == 'no stage input' else 'not generated'] += 1
@@ -273,8 +241,7 @@ def pull_finish(key, full, refl):
         drop(); return refl
     msl = os.path.join(w, key + '_bp.metal'); open(msl, 'w').write(v)
     try:
-        if 'mac' in TARGETS: MTL.compile('mac', msl, libs[0])
-        if IOSOUT and IOS_PULL: MTL.compile('ios', msl, libs[1])
+        MTL.compile('mac', msl, lib)
     except subprocess.CalledProcessError as e:
         PULL_STATS['failed'] += 1; print(f'[RED] {key}: the pulling library does not compile ({str(e)[:120]}): its pipelines are always built for the draw\'s vertex layout', flush=True)
         drop(); return refl
@@ -289,12 +256,11 @@ def vin_finish(key, full, refl):
     """The shadow-input library <key>_bv of a vertex shader with integer inputs (dmsh_vin.py), compiled through the MSL-keyed Metal cache; reflection 'vin' names its entry points and
     the shadow attribute indices. Other shaders get none (stale libraries removed). Changes refl; the caller writes it"""
     if refl['stage'] != 'vs': return refl
-    libs = [os.path.join(out, key + '_bv.metallib')] + ([os.path.join(IOSOUT, key + '_bv.metallib')] if IOSOUT else [])
+    lib = os.path.join(out, key + '_bv.metallib')
     refl.pop('vin', None)
     def drop():
-        for p in libs:
-            try: os.unlink(p)
-            except FileNotFoundError: pass
+        try: os.unlink(lib)
+        except FileNotFoundError: pass
     v, shadows = dmsh_vin.variant(full)
     if not v:
         if shadows != 'no integer input': VIN_STATS['not generated'] += 1; print(f'[RED] {key}: no shadow-input library ({shadows}): its integer inputs keep the CPU conversion', flush=True)
@@ -302,8 +268,7 @@ def vin_finish(key, full, refl):
     VIN_STATS['generated'] += 1
     msl = os.path.join(w, key + '_bv.metal'); open(msl, 'w').write(v)
     try:
-        if 'mac' in TARGETS: MTL.compile('mac', msl, libs[0])
-        if IOSOUT: MTL.compile('ios', msl, libs[1])
+        MTL.compile('mac', msl, lib)
     except subprocess.CalledProcessError as e:
         VIN_STATS['failed'] += 1; print(f'[RED] {key}: the shadow-input library does not compile ({str(e)[:120]}): its integer inputs keep the CPU conversion', flush=True)
         drop(); return refl
@@ -317,41 +282,37 @@ def vin_finish(key, full, refl):
 def vs_libraries(key, msl, full):
     """A vertex shader's libraries: <key>_b with its own entry points, its pulling library <key>_bp (pull_finish) and its shadow-input library <key>_bv (vin_finish). A shader with
     a pulling library gets them cut from one compile through the MSL-keyed Metal cache (dmsh_side.vs_unit, dmsh_side.cut), which holds the body once where the three sources held it
-    nine or twelve times. Each target's unit holds the libraries that target gets: without the pulling entry points where DMSH_IOS_PULL=0 leaves the iPhone's library out, and a
-    target with neither side library compiles the plain source. A shader with layer entry points keeps its shadow-input library a compile of its own: that library repeats them
+    nine or twelve times. A shader with layer entry points keeps its shadow-input library a compile of its own: that library repeats them
     for the host (nvn_mtl.m vin_fn), and one unit cannot hold two main0_l.
     A shader whose unit does not build, or whose source is not of the shape vs_unit knows, gets the three compiles as before, each library from its own source, with a red line; so
-    does one without a pulling library, with none. Returns the 'pull' and 'vin' reflection and the targets whose base library was cut from a unit. Raises CalledProcessError when the
+    does one without a pulling library, with none. Returns the 'pull' and 'vin' reflection and whether the base library was cut from a unit. Raises CalledProcessError when the
     plain source does not compile."""
-    targets = [(t, d) for t, d in (('mac', out), ('ios', IOSOUT)) if d and t in TARGETS]
-    cut_targets = set()
+    cut = False
     pv, pinfo = dmsh_pull.variant(full); why = None
     if pv and isinstance(pinfo, dict):
         vv, shadows = dmsh_vin.variant(full)
         vu = None if re.search(r'^vertex \S+ main0_l\(', full, re.M) else vv
         try:
-            whole = dmsh_side.vs_unit(full, pv, vu); rest = dmsh_side.vs_unit(full, None, vu) if vu else None   # rest: for a target without the pulling library
-            for t, d in targets:
-                src, pn, vn = whole if t == 'mac' or IOS_PULL else rest or (None, None, None)
-                if not src: MTL.compile(t, msl, os.path.join(d, key + '_b.metallib')); continue
-                names = ['_b'] + (['_bp'] if pn else []) + (['_bv'] if vn else []); groups = [set(n.values()) for n in (pn, vn) if n]
-                u = os.path.join(w, f'{key}_bu_{t}.metal'); open(u, 'w').write(src)
-                try: MTL.compile_split(t, u, [os.path.join(d, key + n + '.metallib') for n in names], lambda lib, groups=groups: dmsh_side.cut(lib, *groups))
-                finally: os.unlink(u)
-                cut_targets.add(t)
+            whole = dmsh_side.vs_unit(full, pv, vu)
+            src, pn, vn = whole
+            names = ['_b'] + (['_bp'] if pn else []) + (['_bv'] if vn else []); groups = [set(n.values()) for n in (pn, vn) if n]
+            u = os.path.join(w, f'{key}_bu_mac.metal'); open(u, 'w').write(src)
+            try: MTL.compile_split('mac', u, [os.path.join(out, key + n + '.metallib') for n in names], lambda lib, groups=groups: dmsh_side.cut(lib, *groups))
+            finally: os.unlink(u)
+            cut = True
         except (subprocess.CalledProcessError, ValueError) as e: why = str(e)[:120]
         else:
-            PULL_STATS['generated'] += 1; PULL_STATS['unit'] += bool(cut_targets)
+            PULL_STATS['generated'] += 1; PULL_STATS['unit'] += cut
             refl = {'stage': 'vs', 'pull': {k: v for k, v in {**pinfo, **whole[1]}.items() if v is not None}}
             if not vu: vin_finish(key, full, refl)   # none, or the layer shader's own compile
             else:
                 refl['vin'] = {'entry': 'main0', 'entry_z': 'main0_z', **whole[2], 'shadow': shadows}
                 VIN_STATS['generated'] += 1; VIN_STATS['inputs'] += len(shadows); VIN_STATS['float only'] += sum(1 for s in shadows if 'sint' not in s and 'uint' not in s)
-            return {k: refl[k] for k in ('pull', 'vin') if k in refl}, cut_targets
-    for t, d in targets: MTL.compile(t, msl, os.path.join(d, key + '_b.metallib'))
+            return {k: refl[k] for k in ('pull', 'vin') if k in refl}, cut
+    MTL.compile('mac', msl, os.path.join(out, key + '_b.metallib'))
     if why: PULL_STATS['unit failed'] += 1; print(f'[RED] {key}: its libraries do not build from one compile ({why}): each is compiled from its own source', flush=True)   # after the plain source built: a source that does not compile at all is the caller's failure, not the unit's
     refl = pull_finish(key, full, vin_finish(key, full, {'stage': 'vs'}))
-    return {k: refl[k] for k in ('pull', 'vin') if k in refl}, set()
+    return {k: refl[k] for k in ('pull', 'vin') if k in refl}, False
 
 def ps_libraries(key, msl, full, bindings):
     """A pixel shader's libraries, cut from one compile through the MSL-keyed Metal cache (dmsh_side.cut): <key>_b with its own entry points, <key>_bx with its alpha test and logic
@@ -361,12 +322,10 @@ def ps_libraries(key, msl, full, bindings):
     What does not build is left out, and only that: a unit whose readable-tile version does not build is compiled again without it, one that does not build at all gives <key>_b from the
     plain source, each with a red line. A library a shader does not get is removed (a stale one of an earlier build), and the host draws without it. → what the reflection says of them.
     Raises CalledProcessError when the plain source does not compile"""
-    targets = [(t, d) for t, d in (('mac', out), ('ios', IOSOUT)) if d and t in TARGETS]
     def drop(*suffixes):
-        for _, d in targets:
-            for s in suffixes:
-                try: os.unlink(os.path.join(d, key + s + '.metallib'))
-                except FileNotFoundError: pass
+        for s in suffixes:
+            try: os.unlink(os.path.join(out, key + s + '.metallib'))
+            except FileNotFoundError: pass
     src, info = dmsh_side.unit(full)
     typed = {'main0_u'} if re.search(r'\bfragment\s+main0_out_u\s+main0_u\s*\(', full) else set()
     side = (set(info['alpha'] + info['logic']) if src else set()) | typed
@@ -376,7 +335,7 @@ def ps_libraries(key, msl, full, bindings):
         groups = ([side] if side else []) + ([{'main0_f'}] if fetch else [])
         u = os.path.join(w, key + '_bu.metal'); open(u, 'w').write(unit)
         try:
-            for t, d in targets: MTL.compile_split(t, u, [os.path.join(d, key + n + '.metallib') for n in names], lambda lib, groups=groups: dmsh_side.cut(lib, *groups))
+            MTL.compile_split('mac', u, [os.path.join(out, key + n + '.metallib') for n in names], lambda lib, groups=groups: dmsh_side.cut(lib, *groups))
         except (subprocess.CalledProcessError, ValueError) as e:
             if fetch: BF_STATS['failed'] += 1; print(f'[RED] {key}: the readable-tile version does not build ({str(e)[:120]}): its draws go without the tile read', flush=True)
             else: SIDE_STATS['failed'] += 1; print(f'[RED] {key}: the side library (alpha test, logic operation, typed outputs) does not build ({str(e)[:120]}): its draws go without the alpha test and logic operation, its typed outputs come from <key>_b', flush=True)
@@ -389,7 +348,7 @@ def ps_libraries(key, msl, full, bindings):
         return {**{f: {'entries': info[f]} for f in ('alpha', 'logic') if src and side and info[f]}, **({'fetch': fetch} if fetch else {}), **({'entry_u_side': True} if typed else {})}
     SIDE_STATS['not generated'] += not src
     drop('_bx', '_bf')
-    for t, d in targets: MTL.compile(t, msl, os.path.join(d, key + '_b.metallib'))
+    MTL.compile('mac', msl, os.path.join(out, key + '_b.metallib'))
     return {}
 
 pc_of, loc, RT_KEYS = {}, {}, set()
@@ -573,7 +532,7 @@ RULES = []   # MSL rewrite rules attached by shader name (function, applicabilit
 # dmsh_side.py is in it: dmsh_entry's fs_uint and fs_dual write main0's shared body (shared_body).
 # dmsh_fetch.py is not, but for screen_varyings (raster_facts), nor are the other side libraries' modules: they are made again from the restored MSL on every build (ps_libraries;
 # test_dmsh_code_fp.py checks this list).
-CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_chain.code_form(open(m.__file__, 'r').read()) for m in (dmsh_chain, dmsh_geometry, dmsh_tess, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_reflect, dmsh_entry, dmsh_ampere, dmsh_side, dmsh_rt, dmsh_rt_build, dmsh_rt_compile, abi) + ((ios_metal,) if IOSOUT else ()))
+CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_chain.code_form(open(m.__file__, 'r').read()) for m in (dmsh_chain, dmsh_geometry, dmsh_tess, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_reflect, dmsh_entry, dmsh_ampere, dmsh_side, dmsh_rt, dmsh_rt_build, dmsh_rt_compile, abi))
                          + b'\0' + inspect.getsource(dmsh_fetch.screen_varyings).encode()
                          + b'\0abi\0' + repr(sorted(abi.VALUES.items())).encode()).hexdigest()
 TOOL_FP = tool_fingerprint().encode()
@@ -601,7 +560,7 @@ def partner_inputs(key):
     """The user(locnN) locations the pixel shaders paired with a vertex shader read (vs_pad); pairs whose pixel MSL cannot be read are skipped."""
     want = set()
     for ps in PAIRS.get(key, ()):
-        data = output('mac', ps + '_b.metal')   # finished before this shader (fin's phases), so staged in the cache by now
+        data = output(ps + '_b.metal')   # finished before this shader (fin's phases), so staged in the cache by now
         if data is not None: want |= {int(x) for x in re.findall(r'\[\[user\(locn(\d+)\)', data.decode())}
     return want
 
@@ -615,7 +574,7 @@ def partner_reads(key):
         if ps in loc:
             rec = rec_of(ps)[1]; ci = rec.find(bytes.fromhex('34127698'), 0x38); code = rec[0x38:ci]
             got = dmsh_meshstage.pixel_reads(code[:0x80] if dmsh_ampere.is_nvn2(rec[ci:]) else code[0x30:0x80])   # an Ampere SPH leads the code, a Maxwell one follows its 0x30 header
-        data = output('mac', ps + '_b.metal')
+        data = output(ps + '_b.metal')
         for n in ({int(x) for x in re.findall(r'\[\[user\(locn(\d+)\)', data.decode())} if data is not None else set()) - got.keys(): got[n] = 0xf
         for n, m in got.items(): reads[n] |= m
     return dict(reads)
@@ -757,11 +716,8 @@ def geometry_finish(key, w, j, c1):
                 'bindings': dmsh_reflect.reflect(key, 'gs', src, res), 'vertex_inputs': [], 'raster': {}}
         def save(suffix, text, meta):
             path = os.path.join(out, key + suffix + '.metal'); open(path, 'w').write(text)
-            if 'mac' in TARGETS: MTL.compile('mac', path, os.path.join(out, key + suffix + '.metallib'))
+            MTL.compile('mac', path, os.path.join(out, key + suffix + '.metallib'))
             atomic_json(os.path.join(out, key + suffix + '.json'), MTL.with_compiler('mac', meta))
-            if IOSOUT:
-                MTL.compile('ios', path, os.path.join(IOSOUT, key + suffix + '.metallib'))
-                atomic_json(os.path.join(IOSOUT, key + suffix + '.json'), MTL.with_compiler('ios', meta))
         save('_bg' + str(t), src, refl)
         # Passthrough input without adjacency: a lean kernel the host can pair with the game's own vertex shader (dmsh_geometry.lean)
         if dmsh_geometry.passthrough(code) and t in (0, 1, 3):
@@ -901,18 +857,17 @@ def finish(key, w, j, c1):
     try: binds = dmsh_reflect.reflect(key, mesh['kind'] if mesh else j['stage'], src, res)   # before the compile: a pixel shader's readable-tile version needs its texture slots (ps_libraries)
     except ValueError as e: return 'reflection failed', str(e)[:160], None
     lost = []
-    def compile_targets():   # the selected targets from the same MSL (MSL identical to one compiled before takes that library, dmsh_mtlcache.py)
-        if j['stage'] == 'ps': return ps_libraries(key, msl, open(msl).read(), binds), set()
+    def compile_libraries():   # MSL identical to one compiled before takes that library (dmsh_mtlcache.py)
+        if j['stage'] == 'ps': return ps_libraries(key, msl, open(msl).read(), binds), False
         if j['stage'] == 'vs': return vs_libraries(key, msl, open(msl).read())
-        if 'mac' in TARGETS: MTL.compile('mac', msl, lib)
-        if 'ios' in TARGETS and IOSOUT: MTL.compile('ios', msl, os.path.join(IOSOUT, key + '_b.metallib'))
-        return {}, set()
-    try: side, cut_targets = compile_targets()
+        MTL.compile('mac', msl, lib)
+        return {}, False
+    try: side, cut = compile_libraries()
     except subprocess.CalledProcessError as e:
         if not lay and not fu and not fd: return 'metal failed', str(e)[:160], None
         lost = [name for name, extra in (('layer', lay), ('integer output', fu), ('dual source', fd)) if extra]   # kept in the reflection, as a cache hit compiles nothing: every build reports it (shader_regressions.report_losses)
         open(msl, 'w').write(plain); lay = fu = fd = None   # the layer, typed-output and dual-source entry points are extras: a library that does not build with them is built without
-        try: side, cut_targets = compile_targets()
+        try: side, cut = compile_libraries()
         except subprocess.CalledProcessError as e: return 'metal failed', str(e)[:160], None
     clone(msl, os.path.join(out, key + '_b.metal'))
     entry = re.search(r'(vertex|fragment|kernel)\s+\S+\s+(\w+)\s*\(', src)
@@ -934,7 +889,7 @@ def finish(key, w, j, c1):
             'vertex_inputs': [{'location': int(m.group(3)), 'msl_type': m.group(1)} for m in dmsh_reflect.attributes(src)],
             'raster': {**dmsh_reflect.raster_facts(j['stage'], src), **({'omap': ps_omap(open(j['code'], 'rb').read())} if j['stage'] == 'ps' else {})}, 'vs_pad': pad, **({'tess': tess} if tess else {})}
     refl.update(side)   # the alpha test and logic operation entry points and the readable-tile version (ps_libraries); the pulling and shadow-input libraries (vs_libraries)
-    write_refl(key, refl, cut_targets)
+    write_refl(key, refl, cut)
     return 'ok', '', refl
 
 keys = build_keys(want, loc, PAIRS)
@@ -952,17 +907,15 @@ BATCH = 4 * NJ   # shaders translated and finished together: the next batch is t
 OUT_KEY = re.compile(r'([0-9a-f]{16}|rt_library)_b')
 def owned_output(key): return key == dmsh_rt_compile.KEY or key in want   # the universal catalog is replaced whole, including when the last RT module left the map
 STAMP_BEFORE = shader_lib.read_stamp(out).get('inputs')
-OLD_IMAGE = {}
-for _label, _d in (('mac', out), ('ios', IOSOUT)):
-    if not _d: continue
-    if not want:
-        shutil.rmtree(_d, ignore_errors=True); shader_lib.remove_image(_d)
-    elif os.path.isfile(shader_lib.image_of(_d)): OLD_IMAGE[_label] = romfs.Path(shader_lib.image_of(_d))
-    os.makedirs(_d, exist_ok=True)
-    for _n in os.listdir(_d):   # a partial build over a folder (an older chain's, or one a stopped build left)
-        _m = OUT_KEY.match(_n)
-        if _m and owned_output(_m.group(1)): os.unlink(os.path.join(_d, _n))
-    if STAMP_BEFORE != INPUTS and os.path.exists(os.path.join(_d, dmsh_chain.STAMP)): os.unlink(os.path.join(_d, dmsh_chain.STAMP))
+OLD_IMAGE = None
+if not want:
+    shutil.rmtree(out, ignore_errors=True); shader_lib.remove_image(out)
+elif os.path.isfile(shader_lib.image_of(out)): OLD_IMAGE = romfs.Path(shader_lib.image_of(out))
+os.makedirs(out, exist_ok=True)
+for _n in os.listdir(out):   # a partial build over a folder (an older chain's, or one a stopped build left)
+    _m = OUT_KEY.match(_n)
+    if _m and owned_output(_m.group(1)): os.unlink(os.path.join(out, _n))
+if STAMP_BEFORE != INPUTS and os.path.exists(os.path.join(out, dmsh_chain.STAMP)): os.unlink(os.path.join(out, dmsh_chain.STAMP))
 STORE.delete_prefix(STAGE + '/')   # what a stopped build of this folder staged
 
 def sweep_work(root):
@@ -983,15 +936,14 @@ _work = os.environ.get('WORK') or tempfile.gettempdir()
 sweep_work(_work)
 w = tempfile.mkdtemp(prefix='dmsh_', dir=_work)
 with open(os.path.join(w, 'pid'), 'w') as _f: _f.write(str(os.getpid()))
-MTL = dmsh_mtlcache.Cache(STORE, {'mac': ('macosx', MAC_RECORD, mac_compile), **({'ios': ('iphoneos', ios_metal.RECORD, ios_metal.compile)} if IOSOUT else {})}, w)
-# first take the libraries earlier chain versions left on disk: the b-*/ and b-*.img beside the output (iOS: the folder of the same name) and the roots DMSH_PREFILL lists
-for _spec in [cache_root + ('=' + os.path.dirname(IOSOUT) if IOSOUT else '')] + [x for x in os.environ.get('DMSH_PREFILL', '').split(os.pathsep) if x]:
-    _mac, _, _ios = _spec.partition('=')
-    for _b in sorted(os.listdir(_mac)) if os.path.isdir(_mac) else []:
-        if _b.startswith('b-') and os.path.realpath(shader_lib.folder_of(os.path.join(_mac, _b))) != os.path.realpath(out):
-            for _ln in MTL.fill(os.path.join(_mac, _b), os.path.join(_ios, _b) if _ios else None, targets=TARGETS): print(_ln, flush=True)
+MTL = dmsh_mtlcache.Cache(STORE, {'mac': ('macosx', MAC_RECORD, mac_compile)}, w)
+# first take the libraries earlier chain versions left on disk: the b-*/ and b-*.img beside the output and the roots DMSH_PREFILL lists
+for _root in [cache_root] + [x for x in os.environ.get('DMSH_PREFILL', '').split(os.pathsep) if x]:
+    for _b in sorted(os.listdir(_root)) if os.path.isdir(_root) else []:
+        if _b.startswith('b-') and os.path.realpath(shader_lib.folder_of(os.path.join(_root, _b))) != os.path.realpath(out):
+            for _ln in MTL.fill(os.path.join(_root, _b)): print(_ln, flush=True)
 
-# Progress for the NSP script (DMSH_PROGRESS: a small JSON file it reads, build_ipa_from_nsp.py ShaderWatch), written at most every half second
+# Progress for the NSP script (DMSH_PROGRESS: a small JSON file it reads, build_app.py ShaderWatch), written at most every half second
 PROGRESS = os.environ.get('DMSH_PROGRESS')
 _prog = {'t': 0.0, 'lock': threading.Lock()}
 def progress(step, done, total, force=False, **extra):
@@ -1065,12 +1017,12 @@ DONE = collections.Counter()
 def fin(key, wb):
     try:
         if key in cache_hits and restored(key, wb):
-            refl = json.loads(output_of('mac', key + '_b.json'))
-            src = output_of('mac', key + '_b.metal').decode() if refl['stage'] in ('ps', 'vs') else ''
+            refl = json.loads(output_of(key + '_b.json'))
+            src = output_of(key + '_b.metal').decode() if refl['stage'] in ('ps', 'vs') else ''
             if refl['stage'] == 'vs':
-                side, cut_targets = vs_libraries(key, os.path.join(out, key + '_b.metal'), src)
+                side, cut = vs_libraries(key, os.path.join(out, key + '_b.metal'), src)
                 refl.update(side)   # stored without the side-library reflection (publish_cache)
-                write_refl(key, refl, cut_targets)
+                write_refl(key, refl, cut)
             if refl['stage'] == 'ps': refl.update(ps_libraries(key, os.path.join(out, key + '_b.metal'), src, refl['bindings'])); write_refl(key, refl)   # stored without them (publish_cache)
             return key, 'ok', '', refl
         if key in xerr or not os.path.exists(os.path.join(wb, key + '.spv')): return key, 'translation failed', xerr.get(key, 'no spv'), None
@@ -1124,8 +1076,7 @@ def results(fs):   # → what fin returned for them, in their order (a worker's 
 SERVED = shader_cache.Served(STORE, PROCS) if PROCS and keys else None
 px = cf.ProcessPoolExecutor(PROCS, mp_context=multiprocessing.get_context('fork'), initializer=worker_start) if PROCS and keys else None
 if px:
-    if 'mac' in TARGETS: dmsh_pch.header(MAC_RUN + METAL_DEPTH)
-    if IOSOUT: dmsh_pch.header(ios_metal.METAL + ios_metal.DEPTH)
+    dmsh_pch.header(MAC_RUN + METAL_DEPTH)
     px.submit(int).result()   # forks every worker now, while this process has no other thread
     assert SERVED is not None; SERVED.start()
 # Two phases: paired vertex shaders read their pixel shaders' MSL (vs_pad), so they go last, in batches of their own, once every shader before them is finished. The next batch is
@@ -1157,13 +1108,13 @@ def rt_finish(plan):
     rule_fps[key] = 'universal-rt-v1'
     hit, _ = cache_lookup(key, digests[key], rule_fps[key], CODE_FP)
     if hit and restore_cache(key, digests[key]):
-        refl = json.loads(output_of('mac', key + '_b.json'))
+        refl = json.loads(output_of(key + '_b.json'))
     else:
         if hit:
             PRE_STATS['hit'] -= 1; PRE_STATS['miss'] += 1; PRE_STATS['pruned meanwhile'] += 1
         try:
-            refl = dmsh_rt_compile.build_library(plan, work=w, outputs={'mac': out, **({'ios': IOSOUT} if IOSOUT else {})},
-                targets=TARGETS, xlate=XLATE, cross=SPIRV_CROSS, chain=CHAIN,
+            refl = dmsh_rt_compile.build_library(plan, work=w, outputs={'mac': out},
+                targets={'mac'}, xlate=XLATE, cross=SPIRV_CROSS, chain=CHAIN,
                 debug=os.environ.get('XLATE_DEBUG', '1') != '0', reduced=os.environ.get('XLATE_REDUCED', '1') == '1',
                 compile_metal=MTL.compile, with_compiler=MTL.with_compiler)
         except (OSError, ValueError, subprocess.CalledProcessError) as e:
@@ -1190,17 +1141,16 @@ if RT_PLAN:
 MESH_STATS = collections.Counter()
 def mesh_finish(pair):
     vk, gk = pair
-    vs, gs, gj = (output('mac', n) for n in (vk + '_b.metal', gk + '_bl3.metal', gk + '_bl3.json'))   # staged by now
+    vs, gs, gj = (output(n) for n in (vk + '_b.metal', gk + '_bl3.metal', gk + '_bl3.json'))   # staged by now
     name = f'{vk}_{gk}_m3.metallib'
-    libs = [os.path.join(out, name)] + ([os.path.join(IOSOUT, name)] if IOSOUT else [])
+    lib = os.path.join(out, name)
     if vs is None or gs is None or gj is None: MESH_STATS['missing a library'] += 1; return
     try: msl = dmsh_mesh.compose(vs.decode(), gs.decode(), json.loads(gj)['geometry']['capture_reads'])
     except ValueError as e: MESH_STATS['not composed'] += 1; print(f'[RED] mesh {vk} {gk}: {e}', flush=True); return
     msl = dmsh_rewrite.raw_noinline(msl, 'ms')   # final mesh code: undo noinline inherited from the vertex/geometry libraries (see raw_noinline)
     path = os.path.join(w, f'{vk}_{gk}_m3.metal'); open(path, 'w').write(msl)
     try:
-        if 'mac' in TARGETS: MTL.compile('mac', path, libs[0])
-        if IOSOUT: MTL.compile('ios', path, libs[1])
+        MTL.compile('mac', path, lib)
         MESH_STATS['built'] += 1
     except subprocess.CalledProcessError as e: MESH_STATS['failed to compile'] += 1; print(f'[RED] mesh {vk} {gk}: does not compile ({str(e)[:120]})', flush=True)
     finally:
@@ -1246,15 +1196,13 @@ for e, n in tm.most_common(12): print(f'  translator {n:6d} in {sum(e in [nn[len
 shader_regressions.report_losses(ok)
 json.dump([{'key': r[0], 'st': r[1], 'err': r[2]} for r in res], open(os.path.join(out, '_b_build.json'), 'w'), ensure_ascii=False)
 if not want:   # a full build: the stamp, then the c1 guard and uniform read extent tables from these Mac outputs, into the profile folder (the host takes them only beside this stamp)
-    # The per-shader cache entries this build used (cas/shader/<digest>), which the NSP script keeps when it prunes the others (prune_shader_cache). Only beside the Mac outputs:
-    # every full build writes them, and the iOS folder goes whole into the IPA. Before the stamp, so a stamped folder always has its list
+    # The per-shader cache entries this build used (cas/shader/<digest>), which the NSP script keeps when it prunes the others (prune_shader_cache). Before the stamp, so a stamped folder always has its list
     with open(os.path.join(out, CAS_USED + '.tmp'), 'w') as _f: _f.write(''.join(d + '\n' for d in sorted(set(digests.values()))))
     os.replace(os.path.join(out, CAS_USED + '.tmp'), os.path.join(out, CAS_USED))
-    for _d in [out] + ([IOSOUT] if IOSOUT else []): dmsh_chain.write_stamp(_d, GAME.id, INPUTS)
+    dmsh_chain.write_stamp(out, GAME.id, INPUTS)
     print(f'library stamp: game {GAME.id}, inputs {INPUTS}', flush=True)
 # The libraries' images, from what this build staged (and for a partial build the images it builds on): the folders go, and what reads a library from here on reads the image
-for _label in ('mac', 'ios'):
-    if label_dir(_label): publish_library(_label)
+publish_library()
 if PROGRESS:
     try: os.unlink(PROGRESS)
     except FileNotFoundError: pass

@@ -12,7 +12,7 @@ A graphical app that packs games, keeps a library of them or starts them is a pr
 
 ## Building: the NSP script
 
-`scripts/build_ipa_from_nsp.py <NSP folder>` builds one game: an IPA by default, a Mac app with `--platform mac-app`, at the path `-o` names. Its options are in [The packing script in detail](development.md#the-packing-script-in-detail) and `--help`.
+`scripts/build_app.py <NSP folder>` builds one game: an IPA by default, a Mac app with `--platform mac-app`, at the path `-o` names. Its options are in [The packing script in detail](development.md#the-packing-script-in-detail) and `--help`.
 
 With `--progress json` it asks nothing and writes one JSON object per line on stdout. Every object has `ev` (the event) and `t` (Unix time, seconds):
 
@@ -135,7 +135,7 @@ nxnative has no releases or tags: a front end pins a commit and moves it forward
 | What changed | The command |
 |---|---|
 | This page, the settings list's schema, the settings a game can offer | `git log -p A..B -- docs/frontends.md docs/launcher.schema.json dm/games/settings.tsv` |
-| The NSP script's options | `git diff A..B -- scripts/build_ipa_from_nsp.py \| grep add_argument` |
+| The NSP script's options | `git diff A..B -- scripts/build_app.py \| grep add_argument` |
 | The environment switches, with each one's class (`switch`, `path`, `diagnostic`) | `git diff A..B -- docs/env_switches.tsv` |
 | The shader chain: each game's shaders are rebuilt at its next build, which the `shaders_stale` event reports | `git log --oneline A..B -- dm/gfx/nvn/dmsh_chain.h` |
 

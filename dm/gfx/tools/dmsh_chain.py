@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 # Translation chain version of the B shader library: one version for every game, which the host is compiled with (dm/gfx/nvn/dmsh_chain.h). The build result must be determined by source alone.
 # Chain version V = first 12 digits of the sha256 of the contents of the following in-repo files + the translation options: this script, dmsh_build.py, dmsh_fetch.py (readable-tile version), dmsh_vin.py (shadow vertex inputs), dmsh_pull.py and dmsh_pull.metal (pulling vertex inputs),
-# dmsh_geometry.py, dmsh_facts.py, dmsh_rewrite.py, dmsh_reflect.py and dmsh_entry.py (a shader's MSL rewrites, reflection and entry points), the library ABI dm/gfx/nvn/dmsh_abi.h with its reader dmsh_abi.py, the dmsh_xlate sources (Program.cs, csproj), the iOS compile convention ios_metal.py, the Mac host's minimum macOS dm/mac/min_os.mk (MAC_MIN), and the tool lock dmsh_chain.lock (measured fingerprints of the native translator, which holds the Ryujinx shader library / spirv-cross / metal compiler).
+# dmsh_geometry.py, dmsh_facts.py, dmsh_rewrite.py, dmsh_reflect.py and dmsh_entry.py (a shader's MSL rewrites, reflection and entry points), the library ABI dm/gfx/nvn/dmsh_abi.h with its reader dmsh_abi.py, the dmsh_xlate sources (Program.cs, csproj), the Mac host's minimum macOS dm/mac/min_os.mk (MAC_MIN), and the tool lock dmsh_chain.lock (measured fingerprints of the native translator, which holds the Ryujinx shader library / spirv-cross / metal compiler).
 # A game's own inputs are not part of V: its profile's shader tables and nvn_* / shader_* keys are in each shader's cache key (dmsh_build.py shader_key), so a change rebuilds the shaders it affects,
 # and their digest (inputs below) stamps the library: <cache dir>/b-<V>/inputs.tsv says which game and which inputs it was built from. c1_full.tsv / cb_extent.tsv name V and that digest in their
-# header (dm/tools/shader_lib.py table_head), and the host takes them only when both match its library; build_ipa.sh packs a library only when its digest is the profile's.
+# header (dm/tools/shader_lib.py table_head), and the host takes them only when both match its library.
 # The build (dmsh_build.py) writes into <cache dir>/b-<V>/ and the reflection json records chain = V; at compile time the host takes V from dm/gfx/nvn/dmsh_chain.h, loads only from b-<V>/ and verifies each json.
 # Usage: dmsh_chain.py                 print V (default options)
 #       dmsh_chain.py --header        rewrite dm/gfx/nvn/dmsh_chain.h (run after changing any file listed above, and commit it with the change)
-#       dmsh_chain.py --inputs        print the digest of the current game profile's inputs (DM_GAME), as b-<V>/inputs.tsv records it
+#       dmsh_chain.py --inputs        print the digest of the game profile's inputs, as b-<V>/inputs.tsv records it
 #       (checking the tools against dmsh_chain.lock, and rewriting it, is tool_lock.py's: the checks decide no output, so they are outside V and the shaders' cache keys)
 # Environment: XLATE_DEBUG / XLATE_REDUCED (same meaning as in dmsh_build.py, default 1 / 1), DMSH_SCONST (dmsh_wide.constant_reads, default fp; non-default options yield a different V, which the host will not load)
 from typing import Any
 import os, sys, ast, hashlib
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HERE = os.path.dirname(os.path.abspath(__file__)); GFX = os.path.dirname(HERE); HOME = os.path.expanduser('~')
-FILES = ['tools/dmsh_chain.py', 'tools/dmsh_build.py', 'tools/dmsh_atomic.py', 'tools/dmsh_wide.py', 'tools/dmsh_fetch.py', 'tools/dmsh_vin.py', 'tools/dmsh_pull.py', 'tools/dmsh_pull.metal', 'tools/dmsh_alpha.py', 'tools/dmsh_logic.py', 'tools/dmsh_side.py', 'tools/dmsh_rewrite.py', 'tools/dmsh_reflect.py', 'tools/dmsh_entry.py', 'tools/dmsh_geometry.py', 'tools/dmsh_tess.py', 'tools/dmsh_mesh.py', 'tools/dmsh_meshstage.py', 'tools/dmsh_facts.py', 'tools/dmsh_ampere.py', 'nvn/dmsh_abi.h', 'tools/dmsh_abi.py', 'tools/dmsh_xlate/Program.cs', 'tools/dmsh_xlate/dmsh_xlate.csproj', '../ios/tools/ios_metal.py', 'tools/dmsh_chain.lock']
+FILES = ['tools/dmsh_chain.py', 'tools/dmsh_build.py', 'tools/dmsh_atomic.py', 'tools/dmsh_wide.py', 'tools/dmsh_fetch.py', 'tools/dmsh_vin.py', 'tools/dmsh_pull.py', 'tools/dmsh_pull.metal', 'tools/dmsh_alpha.py', 'tools/dmsh_logic.py', 'tools/dmsh_side.py', 'tools/dmsh_rewrite.py', 'tools/dmsh_reflect.py', 'tools/dmsh_entry.py', 'tools/dmsh_geometry.py', 'tools/dmsh_tess.py', 'tools/dmsh_mesh.py', 'tools/dmsh_meshstage.py', 'tools/dmsh_facts.py', 'tools/dmsh_ampere.py', 'nvn/dmsh_abi.h', 'tools/dmsh_abi.py', 'tools/dmsh_xlate/Program.cs', 'tools/dmsh_xlate/dmsh_xlate.csproj', 'tools/dmsh_chain.lock']
 # This target-specific lowering lives in the vendored translator. Include its
 # sources as well as the rebuilt translator's fingerprint; no old shader cache can bypass it.
 FILES += ['../third_party/ryujinx/src/Ryujinx.Graphics.Shader/' + f for f in (
@@ -39,11 +39,11 @@ FILES += ['../mac/min_os.mk']   # MAC_MIN below
 # The Mac libraries are compiled for the Mac host's minimum macOS (dm/mac/min_os.mk), as the host's own Metal libraries are (dm/host/Makefile MSL_MIN_macosx). The deployment target
 # sets the Metal language version: with none the compiler takes the build Mac's system, so one source compiled on macOS 27 and failed on macOS 26 (a reference parameter with no address
 # space, which the newer language accepts: GitHub issue #2272), and a library made on the newer system names a language version the older one does not load. The NVN chain
-# (MAC_METAL below), vk_shaders.py and gl_shaders.py pass this flag on every Mac compile; the iPhone's is ios_metal.py's
-# Read when asked (MAC_MIN, MAC_MIN_FLAG, MAC_METAL below), not at import: an import needs only the inventory (FILES), which pr_areas.py and the tests read without min_os.mk
+# (MAC_METAL below) passes this flag on every compile
+# Read when asked (MAC_MIN, MAC_MIN_FLAG, MAC_METAL below), not at import: an import needs only the inventory (FILES), which the tests read without min_os.mk
 def mac_min():
     with open(os.path.join(GFX, '../mac/min_os.mk')) as f: return f.read().split('MACOS_MIN := ')[1].split()[0]
-# The Mac compile of a game's shaders (dmsh_build.py; the iPhone's is ios_metal.py METAL). It is here, not in dmsh_build.py, which runs a build when imported, so tests compile with it
+# The Metal compile of the game's shaders (dmsh_build.py). It is here, not in dmsh_build.py, which runs a build when imported, so tests compile with it
 # -fpreserve-invariance: vertex positions are marked [[invariant]], but without this flag Metal does not promise that two different shaders compute the same expression to the same value; on Maxwell the same multiply-adds always agree.
 # Super Mario Odyssey draws a depth pre-pass with alRenderDepthOnly, then the G-buffer with another vertex shader and depth test less-or-equal: a hair off and the test failed, leaving those pixels with old content (Cap Kingdom's ground in 32x32 blocks)
 # -O1: the front end's -O2 (CorrelatedValuePropagation, then SimplifyCFG) folds the translated shaders' repeated tests of one value into switches whose cases jump past their own join.
@@ -60,7 +60,7 @@ def __getattr__(name) -> Any:   # MAC_MIN, MAC_MIN_FLAG and MAC_METAL as the mod
     if name == 'MAC_MIN_FLAG': return f'-mmacosx-version-min={mac_min()}'
     if name == 'MAC_METAL': return mac_metal()
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
-# The MSL that spirv-cross writes for every shader of the chain (dmsh_build.py XC; tests convert with MSL_VERSION too). 3.2 is what both deployment targets compile (macOS 26.6, iOS 18) and the
+# The MSL that spirv-cross writes for every shader of the chain (dmsh_build.py XC; tests convert with MSL_VERSION too). 3.2 is what the deployment target compiles (macOS 26.6) and the
 # first version in which spirv-cross writes a memory barrier as the fence it is: OpMemoryBarrier (MEMBAR.CTA, .GL / .SYS) becomes atomic_thread_fence at threadgroup or device scope, with no
 # execution barrier, and OpControlBarrier (BAR.SYNC) is always written. Below 3.2 it wrote both MEMBARs as one threadgroup_barrier, an execution barrier, and left out a BAR.SYNC that
 # directly followed one (spirv_msl.cpp, OpControlBarrier): a fence made of that line ordered memory and no longer waited for the group (GitHub issue #2786). 3.1's texture atomics follow

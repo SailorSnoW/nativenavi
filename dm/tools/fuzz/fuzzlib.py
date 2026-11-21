@@ -105,11 +105,7 @@ class InputFile:
 
 
 def import_shader_split():
-    """shader_split loads a game profile at import: any profile does (its readers do not depend on it); DM_GAME is put back after, as other tests expect no default game"""
-    had = os.environ.get('DM_GAME'); os.environ['DM_GAME'] = had or '0400486024DEC000'
-    try: return importlib.import_module('shader_split')
-    finally:
-        if had is None: del os.environ['DM_GAME']
+    return importlib.import_module('shader_split')   # it loads the game profile at import (game.DEFAULT, or DM_GAME's)
 
 
 class Broken(AssertionError):

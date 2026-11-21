@@ -105,15 +105,5 @@ int main(int ac, char **av) { @autoreleasepool {
             self.assertEqual(out.stdout.split('\n')[:2], [want, want], out.stdout + out.stderr)
 
 
-    @unittest.skipUnless(shutil.which('xcrun') and sys.platform == 'darwin', 'needs Metal')
-    def test_compiles_for_iphone(self):   # atomic_float at the iPhone libraries' deployment target and flags (ios_metal.METAL)
-        sys.path.insert(0, str(TOOLS.parents[1] / 'ios/tools')); import ios_metal
-        with tempfile.TemporaryDirectory() as w:
-            body = loop('b', 0, 'v', 10) + '    if (_10) { b._m0[0] = 0u; }\n'
-            src = Path(w) / 'n.metal'; src.write_text(KERNEL % float_add_msl(body))
-            r = subprocess.run([*ios_metal.METAL, str(src), '-o', str(Path(w) / 'n.air')], capture_output=True, text=True)
-            if 'SDK "iphoneos" cannot be located' in r.stderr: self.skipTest('no iPhone SDK')
-            self.assertEqual(r.returncode, 0, r.stderr)
-
 if __name__ == '__main__':
     unittest.main()

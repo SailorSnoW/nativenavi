@@ -26,7 +26,7 @@ class ShadowInputs(unittest.TestCase):
     def compiles(self, msl):
         with tempfile.TemporaryDirectory(prefix='dmsh_vin_test_') as d:
             p = Path(d) / 'v.metal'; p.write_text(msl)
-            for sdk in ('macosx', 'iphoneos'):
+            for sdk in ('macosx',):
                 r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', str(p), '-o', str(Path(d) / f'v.{sdk}.air')], capture_output=True, text=True)
                 self.assertEqual(r.returncode, 0, f'{sdk}: {r.stderr[:400]}')
 

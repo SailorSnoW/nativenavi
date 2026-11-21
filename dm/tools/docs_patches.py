@@ -14,7 +14,7 @@ import game   # noqa: E402
 
 OUT = REPO / 'docs' / 'agents' / 'game-patches.md'
 SDK = REPO / 'dm/tools/sdk_patches.py'
-HOST = ['dm/host', 'dm/gfx', 'dm/ios']   # tracked files only: dm/host/gen and other build output are git-ignored
+HOST = ['dm/host', 'dm/gfx', 'dm/mac']   # tracked files only: dm/host/gen and other build output are git-ignored
 HOST_EXT = ('.c', '.m', '.mm', '.h', '.inc', '.swift')
 # What a build-keyed host table does (the table's name in the source; a row of another table is listed under its own name)
 TABLES = {'k_locks': 'engine frame limit set to fps_target', 'k_ue': "Unreal's allocator on a host malloc zone", 'k_nier_dr': 'frame interval and dynamic-resolution floor'}

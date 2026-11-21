@@ -3,8 +3,7 @@ addresses with the extended (.E) high word.
 
   DMSH_TEST_XLATE=/absolute/path/to/dmsh_xlate python3 -m unittest -v dm/tools/tests/test_global_memory.py
 
-Requires spirv-val on PATH (spirv-cross is the in-repo build). DMSH_TEST_METAL=1 also compiles each shader with the builds' own Metal compiles (DMSH_TEST_METAL_SDKS:
-macosx, iphoneos or both; default macosx), and DMSH_TEST_GPU=1 with it runs each one on the Mac's GPU (dm/gfx/tests/t_global_memory.m) and checks all 1,024 words of
+Requires spirv-val on PATH (spirv-cross is the in-repo build). DMSH_TEST_METAL=1 also compiles each shader with the build's own Metal compile, and DMSH_TEST_GPU=1 with it runs each one on the Mac's GPU (dm/gfx/tests/t_global_memory.m) and checks all 1,024 words of
 its buffer against the reference model below.
 
 Every shader reaches one 4 KB buffer at a 40-bit guest address, which c0 holds as a descriptor (the address at c0 0x140 / 0x144, the size at 0x148). Two routes:
@@ -26,8 +25,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 RYU = ROOT / 'dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader'
-sys.path[:0] = [str(ROOT / 'dm/gfx/tools'), str(ROOT / 'dm/ios/tools')]
-import dmsh_chain, ios_metal   # noqa: E402  (the builds' Metal compiles)
+sys.path.insert(0, str(ROOT / 'dm/gfx/tools'))
+import dmsh_chain   # noqa: E402  (the build's Metal compile)
 SPIRV_CROSS = ROOT / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'
 XC = dmsh_chain.CROSS_MSL
 OP_ATOMIC_COMPARE_EXCHANGE = 230
@@ -170,12 +169,11 @@ class GlobalMemory(unittest.TestCase):
     def metal(self, work, name, msl, sbufs, c0, want, extra):
         if os.environ.get('DMSH_TEST_METAL') != '1':
             return
-        for sdk in os.environ.get('DMSH_TEST_METAL_SDKS', 'macosx').split(','):
-            self.assertIn(sdk, ('macosx', 'iphoneos'))
+        for sdk in ('macosx',):
             air, lib = work / f'{name}.{sdk}.air', work / f'{name}.{sdk}.metallib'
-            subprocess.run([*(dmsh_chain.MAC_METAL if sdk == 'macosx' else ios_metal.METAL), str(msl), '-o', str(air)], check=True)
+            subprocess.run([*dmsh_chain.MAC_METAL, str(msl), '-o', str(air)], check=True)
             subprocess.run(['xcrun', '-sdk', sdk, 'metallib', str(air), '-o', str(lib)], check=True)
-            if sdk != 'macosx' or os.environ.get('DMSH_TEST_GPU') != '1':
+            if os.environ.get('DMSH_TEST_GPU') != '1':
                 continue
             exe = work / 't_global_memory'
             if not exe.exists():

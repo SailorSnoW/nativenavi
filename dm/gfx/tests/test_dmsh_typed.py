@@ -6,8 +6,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import dmsh_entry, dmsh_side, dmsh_reflect, pso_offline   # noqa: E402
 from test_dmsh_alpha import compile_lib   # noqa: E402
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'ios/tools'))
-import ios_metal   # noqa: E402
 
 # Colours 0 to 2 written from bits that are a normal float, so a float target keeps them too (no NaN to canonicalize, no denormal to flush): 0.25, -0.5, 1.0, 3.0 and -3.0. Colour 3 holds
 # bits no float target would keep, as the BC block encoders write (agl's BC4 encoder in Breath of the Wild and Tears of the Kingdom): a NaN with a payload, all ones, the smallest denormal
@@ -59,8 +57,8 @@ class Typed(unittest.TestCase):
         self.assertEqual((r['float_colors'], r['uint_colors'], r['sint_colors']), (9, 2, 4))
 
     @unittest.skipUnless(shutil.which('xcrun'), 'requires Metal compilers')
-    def test_base_keeps_main0_alone_on_both_platforms(self):   # the base every shader loads, and the pipeline archive compiles, has no function constant (pso_offline.py)
-        for sdk in ('macosx', 'iphoneos'):
+    def test_base_keeps_main0_alone(self):   # the base every shader loads, and the pipeline archive compiles, has no function constant (pso_offline.py)
+        for sdk in ('macosx',):
             with self.subTest(sdk=sdk), tempfile.TemporaryDirectory() as t:
                 base, bx, side = libraries(MAIN, sdk)
                 (pathlib.Path(t) / 'b.metallib').write_bytes(base); (pathlib.Path(t) / 'bx.metallib').write_bytes(bx)

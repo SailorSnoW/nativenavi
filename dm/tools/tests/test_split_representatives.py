@@ -123,23 +123,6 @@ class Representatives(unittest.TestCase):
             ss.skey(*c): ('vs_main.bin', 2, 'vertex', 'main@v327680#BNSH@0x80#var2', *c),
         })
 
-    def test_ue_duplicates_keep_first_archive_entry_and_record_order(self):
-        ctl, _ = nvn2_stage(0)
-        a = ctl, struct.pack('<I', 0x461) + bytes(28)
-        b = ctl, a[1][:-1] + b'\x01'
-        ue = self.root / 'ue_shaders'
-        ue.mkdir()
-        # Create B before A: directory creation order must not pick the source.
-        (ue / 'ShaderArchive-B.ushaderbytecode').write_bytes(archive([a, b]))
-        (ue / 'ShaderArchive-A.ushaderbytecode').write_bytes(archive([b, a, a, b]))
-        rows, before = self.split()
-        prefix = '/ue_shaders/ShaderArchive-A.ushaderbytecode#UE'
-        self.assert_records(rows, {
-            ss.skey(*b): ('vs_other.bin', 0, 'vertex', prefix + '0', *b),
-            ss.skey(*a): ('vs_other.bin', 1, 'vertex', prefix + '1', *a),
-        })
-        self.assertEqual(self.split(workers=2)[1], before)
-
 
 if __name__ == '__main__':
     unittest.main()

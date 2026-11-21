@@ -82,7 +82,7 @@ class FeedbackTests(unittest.TestCase):
             for geometry in (False, True):
                 source = root / ('geometry.metal' if geometry else 'vertex.metal')
                 source.write_text(fixture(geometry))
-                for sdk in ('macosx', 'iphoneos'):
+                for sdk in ('macosx',):
                     with self.subTest(geometry=geometry, sdk=sdk):
                         result = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fmodules-cache-path=' + str(root / sdk), str(source), '-o', str(root / (sdk + '.air'))], capture_output=True, text=True)
                         self.assertEqual(result.returncode, 0, result.stderr)

@@ -1,6 +1,6 @@
 """A game uniform word tested against constants (dmsh_rewrite.py uniform_tests): each test of a word tested more than once reads it with a volatile load (dm_uword), so the Metal
 front end folds no chain of tests into a switch, which Apple's GPU compiler took hours and tens of gigabytes over (Nintendo Switch Sports Resort's pixel shader 692008b305ce264f in
-the offline pipeline archive). The shader below is the translator's form of a GLSL switch on one word; with dmsh_build.py's and ios_metal.py's compile commands its plain form
+the offline pipeline archive). The shader below is the translator's form of a GLSL switch on one word; with dmsh_build.py's compile command its plain form
 becomes a switch in the front end's IR and its rewritten form none."""
 from pathlib import Path
 import shutil
@@ -12,10 +12,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 TOOLS = ROOT / 'dm/gfx/tools'
 sys.path.insert(0, str(TOOLS))
-sys.path.insert(0, str(ROOT / 'dm/ios/tools'))
 import dmsh_chain  # noqa: E402
 import dmsh_rewrite  # noqa: E402
-import ios_metal  # noqa: E402
 
 WORD = '(*spvDescriptorSet0.fp_c5)._m0[16]'
 
@@ -116,7 +114,7 @@ class UniformTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('xcrun'), 'needs Xcode and Metal')
     def test_no_switch_for_the_gpu_compiler(self):
-        for name, command in (('Mac', dmsh_chain.MAC_METAL), ('iPhone', ios_metal.METAL)):
+        for name, command in (('Mac', dmsh_chain.MAC_METAL),):
             with self.subTest(platform=name):
                 self.assertGreater(self.switches(command, SHADER), 0, 'the plain tests fold into a switch: the test no longer shows the problem')
                 self.assertEqual(self.switches(command, dmsh_rewrite.uniform_tests(SHADER)), 0)

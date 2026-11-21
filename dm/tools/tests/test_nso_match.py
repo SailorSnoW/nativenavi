@@ -444,7 +444,7 @@ class Patches(unittest.TestCase):
         import importlib.util as iu
         repo = TOOLS.parents[1]
         sys.path.insert(0, str(repo / 'dm/games'))
-        spec = iu.spec_from_file_location('build_ipa_from_nsp', repo / 'scripts/build_ipa_from_nsp.py'); assert spec and spec.loader
+        spec = iu.spec_from_file_location('build_app', repo / 'scripts/build_app.py'); assert spec and spec.loader
         nsp = iu.module_from_spec(spec); spec.loader.exec_module(nsp)
         reg = type('Reg', (), {'dir': Path('/repo/dm/games/0100000000000001')})()
         with tempfile.TemporaryDirectory() as tmp:

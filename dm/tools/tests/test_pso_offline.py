@@ -7,13 +7,10 @@ import importlib.util
 import io
 import json
 import os
-import re
-import types
 from pathlib import Path
 import shutil
 import struct
 import subprocess
-import sys
 import tempfile
 import unittest
 import tracemalloc
@@ -974,107 +971,6 @@ class Prewarm(BuildCase):
             self.assertEqual(po.main(['--game', '0100000000001000', '--msl', str(self.lib), '--out', str(self.out), '--work', str(self.work), '--os-min', '27.0',
                                       '--prewarm-host', str(self.t / 'nothing')]), 0)
         self.assertIn('[RED] pso_offline: prewarm: no host at', out.getvalue())
-
-
-class IpaFallback(unittest.TestCase):
-    """build_ipa.sh's own archive step with a pso_offline.py that fails: a [RED] line, no archive folder, and the build goes on (an optimization: the device builds the bases)"""
-
-    def step(self, python, host_game=None, make_exit=0, **extra):
-        lines = (REPO / 'dm/ios/tools/build_ipa.sh').read_text().splitlines()
-        i = next(n for n, ln in enumerate(lines) if ln.startswith('if [ "$GFXAPI" = nvn ] && [ -n "$GPUS" ]'))
-        j = next(n for n, ln in enumerate(lines) if n > i and ln.startswith('else [ "$GFXAPI" != nvn ]'))
-        with tempfile.TemporaryDirectory() as d:
-            (Path(d) / 'bin').mkdir(); stub = Path(d) / 'bin/python3'; stub.write_text('#!/bin/sh\n' + python); stub.chmod(0o755)
-            (Path(d) / 'shader_pairs.tsv').write_text('v\tf\n')
-            if host_game:
-                host = Path(d) / f'dm/host/gen/{host_game}/dmhost'; host.parent.mkdir(parents=True); host.write_text('#!/bin/sh\nexit 0\n'); host.chmod(0o755)
-                make = Path(d) / 'bin/make'; make.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$W/make.args"\nexit ' + str(make_exit) + '\n'); make.chmod(0o755)
-            env = dict({k: v for k, v in os.environ.items() if k != 'DM_PSO_HOST'}, PATH=f'{d}/bin:{os.environ["PATH"]}', W=d, GD=d, GAME='G', DM='dm', MSL_IOS='m', V='0', GPUS='g18p', GFXAPI='nvn', **extra)
-            if host_game: env['DM'] = str(Path(d) / 'dm')
-            script = 'die() { echo "FAIL: $*"; exit 1; }\nt() { echo "$*"; }\nDM_PSO_IOS_MIN=\n' + '\n'.join(lines[i:j]) + '\nfi\necho "PSO=[$PSO]"\n[ -d "$W/build/ios/pso/bundle" ] && echo folder\n[ ! -f "$W/make.args" ] || cat "$W/make.args"\necho went on\n'
-            return subprocess.run(['bash', '-c', 'set -u\n' + script], env=env, capture_output=True, text=True).stdout
-
-    def test_failed_archive_is_a_warning(self):
-        out = self.step('mkdir -p "$W/build/ios/pso/bundle"; echo half; exit 1\n')
-        self.assertIn('[RED] pipeline archive: pso_offline.py failed', out); self.assertIn('PSO=[]', out); self.assertNotIn('folder', out); self.assertIn('went on', out)
-        self.assertNotIn('FAIL', out)
-
-    def test_prewarm_host(self):   # DM_PSO_HOST names the Mac host the prewarm files are made with; none, or no host of this game in the tree: none, with a line saying how
-        out = self.step('echo "ARGS $*"; exit 0\n', DM_PSO_HOST='/x/dmhost')
-        self.assertIn('--prewarm-host /x/dmhost', out); self.assertNotIn('no Mac host', out)
-        for setting in ('none', None):
-            out = self.step('echo "ARGS $*"; exit 0\n', DM_PSO_HOST=setting) if setting else self.step('echo "ARGS $*"; exit 0\n')
-            self.assertNotIn('--prewarm-host', out); self.assertIn('prewarm pipelines: no Mac host of this game', out); self.assertNotIn('FAIL', out)
-
-    def test_made_archive_goes_into_the_app(self):
-        out = self.step('mkdir -p "$W/build/ios/pso/bundle"; exit 0\n')
-        self.assertNotIn('[RED]', out); self.assertIn('/build/ios/pso/bundle]', out); self.assertIn('folder', out)
-
-    def test_current_per_game_host_is_discovered_without_the_old_stamp(self):
-        out = self.step('echo "ARGS $*"; exit 0\n', host_game='G')
-        self.assertIn('/dm/host/gen/G/dmhost', out); self.assertIn('GAME=G gen/G/dmhost', out)
-        self.assertNotIn('no Mac host', out)
-        out = self.step('echo "ARGS $*"; exit 0\n', host_game='other')
-        self.assertNotIn('--prewarm-host', out); self.assertIn('no Mac host', out)
-        out = self.step('mkdir -p "$W/build/ios/pso/bundle"; exit 0\n', host_game='G', make_exit=1)
-        self.assertIn('prewarm pipelines: make', out); self.assertNotIn('--prewarm-host', out); self.assertIn('folder', out)
-
-
-class Default(unittest.TestCase):
-    """Which games get an archive without DM_PSO_GPUS: build_ipa.sh's own lines, run with game.py's default form, so only a profile with pso_mtl4 on (the Metal 4 path, which alone
-    reads the archive on iOS) gets one — g18p by default, the profile key pso_gpu's architectures when it names them (joined with commas) and g18p on a key the shell guard does not take —
-    and an explicit DM_PSO_GPUS wins, also when empty"""
-
-    def lines(self):
-        lines = (REPO / 'dm/ios/tools/build_ipa.sh').read_text().splitlines()
-        i = next(n for n, ln in enumerate(lines) if ln.startswith('PSO=; P4='))
-        return 'die() { echo "FAIL: $*"; exit 1; }\nt() { echo "$*" >&2; }\n' + '\n'.join(lines[i:i + 4])   # the P4 / pso_gpu reads, the key's shell guard and the GPUS chain
-
-    def gpus(self, profile, **env):
-        with tempfile.TemporaryDirectory() as d:
-            for k, v in profile.items(): Path(d, k).mkdir(); Path(d, k, 'game.tsv').write_text(v)
-            e = {k: v for k, v in os.environ.items() if k != 'DM_PSO_GPUS'}
-            e.update(env, DM=str(REPO / 'dm'), DM_GAMES_DIR=d, GD=d)
-            return {gid: (r.stdout, r.stderr) for gid, r in
-                    ((gid, subprocess.run(['bash', '-c', self.lines() + '\necho "$P4 $GPUS"'], env=dict(e, GAME=gid),
-                                          capture_output=True, text=True)) for gid in profile)}
-
-    def test_by_profile(self):
-        games = {'0100000000F0F000': 'title_id\t0100000000F0F000\npso_mtl4\ton\n',
-                 '0100000000F0F001': 'title_id\t0100000000F0F001\n',
-                 '0100000000F0F002': 'title_id\t0100000000F0F002\npso_mtl4\toff\n',
-                 '0100000000F0F003': 'title_id\t0100000000F0F003\npso_mtl4\ton\npso_gpu\tapplegpu_g19p\n',
-                 '0100000000F0F004': 'title_id\t0100000000F0F004\npso_mtl4\ton\npso_gpu\tg18p   g19p\n',
-                 '0100000000F0F005': 'title_id\t0100000000F0F005\npso_mtl4\ton\npso_gpu\tnone\n',                                   # none is no token of this key
-                 '0100000000F0F006': 'title_id\t0100000000F0F006\npso_mtl4\ton\npso_gpu\tg15s g16s g17p g18p g19p\n',               # 5 architectures: more than the key takes
-                 '0100000000F0F007': 'title_id\t0100000000F0F007\npso_mtl4\toff\npso_gpu\tg19p\n'}
-        r = self.gpus(games)
-        self.assertEqual({k: p[0].strip() for k, p in r.items()},
-                         {'0100000000F0F000': 'on g18p', '0100000000F0F001': 'off none', '0100000000F0F002': 'off none',
-                          '0100000000F0F003': 'on applegpu_g19p', '0100000000F0F004': 'on g18p,g19p', '0100000000F0F005': 'on g18p',
-                          '0100000000F0F006': 'on g18p', '0100000000F0F007': 'off none'})
-        self.assertEqual({k for k, p in r.items() if 'taking g18p' in p[1]}, {'0100000000F0F005', '0100000000F0F006'})   # a key the guard rejects keeps the default, and says so
-        self.assertEqual({k: p[0].strip() for k, p in self.gpus(games, DM_PSO_GPUS='g17p').items()},
-                         {k: v.split()[0] + ' g17p' for k, v in {k: p[0].strip() for k, p in r.items()}.items()})
-        self.assertEqual(self.gpus(games, DM_PSO_GPUS='none')['0100000000F0F000'][0].strip(), 'on none')
-        self.assertEqual(self.gpus(games, DM_PSO_GPUS='')['0100000000F0F000'][0].strip(), 'on')
-
-    def test_nsp_defaults_follow_the_same_profile_gate(self):
-        # Run the NSP script's actual choice block without extracting or building a game.
-        script = (REPO / 'scripts/build_ipa_from_nsp.py').read_text()
-        start = script.index("    gpus = (args.gpu or PSO_GPUS).strip()")
-        end = script.index("    ipa_env['DM_PSO_GPUS'] = gpus", start)
-        block = '\n'.join(line[4:] for line in script[start:end].splitlines())
-        block = script[script.index('def ios_gpus('):script.index('def ios_wants_pulling(')] + block   # the choice itself, which the shader step shares
-        for p4, pg, expected in [('on', '', 'g18p'), ('on', 'g18p   applegpu_g19p', 'g18p,applegpu_g19p'),
-                                 ('off', '', 'none'), ('off', 'g19p', 'none')]:
-            for explicit, setting in [('', ''), ('g17p', ''), ('none', ''), ('', 'g16p')]:
-                with self.subTest(pso_mtl4=p4, pso_gpu=pg, gpu=explicit, setting=setting):
-                    scope = {'args': types.SimpleNamespace(gpu=explicit), 'PSO_GPUS': setting,
-                             'g': types.SimpleNamespace(get={'pso_mtl4': p4, 'pso_gpu': pg}.get),
-                             're': re, 'BuildError': RuntimeError}
-                    exec(block, scope)
-                    self.assertEqual(scope['gpus'], explicit or setting or expected)
 
 
 if __name__ == '__main__':

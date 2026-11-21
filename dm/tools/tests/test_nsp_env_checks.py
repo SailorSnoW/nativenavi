@@ -1,6 +1,6 @@
-"""NSP script environment checks (scripts/build_ipa_from_nsp.py), all before the extraction: an iOS build without Xcode's iOS SDK, a shader translator that does not start
-with the .NET it is given, a missing glslangValidator, and a Python under Rosetta each stop the build at once instead of at a shader step minutes later.
-Every input (xcrun, xcode-select, sysctl, the translator, PATH) is mocked: no Xcode, .NET, glslang or Rosetta needed."""
+"""build_app.py's environment checks, all before the game is unpacked: a shader translator that does not start, a missing Python module, a Metal compiler that does
+not run, and a Python under Rosetta each stop the build at once instead of at a shader step minutes later.
+Every input (xcrun, sysctl, the translator, PATH) is mocked: no Xcode or Rosetta needed."""
 import importlib.util
 import os
 from pathlib import Path
@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
 assert spec and spec.loader
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
@@ -21,17 +21,16 @@ import dmsh_chain  # noqa: E402
 import tool_lock  # noqa: E402
 
 
-def fake_run(sdk_rc=0, devdir='/Applications/Xcode.app/Contents/Developer', xlate=(0, 'f21af1efa737a270\n', ''), translated='0', calls=None):
+def fake_run(metal_rc=0, xlate=(0, 'f21af1efa737a270\n', ''), translated='0', calls=None):
     def run(cmd, **kw):
         cmd = [str(c) for c in cmd]
         if calls is not None: calls.append(cmd)
-        if cmd[:2] == ['xcrun', '--sdk']: return subprocess.CompletedProcess(cmd, sdk_rc, '' if sdk_rc else '27.1\n', 'xcrun: error: SDK "iphoneos" cannot be located' if sdk_rc else '')
-        if cmd[0] == 'xcode-select': return subprocess.CompletedProcess(cmd, 0, devdir + '\n', '')
+        if cmd[0] == 'xcrun' and 'metal' in cmd: return subprocess.CompletedProcess(cmd, metal_rc, '', 'error: cannot execute tool \'metal\' due to missing Metal Toolchain' if metal_rc else '')
         if cmd[0] == 'sysctl': return subprocess.CompletedProcess(cmd, 0, translated + '\n', '')
         if cmd[-1] == '--source-sha':
             if isinstance(xlate, BaseException): raise xlate
             return subprocess.CompletedProcess(cmd, *xlate)
-        return subprocess.CompletedProcess(cmd, 0, '', '')   # xcrun metal --version
+        return subprocess.CompletedProcess(cmd, 0, '', '')
     return run
 
 
@@ -43,14 +42,14 @@ class ToolPath(unittest.TestCase):   # issue #1474: TOOL_PATHS are fallbacks, so
     def test_caller_tools_win_and_fallbacks_find_the_rest(self):
         with tempfile.TemporaryDirectory() as folder:
             caller, fallback = Path(folder) / 'Project Tools', Path(folder) / 'fallback'   # a space in the caller's folder
-            for directory, names in ((caller, ('zstd', 'make')), (fallback, ('zstd', 'make', 'xcodegen'))):
+            for directory, names in ((caller, ('zstd', 'make')), (fallback, ('zstd', 'make', 'spirv-cross'))):
                 directory.mkdir()
                 for name in names: tool = directory / name; tool.write_text('#!/bin/sh\n'); tool.chmod(0o755)
             with mock.patch.object(nsp, 'TOOL_PATHS', [str(fallback)]):
                 env = nsp.tool_env({'PATH': str(caller), 'HOME': '/h', 'DM_SAVE_SYNC': '/cloud', 'DM_SAVE_SYNC_CHOICE': 'cloud'})   # the build's host runs play on scratch saves: never the player's cloud (docs/reference/services.md)
             self.assertEqual(env, {'PATH': os.pathsep.join([str(caller), str(fallback)]), 'HOME': '/h', 'DM_SAVE_SYNC': '0'})
             for name in ('zstd', 'make'): self.assertEqual(shutil.which(name, path=env['PATH']), str(caller / name))
-            self.assertEqual(shutil.which('xcodegen', path=env['PATH']), str(fallback / 'xcodegen'))
+            self.assertEqual(shutil.which('spirv-cross', path=env['PATH']), str(fallback / 'spirv-cross'))
 
     def test_no_path_takes_the_system_path(self):   # unset or empty: an empty PATH entry would search the current folder
         for environ in ({}, {'PATH': ''}):
@@ -59,24 +58,26 @@ class ToolPath(unittest.TestCase):   # issue #1474: TOOL_PATHS are fallbacks, so
 
 
 class Prereqs(unittest.TestCase):
-    def check(self, mac=False, which=lambda *a, **k: '/x', capstone=5, **kw):
+    def check(self, which=lambda *a, **k: '/x', capstone=5, **kw):
         calls = []
         with tempfile.TemporaryDirectory() as d, mock.patch.object(nsp, '_importable', lambda m: True), mock.patch.object(nsp.shutil, 'which', which), \
                 mock.patch.object(nsp.subprocess, 'run', fake_run(calls=calls, **kw)), mock.patch.dict(sys.modules, capstone=fake_capstone(capstone)):
             xlate = Path(d) / 'dmsh_xlate'; xlate.write_text('')
-            try: nsp.check_prereqs({'PATH': '/usr/bin'}, xlate, mac)
+            try: nsp.check_prereqs({'PATH': '/usr/bin'}, xlate)
             finally: self.calls = calls
 
-    def test_ios_without_sdk_stops_before_the_metal_check(self):   # whose message would blame the Metal toolchain
-        with self.assertRaisesRegex(nsp.BuildError, r'iOS SDK is not installed.*Components.*downloadPlatform iOS'): self.check(sdk_rc=1)
-        self.assertFalse(any('metal' in c for c in self.calls))
-
-    def test_command_line_tools_selected(self):
-        with self.assertRaisesRegex(nsp.BuildError, r'Command Line Tools.*xcode-select -s /Applications/Xcode.app'): self.check(sdk_rc=1, devdir='/Library/Developer/CommandLineTools')
-
-    def test_mac_build_does_not_ask_for_the_ios_sdk(self):   # own_compilers.py lets a Mac-only shader build go on without the iOS compiler
-        self.check(mac=True, sdk_rc=1)
+    def test_only_the_mac_sdk_is_asked_for(self):
+        self.check()
+        self.assertTrue(any(c[:3] == ['xcrun', '-sdk', 'macosx'] and 'metal' in c for c in self.calls))
         self.assertFalse(any('iphoneos' in c for c in self.calls))
+
+    def test_metal_compiler_that_does_not_run_stops(self):   # Xcode installs the Metal toolchain separately
+        with self.assertRaisesRegex(nsp.BuildError, r'Metal compiler does not run \(.*missing Metal Toolchain\).*downloadComponent MetalToolchain'): self.check(metal_rc=1)
+
+    def test_missing_tools_are_named(self):
+        with self.assertRaisesRegex(nsp.BuildError, r'tools not found: make \(Xcode\)$'): self.check(which=lambda tool, **k: None if tool == 'make' else '/x')
+        for gone in ('xcodegen', 'glslangValidator', 'zstd'):   # what the removed paths ran: no longer asked for
+            with self.subTest(gone=gone): self.check(which=lambda tool, gone=gone, **k: None if tool == gone else '/x')
 
     def test_translator_runs_once_with_the_scripts_environment(self):
         run = mock.Mock(side_effect=fake_run())
@@ -94,12 +95,9 @@ class Prereqs(unittest.TestCase):
         for exc in (OSError('Exec format error'), subprocess.TimeoutExpired('dmsh_xlate', 60)):
             with self.subTest(exc=exc), self.assertRaisesRegex(nsp.BuildError, 'does not start'): self.check(xlate=exc)
 
-    def test_glslang_is_a_prerequisite(self):   # README installs it; an OpenGL game would otherwise stop only after its run-time capture
-        with self.assertRaisesRegex(nsp.BuildError, r'glslangValidator \(brew install glslang\)'): self.check(which=lambda t, **k: None if t == 'glslangValidator' else '/x')
-
     def test_zbic_is_a_prerequisite(self):   # README installs it; a game with ZBIC modules would otherwise stop only at the rewrite, after its whole RomFS is unpacked (Ocarina of Time: 23 minutes)
         with mock.patch.object(nsp, '_importable', lambda m: m != 'zbic'), self.assertRaisesRegex(nsp.BuildError, r'missing modules: zbic \(pip install .*zbic'):
-            nsp.check_prereqs({'PATH': '/usr/bin'}, Path('/nonexistent'), True)
+            nsp.check_prereqs({'PATH': '/usr/bin'}, Path('/nonexistent'))
 
     def test_capstone_5_passes(self):
         with mock.patch.dict(sys.modules, capstone=fake_capstone(5)): nsp.check_capstone()

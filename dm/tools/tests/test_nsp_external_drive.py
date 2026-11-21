@@ -1,37 +1,18 @@
-"""NSP script: a game folder on an exFAT / FAT external drive. macOS writes an AppleDouble `._<name>` beside every file there: scan_nsps must not read one as a game file, and rmtree
-must treat an entry that vanished between the listing and its unlink (the `._x` that goes with `x`) as removed. No game files or keys needed."""
+"""build_app.py: a NUP on an exFAT / FAT external drive. macOS writes an AppleDouble `._<name>` beside every file there: nup_file must not read one as the game's NUP, and rmtree
+must treat an entry that vanished between the listing and its unlink (the `._x` that goes with `x`) as removed. No game files needed."""
 import errno
 import importlib.util
 import os
 from pathlib import Path
-import re
 import shutil
-import struct
 import tempfile
 import unittest
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
-if spec is None or spec.loader is None: raise ImportError('scripts/build_ipa_from_nsp.py')
+spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
+if spec is None or spec.loader is None: raise ImportError('scripts/build_app.py')
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
-
-APP = 0x010020D01AD24000
-
-
-def pfs0(path, names):   # a PFS0 holding empty files with these names
-    strs = b''.join(n.encode() + b'\0' for n in names); ent, o = b'', 0
-    for n in names: ent += struct.pack('<QQII', 0, 0, o, 0); o += len(n) + 1
-    path.write_bytes(b'PFS0' + struct.pack('<III', len(names), len(strs), 0) + ent + strs)
-
-def meta(tid, ver=0):   # the name of a stand-in meta NCA that says what the package's content meta says: fake_contents reads it back
-    kind = 'Application' if tid & 0xFFF == 0 else 'Patch' if tid & 0xFFF == 0x800 else 'AddOnContent'
-    return f'{kind}-{tid:016x}-{ver}.cnmt.nca'
-
-
-def fake_contents(paths):   # stands in for package_reader's contents (nx_extract --contents): the content metas its stand-in meta NCAs name
-    return {p: [(k, int(t, 16), int(v)) for k, t, v in re.findall(r'(\w+)-([0-9a-f]{16})-(\d+)\.cnmt\.nca', p.read_bytes().decode('latin-1'))] for p in paths}
-
 
 
 class ExternalDrive(unittest.TestCase):
@@ -39,16 +20,26 @@ class ExternalDrive(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.tmp)
         cm = mock.patch.object(nsp, 'say', lambda m: None); cm.__enter__(); self.addCleanup(cm.__exit__, None, None, None)
 
-    def test_scan_skips_appledouble(self):
-        base = self.tmp / f'Game [{APP:016X}][v0].nsp'; pfs0(base, [meta(APP)])
-        upd = self.tmp / f'Update [{APP | 0x800:016X}].nsp'; pfs0(upd, [meta(APP | 0x800, 65536)])
-        for p in (base, upd): (self.tmp / ('._' + p.name)).write_bytes(b'\0\x05\x16\x07' + b'\0' * 4092)   # what macOS writes: 4 KB, no PFS0
-        for ext in ('xci', 'nsz', 'xcz'): (self.tmp / f'._Other [{APP | 0x800:016X}].{ext}').write_bytes(b'\0' * 4096)
-        app, fam = nsp.scan_nsps(self.tmp, fake_contents)   # with the `._` copies this raised (more than one game) or listed them as updates
-        self.assertEqual(app, APP)
-        self.assertEqual(fam['base'], base)
-        self.assertEqual([p for _, p in fam['updates']], [upd])
-        self.assertEqual(fam['dlc'], [])   # with the `._` copies the untagged update was counted more than once
+    def test_the_folder_s_nup_skips_appledouble(self):
+        nup = self.tmp / 'Game [0400486024dec000][v131072].nup'; nup.write_bytes(b'NUP\0' + bytes(60))
+        (self.tmp / ('._' + nup.name)).write_bytes(b'\0\x05\x16\x07' + b'\0' * 4092)   # what macOS writes: 4 KB, no NUP
+        self.assertEqual(nsp.nup_file(self.tmp), nup)   # with the `._` copy this would be a second .nup file
+        self.assertEqual(nsp.nup_file(nup), nup)   # the file itself may be given
+
+    def test_extension_in_any_letter_case(self):   # a download's `Game.NUP`: glob('*.nup') compares case-sensitively
+        nup = self.tmp / 'Game.NUP'; nup.write_bytes(b'NUP\0' + bytes(60))
+        self.assertEqual(nsp.nup_file(self.tmp), nup)
+
+    def test_no_nup_or_several_stop(self):
+        with self.assertRaises(nsp.BuildError) as e: nsp.nup_file(self.tmp)
+        self.assertIn('no NUP', str(e.exception))
+        other = self.tmp / 'notes.nup'; other.write_bytes(b'text')   # named like one, but not a NUP: does not count
+        with self.assertRaises(nsp.BuildError): nsp.nup_file(self.tmp)
+        with self.assertRaises(nsp.BuildError) as e: nsp.nup_file(other)
+        self.assertIn('not a NUP file', str(e.exception))
+        for n in ('a.nup', 'b.nup'): (self.tmp / n).write_bytes(b'NUP\0' + bytes(60))
+        with self.assertRaises(nsp.BuildError) as e: nsp.nup_file(self.tmp)
+        self.assertIn('more than one NUP', str(e.exception))
 
     def test_rmtree_tolerates_partner_vanishing(self):
         d = self.tmp / 'tree'; (d / 'sub').mkdir(parents=True)

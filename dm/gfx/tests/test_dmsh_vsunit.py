@@ -8,8 +8,6 @@ layer shader's shadow-input library, and each library compiled from its own sour
 import ast, collections, os, pathlib, shutil, subprocess, sys, tempfile, unittest, warnings
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
 import dmsh_side, dmsh_pull, dmsh_vin, dmsh_entry, dmsh_geometry, pso_offline
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'ios/tools'))
-import ios_metal   # noqa: E402  (the iPhone's deployment target and math mode)
 
 BODY = 'float4 acc = u;'   # a line the body has once
 CALL_GL = '    main0_out out = dm_vs_body(in, u);\n    ' + dmsh_side.VS_DEPTH + '\n    return out;\n}\n'
@@ -103,7 +101,7 @@ class Unit(unittest.TestCase):
         self.assertEqual(u.count('dm_vs_body(in, u, gl_InstanceIndex, gl_VertexIndex);'), 7)   # main0, main0_z, their pulling and shadow-input versions, and the out-of-line copy
         self.assertEqual(u.count('dm_vs_body_o(in, u, gl_InstanceIndex, gl_VertexIndex);'), 2)   # the two wide-line body functions
 
-    def test_a_target_without_the_pulling_library(self):   # DMSH_IOS_PULL=0: the iPhone's unit holds <key>_b and <key>_bv
+    def test_a_unit_without_the_pulling_library(self):   # vs_unit with no pulling variant: the unit holds <key>_b and <key>_bv
         full = source(['float4', 'uint4'])
         u, pn, vn = unit(full, pull=False)
         self.assertEqual((pn, vn), ({}, {'entry': 'main0_v', 'entry_z': 'main0_zv'}))
@@ -135,7 +133,7 @@ class Unit(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which('xcrun'), 'requires Metal compilers')
 class Libraries(unittest.TestCase):
-    FLAGS = (('macosx', ()), ('iphoneos', tuple(ios_metal.IOS_FLAGS)))
+    FLAGS = (('macosx', ()),)
 
     def compile(self, d, name, src, sdk, flags):   # → (the .air, the library), with the chain's flags that matter here
         msl = d / f'{name}.metal'; air = d / f'{name}.{sdk}.air'; lib = d / f'{name}.{sdk}.metallib'; msl.write_text(src)
@@ -213,82 +211,69 @@ class BuildStep(unittest.TestCase):
         self.code = compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('vs_libraries', 'pull_finish', 'vin_finish', 'write_refl')], type_ignores=[]), '<vertex libraries>', 'exec')
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = pathlib.Path(self.tmp.name)
-        for d in ('mac', 'ios', 'w'): (self.root / d).mkdir()
+        for d in ('mac', 'w'): (self.root / d).mkdir()
         quiet = warnings.catch_warnings(); quiet.__enter__(); self.addCleanup(quiet.__exit__, None, None, None)
         warnings.simplefilter('ignore', ResourceWarning)   # the build writes a source with open(...).write(...), which CPython closes at once
 
-    def run_step(self, full, ios=True, ios_pull=True, fail=()):   # → (what vs_libraries returns or the error it raises, the Metal cache's calls, the lines printed, the namespace)
+    def run_step(self, full, fail=()):   # → (what vs_libraries returns or the error it raises, the Metal cache's calls, the lines printed, the namespace)
         lines = []; mtl = FakeMetal(fail); written = {}
-        ns = dict(os=os, re=__import__('re'), subprocess=subprocess, out=str(self.root / 'mac'), IOSOUT=str(self.root / 'ios') if ios else None, w=str(self.root / 'w'),
-                  TARGETS={'mac', 'ios'} if ios else {'mac'}, IOS_PULL=ios_pull, MTL=mtl, dmsh_pull=dmsh_pull, dmsh_vin=dmsh_vin, dmsh_side=dmsh_side,
+        ns = dict(os=os, re=__import__('re'), subprocess=subprocess, out=str(self.root / 'mac'), w=str(self.root / 'w'),
+                  MTL=mtl, dmsh_pull=dmsh_pull, dmsh_vin=dmsh_vin, dmsh_side=dmsh_side,
                   PULL_STATS=collections.Counter(), VIN_STATS=collections.Counter(), print=lambda *a, **k: lines.append(' '.join(map(str, a))),
                   written=written, atomic_json=lambda path, refl: written.update({pathlib.Path(path).parent.name: refl}))
         exec(self.code, ns)
         msl = self.root / 'w' / 'k_b.metal'; msl.write_text(full)
         try:
-            got, cut_targets = ns['vs_libraries']('k', str(msl), full)
-            ns['write_refl']('k', got, cut_targets)
+            got, cut = ns['vs_libraries']('k', str(msl), full)
+            ns['write_refl']('k', got, cut)
         except subprocess.CalledProcessError as e: got = e
         self.assertEqual(sorted(p.name for p in (self.root / 'w').iterdir()), ['k_b.metal'])   # the units' files are gone
         return got, mtl, lines, ns
 
-    def test_one_compile_a_target(self):
+    def test_one_compile(self):
         got, mtl, lines, ns = self.run_step(source(['float4', 'uint4']))
-        self.assertEqual(mtl.calls, [(t, ['_b', '_bp', '_bv'], [self.PULLED, self.SHADOWED]) for t in ('mac', 'ios')])   # where there were three compiles a target
-        self.assertEqual(mtl.units['mac'], mtl.units['ios'])
+        self.assertEqual(mtl.calls, [('mac', ['_b', '_bp', '_bv'], [self.PULLED, self.SHADOWED])])   # where there were three compiles
         self.assertEqual(got, {'pull': {'entry': 'main0_p', 'entry_z': 'main0_zp', 'slot': 16, 'inputs': [0, 1], 'entry_wl': 'main0_wl', 'entry_z_wl': 'main0_z_wl'},
                                'vin': {'entry': 'main0_v', 'entry_z': 'main0_zv', 'shadow': [{'location': 1, 'float': 16, 'sint': 17}]}})
         self.assertEqual(lines, [])
         self.assertEqual((dict(ns['PULL_STATS']), dict(ns['VIN_STATS'])), ({'generated': 1, 'unit': 1}, {'generated': 1, 'inputs': 1, 'float only': 0}))
-        self.assertTrue(all(ns['written'][t]['chain_metal_cut'] for t in ('mac', 'ios')))
+        self.assertTrue(ns['written']['mac']['chain_metal_cut'])
 
     def test_no_integer_input(self):
-        got, mtl, lines, _ = self.run_step(source(['float4']), ios=False)
+        got, mtl, lines, _ = self.run_step(source(['float4']))
         self.assertEqual(mtl.calls, [('mac', ['_b', '_bp'], [self.PULLED])])
         self.assertEqual(sorted(got), ['pull']); self.assertEqual(lines, [])
 
-    def test_a_target_without_the_pulling_library(self):   # DMSH_IOS_PULL=0: the reflection, one for both targets, names the same entry points
-        got, mtl, _, _ = self.run_step(source(['float4', 'uint4']), ios_pull=False)
-        self.assertEqual(mtl.calls, [('mac', ['_b', '_bp', '_bv'], [self.PULLED, self.SHADOWED]), ('ios', ['_b', '_bv'], [self.SHADOWED])])
-        self.assertNotIn('dm_fetch', mtl.units['ios']); self.assertIn('dm_fetch', mtl.units['mac'])
-        self.assertEqual((got['pull']['entry'], got['vin']['entry']), ('main0_p', 'main0_v'))
-        got, mtl, _, ns = self.run_step(source(['float4']), ios_pull=False)   # and with no shadow-input library either, nothing shares the plain source's compile there
-        self.assertEqual(mtl.calls, [('mac', ['_b', '_bp'], [self.PULLED]), ('ios', '_b')])
-        self.assertEqual(got['pull']['entry'], 'main0_p')
-        self.assertTrue(ns['written']['mac']['chain_metal_cut'])
-        self.assertNotIn('chain_metal_cut', ns['written']['ios'])
-
     def test_a_layer_shader_keeps_its_shadow_input_library_a_compile_of_its_own(self):   # that library repeats main0_l for the host (vin_fn), and one unit cannot hold it twice
-        got, mtl, lines, _ = self.run_step(source(['float4', 'uint4'], tail=LAYER), ios=False)
+        got, mtl, lines, _ = self.run_step(source(['float4', 'uint4'], tail=LAYER))
         self.assertEqual(mtl.calls, [('mac', ['_b', '_bp'], [self.PULLED]), ('mac', '_bv')])
         self.assertEqual((got['pull']['entry'], got['vin']), ('main0_p', {'entry': 'main0', 'entry_z': 'main0_z', 'shadow': [{'location': 1, 'float': 16, 'sint': 17}]}))
         self.assertEqual(lines, [])
 
     def test_a_unit_that_does_not_build_is_compiled_library_by_library(self):
-        got, mtl, lines, ns = self.run_step(source(['float4', 'uint4']), fail={('ios', 'unit')})
-        units = [(t, ['_b', '_bp', '_bv'], [self.PULLED, self.SHADOWED]) for t in ('mac', 'ios')]
-        self.assertEqual(mtl.calls, units + [('mac', '_b'), ('ios', '_b'), ('mac', '_bv'), ('ios', '_bv'), ('mac', '_bp'), ('ios', '_bp')])
+        got, mtl, lines, ns = self.run_step(source(['float4', 'uint4']), fail={('mac', 'unit')})
+        self.assertEqual(mtl.calls, [('mac', ['_b', '_bp', '_bv'], [self.PULLED, self.SHADOWED]), ('mac', '_b'), ('mac', '_bv'), ('mac', '_bp')])
         self.assertEqual((got['pull']['entry'], got['pull']['entry_wl'], got['vin']['entry']), ('main0', 'main0_wl', 'main0'))   # each library's own names
         self.assertEqual(len(lines), 1); self.assertRegex(lines[0], r'^\[RED\] k: its libraries do not build from one compile \(.*\): each is compiled from its own source$')
         self.assertEqual((ns['PULL_STATS']['unit'], ns['PULL_STATS']['unit failed'], ns['PULL_STATS']['generated'], ns['VIN_STATS']['generated']), (0, 1, 1, 1))
         self.assertEqual({p.name: p.read_text() for p in (self.root / 'mac').iterdir()}, {f'k{s}.metallib': 'mac alone' for s in ('_b', '_bp', '_bv')})   # none of a unit's pieces left
-        self.assertTrue(all('chain_metal_cut' not in ns['written'][t] for t in ('mac', 'ios')))
+        self.assertNotIn('chain_metal_cut', ns['written']['mac'])
 
     def test_a_source_of_another_shape_is_compiled_library_by_library(self):
         full = source(['float4']).replace('    ' + dmsh_side.VS_DEPTH + '\n', '')
-        got, mtl, lines, ns = self.run_step(full, ios=False)
+        got, mtl, lines, ns = self.run_step(full)
         self.assertEqual(mtl.calls, [('mac', '_b'), ('mac', '_bp')])   # no unit was compiled
         self.assertEqual(got['pull']['entry'], 'main0'); self.assertEqual(len(lines), 1); self.assertIn('main0 is not main0_z with the depth line', lines[0])
         self.assertEqual(ns['PULL_STATS']['unit failed'], 1)
 
     def test_a_source_that_does_not_compile_is_the_callers_failure(self):   # finish builds it again without its extras, or reports the shader: no red line of the unit's
-        got, mtl, lines, ns = self.run_step(source(['float4']), ios=False, fail={'unit', '_b'})
+        got, mtl, lines, ns = self.run_step(source(['float4']), fail={'unit', '_b'})
         self.assertIsInstance(got, subprocess.CalledProcessError)
         self.assertEqual(mtl.calls, [('mac', ['_b', '_bp'], [self.PULLED]), ('mac', '_b')]); self.assertEqual(lines, []); self.assertEqual(ns['PULL_STATS']['unit failed'], 0)
 
     def test_no_pulling_library_no_unit(self):
         full = source(['float4', 'uint4']).replace('[[attribute(1)]]', '[[attribute(32)]]')   # an input the layout block does not hold
-        got, mtl, lines, ns = self.run_step(full, ios=False)
+        got, mtl, lines, ns = self.run_step(full)
         self.assertEqual(mtl.calls, [('mac', '_b')])   # and no shadow-input library: its input is past attribute 15
         self.assertEqual(got, {}); self.assertEqual(ns['PULL_STATS']['unit failed'], 0)
         self.assertEqual([l[:40] for l in lines], ['[RED] k: no shadow-input library (an inp', '[RED] k: no pulling library (an input at'])

@@ -3,7 +3,7 @@
 MEMBAR.GL / .SYS and Ampere's MEMBAR, Device scope) is an atomic_thread_fence of that scope with no execution barrier, and an OpControlBarrier (BAR.SYNC) right after one stays a
 threadgroup_barrier. Below MSL 3.2 SPIRV-Cross wrote both MEMBARs as one threadgroup_barrier and left that BAR.SYNC out, and the text rule that made the line a fence (membar_fence) left
 the group with no barrier at all (GitHub issue #2786: Fire Emblem: Three Houses hung an A17 Pro's GPU). The modules are written here word by word, so only spirv-cross is needed; with
-DMSH_TEST_METAL=1 the MSL also compiles with the Mac's and the iPhone's compile, and with DMSH_TEST_XLATE a Maxwell MEMBAR.CTA; BAR.SYNC goes through the translator too."""
+DMSH_TEST_METAL=1 the MSL also compiles with the chain's Metal compile, and with DMSH_TEST_XLATE a Maxwell MEMBAR.CTA; BAR.SYNC goes through the translator too."""
 from pathlib import Path
 import json
 import os
@@ -71,13 +71,11 @@ class MembarFence(unittest.TestCase):
         self.assertEqual(barriers(msl), [FENCE % 'device'] * 2)
 
     @unittest.skipUnless(os.environ.get('DMSH_TEST_METAL') and shutil.which('xcrun'), 'set DMSH_TEST_METAL=1 to compile with the Metal compiler')
-    def test_it_compiles_for_the_mac_and_the_iphone(self):
-        sys.path.insert(0, str(TOOLS.parents[1] / 'ios/tools')); import ios_metal
+    def test_it_compiles(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / 'k.metal'; p.write_text(cross(module([('membar', WORKGROUP), ('bar',), ('membar', DEVICE), ('bar',)])))
-            for name, cmd in (('mac', dmsh_chain.MAC_METAL), ('ios', ios_metal.METAL)):
-                r = subprocess.run([*cmd, str(p), '-o', str(Path(d) / f'{name}.air')], capture_output=True, text=True)
-                self.assertEqual(r.returncode, 0, name + ': ' + r.stderr)
+            r = subprocess.run([*dmsh_chain.MAC_METAL, str(p), '-o', str(Path(d) / 'k.air')], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
 
 
 # Maxwell encodings (test_dmsh_maxwell_ftz.py has the scheduling word's layout)

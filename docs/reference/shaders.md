@@ -2664,7 +2664,7 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 
 - **Symptom:** the NSP script stops with `captured only 0 run-time shaders` while the capture run reaches the game's frame loop and runs to the end of its 30 s.
 - **Cause:** the game compiles its run-time programs only after its title screen has had a button press, and the capture run had no input: 0 outputs in 200 s without a press, both of them 3 s after the first A.
-- **Fix:** the capture run presses A every 4 s from 5 s on (`GLSLC_KEYS` in `build_ipa_from_nsp.py`, through `DM_KEYS`). The run keeps its own save and temporary storage, so whatever the presses choose is thrown away with them; a game that compiles at boot (Three Houses) is done before the first press.
+- **Fix:** the capture run presses A every 4 s from 5 s on (`GLSLC_KEYS` in `build_app.py`, through `DM_KEYS`). The run keeps its own save and temporary storage, so whatever the presses choose is thrown away with them; a game that compiles at boot (Three Houses) is done before the first press.
 - **Found on:** Crash Team Racing Nitro-Fueled (`0100F9F00C696000`, update 1.0.15, no profile yet): both outputs within the 30 s run.
 
 ### Offline coverage after an empty GLSLC capture
@@ -2784,7 +2784,7 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 
 - **Symptom:** after a shader input changes, the Mac app build recompiles the affected library but reports `prewarm pipelines: reused (inputs unchanged)`, retaining pipelines made with the previous shader functions.
 - **Cause:** the prewarm cache key read `b-<chain>/inputs.tsv` with a normal filesystem path. A full shader build packs that directory into `b-<chain>.img`, so the stamp was silently replaced with an empty string in the key. A profile input such as `dual_want.tsv` changes functions without changing the chain, shader keys or recorded pipeline list.
-- **Fix:** `build_ipa_from_nsp.py` reads the stamp through `shader_lib.view`, as other library readers do. Both folder and image stamps invalidate the captured prewarm pipelines when shader inputs change; identical inputs still reuse them.
+- **Fix:** `build_app.py` reads the stamp through `shader_lib.view`, as other library readers do. Both folder and image stamps invalidate the captured prewarm pipelines when shader inputs change; identical inputs still reuse them.
 - **Check:** `test_nsp_mac_app.py` exercises unchanged and changed stamps in both storage forms. Its image case reproduced reuse before the fix.
 - **Found on:** Sid Meier's Civilization VII, adding the second dual-source shader during bring-up.
 
@@ -2988,7 +2988,7 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 
 ### An iOS build after a Mac-only build kept no Mac libraries
 
-- **Symptom:** after `scripts/build_ipa_from_nsp.py <NSP folder> --platform mac`, a plain (iOS) run of the script on the same folder succeeds, but the Mac run command the first build printed then logs hundreds of `[RED] failed to load shader <key>_b: cannot open …/shader/cache/b-<chain>/<key>_b.metallib` lines, until `--platform mac` is run again.
+- **Symptom:** after `scripts/build_app.py <NSP folder> --platform mac`, a plain (iOS) run of the script on the same folder succeeds, but the Mac run command the first build printed then logs hundreds of `[RED] failed to load shader <key>_b: cannot open …/shader/cache/b-<chain>/<key>_b.metallib` lines, until `--platform mac` is run again.
 - **Cause:** both builds write the Mac sources and reflection into `<id>_build/shader/cache/b-<chain>/`, which also holds the Mac libraries. A full `dmsh_build.py` run first removes every `<key>_b*` output there, so that a key that left the map or a shader that no longer builds keeps no old library, and then restores or compiles only the targets in `DMSH_TARGETS`. Since target selection ([Target selection keeps the shader analysis files in the cache](#target-selection-keeps-the-shader-analysis-files-in-the-cache)) the NSP script asked an iOS build for `ios` alone, so the Mac `.metallib` files were removed and only their `.metal` and `.json` came back.
 - **Fix:** the NSP script (`build_shaders`) asks an iOS build for `mac,ios` when the folder holds the current chain's Mac libraries, and then writes both reuse keys, so a later `--platform mac` run is reused. The Mac libraries are rebuilt, not kept as they were, so none is stale: the Metal compile cache gives back every one whose MSL was compiled before, and only a changed MSL is compiled. The first such build of a folder may translate again, because the per-shader cache entries an iOS-only build left hold no Mac library. A folder without Mac libraries (only ever packed as an IPA) still compiles only the iPhone's. `dmsh_build.py`'s rule, that a full build leaves only what it built, is unchanged; it is part of the chain version, so the fix stays in its caller.
 - **Found on:** Team Sonic Racing (resolved).

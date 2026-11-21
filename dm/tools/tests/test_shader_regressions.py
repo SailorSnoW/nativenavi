@@ -1,4 +1,4 @@
-"""Shader regressions between two builds of a game's shader libraries (dm/gfx/tools/shader_regressions.py) and the NSP script's stop on them (build_ipa_from_nsp.py
+"""Shader regressions between two builds of a game's shader libraries (dm/gfx/tools/shader_regressions.py) and the NSP script's stop on them (build_app.py
 shader_regressions; GitHub issue #272): a shader that translated in the newest other b-*/ of the same game and fails now is listed, new keys and shaders that failed before are not,
 another game's stamped library is never the previous build, and the NSP script stops unless ALLOW_SHADER_REGRESSIONS. Build reports only: no game files, translator or Metal needed.
 Also what a shader that built lost (losses, report_losses), which never stops a build."""
@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parents[3]
 TOOL = REPO / 'dm/gfx/tools/shader_regressions.py'
 spec = importlib.util.spec_from_file_location('shader_regressions', TOOL)
 sr = importlib.util.module_from_spec(spec); spec.loader.exec_module(sr)
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
 FAIL = 'NotSupportedException: MSL 2.3 image atomics require IGN with a discarded result'
@@ -101,7 +101,7 @@ class Losses(unittest.TestCase):
         self.assertEqual(self.report([{'dm_ctl': 'a', 'notes': []}]), ['lost without failing: nothing'])
 
     def test_the_nsp_script_finds_the_summary(self):   # one line for the player, from the build's log; it stops nothing
-        src = (REPO / 'scripts/build_ipa_from_nsp.py').read_text()
+        src = (REPO / 'scripts/build_app.py').read_text()
         self.assertIn(r"re.search(r'^\[RED\] lost without failing: .*$', t, re.M)", src)
         self.assertRegex(self.report([{'dm_ctl': 'a', 'notes': [HANDLE % 'texture2D']}])[-1], r'^\[RED\] lost without failing: ')
 

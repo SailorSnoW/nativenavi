@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """dmsh_rewrite.py per_vertex: the flat inputs the translator declares for Ampere's LDTRAM (dm_pv<L>_<v> at user(locn<64 + 3L + v>)) become one vertex_value<float4> at user(locn<L>),
-each read that vertex's get(); a shader without them is unchanged, and one that also interpolates attribute L is refused. ios_metal.compile takes MSL 4.0 for such a source only.
-With DMSH_TEST_METAL=1 the result also compiles with the Metal compilers (the Mac's deployment target, and the iPhone's with its MSL 4.0 flag)."""
+each read that vertex's get(); a shader without them is unchanged, and one that also interpolates attribute L is refused.
+With DMSH_TEST_METAL=1 the result also compiles with the chain's Metal compile."""
 from pathlib import Path
 import os
 import shutil
@@ -12,10 +12,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'dm/gfx/tools'))
-sys.path.insert(0, str(ROOT / 'dm/ios/tools'))
 import dmsh_chain  # noqa: E402
 import dmsh_rewrite  # noqa: E402
-import ios_metal  # noqa: E402
 
 # The shape SPIRV-Cross gives Resident Evil 4's pixel shader 5b7f35045f5c8614: attribute 2 read at all three vertices, weighed with the barycentric coordinates' y and z
 SRC = """#include <metal_stdlib>
@@ -86,28 +84,12 @@ class PerVertex(unittest.TestCase):
         with self.assertRaises(ValueError):
             dmsh_rewrite.per_vertex(SRC.replace('locn71', 'locn75'))
 
-    def test_only_a_vertex_value_source_compiles_as_msl_4(self):
-        calls = []
-        real_compile, real_run = ios_metal.dmsh_pch.compile, subprocess.run
-        try:
-            ios_metal.dmsh_pch.compile = lambda metal, msl, air: calls.append(metal)
-            subprocess.run = lambda *a, **k: None
-            with tempfile.TemporaryDirectory() as d:
-                for name, text in (('pv', dmsh_rewrite.per_vertex(SRC)), ('plain', SRC.replace('dm_pv2_', 'm_pv2_'))):
-                    p = Path(d) / f'{name}.metal'; p.write_text(text)
-                    ios_metal.compile(str(p), str(Path(d) / f'{name}.air'), str(Path(d) / f'{name}.metallib'))
-        finally:
-            ios_metal.dmsh_pch.compile, subprocess.run = real_compile, real_run
-        self.assertIn(ios_metal.METAL4_FLAG, calls[0])
-        self.assertNotIn(ios_metal.METAL4_FLAG, calls[1])
-
     @unittest.skipUnless(os.environ.get('DMSH_TEST_METAL') and shutil.which('xcrun'), 'set DMSH_TEST_METAL=1 to compile with the Metal compilers')
     def test_the_result_compiles(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / 'pv.metal'; p.write_text(dmsh_rewrite.per_vertex(SRC))
-            for metal in (dmsh_chain.MAC_METAL, ios_metal.METAL + [ios_metal.METAL4_FLAG]):
-                r = subprocess.run([*metal, str(p), '-o', str(Path(d) / 'pv.air')], capture_output=True, text=True)
-                self.assertEqual(r.returncode, 0, r.stderr)
+            r = subprocess.run([*dmsh_chain.MAC_METAL, str(p), '-o', str(Path(d) / 'pv.air')], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == '__main__':

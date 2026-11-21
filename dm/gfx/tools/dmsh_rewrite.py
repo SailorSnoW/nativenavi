@@ -16,13 +16,12 @@ def precise(msl): return re.sub(r'\bfast::(min|max|clamp)\(', r'precise::\1(', m
 PER_VERTEX_BASE = 64   # the translator's Declarations.PerVertexLocationBase: dm_pv<L>_<v> is at user(locn<64 + 3L + v>), past every attribute's own location
 PER_VERTEX_IN = re.compile(r'\n    float4 dm_pv(\d+)_([012]) \[\[user\(locn(\d+)\)(?:, flat)?\]\];')
 VERTEX_INDEX = ('first', 'second', 'third')
-METAL4 = 'vertex_value<'   # in a source that needs MSL 4.0 (ios_metal.compile)
 def per_vertex(msl):
     """A user attribute as each vertex of the triangle holds it, which Ampere's LDTRAM reads in a pixel shader (fragment shader barycentrics: Resident Evil 4's shaders weigh
     the three values with the barycentric coordinates themselves). SPIRV-Cross has no MSL form of SPIR-V's PerVertexKHR, so the translator declares each vertex read as a flat
     input of its own, dm_pv<L>_<v> at user(locn<64 + 3L + v>) (InstEmitAmpereMem ALdTram). Here the reads of attribute L become one vertex_value<float4> at user(locn<L>), which the
     vertex shader's output there feeds, and each read that vertex's get(vertex_index::...): the vertices the [[barycentric_coord]] weights refer to, as on NVIDIA.
-    vertex_value is MSL 4.0 (macOS 26, iOS 26): the Mac's deployment target has it, and ios_metal.compile compiles a source using it with -std=metal4.0.
+    vertex_value is MSL 4.0 (macOS 26): the Mac's deployment target has it.
     Raises ValueError when attribute L is also an ordinary input of the shader, which one location cannot be at once (no game known)"""
     found = list(PER_VERTEX_IN.finditer(msl))
     if not found: return msl

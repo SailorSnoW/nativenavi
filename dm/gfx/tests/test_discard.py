@@ -44,7 +44,7 @@ class DiscardTests(unittest.TestCase):
         src = SOURCE + scope['vs_discard'](SOURCE)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); msl = root / 'discard.metal'; msl.write_text(src)
-            for sdk in ('macosx', 'iphoneos'):
+            for sdk in ('macosx',):
                 with self.subTest(sdk=sdk):
                     r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fmodules-cache-path=' + str(root / sdk), str(msl), '-o', str(root / (sdk + '.air'))], capture_output=True, text=True)
                     self.assertEqual(r.returncode, 0, r.stderr)

@@ -6,12 +6,12 @@
 # is missing) and the metallib compiled for the SDK. Without the Metal toolchain the header has the sources only: the host then compiles them and says so in a [RED] line.
 # Each run rechecks the compiler, SDK, deployment target and source contents. Matching inputs reuse the header without compiling; a toolchain installed after a source-only
 # build regenerates the libraries. The header is written only when it changes, so an unchanged run does not rebuild the host.
-# Usage: host_msl.py --sdk macosx|iphoneos [--min <OS version>] <header> <name.metal>...
+# Usage: host_msl.py --sdk macosx [--min <OS version>] <header> <name.metal>...
 import argparse, hashlib, os, subprocess, sys, tempfile
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--sdk', required=True, choices=['macosx', 'iphoneos'])
-ap.add_argument('--min', help='the lowest OS version the libraries must load on (iphoneos: the app\'s deployment target)')
+ap.add_argument('--sdk', required=True, choices=['macosx'])
+ap.add_argument('--min', help='the lowest OS version the libraries must load on')
 ap.add_argument('out')
 ap.add_argument('sources', nargs='+')
 a = ap.parse_args()
@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory() as td:
         lib = b''
         if ver:
             ml = os.path.join(td, name + '.metallib')
-            cmd = ['xcrun', '-sdk', a.sdk, 'metal'] + ([f'-m{"ios" if a.sdk == "iphoneos" else "macosx"}-version-min={a.min}'] if a.min else []) + ['-o', ml, src]
+            cmd = ['xcrun', '-sdk', a.sdk, 'metal'] + ([f'-mmacosx-version-min={a.min}'] if a.min else []) + ['-o', ml, src]
             r = subprocess.run(cmd)
             if r.returncode: sys.exit(f'host_msl.py: {src} does not compile ({" ".join(cmd)})')
             lib = open(ml, 'rb').read()

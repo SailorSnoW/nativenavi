@@ -191,7 +191,7 @@ int main(int argc, char **argv) {
     char name[256] = "nxnative", id[64] = "", marker[512] = "", lang[32] = "";
     if (!info_string("CFBundleName", name, sizeof name)) snprintf(name, sizeof name, "nxnative");
     info_string("DMRomfsMarker", marker, sizeof marker); info_string("DMLanguage", lang, sizeof lang);
-    if (!info_string("DMTitleID", id, sizeof id) || strchr(id, '/')) { alert(name, "This app has no title ID in its Info.plist (DMTitleID): pack it again with build_ipa_from_nsp.py --platform mac-app."); return 1; }
+    if (!info_string("DMTitleID", id, sizeof id) || strchr(id, '/')) { alert(name, "This app has no title ID in its Info.plist (DMTitleID): pack it again with build_app.py --platform mac-app."); return 1; }
     struct stat st; snprintf(p, sizeof p, "%s/romfs.img", res);
     int valid_romfs;
     if (!stat(p, &st)) {
@@ -199,7 +199,7 @@ int main(int argc, char **argv) {
         romfs_image_close(image); snprintf(romfs, sizeof romfs, "%s", p);
     } else { snprintf(p, sizeof p, "%s/%s", romfs, marker); valid_romfs = !stat(p, &st); }
     if (access(host, X_OK) || !valid_romfs || !modules_present(dm)) {
-        alert(name, "The game data inside this app is missing or incomplete (Contents/Resources/romfs.img, Contents/Resources/dm or Contents/MacOS/dmhost): pack it again with build_ipa_from_nsp.py --platform mac-app.");
+        alert(name, "The game data inside this app is missing or incomplete (Contents/Resources/romfs.img, Contents/Resources/dm or Contents/MacOS/dmhost): pack it again with build_app.py --platform mac-app.");
         return 1;
     }
     const char *home = getenv("HOME"); if (!home || !*home) return 1;

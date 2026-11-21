@@ -51,7 +51,7 @@ Original Switch shader package
   → xcrun metal / metallib  compiles into Metal shader libraries
 ```
 
-The whole chain is driven by `tools/dmsh_build.py`; `scripts/build_ipa_from_nsp.py` runs it as part of packing an IPA. Key points:
+The whole chain is driven by `tools/dmsh_build.py`; `scripts/build_app.py` runs it as part of packing an IPA. Key points:
 
 - **Key**: each shader is keyed by the first 16 hexadecimal digits of the sha256 of its control section (the first 0x880 bytes, or the section's own length at control +0x20 when that is shorter, as in SDK 10's 0x850-byte sections) followed by its code area (many of Mario's shaders share a control section and differ in code). At run time the game hands both to `nvnProgramSetShaders`, and the replay layer computes the same key to find the library.
 - **Build outputs**: `<key>_b.metallib` (the shader library), `<key>_b.json` (reflection used by replay: each binding's kind, slot number, index within the argument buffer and so on), `<key>_b.metal` (the MSL source). Some fragment shaders additionally have `<key>_bf.metallib`, a "readable tile" version used for pass merging (see the file header of `tools/dmsh_fetch.py`). `_b_build.json` in the directory records the success or failure of each key in this run.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Compiled-shader cache keyed by the Metal source (dmsh_build.py): a library is compiled once per (MSL text, compile convention, compiler), so a chain change
 # that leaves a shader's MSL as it was (a translator fix, a new rule for other shaders) costs that shader no Metal compile. The Metal compiler is deterministic:
-# the same MSL with the same flags gives a byte-identical metallib (checked for macOS and iOS), which is what makes reuse safe. Its input is the text alone: dmsh_pch.compile passes the source on
+# the same MSL with the same flags gives a byte-identical metallib (checked), which is what makes reuse safe. Its input is the text alone: dmsh_pch.compile passes the source on
 # standard input, as a file's name reaches the library of a source with function constants.
 # Entries of the compile cache's one file (shader_cache.py): metallib/<target>/<digest>.metallib, digest = sha256 over FORMAT, the target's compile convention (the record written into json chain_metal),
 # the compiler's identity (metal / metallib --version without the install path, the SDK version and build) and the MSL bytes.
@@ -38,7 +38,7 @@ def compiler_id(sdk):
 
 class Cache:
     def __init__(self, store: 'shader_cache.Store | shader_cache.Remote', targets, work):
-        """store: the compile cache (in a worker process of dmsh_build.py, its Remote); targets: {name: (sdk, record, compile)}, compile(msl, air, lib) as ios_metal.compile; work: a folder for temporary .air files"""
+        """store: the compile cache (in a worker process of dmsh_build.py, its Remote); targets: {name: (sdk, record, compile)}, compile(msl, air, lib) as dmsh_build.py's mac_compile; work: a folder for temporary .air files"""
         self.store, self.targets, self.work = store, targets, work
         self.ident = {t: hashlib.sha256(FORMAT + b'\0' + rec.encode() + b'\0' + compiler_id(sdk).encode()).digest() for t, (sdk, rec, _) in targets.items()}
         self.stats, self.lock = collections.Counter(), threading.Lock()
@@ -117,17 +117,16 @@ class Cache:
             if not same: return set(), f'a fresh compile of {stem}.metal differs from its library'
         return eligible, None
 
-    def fill(self, mac_dir, ios_dir=None, targets=None):
-        """Takes the libraries of an earlier build: mac_dir = its Mac b-<chain>/ folder, ios_dir = the iOS folder of the same chain (or None). Returns the lines to print"""
-        mac_dir, ios_dir = str(shader_lib.view(mac_dir)), ios_dir and str(shader_lib.view(ios_dir))
+    def fill(self, mac_dir):
+        """Takes the libraries of an earlier build: mac_dir = its b-<chain>/ folder. Returns the lines to print"""
+        mac_dir = str(shader_lib.view(mac_dir))
         if not romfs.os.path.isdir(mac_dir): return []   # a stopped pack's .part beside the libraries
         try: stamps = json.loads(self.store.get(STAMPS) or b'{}')
         except ValueError: stamps = {}
         names = set(romfs.os.listdir(mac_dir))
         stems = sorted(n[:-6] for n in names if OUTPUT.fullmatch(n) and not cut_from_unit(n[:-6], names))   # not an AppleDouble ._<name> (exFAT / FAT drives)
         todo, notes = {}, []
-        for target, d in (('mac', mac_dir), ('ios', ios_dir)):
-            if targets is not None and target not in targets: continue   # checking an earlier build compiles samples too
+        for target, d in (('mac', mac_dir),):
             if target not in self.targets or not d or not romfs.os.path.isdir(d): continue
             libs = names if d == mac_dir else set(romfs.os.listdir(d))
             have = [s for s in stems if s + '.metallib' in libs and not cut_from_unit(s, libs)]; key = self.ident[target].hex() + ':' + os.path.realpath(d)

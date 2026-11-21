@@ -1,5 +1,4 @@
-# The build folder of each program of a multi-program game (build_ipa_from_nsp.py build_folder): under --work-dir the programs packed with the application's first get folders
-# of their own, so one program's extract/<version>/RomFS.img does not replace another's (docs/reference/packing.md)
+# The build folder (build_app.py build_folder): <title ID>_build in the NUP's folder, or --work-dir / WORK_DIR used as given
 import importlib.util
 from pathlib import Path
 import types
@@ -7,10 +6,10 @@ import unittest
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
 assert spec and spec.loader
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
-NSP = Path('/games/All-Stars')
+NUP_DIR = Path('/games/oot')
 
 
 def args(work_dir=None, **kw):
@@ -21,19 +20,16 @@ class BuildFolder(unittest.TestCase):
     def setUp(self):   # the Spyder settings block's WORK_DIR stays out of it
         patch = mock.patch.object(nsp, 'WORK_DIR', ''); patch.start(); self.addCleanup(patch.stop)
 
-    def test_default_is_one_folder_per_profile(self):
-        self.assertEqual(nsp.build_folder(args(), NSP, '010049900F546000'), NSP / '010049900F546000_build')
-        self.assertEqual(nsp.build_folder(args(in_programs={}), NSP, '010049900F546001'), NSP / '010049900F546001_build')
+    def test_default_is_beside_the_nup(self):
+        self.assertEqual(nsp.build_folder(args(), NUP_DIR, '0400486024DEC000'), NUP_DIR / '0400486024DEC000_build')
 
-    def test_work_dir_is_used_as_given_for_the_first_program(self):
-        self.assertEqual(nsp.build_folder(args('/b/w'), NSP, '010049900F546000'), Path('/b/w').resolve())
-        self.assertEqual(nsp.build_folder(args('/b/w', program=1), NSP, '010049900F546001'), Path('/b/w').resolve())   # --program N alone: the folder named
+    def test_work_dir_is_used_as_given(self):
+        self.assertEqual(nsp.build_folder(args('/b/w'), NUP_DIR, '0400486024DEC000'), Path('/b/w').resolve())
 
-    def test_programs_under_work_dir_do_not_share_a_folder(self):
-        first = nsp.build_folder(args('/b/w'), NSP, '010049900F546000')
-        others = [nsp.build_folder(args('/b/w', program=n, in_programs={}), NSP, f'010049900F54600{n}') for n in (1, 2)]
-        self.assertEqual(others, [first / 'programs' / '010049900F546001_build', first / 'programs' / '010049900F546002_build'])
-        self.assertEqual(len({first, *others}), 3)
+    def test_the_setting_names_it_too(self):
+        with mock.patch.object(nsp, 'WORK_DIR', '/b/setting'):
+            self.assertEqual(nsp.build_folder(args(), NUP_DIR, '0400486024DEC000'), Path('/b/setting').resolve())
+            self.assertEqual(nsp.build_folder(args('/b/w'), NUP_DIR, '0400486024DEC000'), Path('/b/w').resolve())   # the command line wins
 
 
 if __name__ == '__main__':

@@ -32,7 +32,7 @@ def load(name, path):
     return mod
 
 
-nsp = load('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+nsp = load('build_app', REPO / 'scripts/build_app.py')
 regress = load('regress', REPO / 'scripts/regress.py')
 BOUND = 10.0   # seconds any one stop may take here (the grace periods below are shorter)
 

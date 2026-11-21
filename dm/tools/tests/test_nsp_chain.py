@@ -1,4 +1,4 @@
-"""NSP script chain files (scripts/build_ipa_from_nsp.py chain_header, chain_tables): the one chain version header (dm/gfx/nvn/dmsh_chain.h) is written again when stale and left
+"""build_app.py's chain files (chain_header, chain_tables): the one chain version header (dm/gfx/nvn/dmsh_chain.h) is written again when stale and left
 alone when current, and the committed one is current; only the c1 / uniform extent tables that are missing (they are not committed) or do not name the library's stamp (its chain version
 and profile inputs) are made (GitHub issue #78), none without a stamped library, and no step's reuse key counts them; the tools that make them read only the shader build's outputs
 (an exFAT drive's AppleDouble `._<name>` beside each, PR #555); no game files, keys or Xcode needed (temporary files only in a
@@ -16,8 +16,8 @@ import unittest
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
-SCRIPT = REPO / 'scripts/build_ipa_from_nsp.py'
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', SCRIPT)
+SCRIPT = REPO / 'scripts/build_app.py'
+spec = importlib.util.spec_from_file_location('build_app', SCRIPT)
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
 
@@ -34,7 +34,7 @@ class Header(Base):
         super().setUp()
         self.repo = self.tmp / 'repo'
         (self.repo / 'dm/gfx/nvn').mkdir(parents=True)
-        (self.repo / 'dm/gfx/tools').symlink_to(REPO / 'dm/gfx/tools'); (self.repo / 'dm/ios').symlink_to(REPO / 'dm/ios')
+        (self.repo / 'dm/gfx/tools').symlink_to(REPO / 'dm/gfx/tools')
         (self.repo / 'dm/third_party').symlink_to(REPO / 'dm/third_party')
         (self.repo / 'dm/mac').symlink_to(REPO / 'dm/mac')   # min_os.mk, the Mac libraries' deployment target
         (self.repo / 'dm/gfx/nvn/dmsh_abi.h').symlink_to(REPO / 'dm/gfx/nvn/dmsh_abi.h')   # the shader library ABI, a chain input beside the header
@@ -122,7 +122,7 @@ class Tables(Base):
         self.assertFalse(self.tables(None, None))
         self.assertEqual(self.ran, [])
 
-    def test_not_profile_inputs(self):   # the steps' reuse keys leave out what the iOS shader step makes, and the rewriter's patches (the rewrite step's own key)
+    def test_not_profile_inputs(self):   # the steps' reuse keys leave out what the shader step makes, and the rewriter's patches (the rewrite step's own key)
         for n in ('game.tsv', 'shader_map.tsv', 'c1_full.tsv', 'cb_extent.tsv', 'patches.py'): (self.tmp / n).write_text('')
         self.assertEqual([p.name for p in nsp.profile_files(types.SimpleNamespace(dir=self.tmp))], ['game.tsv', 'shader_map.tsv'])
 

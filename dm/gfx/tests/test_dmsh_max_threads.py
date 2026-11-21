@@ -1,6 +1,6 @@
 """A compute shader's local size as the kernel's thread limit (dmsh_rewrite.py max_threads): on the M1 and M2 a compute pipeline allows fewer threads per threadgroup the more
 registers its code takes, so a kernel compiled without the limit can get a dispatch of the Switch shader's local size that its pipeline does not allow, and no invocation runs (Ocarina of
-Time's froxel light injection 9ed48d1011f1b48b, 8x8x8, issue #2425). The rewrite names the local size on the kernel; with dmsh_build.py's and ios_metal.py's compile commands the front
+Time's froxel light injection 9ed48d1011f1b48b, 8x8x8, issue #2425). The rewrite names the local size on the kernel; with dmsh_build.py's compile command the front
 end's IR then carries it as the function's work-group size, which the GPU compiler fits the registers to."""
 from pathlib import Path
 import shutil
@@ -12,10 +12,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 TOOLS = ROOT / 'dm/gfx/tools'
 sys.path.insert(0, str(TOOLS))
-sys.path.insert(0, str(ROOT / 'dm/ios/tools'))
 import dmsh_chain  # noqa: E402
 import dmsh_rewrite  # noqa: E402
-import ios_metal  # noqa: E402
 
 SHADER = """#include <metal_stdlib>
 #include <simd/simd.h>
@@ -67,7 +65,7 @@ class MaxThreads(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('xcrun'), 'needs Xcode and Metal')
     def test_the_gpu_compiler_gets_the_size(self):
-        for name, command in (('Mac', dmsh_chain.MAC_METAL), ('iPhone', ios_metal.METAL)):
+        for name, command in (('Mac', dmsh_chain.MAC_METAL),):
             with self.subTest(platform=name):
                 self.assertIsNone(self.work_group_size(command, SHADER), 'the plain kernel names a size: the test no longer shows the problem')
                 self.assertEqual(self.work_group_size(command, dmsh_rewrite.max_threads(SHADER, [8, 8, 8])), 512)

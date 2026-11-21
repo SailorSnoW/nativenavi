@@ -50,43 +50,6 @@ fragment main0_out main0(main0_in in [[stage_in]], constant spvDescriptorSetBuff
 
 
 class Regress(unittest.TestCase):
-    def test_gl_chain_key_tracks_the_glsl_compiler(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d); compiler = root / 'glslangValidator'; compiler.write_bytes(b'compiler version one')
-            tree = NS(path=root)
-            g = NS(kind='gl', ver='v0', shader_roots=list)
-            gl = NS(sources=lambda roots: [(b'void main() {}', 'frag', 'synthetic')])
-            with patch.dict(os.environ, {}, clear=True), patch.object(regress, 'load_module', return_value=gl), \
-                 patch.object(regress.shutil, 'which', return_value=str(compiler)):
-                before = regress.chain_key(tree, g, 'other tools')
-                self.assertEqual(before, regress.chain_key(tree, g, 'other tools'))
-                compiler.write_bytes(b'compiler version two')
-                self.assertNotEqual(before, regress.chain_key(tree, g, 'other tools'))
-
-    def test_gl_manifest_preserves_translation_failures(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / 'translations.json'
-            p.write_text(json.dumps({'a_frag': {'st': 'ok', 'msl': 'abc', 'refl': 'def'}, 'b_frag': {'st': 'translation failed', 'err': 'sampler limit'}}))
-            built = regress.gl_manifest(p, True, Path(d) / 'log')
-            self.assertEqual((built['a_frag']['st'], built['b_frag']['st']), ('ok', 'translation failed'))
-            failed = regress.gl_manifest(p, False, Path(d) / 'log')
-            self.assertEqual((failed['a_frag']['st'], failed['b_frag']['st']), ('library failed', 'translation failed'))
-            p.write_text('{}')
-            with self.assertRaises(regress.HarnessError): regress.gl_manifest(p, True, Path(d) / 'log')
-
-    def test_gl_game_capture_roots_and_provisional_route(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d); build = root / '0100000000000000_build'
-            (build / 'patched_v0').mkdir(parents=True); (build / 'shader/gl').mkdir(parents=True)
-            capture = build / 'extract/v0/gl_capture'; capture.mkdir(parents=True)
-            profile = build / 'profile/0100000000000000'; profile.mkdir(parents=True)
-            (profile / 'game.tsv').write_text('name\tSynthetic GL game\n')
-            (profile / 'smoke.tsv').write_text('secs\t120\nsave\tnew\n')
-            g = regress.Game(root, build)
-            self.assertEqual(g.kind, 'gl'); self.assertEqual(g.route()['secs'], 120)
-            with patch.object(regress.Game, 'romfs', return_value=root / 'romfs'):
-                self.assertEqual(g.shader_roots(), [root / 'romfs', capture, build / 'extract/v0/ExeFS/main'])
-
     def test_run_env_cloud_saves_off(self):   # an inherited DM_SAVE_SYNC would sync a route's scratch save with the player's cloud save (docs/reference/services.md)
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -666,39 +629,6 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
             self.assertNotEqual(original, changed)
             self.assertNotEqual(changed, paired)
 
-    def test_vk_chain_key_tracks_selected_converter_content(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td); tools = root / 'dm/gfx/tools'; tools.mkdir(parents=True)
-            bundled = tools / 'spirv_cross_bin/spirv-cross'; bundled.parent.mkdir()
-            bundled.write_bytes(b'bundled converter')
-            selected = root / 'override'; selected.write_bytes(b'converter A'); selected.chmod(0o755)
-            env = dict(regress.os.environ, SPIRV_CROSS=str(selected))
-            g = NS(kind='vk', ver='v0', env=lambda tree: env, shader_roots=list, build=root)
-            tree = NS(path=root)
-            before = regress.chain_key(tree, g, 'tools')[2]
-            selected.write_bytes(b'converter B')
-            self.assertNotEqual(before, regress.chain_key(tree, g, 'tools')[2])
-
-    def test_vk_chain_key_tracks_shader_bytes_in_a_folder_and_in_romfs_img(self):   # the image's entries were hashed as "missing": changed bytes kept the key
-        import sys; sys.path.insert(0, str(REPO / 'dm/gfx/tools')); import romfs_image
-        spirv = lambda tail: (0x07230203).to_bytes(4, 'little') + tail   # SPIR-V's magic: what vk_shaders.spirv_files keeps
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td); files = root / 'files' / 'shaders'; files.mkdir(parents=True)
-            shader = files / 'a.spv'; (files / 'readme.txt').write_text('not a shader')
-            g = NS(kind='vk', ver='v0', env=lambda tree: dict(regress.os.environ), build=root)
-            tree = NS(path=root)
-            def key(form, tail):
-                shader.write_bytes(spirv(tail))
-                if form == 'image': romfs_image.pack(root / 'files', root / 'RomFS.img')
-                shader_root = root / 'files' if form == 'folder' else regress.rfs.Path(root / 'RomFS.img')
-                g.shader_roots = lambda: [shader_root]
-                return regress.chain_key(tree, g, 'tools')[2]
-            for form in ('folder', 'image'):
-                with self.subTest(form=form):
-                    first = key(form, b'original')
-                    self.assertEqual(first, key(form, b'original'), 'the same bytes, the same key')
-                    self.assertNotEqual(first, key(form, b'changed!'), 'changed bytes under the same name, another key')
-
     def test_baseline_context_tracks_route_save_artifacts_and_settings(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); save = root / 'save'; save.mkdir()
@@ -760,15 +690,6 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
             self.assertEqual(env['DM_GAMES_DIR'], str(g.profile_dir(tree).parent))
             self.assertEqual(env['DM_GAMES_FIRST'], '1')
 
-    def test_vk_roots_include_runtime_capture(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td); build = root / ('0' * 16 + '_build')
-            romfs = build / 'extract/v0/RomFS'; romfs.mkdir(parents=True)
-            (build / 'patched_v0').mkdir()
-            capture = romfs.parent / 'vk_capture'; capture.mkdir()
-            g = regress.Game(root, build)
-            self.assertEqual(g.shader_roots(), [romfs, capture])
-
     def test_rewriter_uses_original_registered_profile_and_keeps_provisional(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -787,34 +708,6 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
                     self.assertEqual(selected.get('DM_GAMES_FIRST'), '1' if derived else None)
                     self.assertEqual(selected['DM_GAME'], 'game')
                     self.assertTrue((dst / '.done').is_file())
-
-    def test_vk_build_records_failure_even_without_generated_shaders(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td); tool = root / 'dm/gfx/tools/vk_shaders.py'; tool.parent.mkdir(parents=True)
-            tool.write_text('raise SystemExit(1)\n')
-            g = NS(id='game', folder=root, build=root, kind='vk', env=lambda tree: dict(regress.os.environ), shader_roots=list)
-            with patch.object(regress, 'chain_key', return_value=('version', 'inputs', 'key')):
-                manifest, _ = regress.chain_build(NS(id='tree', path=root), g, NS(tools_fp='', jobs=1, pause_lock=None))
-            self.assertTrue(manifest['build_failed'])
-            self.assertEqual(manifest['shaders'], {})
-
-    def test_vk_failure_without_msl_fails_the_check(self):
-        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
-            root = Path(td)
-            tree = NS(id='tree'); g = NS(id='game', name='game')
-            a = NS(baseline='base', candidate='cand', no_smoke=True, rewrite=False, quick=False)
-            stack.enter_context(patch.object(regress, 'Tree', return_value=tree))
-            stack.enter_context(patch.object(regress, 'select', return_value=[g]))
-            stack.enter_context(patch.object(regress, 'rewriter_key', return_value='same'))
-            baseline = {'kind': 'vk', 'shaders': {'key': {'st': 'ok'}}, 'failed': 0}
-            candidate = {'kind': 'vk', 'shaders': {}, 'failed': 0, 'build_failed': True}
-            stack.enter_context(patch.object(regress, 'chain_build', side_effect=[(baseline, root), (candidate, root)]))
-            stack.enter_context(patch.object(regress, 'new_report', return_value={'games': {}}))
-            finish = stack.enter_context(patch.object(regress, 'finish', return_value=1))
-            stack.enter_context(patch.object(regress, 'say'))
-            regress.cmd_check(a)
-            self.assertEqual(finish.call_args.args[0]['games']['game']['status'], 'NEW-FAIL')
-
 
 class Validated(unittest.TestCase):
     """--record: dm/games/<id>/validated.tsv, the chain a game was last green on"""

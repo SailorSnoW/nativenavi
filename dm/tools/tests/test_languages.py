@@ -13,8 +13,8 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(REPO / 'dm/tools'), str(REPO / 'dm/games')]
 import nacp
 import settings
-spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
-if spec is None or spec.loader is None: raise ImportError('scripts/build_ipa_from_nsp.py')
+spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
+if spec is None or spec.loader is None: raise ImportError('scripts/build_app.py')
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 vars(nsp)['nacp'] = nacp   # main sets it
 

@@ -77,7 +77,7 @@ class Pairing(unittest.TestCase):
         self.ns = builder()
         # output(): a finished shader's file as dmsh_build.py reads it back (from the compile cache there; from the folder here)
         self.ns.update(out=str(self.root), PAIRS=self.ns['load_pairs'](self.g, self.package),
-                       output=lambda target, name: (self.root / name).read_bytes() if (self.root / name).is_file() else None)
+                       output=lambda name: (self.root / name).read_bytes() if (self.root / name).is_file() else None)
         for key, loc in [('f0', 0), ('f1', 1), ('f6', 6)]:
             src = pixel(loc)
             if not loc: src = src.replace('    float4 missing [[user(locn0)]];\n', '').replace('in.v0 + in.missing', 'in.v0')
@@ -146,7 +146,7 @@ class Pairing(unittest.TestCase):
         for name, text in [('v_b', full), ('v_bp', pull), ('f1_b', pixel(1)), ('f6_b', pixel(6))]:
             msl, air, lib = [self.root / (name + ext) for ext in ('.metal', '.air', '.metallib')]
             msl.write_text(text)
-            for sdk in ('iphoneos', 'macosx'):
+            for sdk in ('macosx',):
                 r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fpreserve-invariance', '-fmodules-cache-path=' + str(self.root / 'modules'), msl, '-o', air], capture_output=True, text=True)
                 self.assertEqual(r.returncode, 0, r.stderr)
             # The archive below consumes the Mac libraries.
