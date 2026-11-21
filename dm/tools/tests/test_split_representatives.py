@@ -13,7 +13,7 @@ import sys
 import tempfile
 import unittest
 
-from dm.tools.tests.test_split_rt import REPO, bnsh, fz, nvn2_stage, ss
+from dm.tools.tests.test_split_rt import REPO, bnsh, fz, ss
 
 
 def nso(data):

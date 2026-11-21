@@ -25,7 +25,6 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
-#include <TargetConditionals.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <errno.h>
@@ -2054,8 +2053,8 @@ static double pres_expect_ms(uint64_t n) {   // the interval between presents n 
 __attribute__((weak)) double dm_brightness_now(void) { return -1; }
 __attribute__((weak)) void dm_perf_present(double iv_ms) { (void)iv_ms; }   // Default (unit tests); strong definition in the host's diag.c: always-on performance record perf.txt
 uint64_t dm_nvn_sub_cpu_ns(void) { return atomic_load(&g_cum_sub_cpu_ns); }   // Cumulative CPU nanoseconds of submit (excluding present)
-__attribute__((weak)) int dm_thermal_now(void) { return -1; }   // Default (Mac); overridden by iOS front_ios.m   // default (Mac); the strong definition in the iOS front end front_ios.m overrides it
-__attribute__((weak)) int dm_low_power_now(void) { return 0; }   // Low Power Mode (iOS front_ios.m); off on the Mac
+__attribute__((weak)) int dm_thermal_now(void) { return -1; }   // the device's thermal state (NSProcessInfo thermalState), -1 = unknown: the Mac front end gives none, so the thermal cap below never engages; t_thermal.c defines it
+__attribute__((weak)) int dm_low_power_now(void) { return 0; }   // Low Power Mode: the Mac front end reports none
 // Per-frame ring for the long-frame log (GPU time only arrives 8 frames late, so store first and judge later)
 #define LFN 16
 typedef struct { uint64_t f; double fr, nv, t_s, make_ms, up_mb, up_ms; unsigned pso, lib, up, rup, hy; } lf_rec;   // hy: draws with a hybrid (pulling) pipeline
@@ -2369,7 +2368,7 @@ __attribute__((weak)) int dm_fps_step_max;   // loader.c: the largest step the s
 // pacer's ticks of 1/120 s (fps_high) are not reachable in the game; the graphics unit tests of that path set this
 static int g_fps_engine;
 __attribute__((weak)) int dm_movie_hz(void) { return 0; }   // hle_movie.c: the picture rate of the movie playing, 0 when none; graphics unit tests have no movie decoder
-// Thermal cap (iOS): while the device is thermally serious or worse (NSProcessInfo thermalState >= 2) the frame step holds 30 fps, and it goes back to the cap after the device
+// Thermal cap (from nxnative's iOS front end; idle here until a front end defines dm_thermal_now): while the device is thermally serious or worse (NSProcessInfo thermalState >= 2) the frame step holds 30 fps, and it goes back to the cap after the device
 // has been fair or better for THERMAL_CALM_NS, so it does not flap. At "serious" iOS caps the GPU clock to about a third: Breath of the Wild's vistas (about 3,000 G-buffer draws)
 // then took 17-26 ms a frame and dropped a frame in most windows; a steady 30 instead also lets the device cool. DM_THERMAL_CAP=0 turns it off; the Mac reports no thermal state
 #define THERMAL_CALM_NS 30000000000ull

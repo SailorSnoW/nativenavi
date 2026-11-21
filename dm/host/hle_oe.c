@@ -7,7 +7,6 @@
 // The operation mode is runtime state (the front end can change it: iOS overheat downgrade switches to handheld): the single source is here, taken once from DM_OPMODE at startup, the environment variable is not read again afterwards
 #include <stdatomic.h>
 #include <errno.h>
-#include <TargetConditionals.h>
 #include <unistd.h>
 #include <crt_externs.h>
 #include <mach-o/dyld.h>

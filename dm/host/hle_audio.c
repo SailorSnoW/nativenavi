@@ -5,7 +5,6 @@
 #include "hle.h"
 #include "audio_input.h"
 #include <AudioToolbox/AudioToolbox.h>
-#include <TargetConditionals.h>
 #include <dispatch/dispatch.h>
 #include <stdatomic.h>
 #include <unistd.h>

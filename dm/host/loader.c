@@ -1,7 +1,6 @@
 // Multi-module loading (playing the role of Horizon's rtld): mapping, claiming thread slots, gate registration, cross-module relocation, take-over by name, segment permissions.
 // The code area (original text and patch area) is set to read-only+execute as soon as it is copied in, and from then on the loader only writes data: on iOS these two blocks must be embedded as is as signed code segments.
 #include "dm.h"
-#include <TargetConditionals.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/mman.h>

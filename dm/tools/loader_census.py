@@ -3,7 +3,7 @@
 # NVN's C proc loader over nvnDeviceGetProcAddress): the loader is a run of "name → x0 or x1 (adrp + add), call the get-proc function, adrp + ldr of a GOT slot, str x0 through it".
 # Every GOT slot stored that way is named after its string; the code outside the loader then reaches a function by loading its slot (adrp + ldr of the same GOT address), so the
 # slots loaded elsewhere are the functions the game calls. Digimon Story Cyber Sleuth: Complete Edition: glad asks for 2,956 GL names, the code loads 79 of them; its NVN loader
-# fetches 512, the code loads 30 (docs/agents/02-survey.md).
+# fetches 512, the code loads 30.
 # Usage: loader_census.py <NSO or decompressed image> [--sites name,name...]   (an NSO is decompressed in memory; a .bin is taken as is, text from 0 to the end of the first segment it
 # cannot tell, so give an NSO when you can)
 import struct, sys, collections

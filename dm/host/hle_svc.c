@@ -13,7 +13,6 @@
 #include <time.h>
 #include <stdatomic.h>
 #include <mach/mach.h>
-#include <TargetConditionals.h>
 #include <CoreFoundation/CoreFoundation.h>   // the volume's free space with what the system can purge (guest_file_free_important)
 
 #define SWITCH_ALIAS UINT64_C(0x1000000000)   // a Switch's alias region: 64 GB

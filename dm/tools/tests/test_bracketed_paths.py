@@ -1,7 +1,6 @@
 """Tools that search a folder with glob find its files when a parent folder's name has brackets (`Game [0400486024DEC000][v131072]`, a usual NSP folder name): glob reads
 an unescaped `[...]` as a character class and finds nothing, silently. The rewriter's registry is checked in test_patches.py; these are the matcher's registered cuts and the
 host hooks read from the sources. No game files needed (temporary files only in a temporary folder)."""
-import os
 from pathlib import Path
 import shutil
 import sys

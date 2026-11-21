@@ -9,7 +9,6 @@
 //   The part where charged ≠ phys_footprint (GPU private memory accounted by IOKit is not in any VM region) is listed separately as "unattributed" = footprint − Σcharged.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
-#include <TargetConditionals.h>
 #include <mach/mach.h>
 #include <mach/vm_statistics.h>
 #include <stdatomic.h>

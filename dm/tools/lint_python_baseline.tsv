@@ -7,25 +7,9 @@ pyright	dm/gfx/tools/cb_extent.py	reportArgumentType	1	Argument of type "Unknown
 pyright	dm/gfx/tools/cb_extent.py	reportArgumentType	1	Argument of type "Unknown | None" cannot be assigned to parameter "arg2" of type "SupportsRichComparisonT@max" in function "max" Type "Unknown | None" is not assignable to type "int" "None" is not assignable to "int"
 pyright	dm/gfx/tools/cb_extent.py	reportOptionalOperand	1	Operator "<" not supported for "None"
 pyright	dm/gfx/tools/dmsh_build.py	reportArgumentType	1	Argument of type "str | None" cannot be assigned to parameter "file" of type "FileDescriptorOrPath" in function "open" Type "str | None" is not assignable to type "FileDescriptorOrPath" Type "None" is not assignable to type "FileDescriptorOrPath" "None" is not assignable to "int" "None" is not assignable to "str" "None" is not assignable to "bytes" "None" is incompatible with protocol "PathLike[str]" "__fspath__" is not present "None" is incompatible with protocol "PathLike[bytes]" ...
-pyright	dm/gfx/tools/dmsh_build.py	reportArgumentType	2	Argument of type "str | None" cannot be assigned to parameter "a" of type "BytesPath" in function "join" Type "str | None" is not assignable to type "BytesPath" Type "str" is not assignable to type "BytesPath" "str" is not assignable to "bytes" "str" is incompatible with protocol "PathLike[bytes]" "__fspath__" is not present
 pyright	dm/gfx/tools/dmsh_build.py	reportAttributeAccessIssue	1	Cannot access attribute "items" for class "str" Attribute "items" is unknown
 pyright	dm/gfx/tools/dmsh_build.py	reportCallIssue	1	No overloads for "open" match the provided arguments
-pyright	dm/gfx/tools/dmsh_build.py	reportCallIssue	2	No overloads for "join" match the provided arguments
-pyright	dm/gfx/tools/shader_split.py	reportArgumentType	1	Argument of type "Literal['m_Name']" cannot be assigned to parameter "s" of type "slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]" in function "__getitem__" "Literal['m_Name']" is not assignable to "slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]"
-pyright	dm/gfx/tools/shader_split.py	reportArgumentType	1	Argument of type "Literal['m_ParsedForm']" cannot be assigned to parameter "s" of type "slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]" in function "__getitem__" "Literal['m_ParsedForm']" is not assignable to "slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]"
-pyright	dm/gfx/tools/shader_split.py	reportArgumentType	1	Argument of type "Literal['variants']" cannot be assigned to parameter "s" of type "slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]" in function "__getitem__" "Literal['variants']" is not assignable to "slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]"
-pyright	dm/gfx/tools/shader_split.py	reportArgumentType	1	Argument of type "bytes | None" cannot be assigned to parameter "buffer" of type "ReadableBuffer" in function "unpack_from" Type "bytes | None" is not assignable to type "ReadableBuffer" "None" is incompatible with protocol "Buffer" "__buffer__" is not present
-pyright	dm/gfx/tools/shader_split.py	reportArgumentType	2	Argument of type "Unknown | int | None" cannot be assigned to parameter "offset" of type "int" in function "unpack_from" Type "Unknown | int | None" is not assignable to type "int" "None" is not assignable to "int"
-pyright	dm/gfx/tools/shader_split.py	reportAttributeAccessIssue	1	Cannot access attribute "get" for class "list[Any]" Attribute "get" is unknown
-pyright	dm/gfx/tools/shader_split.py	reportCallIssue	3	No overloads for "__getitem__" match the provided arguments
 pyright	dm/gfx/tools/shader_split.py	reportMissingImports	1	Import "backports" could not be resolved
-pyright	dm/gfx/tools/shader_split.py	reportOperatorIssue	1	Operator "<=" not supported for types "int" and "Any | tuple[Any, ...]" Operator "<=" not supported for types "int" and "tuple[Any, ...]"
-pyright	dm/gfx/tools/shader_split.py	reportOptionalIterable	5	Object of type "None" cannot be used as iterable value
-pyright	dm/gfx/tools/shader_split.py	reportOptionalMemberAccess	1	"flush" is not a known attribute of "None"
-pyright	dm/gfx/tools/shader_split.py	reportOptionalMemberAccess	2	"read" is not a known attribute of "None"
-pyright	dm/gfx/tools/shader_split.py	reportOptionalMemberAccess	2	"write" is not a known attribute of "None"
-pyright	dm/gfx/tools/shader_split.py	reportOptionalSubscript	1	Object of type "None" is not subscriptable
-pyright	dm/gfx/tools/shader_split.py	reportSelfClsParameterName	5	Instance methods should take a "self" parameter
 pyright	dm/tools/docs_symptoms.py	reportOptionalMemberAccess	1	"group" is not a known attribute of "None"
 pyright	dm/tools/gpuprof.py	reportArgumentType	1	Argument of type "Unknown | None" cannot be assigned to parameter "value" of type "int" in function "__setitem__" Type "Unknown | None" is not assignable to type "int" "None" is not assignable to "int"
 pyright	dm/tools/gpuprof.py	reportOptionalMemberAccess	1	"split" is not a known attribute of "None"
@@ -58,16 +42,12 @@ pyright	dm/tools/tests/test_nsp_chain.py	reportArgumentType	1	Argument of type "
 pyright	dm/tools/tests/test_nsp_chain.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
 pyright	dm/tools/tests/test_nsp_chain.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
 pyright	dm/tools/tests/test_nsp_incremental.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_nsp_incremental.py	reportArgumentType	1	Argument of type "int | str | tuple[str, str]" cannot be assigned to parameter "ver" of type "str" in function "derive" Type "int | str | tuple[str, str]" is not assignable to type "str" "int" is not assignable to "str"
 pyright	dm/tools/tests/test_nsp_incremental.py	reportAttributeAccessIssue	1	Cannot assign to attribute "nacp" for class "ModuleType" Attribute "nacp" is unknown
-pyright	dm/tools/tests/test_nsp_incremental.py	reportAttributeAccessIssue	1	Cannot assign to attribute "pg" for class "ModuleType" Attribute "pg" is unknown
 pyright	dm/tools/tests/test_nsp_incremental.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
 pyright	dm/tools/tests/test_nsp_incremental.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
 pyright	dm/tools/tests/test_nsp_mac.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_nsp_mac.py	reportOperatorIssue	1	Operator "in" not supported for types "Literal['IOSOUT']" and "Unknown | None" Operator "in" not supported for types "Literal['IOSOUT']" and "None"
 pyright	dm/tools/tests/test_nsp_mac.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
 pyright	dm/tools/tests/test_nsp_mac.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_mac.py	reportOptionalSubscript	1	Object of type "None" is not subscriptable
 pyright	dm/tools/tests/test_nsp_mac_app.py	reportArgumentType	1	Argument of type "Unknown | None" cannot be assigned to parameter "obj" of type "Sized" in function "len" Type "Unknown | None" is not assignable to type "Sized" "None" is incompatible with protocol "Sized" "__len__" is not present
 pyright	dm/tools/tests/test_nsp_mac_app.py	reportArgumentType	1	Argument of type "str | None" cannot be assigned to parameter "src" of type "StrPath" in function "copy2" Type "str | None" is not assignable to type "StrPath" Type "None" is not assignable to type "StrPath" "None" is not assignable to "str" "None" is incompatible with protocol "PathLike[str]" "__fspath__" is not present
 pyright	dm/tools/tests/test_nsp_mac_app.py	reportArgumentType	2	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
@@ -94,21 +74,10 @@ pyright	scripts/bench.py	reportArgumentType	1	Argument of type "float" cannot be
 pyright	scripts/bench.py	reportCallIssue	1	No overloads for "round" match the provided arguments
 pyright	scripts/bench.py	reportOptionalMemberAccess	1	"group" is not a known attribute of "None"
 ruff	dm/gfx/tools/shader_split.py	B006	1	Do not use mutable data structures for argument defaults
-ruff	dm/gfx/tools/shader_split.py	B023	1	Function definition does not bind loop variable `c`
-ruff	dm/gfx/tools/shader_split.py	B023	1	Function definition does not bind loop variable `order`
-ruff	dm/gfx/tools/shader_split.py	B023	1	Function definition does not bind loop variable `tab`
-ruff	dm/gfx/tools/shader_split.py	B023	3	Function definition does not bind loop variable `r`
-ruff	dm/gfx/tools/shader_split.py	B023	3	Function definition does not bind loop variable `sec`
-ruff	dm/gfx/tools/shader_split.py	B023	3	Function definition does not bind loop variable `secs`
-ruff	dm/gfx/tools/shader_split.py	F841	1	Local variable `pre` is assigned to but never used
 ruff	dm/tools/patch_nso.py	PIE808	1	Unnecessary `start` argument in `range`
 ruff	dm/tools/sdis.py	F841	1	Local variable `lo` is assigned to but never used
 ruff	dm/tools/tests/test_gpuprof.py	F401	1	`os` imported but unused
 ruff	dm/tools/tests/test_gpuprof.py	F401	1	`sys` imported but unused
 ruff	dm/tools/tests/test_image_atomic_bounds.py	B023	1	Function definition does not bind loop variable `dependencies`
-ruff	dm/tools/tests/test_nsp_incremental.py	B023	1	Function definition does not bind loop variable `build`
-ruff	dm/tools/tests/test_nsp_incremental.py	B023	1	Function definition does not bind loop variable `own`
-ruff	dm/tools/tests/test_nsp_incremental.py	B023	1	Function definition does not bind loop variable `roots`
-ruff	dm/tools/tests/test_nsp_incremental.py	B023	1	Function definition does not bind loop variable `sh`
 ruff	dm/tools/tests/test_spin_waits.py	F401	1	`sys` imported but unused
 ruff	scripts/bench.py	B023	1	Function definition does not bind loop variable `ok`

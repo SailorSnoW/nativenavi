@@ -1,7 +1,6 @@
 #ifndef DM_AUDIO_INPUT_H
 #define DM_AUDIO_INPUT_H
 
-#include <TargetConditionals.h>
 #include <stdint.h>
 
 typedef struct dm_audio_input_stream dm_audio_input_stream;

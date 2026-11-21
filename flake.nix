@@ -26,7 +26,6 @@
     in
     {
       packages = eachSystem (pkgs: {
-        xcodegen = pkgs.callPackage ./dm/nix/xcodegen.nix { };
         llvm = pkgs.callPackage ./dm/nix/llvm.nix {
           version = workflowEnv lintC "LLVM_VERSION";
           sha256 = workflowEnv lintC "LLVM_SHA256";
@@ -44,9 +43,7 @@
           build = [
             python
             dotnet
-            own.xcodegen
             pkgs.zstd
-            pkgs.glslang
             pkgs.spirv-tools
           ];
           # The SDK wrapper does not set it, and the translator's apphost cannot find the runtime without it

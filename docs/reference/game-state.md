@@ -20,7 +20,7 @@ The games' own state: saves, scripted state, and behaviour that looks like a hos
 
 - **Symptom:** a crash in `main+0x339c00` a second or two into the title, in love-nx's video module teardown (`love::video::theora::Video` → `~Worker`; its thread released the worker that the closing module deletes too).
 - **Cause:** the Lua state was closing: on the Switch, Balatro's `love.errhand` returns at once, so any Lua error quits. A `print` at the top of `love.errhand` in a copy of the RomFS (`DM_ROMFS=<copy>`) gave the error: `Shader uniform 'distortion_fac' does not exist` (the capture run had no shader library, so every program linked with no uniforms), then `bad argument #2 to 'send' (number expected, got boolean)` (a `bool` uniform reported as `GL_UNSIGNED_INT`).
-- **Fix:** look for the Lua error first; the two errors here were host faults in the GL layer's shaders and uniforms (see [GL shaders put together at run time and captured](rendering.md#gl-shaders-put-together-at-run-time-and-captured) and [GL uniforms, pipelines and attributes](rendering.md#gl-uniforms-pipelines-and-attributes)).
+- **Fix:** look for the Lua error first; the two errors here were host faults in the GL layer's shaders and uniforms (see GL shaders put together at run time and captured and GL uniforms, pipelines and attributes).
 - **Found on:** Balatro (SDK 18.3.2, LÖVE 11.4; one boot).
 - **Check:** probing the destructors (`DM_PROBE`) and logging every object the Lua GC released (`DM_PROBE=main:0x18b920@x0+0`: the module proxies all at once) showed it was a shutdown, not a premature collection.
 
@@ -40,13 +40,6 @@ The games' own state: saves, scripted state, and behaviour that looks like a hos
 - **Found on:** Diablo II: Resurrected 1.0.34.0 (SDK 11.4.3). The check and its 30 days were first described in d2r-mobile's notes on a community offline fix; the cut here is its own.
 
 ## Scripted state
-
-### The software keyboard in scripted runs (`DM_KBD`)
-
-- **Symptom:** in a scripted run, a screen goes back by itself right after a confirm; the log shows `swkbd: … → no window, treated as cancel`.
-- **Cause:** the confirm opened the system keyboard (`swkbd`, name entry). Without a window the host answers "cancel" by design.
-- **Fix:** pass `DM_KBD=<text>` to answer it.
-- **Found on:** Fire Emblem Engage (its appearance choice).
 
 ### Player join screens (`hid::StartLrAssignmentMode`)
 

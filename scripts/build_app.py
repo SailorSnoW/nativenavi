@@ -1111,6 +1111,7 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, own=False, dlc_roms=
     dlckf, dlckey, promoted = pkg.with_name(pkg.name + '.dlc.key'), None, False
     def promote():
         nonlocal g, own, env, promoted
+        assert derive_dlc is not None   # promote() is called only with one
         g, own, promoted = derive_dlc(), True, True; inputs[1] = True
         env = dict(env, DM_GAMES_DIR=os.pathsep.join([str(g.dir.parent), env.get('DM_GAMES_DIR', '')]), DM_GAMES_FIRST='1')
     if not own and derive_dlc:
@@ -1876,6 +1877,7 @@ def main(args=None):
     sh = work / 'shader'
     def derive_shader_tables():   # called only after the strict DLC-only comparison passed (split_shaders)
         nonlocal g, derived
+        assert g is not None
         derived = 'the installed DLC shader content differs from the registered tables'
         derive_profile(g, pdir / g.id, pkg_ver, game, g.words('modules'), shader_only=True)
         profiles_first(env, pdir)

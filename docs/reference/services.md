@@ -15,13 +15,13 @@ SDK calls and system services the host answers (`dm/host/hle_*.c`). Each entry: 
 ### SDK 3.6.0 answered as SDK 4
 
 - SDK 3.6.0 booted to its frame loop with the provisional profile as generated and no host change: the services, the NVN API version (53, as for every SDK up to 10), the audio output and the heap all answered as for SDK 4.
-- **Found on:** Bayonetta 2 (PlatinumGames' engine in its Wii U form): what it needed was graphics ([Clears of attachments larger than the render pass](rendering.md#clears-of-attachments-larger-than-the-render-pass), [`Downsample` of a single-sample texture](rendering.md#downsample-of-a-single-sample-texture)) and a reader for its CRI CPK archives ([BNSH files in PlatinumGames DAT archives inside CRI CPK archives](shaders.md#bnsh-files-in-platinumgames-dat-archives-inside-cri-cpk-archives)); Bayonetta, on the same `sdk` and `subsdk0` builds, then needed no change at all (its profile is Bayonetta 2's with its own build row and tables, and the route from the boot to the first fight logged no red line). OCTOPATH TRAVELER's SDK 3.5.1 answered as SDK 4 as well (NVN 53.313); its audio renderer needed the update lock found without `SdkMutexType` ([No `SdkMutexType` in SDK 3](audio.md#no-sdkmutextype-in-sdk-3)).
+- **Found on:** Bayonetta 2 (PlatinumGames' engine in its Wii U form): what it needed was graphics ([Clears of attachments larger than the render pass](rendering.md#clears-of-attachments-larger-than-the-render-pass), [`Downsample` of a single-sample texture](rendering.md#downsample-of-a-single-sample-texture)) and a reader for its CRI CPK archives (BNSH files in PlatinumGames DAT archives inside CRI CPK archives); Bayonetta, on the same `sdk` and `subsdk0` builds, then needed no change at all (its profile is Bayonetta 2's with its own build row and tables, and the route from the boot to the first fight logged no red line). OCTOPATH TRAVELER's SDK 3.5.1 answered as SDK 4 as well (NVN 53.313); its audio renderer needed the update lock found without `SdkMutexType` ([No `SdkMutexType` in SDK 3](audio.md#no-sdkmutextype-in-sdk-3)).
 
 ### Listing a game's unhooked imports before they are met
 
 Most service calls can be found before they crash, before the first boot or the next one: the calls that would abort in `sm::Initialize` (or read a null service object) are in the import list.
 
-- **Procedure:** list `main`'s `nn::` imports (its undefined imports) that no host hook names, by namespace: the survey's import table (`nso_syms.py`), then `main`'s undefined `nn::` symbols that no hook (`HLE` / `HLE_FORCE`) names ([02](../agents/02-survey.md#imports-vs-host-hooks)), and read each one's SDK code. This gives the calls a game will make before they are met. The import list itself says where to look: diff the undefined symbols against the closest title the host already runs (and every other game's imports), drop what the host hooks, and the rest are the candidates. To find which `sdk` function aborted, map the backtrace offsets to the nearest exported symbol (The Legend of Zelda: Tears of the Kingdom 1.4.3).
+- **Procedure:** list `main`'s `nn::` imports (its undefined imports) that no host hook names, by namespace: the survey's import table (`nso_syms.py`), then `main`'s undefined `nn::` symbols that no hook (`HLE` / `HLE_FORCE`) names, and read each one's SDK code. This gives the calls a game will make before they are met. The import list itself says where to look: diff the undefined symbols against the closest title the host already runs (and every other game's imports), drop what the host hooks, and the rest are the candidates. To find which `sdk` function aborted, map the backtrace offsets to the nearest exported symbol (The Legend of Zelda: Tears of the Kingdom 1.4.3).
 - **What needs nothing:** most `nn::os` / `nn::mem` imports run natively in `sdk`. Calls that are pure computations need nothing, nor do socket calls behind a `Socket()` that already fails offline, nor library helpers that only fill the game's own structures.
 - **Hook names:** hooks are `HLE_FORCE`, `SSF`, `SKF`, `IKB_IGNORE` across `dm/host` and `dm/gfx`. `strings` misses names the symbol table stores as the tail of a longer one, so list them with `nso_syms.dynsyms`.
 - **The survey table's blind spots:** it counts only names given to `HLE` / `HLE_FORCE` directly: hooks made through macros (`SKF` and `SSF` in `hle_net.c`, `TOUCH(N)` in `hle_hid.c`) show as missing. The touch-screen states (`GetTouchScreenState<16>`) were already hooked by such a macro, which the import table does not see. It once listed every vi call as unhooked: `nso_syms.py host_hooks` read only `dm/host`, and the vi hooks are in `dm/gfx` (it reads `dm/gfx` and `dm/gfx/nvn` now; found on Absolum).
@@ -72,14 +72,7 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Cause:** older SDKs export other names for the same calls.
 - **Fix:** hook both generations. SDK 12 names: `ListAudioDeviceName` / `GetActiveAudioDeviceName`, singular `hid::GetNpadState`, `OpenDefaultAudioOut`. SDK 11 names: `fs::CommitSaveData(mount)` is the older name of `fs::Commit`.
 - **Found on:** Metroid Dread (SDK 11 names).
-- **Note:** overloads change too: SDK 18's `nn::hid::InitializeTouchScreen(int, int)` (Super Mario Galaxy, [SDK calls that open a system service through sm](#sdk-calls-that-open-a-system-service-through-sm)), SDK 19's `LoadModule` with one more bool ([`nn::ro` and its port](#nnro-and-its-port)), and `vi::CreateLayer` with the layer's size (Absolum, [`vi::CreateLayer` with the layer's size](#vicreatelayer-with-the-layers-size)). SDK 19's `fs::MountRom(const char *, int, void *, size_t)` and `fs::QueryMountRomCacheSize(size_t *, int)` take a program index (Metroid Prime 4: Beyond's boot, `[RED] sf: the game connects to service fsp-srv itself`): an index mounts that program's RomFS image, `romfs_programs/<index>.img` beside the RomFS, which the NUP packer writes for the other programs of an application, and an index with none mounts this program's own (a red line for an index other than 0) ([A Switch 2 Edition NUP](packing.md#a-switch-2-edition-nup-stops-at-2-base-packages-or-is-not-a-base-title-id)).
-
-### SDK 4's `friends::GetBlockedUserList` without a `Uid`
-
-- **Symptom:** abort in `sm::Initialize` under `nn::friends::GetBlockedUserList` after the opening movie.
-- **Cause:** SDK 4's overload without the `Uid` (`EPiPNS_7account23NetworkServiceAccountIdEii`), which the host did not take over.
-- **Fix:** it reports an empty list with success: the game turns a failure into an error for the error applet (`main+0x8ff9f0`). The overload with a `Uid` keeps reporting a failure, which DRAGON QUEST XI S takes as it is ([Account, friends, play data and Nintendo Account calls](#account-friends-play-data-and-nintendo-account-calls)).
-- **Found on:** DARK SOULS: REMASTERED (SDK 4.5.0, the oldest so far; one boot).
+- **Note:** overloads change too: SDK 18's `nn::hid::InitializeTouchScreen(int, int)` (Super Mario Galaxy, [SDK calls that open a system service through sm](#sdk-calls-that-open-a-system-service-through-sm)), SDK 19's `LoadModule` with one more bool (`nn::ro` and its port), and `vi::CreateLayer` with the layer's size (Absolum, [`vi::CreateLayer` with the layer's size](#vicreatelayer-with-the-layers-size)). SDK 19's `fs::MountRom(const char *, int, void *, size_t)` and `fs::QueryMountRomCacheSize(size_t *, int)` take a program index (Metroid Prime 4: Beyond's boot, `[RED] sf: the game connects to service fsp-srv itself`): an index mounts that program's RomFS image, `romfs_programs/<index>.img` beside the RomFS, which the NUP packer writes for the other programs of an application, and an index with none mounts this program's own (a red line for an index other than 0) (A Switch 2 Edition NUP).
 
 ### SDK 20's `friends::GetPlayHistoryRegistrationKey` without a `Uid`
 
@@ -811,7 +804,7 @@ Most service calls can be found before they crash, before the first boot or the 
 
 - **Symptom:** null read in `sdk` under `nn::applet::CreateLibraryApplet` (Engage: title menu → DLC → `nn::ec::ShowShopAddOnContentList`); `Show…` overloads found in the imports before they were met.
 - **Cause:** every `Show…` call that opens a system applet (eShop, friend lists, web pages, error screens) goes through the applet proxy that `oe::Initialize` would have set up, and the host has none.
-- **Fix:** hook each `Show…` overload the game imports: list `main`'s undefined symbols containing `Show` / `Applet` and grep the host sources for each mangled name; one overload missing is enough to crash. The shop calls return `void` and act as if the player closed the shop (`hle_misc.c`); the friends and web ones return failure (`hle_friends.c`, `hle_offline.c`). `ShowWebPage` remains cut; `web::ShowOfflineHtmlPage` now uses the [offline web view](#offline-html-pages-in-a-web-view) when its page is available. `err::ShowNetworkServiceError` and `err::ShowApplicationError` are logged. Also hooked, found in the imports before they were met: the `ShowShopAddOnContentList(UserHandle)` overload, and the `ec::ShowShop…` overloads without an `ApplicationId` (they show the calling application's own pages). `ec::ShowShopSubscriptionDetails` is under [Shop service accessors](#shop-service-accessors).
+- **Fix:** hook each `Show…` overload the game imports: list `main`'s undefined symbols containing `Show` / `Applet` and grep the host sources for each mangled name; one overload missing is enough to crash. The shop calls return `void` and act as if the player closed the shop (`hle_misc.c`); the friends and web ones return failure (`hle_friends.c`, `hle_offline.c`). `ShowWebPage` remains cut; `web::ShowOfflineHtmlPage` now uses the offline web view when its page is available. `err::ShowNetworkServiceError` and `err::ShowApplicationError` are logged. Also hooked, found in the imports before they were met: the `ShowShopAddOnContentList(UserHandle)` overload, and the `ec::ShowShop…` overloads without an `ApplicationId` (they show the calling application's own pages). `ec::ShowShopSubscriptionDetails` is under [Shop service accessors](#shop-service-accessors).
 - **Found on:** Fire Emblem Engage (the shop calls); Octopath Traveler 0 (`web::ShowOfflineHtmlPage`); Pokémon Sword (SDK 7, `err::ShowNetworkServiceError`); Pokémon Legends: Z-A (19.3.11: `ShowShopAddOnContentList(UserHandle)`, `err::ShowApplicationError`); The Great Ace Attorney Chronicles (SDK 10.4.1: the overloads without an `ApplicationId`); Fire Emblem Fortune's Weave (SDK 22.2.0: `hid::ShowControllerStrapGuide(const StrapGuideArg&)`, met at the title about 100 s in).
 
 ### Library applets take the application's focus
@@ -838,42 +831,6 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Open:** not run on a game (no second controller here): the tests cover the host's side, and that Ocarina of Time stops asking once No2 reads as not connected follows from its request for one player, not from a run. A game that opens the applet for one player and later expects a second controller without opening it again would not see that controller until it reconnects; none is known. The second HID entry behind the report no longer counts as a pad: [A HID entry that sends nothing counted as a second pad](#a-hid-entry-that-sends-nothing-counted-as-a-second-pad).
 - **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) (v131072, one Pro Controller over Bluetooth on the Mac, read as players 1 and 2 after it reconnected; GitHub issue #2237).
 - **Check:** `t_hid` (`dm/host/tests`): one wanted with two and three players, the lowest players kept with a maximum of two, the applet opened for more, a controller that goes and comes back, the supported npads set again.
-
-### The software keyboard blocks only its caller
-
-- **Symptom:** the sound stutters and the input box lags while the player types a name (Octopath Traveler 0 on an iPhone: one 4.7 s frame, 5,035 wakeups a second instead of about 1,800, and no audio underruns).
-- **Cause:** the host froze the guest clock while `swkbd::ShowKeyboard` was up (d2r-mobile's choice, so that monsters did not attack while the player typed). Unreal calls it off its game thread, so the game kept running, and every thread that waits on the clock spun while its audio mixing starved. On the Switch the applet blocks only the caller while the clock runs.
-- **Fix:** the host now does the same (`hle_swkbd.c`). The iOS input box froze the clock a second time around its own wait (`front_ios.m`), so the first fix changed nothing on the phone (4,977 ms and 2,577 ms frames, 5,181 wakeups a second): look for every caller of `guest_clock_freeze_for`, the front ends included. The inline keyboard keeps the freeze: its game (Monster Hunter Rise) does not block on hardware at all, and the host's input box blocks it.
-- **Found on:** Octopath Traveler 0.
-- **Check:** on the Mac `DM_KBD=<text> DM_TEST_SWKBD_HOLD_MS=8000` holds the keyboard up: frozen, 8.8 fps and 7,936 wakeups a second in that window; running, 30 fps and 1,788.
-
-### The inline keyboard as a resident library applet
-
-- **Symptom:** null read in `applet::CreateLibraryApplet` under `swkbd::InlineKeyboard::Initialize` (3D World, entering the save select after the character select).
-- **Cause:** the inline keyboard is a resident library applet whose results arrive through `Calc`.
-- **Fix:** `hle_swkbd.c` takes over every entry that touches the applet: `Appear` arms a request, and the next `Calc` asks for the text the way `ShowKeyboard` does (`DM_KBD`, else the front end's input box) and hands it to the game's changed-string and enter callbacks, or calls its cancel callback; `GetImage` reports no picture. `GetImageMemoryRequirement` is not a pure computation: it asks vi, hence the `vi::GetIndirectImageMemoryRequirement` hook ([vi layer and display calls without vi service objects](#vi-layer-and-display-calls-without-vi-service-objects)).
-- **Found on:** Super Mario 3D World + Bowser's Fury.
-
-### Inline keyboard window size, setters and callbacks
-
-- **Symptom:** texture creation returns null right after the inline keyboard's `Initialize`, then a null read at `main+0x7713044`.
-- **Cause:** the game makes three textures of `swkbd::InlineKeyboard::GetWindowSize`, and the host answered 0 × 0 (its creation function returns null for a size of 0, `main+0x77112b8`).
-- **Fix:** it is 1280 × 720 as on hardware now. SDK 11 adds keyboard setters (window mode, key top alpha / scale / position, touch, hardware keyboard, user words, dictionaries; ignored) and two callbacks the applet makes from `Calc`: finished-initialize after `Initialize` and released-user-words after `UnsetUserWordInfo`. The host makes them on the next `Calc`.
-- **Found on:** Monster Hunter Rise.
-
-### Inline keyboard text callbacks and `Calc` states
-
-- **Symptom:** the hunter's name box stays empty, then stays open with the name in it (Monster Hunter Rise, character creation).
-- **Cause:** the inline keyboard used to count every `Appear` as a cancel. The game also finishes the entry only when `Calc` returns 1 (ready / hidden) after a non-zero value (`main+0x6fb3e6c`); the hook returned nothing.
-- **Fix:** the text arrives through the enter callback, whose argument is the text inline (`char16_t[502]`, the length at +0x3EC; the changed-string argument adds three cursor positions at +0x3F0..+0x3F8: `ikb_str_arg`, read off the game's callbacks at `main+0x6fb3910` / `main+0x6fb3afc`). `Calc` now returns 0 until initialization finishes, 3 while shown and 1 otherwise. `SetFinishedKeyboardCallback` is called on the `Calc` after `Disappear`. AppearArg's `textMaxLength` (+0x20) limits the text.
-- **Found on:** Monster Hunter Rise.
-
-### The Mac input box keeps the game's focus
-
-- **Symptom:** the name typed in the Mac input box is dropped and the game asks again; the log has `oe focus state → 2` and `→ 1` between `inline keyboard Appear` and `→ OK` (Monster Hunter Rise, character creation).
-- **Cause:** the box (`front_text_input`, an `NSAlert`) takes the key window, and the game window resigning key was sent to the game as out of focus. On hardware the inline keyboard is drawn inside the game, which keeps its focus.
-- **Fix:** `front_mac.m` does not report the game window resigning key while the box is up (`g_text_box`). `ShowKeyboard`'s applet still sends its own out-of-focus / in-focus pair (`DM_APPLET`).
-- **Found on:** Monster Hunter Rise.
 
 ### `nn::ngc::ProfanityFilter` vtable and by-name overloads
 
@@ -909,7 +866,7 @@ Most service calls can be found before they crash, before the first boot or the 
 
 - **Symptom:** SIGSEGV in `vi::SetLayerCrop` or `vi::OpenDisplay` when opening a display by name.
 - **Cause:** the SDK's version dereferences vi service objects the host never made.
-- **Fix:** `SetLayerCrop` only records the crop for the present ([The NVN present crops by the vi layer crop](rendering.md#the-nvn-present-crops-by-the-vi-layer-crop)); `DestroyLayer`, `CloseDisplay` and `vi::Finalize` are host no-ops. Also hooked: `vi::GetIndirectImageMemoryRequirement` (asked by the inline keyboard's `GetImageMemoryRequirement`, [The inline keyboard as a resident library applet](#the-inline-keyboard-as-a-resident-library-applet)); `vi::ListDisplays` (one display, "Default"; the game lists 10 into a stack buffer and does not read them, `main+0x808f08`), found from the import list before it was met. `vi::OpenDisplay("Default")` returns the same static display as `OpenDefaultDisplay`, so applications can open the name returned by `ListDisplays` without entering the SDK's absent service client.
+- **Fix:** `SetLayerCrop` only records the crop for the present ([The NVN present crops by the vi layer crop](rendering.md#the-nvn-present-crops-by-the-vi-layer-crop)); `DestroyLayer`, `CloseDisplay` and `vi::Finalize` are host no-ops. Also hooked: `vi::GetIndirectImageMemoryRequirement` (asked by the inline keyboard's `GetImageMemoryRequirement`, The inline keyboard as a resident library applet); `vi::ListDisplays` (one display, "Default"; the game lists 10 into a stack buffer and does not read them, `main+0x808f08`), found from the import list before it was met. `vi::OpenDisplay("Default")` returns the same static display as `OpenDefaultDisplay`, so applications can open the name returned by `ListDisplays` without entering the SDK's absent service client.
 - **Found on:** The Legend of Zelda: Link's Awakening (SDK 8.2.0); Super Mario 3D World + Bowser's Fury (SDK 10: `vi::GetIndirectImageMemoryRequirement`); The Great Ace Attorney Chronicles (SDK 10.4.1: `vi::ListDisplays`); Alien: Isolation (SDK 8.2.0: `vi::OpenDisplay`).
 
 ### `vi::InitializeWithVrrLfcEnabled`
@@ -1001,7 +958,7 @@ Most service calls can be found before they crash, before the first boot or the 
 
 - **Symptom:** SDK 20 calls that reach a service, each one boot; SDK 20's `OpenAudioRenderer` aborts on an ARUID of 0.
 - **Cause:** the SDK's own `applet::GetAppletResourceUserId` returns 0 without am, and SDK 20's `OpenAudioRenderer` aborts on that.
-- **Fix:** `applet::GetAppletResourceUserId` reports 0x80; the VR-mode calls (`pl::IsVrMode` / `BeginVrMode` / `EndVrMode`; `BeginVrMode` returns 0xd08e, the SDK's own refusal); `pctl::CheckStereoVisionPermission` (bool, not permitted: the host has no VR display); `oe::TryPopLaunchParameter` (none, or the profile's `launch_param`: [Multi-program applications: `oe::ExecuteProgram`](#multi-program-applications-oeexecuteprogram)) (The Legend of Zelda: Breath of the Wild 1.9.0, SDK 20.5.22). `oe::GetPreviousProgramIndex` reports −1: launched from the home menu (The Legend of Zelda: Tears of the Kingdom 1.4.3).
+- **Fix:** `applet::GetAppletResourceUserId` reports 0x80; the VR-mode calls (`pl::IsVrMode` / `BeginVrMode` / `EndVrMode`; `BeginVrMode` returns 0xd08e, the SDK's own refusal); `pctl::CheckStereoVisionPermission` (bool, not permitted: the host has no VR display); `oe::TryPopLaunchParameter` (none, or the profile's `launch_param`: Multi-program applications: `oe::ExecuteProgram`) (The Legend of Zelda: Breath of the Wild 1.9.0, SDK 20.5.22). `oe::GetPreviousProgramIndex` reports −1: launched from the home menu (The Legend of Zelda: Tears of the Kingdom 1.4.3).
 - **Found on:** The Legend of Zelda: Breath of the Wild, The Legend of Zelda: Tears of the Kingdom.
 
 ### oe calls through apm without an apm session
@@ -1032,7 +989,7 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Symptom:** a null read at `sdk+0x336ccc` in `pdm::QueryApplicationPlayStatistics` (Pokémon Sword, the second boot); undefined `nn::account::` / `nn::friends::` imports with no hook, found from the import list ([Listing a game's unhooked imports before they are met](#listing-a-games-unhooked-imports-before-they-are-met)) before they were met.
 - **Fix:** hooked (`hle_account.c`, `hle_friends.c`, `hle_offline.c`): `account::ListAllUsers`; `account::PushOpenUsers` (nothing to hand over); `account::LoadCachedNintendoAccountInfo` (fails: no Nintendo Account; Big Brain Academy then skips the birthday and country getters); `friends::GetBlockedUserList`, `DeclareOpen` / `DeclareCloseOnlinePlaySession` (unavailable); `friends::StartFacedFriendRequest` / `StartSendingFriendRequest` (fail); the Nintendo Account request's `GetAuthorizationCode` and `GetState` (both fail, as `GetIdToken`); `pdm::QueryApplicationPlayStatistics`, which asks how often this user launched two other games and reads only the launch count, so each is never played.
 - **Found on:** Super Mario 3D World + Bowser's Fury (SDK 10, `ListAllUsers`); Octopath Traveler 0 (`PushOpenUsers`); DRAGON QUEST XI S (the friends calls); DRAGON QUEST VII Reimagined (the Nintendo Account request); Pokémon Sword (SDK 7, `pdm`); The Great Ace Attorney Chronicles (SDK 10.4.1: the friend requests); Big Brain Academy: Brain vs. Brain (SDK 11.4.3: `LoadCachedNintendoAccountInfo`).
-- **Note:** Super Mario Odyssey's `account::OpenPreselectedUser` and `account::GetLastOpenedUser` are in [SDK calls that open a system service through sm](#sdk-calls-that-open-a-system-service-through-sm); SDK 6's `OpenPreselectedUser` in [SDK 6's `account::OpenPreselectedUser` returns a Result](#sdk-6s-accountopenpreselecteduser-returns-a-result); SDK 4's `GetBlockedUserList` without a `Uid` in [SDK 4's `friends::GetBlockedUserList` without a `Uid`](#sdk-4s-friendsgetblockeduserlist-without-a-uid); the save thumbnail calls in [Directory, file data cache and save-thumbnail calls](#directory-file-data-cache-and-save-thumbnail-calls).
+- **Note:** Super Mario Odyssey's `account::OpenPreselectedUser` and `account::GetLastOpenedUser` are in [SDK calls that open a system service through sm](#sdk-calls-that-open-a-system-service-through-sm); SDK 6's `OpenPreselectedUser` in [SDK 6's `account::OpenPreselectedUser` returns a Result](#sdk-6s-accountopenpreselecteduser-returns-a-result); SDK 4's `GetBlockedUserList` without a `Uid` in SDK 4's `friends::GetBlockedUserList` without a `Uid`; the save thumbnail calls in [Directory, file data cache and save-thumbnail calls](#directory-file-data-cache-and-save-thumbnail-calls).
 
 ### Play statistics without a user ID
 
@@ -1274,52 +1231,6 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Fix:** `pl::RequestSharedFontLoad` is hooked (an SDK 20 call that reaches a service).
 - **Found on:** The Legend of Zelda: Breath of the Wild (1.9.0, SDK 20.5.22).
 
-### Multi-program applications: `oe::ExecuteProgram`
-
-- **Symptom:** `[RED] oe::ExecuteProgram(<n>, <k> bytes of parameters: …)`; before this entry, a crash right after that line (`sig=4` on a trap, or the next function running). A program started on its own quits at boot: it expects the launch parameter its launcher passes.
-- **Cause:** a multi-program application has one Program and one Control NCA per program index, title IDs base + index. One program starts another with `oe::ExecuteProgram(index, param, size)`: on Horizon the process ends and the named program starts, and pops the parameters with `oe::TryPopLaunchParameter`. The call never returns, and what follows it in the game's code is not code to run: a trap (Super Mario 3D All-Stars' launcher, `main+0x10a58`) or the next function (ROMANCE OF THE THREE KINGDOMS 8 REMAKE, `main+0xa31914`).
-- **Fix:** one package over all the programs. The first program's profile lists the others (`programs`); the host is built over a table of their profiles (`game.py` `header_multi`, `DM_GAME_*` read the entry `DM_PROGRAM` picks), each program extracted with `nx_extract --program=<title ID>` into its own build folder, and `build_app.py` packs them as one (`--program N` packs one alone, for bring-up). `ExecuteProgram` ends the program as Horizon does (`hle_oe.c`):
-  - **The Mac, a run command or an app:** `DM_PROGRAMS` names a table with one row per program: its host, rewritten modules, run folder and environment. The parameters go to `<run folder>/launch_param.bin`, and after the graceful exit (`dm_host_shutdown_then`, which writes the pipeline archive first: [A run that ends in its prewarm loses what it compiled](rendering.md#a-run-that-ends-in-its-prewarm-loses-what-it-compiled)) the host `execve`s itself with this environment less every key a row sets, then the row's keys, `DM_LAUNCH_PARAM` and `DM_PREV_PROGRAM` (`oe::GetPreviousProgramIndex`). The NSP script writes `programs.tsv` in program 0's build folder; a Mac app's `dm/mac/launcher.c` fills in its own paths.
-  - **The iPhone:** iOS cannot start a process. `DM_EXEC_OUT` (`main.m`: `Documents/program.bin`) gets the index and the parameters; the front end names the program for 1.5 s and schedules a local notification that opens the app (`front_program_handoff`; a player who refused notifications is asked on screen to open the app again), and the app ends. The next start reads the record, deletes it and runs that program without the settings screen, so opening the app later starts at the first program. Each program's modules are in sections of their own (`gen_embed.py --tag`, `DM_EMBED_TAG`) and its files in `dm/p<N>/`, `p<N>/` and `msl/p<N>/`, packed so into the IPA or copied so by the Xcode build phase (`build_ipa.sh` `PROGRAMS_TSV`, `stage_resources.sh`).
-  - **A program not packed** (Super Mario 3D All-Stars' Galaxy, 32-bit ARM): a red line, and the application's first program starts instead, as after a restart from HOME. **No table** (a program run by itself): `ExecuteProgram` of its own index starts its host again with its own arguments; another program cannot start, and the program ends.
-- **Launch parameters:** `TryPopLaunchParameter` returns the bytes of `DM_LAUNCH_PARAM`'s file, once; a program run alone gets what its profile's `launch_param` describes.
-- **Found on:** Super Mario 3D All-Stars: the launcher starts Super Mario 64 and Super Mario Sunshine with 16 bytes (language code and two volume floats), and each game's Return to title selection calls `ExecuteProgram(0)`. ROMANCE OF THE THREE KINGDOMS 8 REMAKE and Octopath Traveler 0 import it; neither was seen to call it.
-- **Note:** `DM_CTL` `program <n>` calls it with no parameters ([05, Scripted input](../agents/05-debugging.md#scripted-input-and-thread-scheduling)). The iPhone path compiles and packs; it has not run on a device.
-
-### `oe::RequestToRelaunchApplication`: the application starts again
-
-- **Symptom:** `CRASH sig=11 addr=0` in the SDK's `applet::RequestToLaunchApplication` (Super Smash Bros. Ultimate 13.0.5: `pc=sdk+0x804c8`) right after a game asks to restart itself, for example after a language change.
-- **Cause:** `oe::RequestToRelaunchApplication` was not hooked. The SDK's version reads through the am application proxy, which the host never opens.
-- **Fix:** hooked (`hle_oe.c` `h_oe_Relaunch`): the start of [`oe::ExecuteProgram`](#multi-program-applications-oeexecuteprogram) (`oe_start`) for program 0, with no launch parameter and no previous program, as from HOME; it never returns. On the Mac the plan is made first and the graceful exit (`dm_host_shutdown_then`) then runs only `execve`: a multi-program application's program 0 row, or a program run by itself its own host with the same arguments. Either gets this environment less `DM_LAUNCH_PARAM` and `DM_PREV_PROGRAM`, plus `DM_RELAUNCH=1`, which makes `DM_CTL` resume at the end of its file. On the iPhone an app holding several programs records program 0 (`DM_EXEC_OUT`); an app of one program cannot start itself again, so the front end asks the player on screen for 3 s to open it again (`front_program_handoff`), and the app ends.
-- **Note:** tested on the Mac with a program run by itself; the multi-program and iPhone paths have not run. `t_oe` checks the Mac's plans.
-- **Found on:** Super Smash Bros. Ultimate (13.0.5: Options > Language > Yes).
-
-### Offline HTML startup overflows a small guest stack
-
-- **Symptom:** opening Mario Kart 8 Deluxe's info screen crashes in `__chkstk_darwin`, called by `web_find` through `web_start` and `h_web_Offline` ([issue #2541](https://github.com/seedds/nxnative/issues/2541)).
-- **Cause:** the offline-page hooks ran on the calling game thread's stack. `web_start` keeps about 5 KB of path buffers and `web_find` needs another 5 KB, before the file-system and front-end calls. A small thread stack sized for Horizon's applet request cannot hold this host implementation.
-- **Fix:** both `ShowOfflineHtmlPage` and `OfflineWebSession::Start` were registered with `HLE_FORCE_BIG`, the guarded host-stack entry, which every take-over takes since 2026-11-13 ([Host calls on small guest stacks](memory.md#host-calls-on-small-guest-stacks)). Arguments and results keep their ABI, and the original guest stack is restored when the call returns. Calls already on a host stack use the direct path.
-- **Test:** `t_web_stack` calls both registered entries on an 8 KB guarded guest stack with a fake viewer (session exit, the synchronous callback result, a missing page); before the fix it stops with SIGBUS. Mario Kart 8 Deluxe 4.0.0 on the Mac shows its Info page, closes it with B and opens it again.
-- **Found on:** Mario Kart 8 Deluxe, 4.0.1 with DLC on the Mac.
-
-### Offline pages moved by the Switch browser's focus navigation
-
-- **Symptom:** an offline page shows and B closes it, but the D-pad and A do nothing: its entries never take the focus or open. A page error at load, `TypeError: window.nx.playReport.setCounterSetIdentifier is not a function`. Button icons in the page's text draw as empty boxes. After the page went to another of its pages and back, B no longer closes it.
-- **Cause:** the Switch browser (NetFront Browser NX, WebKit-based) moves the focus itself: the D-pad and the stick move it to the nearest focusable element in their direction (spatial navigation), as the default action of the arrow key, and A presses what has the focus; a page loads with its first element focused. Pages are written for that: Mario Kart 8 Deluxe's Info pages have only `tabindex` entries, act on their `focus` and `click` events, wrap from the last entry to the first in their own `keydown` handlers and cancel Left / Right with `return false`, which only make sense if the browser's move is a default action that a moved focus or a prevented key stops. The host sent synthetic key events, which have no default action in WebKit, so nothing moved the focus. Its `window.nx` stand-in answered an unknown name with a no-op function, so a namespace (`nx.playReport.incrementCounter`) was undefined and the click handlers threw before they navigated; `nx.playSystemSe` (the browser's system sounds) was a generic no-op. On the Switch a character no font in the page's list has comes from the system's fonts, the extension font among them, so pages name families that do not exist (the footer: `none,NintendoExt0003`) or their own fonts without the icons; WebKit falls back to macOS's fonts. B went back while `history.length > 1`, which also counts the pages ahead after a back.
-- **Fix:** `web_apple.m`'s injected script does the browser's part. An arrow key that the page neither prevents nor answers by moving the focus moves the focus to the nearest focusable element (links, form controls, `tabindex` ≥ 0, visible) whose far edge and centre lie past the focus's in that direction, scored as in the CSS spatial navigation draft (the gap ahead, plus the gap to the side 30 times going left or right and twice going up or down); with none there, the nearest scrollable box (or the page) scrolls 64 px. At load the first element in tab order takes the focus when the page focused none. Unknown `window.nx` names are logged no-ops at any depth; `playReport`'s counters are dropped (telemetry) and `playSystemSe` is silent, logged once per sound (the sounds are the web applet's own data, which the host does not have). Each family a page's styles name that is its own (`@font-face`) or not installed gets the host's extension font for U+E000–E1FF as an extra face, ahead of the page's own faces so a page font with the glyph still draws it. B asks the web view: back when it can go back (`WKWebView.canGoBack`), the end with exit reason 1 otherwise.
-- **Found on:** Mario Kart 8 Deluxe 4.0.0, the Info screen ([issue #2541](https://github.com/seedds/nxnative/issues/2541)): on the Mac the D-pad moves through Driving Techniques, Items and Battle and the pages' wraps, A opens each, the Items grid moves in both directions, B goes back and closes the page from the index, and the menu takes input after.
-- **Note:** what NetFront does is read from the pages, not from a console: whether its own move would also run after a handler moved the focus, which element it focuses at load, and whether A clicks a focused element that is not a link or button (the host keeps A to links and buttons, as before) are unconfirmed. The pages' sounds and their `nx-se-disabled` attribute (the browser's default sounds off) have no effect here. Super Mario 3D All-Stars' pause pages, which move the focus in their own handlers, were not on hand to run again.
-
-### Offline HTML pages in a web view
-
-- **Symptom:** a null read in `applet::StartLibraryAppletImmediately` under `web::OfflineWebSession::Start` at boot; a game's pause menu, an offline page, never shows, or the game waits for a message from it.
-- **Cause:** the web applet shows the pages a game ships in its HtmlDocument NCA over the game, with the Switch browser's JavaScript extension (`window.nx`: content messages both ways, the footer's buttons). A game may start its page hidden at boot, wait for the page's first message before `Appear`, and read where the page ended (its last URL) when it closes.
-- **Fix:** `hle_web.c` reads `ShowOfflineHtmlPageArg` as the SDK writes it (u16 count at +0, entries from +8 of `{u16 type, u16 size, u32 0}` and their data: DocumentPath 0x6, CallbackUrl 0x3, KeyRepeatFrame 0x1c / 0x1d, BootMode 0x41) and shows the page in a web view of the front end over the game picture (`web_apple.m`, WKWebView on the Mac and the iPhone), hidden until `Appear`. The page is served from its folder through a scheme of its own (`dmweb://doc/`, so its XMLHttpRequests for its sounds work), with a `window.nx` stand-in, `navigator.getGamepads` in the standard mapping and key events from the controller (D-pad and left stick as arrows with key repeat and the browser's spatial navigation as their default action, [Offline pages moved by the Switch browser's focus navigation](#offline-pages-moved-by-the-switch-browsers-focus-navigation); A as keyCode 32), its 1280x720 fitted to the 16:9 picture, transparent, with the host's extension font for the button icons. Messages are queued both ways. The page ends at its callback URL (`http://localhost/` by default: exit reason 3, the URL as the last URL), on B from its first page (1), `nx.endApplet` (0) or `RequestExit` / `Finalize` (2). While it shows, the game reads no input (`dm_input_hold` in `hle_hid.c`; buttons held as it appears count once released). Pages come from `DM_HTML`, by default the folder `html` beside the RomFS folder (`html-document/` or `html<n>/html-document/`, as `nx_extract --html` writes them; the NSP script extracts them for every program, and the iOS app carries them as `html/` beside `romfs/`). On the iPhone the page sits over the game view and under the gamepad, and a touch no control takes goes to the page (`DmGamepad.m`). Without the page or a window, a stand-in answers: the page loads at once, sends one empty content message and closes when it appears (exit reason 0, no last URL); `ShowOfflineHtmlPage` then fails.
-- **Found on:** Super Mario 3D All-Stars: Super Mario Sunshine (its pause menu, `launcher_pause_menu.htdocs`, started hidden at boot) and Super Mario 64 of the same collection.
-- **Note:** WebKit matches `:focus` only in the key window, so the page's `:focus` rules are copied for the focused element (with another app in front the highlight stayed on the first item). A relative URL that climbs out of the document's folder is looked up inside it. `DM_WEB_LOG=1` logs each key and the focus after it. `DM_CTL` `webshot <path>` saves the page as a PNG. The iPhone path compiles; it has not run on a device.
-
-- **Fix:** `applet::GetAppletResourceUserId` reports 0x80; the VR-mode calls (`pl::IsVrMode` / `BeginVrMode` / `EndVrMode`); `pctl::CheckStereoVisionPermission` (bool, permitted); `oe::TryPopLaunchParameter` (none, unless another program of the application started this one: [Multi-program applications: `oe::ExecuteProgram`](#multi-program-applications-oeexecuteprogram)) (The Legend of Zelda: Breath of the Wild 1.9.0, SDK 20.5.22). `oe::GetPreviousProgramIndex` reports −1: launched from the home menu (The Legend of Zelda: Tears of the Kingdom 1.4.3).
-
 ### Every undrawn extension code point is a ring
 
 - **Symptom:** a crash in the font engine at boot with the null glyph, from a code point no message uses (`main+0x62d20` on 1.0.0, `main+0x63780` on 1.1.4); `?` in text for an icon the stand-in does not draw.
@@ -1329,39 +1240,6 @@ Most service calls can be found before they crash, before the first boot or the 
 
   - Super Mario 3D All-Stars: Super Mario Sunshine: its recompiled PowerPC code is Hagi's `.nrolz` (`data/gekko/<game>/nx/<game>.nrolz`: the NRO's size big-endian, then one LZ4 block), which `nro_collect.py` decodes; the 25.3 MB NRO matches the hash `.nrr/Hagi.nrr` registers. Super Mario 64 of the same collection loads its recompiled N64 code (`05_UNSMJ3.002.nro`) and unloads it before it returns to the launcher.
 
-
-### `nn::jit` taken over by the host
-
-- **Symptom:** `nn::jit::Initialize` crashes reaching for the jit service (`sdk+0x2e5414`).
-- **Cause:** on Horizon the jit service loads the game's JIT plugin, an NRO the game reads from its own files, into a process of its own, maps the game's code memory read-write there and read + execute in the game, and runs the plugin's `nnjitpluginGenerateCode` / `nnjitpluginControl` for each request (yuzu's `service/jit` has the calling conventions). The host has no service process.
-- **Fix:** `hle_jit.c` takes over the API (`Initialize`, `CreateJitEnvironment`, `GenerateCode`, `Control`, `GetJitEnvironmentInfo`, `DestroyJitEnvironment`, `Finalize`). `CreateJitEnvironment` finds the plugin among the game's buffers by SHA-256 among the rewritten NROs (`nro_collect.py` collects it through the game's NRR), loads it alone (`loader.c` `nro_load_alone`: relocated against itself and left out of the game's symbol lookups), runs it as the service does (`_init`, `GetVersion`, `ResolveBasicSymbols` with the host's `memcpy` / `memmove` / `memset` and panic handlers, `SetupDiagnostics` off, `Configure`, `OnPrepared`) and gives it its configuration: the code memory (a `MAP_JIT` mapping on the Mac, one address for the plugin's writes and the game's calls), the data memory, and the work buffer's last part as its transfer memory, where it keeps its state. `GenerateCode` and `Control` run on the calling thread under one lock, with the data zero-padded to 32 bytes as the SDK sends it; `GenerateCode` opens the thread's JIT write window (`pthread_jit_write_protect_np`) and invalidates the instruction cache over the range returned. Layouts from SDK 9.5.1's `nn::jit` (`sdk+0x2e6610` ff.): code ranges are offsets in the code / data memory, the handle is the environment, `GetJitEnvironmentInfo` returns {code address, size, data address, size}. `DM_JIT_LOG=1` logs every request (
-- **Found on:** Super Mario 3D All-Stars: Super Mario 64 : command 3 at boot turns 4,235 precompiled MIPS blocks into 14.2 MB of code in 27 ms; command 4 compiles a handful of blocks in play. Its code needs nothing from the rewriter (no x18, SVC, system register or PC-relative literal in 3.55 million instructions).
-
-
-### A JIT plugin loaded a second time crashed
-
-- **Symptom:** a second `nn::jit::CreateJitEnvironment` for the same plugin, after `DestroyJitEnvironment`, crashes with SIGSEGV in `nro_load_alone` (a `memcpy` from address 0) right after `NRO <name> loaded alone (load 2, …)`.
-- **Cause:** NRO data snapshots are lazy: `preload_nros` records only the length of an NRO's initialized data, and the first load copies it. `nro_load` did that copy, but `nro_load_alone` (the JIT plugin's load) did not, so its reload restored the data from a null pointer. Its reload also left the bss as the previous environment had left it, while the jit service loads the plugin fresh for each environment.
-- **Fix:** both loads start with `nro_reset_data` (`loader.c`): the first load snapshots the initialized data, and a reload restores it and zeroes the bss. Each load keeps its own symbol binding (linked into the game's lookups, or alone).
-- **Found on:** no game: a synthetic test found it, and no game has been seen to create a second environment. Super Mario 3D All-Stars: Super Mario 64 is the one game that takes this path.
-- **Check:** `t_nro` loads a module alone, dirties its data, bss and relocation slots, and loads it alone again: the data and bss are as rewritten and the slots relocated against the module itself. Without the fix it fails at the first load (no snapshot).
-
-### A JIT plugin loaded alone took bindings from the game's NROs
-
-- **Symptom:** none seen on a game. A JIT plugin's undefined weak import could end up pointing into a game NRO, though the plugin runs, on Horizon, in the jit service's own process and links with nothing of the game's; a second `CreateJitEnvironment` before the first was destroyed reset the live plugin's data under it; a plugin's deactivation skipped the loader's locks and its check of stacks borrowing NRO data.
-- **Cause:** `nro_load_alone` relocated the plugin against itself only, but left it marked loaded like any module, so the rebind loops of `nro_load` and `nro_unload` (a linked NRO coming or going: every loaded module's imports it defines or that point into it bound again) took it in. `h_jit_Destroy` cleared the plugin's `loaded` flag itself, outside `g_modules_mu`, without `svc_nro_deactivate`'s check. Nothing refused loading a module that was loaded.
-- **Fix:** a module loaded alone is marked so (`module_t.alone`), and both rebind loops leave it out. Its end is the loader's, `nro_unload_alone` (under `g_modules_mu`, through `svc_nro_deactivate`, as `nro_unload`), which `h_jit_Destroy` calls after the plugin's fini. `nro_reset_data` refuses a module already loaded (`die`): the host has one image of the plugin, where the jit service would load a copy per environment; `ro::LoadModule` already answered such a load with an error.
-- **Found on:** no game; the audit of the review's JIT fix (step 15). Super Mario 3D All-Stars: Super Mario 64 is the one game that loads a plugin.
-- **Check:** `t_nro`: with the plugin loaded alone, a linked NRO that defines the plugin's undefined weak import is loaded (the main module's import is bound to it, the plugin's stays 0) and unloaded; a second load alone while it is loaded is refused in a child process and leaves its data as it was; `nro_unload_alone` ends it, and the reload is as rewritten; a module with no initialized data reloads with a zero bss. Without the rebind change the isolation check fails.
-
-### `nn::jit` served from an image on iOS
-
-- **Symptom:** `[RED] jit::GenerateCode command <n>: request <key> … is not in the image …: capture it on the Mac (DM_JIT_CAPTURE) and rebuild the image`, then the game crashes there (the iPhone, or the Mac with `DM_JIT_SERVE`).
-- **Cause:** iOS runs no code made at run time, so the plugin's output must come from the Mac. That output depends on where the code memory and the modules are (the plugin builds every host address as `movz` + three `movk`), and two things only the game's code tells: which bytes of a request's data make the request, and where its output lists the code's entry points, which the game computes from the address it asked for.
-- **Fix:** the Mac host captures each request once with the layout it was made in (`DM_JIT_CAPTURE=<dir>`, `<key>.jit`; the key is the command, the data size, the data and the input's SHA-256, an input over 1 MB by size only). `dm/tools/jit_capture.py` builds the image (`jit.img`, `jit.tsv`, `jit.out`): each address sequence into the code memory or a module becomes `adrp` + `add` + two `nop`s to a canonical layout (the code memory at 0, the modules after it, 16 KB aligned); requests the captures placed differently go after the others, with their branches out of the block moved; output words that are host addresses become relocations, found as the words that differ between two captures in different layouts (a request captured once must hold none). The profile keys `jit_key_data` and `jit_out_code` say the rest ([dm/games/README.md, Keys](../../dm/games/README.md#keys)). Serving (iOS; the Mac with `DM_JIT_SERVE=<dir>`): the plugin is never loaded; the image is mapped at the layout's base (iOS: the executable's `__TEXT,__dm<tag>_jit` section, `gen_embed.py --jit`), and every module it names at its offset in one reservation (`loader.c` `jit_layout_init`; the image's layout must match each module's size, else the host stops); `Control` does nothing, and `GenerateCode` finds the request by its key and returns the image's code range, the data bytes and the output with its relocations applied. The NSP script's iPhone build of a program whose `main` imports `nn::jit::CreateJitEnvironment` boots it twice headless with `DM_JIT_CAPTURE` (`capture_jit`) and adds every other folder in `jit_capture/`; a Mac build's run command captures play into `jit_capture/play`. A request already in the folder is not captured again, so a session whose code memory lies elsewhere than every earlier one's (one that started after an in-process program switch) may hold only its later requests, whose code calls boot code it did not capture: the builder leaves such a session out with a red line (`capture session <base> left out …`, with how many of its requests no other session has) and builds from the rest. `DM_JIT_MISS_DUMP=<dir>` writes a missing request's input.
-- **Found on:** Super Mario 3D All-Stars: Super Mario 64: command 4's request struct leaves 4 padding bytes uninitialised, which differed once the plugin no longer ran; the image is about 14 MB, and the JIT layout a second reservation of 0.96 GB on the iPhone.
-- **Check:** `test_jit_capture.py` (`dm/tools/tests`).
-- **Note:** a request the image lacks stops the app there: play that part on the Mac and pack again. Not run on a device yet.
 ### Nintendo-extension glyphs for button icons
 
 - **Symptom:** controller-button icons in text show as `?`.
@@ -1369,13 +1247,6 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Fix:** `dm/tools/make_ext_font.py` generates a stand-in `nintendo_ext.ttf` with those icons (`make_shared_fonts.py` makes it with the other stand-ins); the host serves it for shared-font type 5 (`DM_FONT_DIR` or `DM_SHARED_FONT_EXT`).
 - **Note:** to find which code points a title uses, scan the `TXT2` sections of its MSBT files for U+E000–F8FF.
 - **Found on:** Super Mario Bros. Wonder.
-
-### Shared fonts on iOS
-
-- **Symptom:** on a phone, `GetSharedFontLoadState` would report "not loaded".
-- **Cause:** the macOS stand-in path (`/System/Library/Fonts/Supplemental/Arial Unicode.ttf`) does not exist on a phone.
-- **Fix:** the iOS app ships the stand-ins in `dm/font/` (`build_ipa.sh` makes them with `make_shared_fonts.py`) and sets `DM_FONT_DIR`.
-- **Found on:** every game on iOS (general).
 
 ### Shared font stand-ins sized for the game's font engines
 
@@ -1445,7 +1316,7 @@ Most service calls can be found before they crash, before the first boot or the 
 
 - **Symptom:** after switching apps and back, one guest thread at 100% in a tight loop (`main+0x9abd0`, `x10 = 0`); the game freezes, picture still, sound on. Mac repro `DM_OE_SCRIPT=bg=1@20,bg=0@25`.
 - **Cause:** the frame pacing measured a frame period of 0 (`main+0x5926a8`: the clock difference between two frames). The host freezes the guest clock in the background but its threads went on, so two frames read the same time.
-- **Fix:** guest reads of the system counter (the `cntpct` gate, `svc GetSystemTick`) now wait while the app is in the background (`hle_os.c` `guest_clock_read_wait`); host work and the keyboard freeze ([The software keyboard blocks only its caller](#the-software-keyboard-blocks-only-its-caller)) keep the frozen clock.
+- **Fix:** guest reads of the system counter (the `cntpct` gate, `svc GetSystemTick`) now wait while the app is in the background (`hle_os.c` `guest_clock_read_wait`); host work and the keyboard freeze (The software keyboard blocks only its caller) keep the frozen clock.
 - **Found on:** Super Mario Galaxy 2 (one of two causes; the other is [Focus handling mode decides whether focus changes are notified](#focus-handling-mode-decides-whether-focus-changes-are-notified)).
 
 ### Cryptographically random bytes
@@ -1493,79 +1364,9 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Fix:** an undefined weak symbol that no module defines and the host does not implement is now 0, as Horizon's rtld binds it (`loader.c`, logged as `undefined weak … bound to 0`).
 - **Found on:** Octopath Traveler 0 (the `thread_local` init function `_ZTHN13LowLevelTasks5FTask10ActiveTaskE`).
 
-### `nn::ro` and its port
-
-- **Symptom:** crash in `nn::ro::InitializeWithPortName`.
-- **Cause:** `nn::ro` connects to `ldr:ro`.
-- **Fix:** take over `Initialize` and answer `LookupSymbol` from the loaded modules (`hle_ro.c`). Check the mangled names against the new title's imports: SDK 19's `LoadModule` takes one more bool (`_ZN2nn2ro10LoadModuleEPNS0_6ModuleEPKvPvmib`), so the hook for the older form did not catch it and the SDK's own code would have run.
-- **Found on:** Hades II (SDK 19's `LoadModule`).
-
 ### `ro::ProtectRelro` runs natively
 
 - `nn::ro::ProtectRelro` (called from `main`'s DSO init), a new import of SDK 20, needs nothing: it runs natively on the host's no-op `SetMemoryPermission` / `SetMemoryAttribute`. Found on The Legend of Zelda: Breath of the Wild (1.9.0, SDK 20.5.22).
-
-### Loading NROs with `ro::LoadModule`
-
-- **Symptom:** the frame loop runs, but the game waits for code it loads itself (`ro::RegisterModuleInfo` / `ro::GetBufferSize` red lines; `main` imports 1,045 `lua2cpp::create_agent_*` functions, global, that no ExeFS module defines, bound to stubs at start).
-- **Cause:** the fighters' code is 98 NROs inside `data.arc`, registered by `.nrr/cross2_*.nrr`. The SDK's own `LoadModule` (SDK 8.2.1 `LoadModuleInternal`, `sdk+0x347460`) uses the service only to map the image, then zeroes bss, relocates through rtld's module lists, calls the module's init and binds the variables of the modules loaded before; the host replaces rtld, so it takes over the whole call.
-- **Fix:** the NROs are collected at pack time by the SHA-256s the NRRs list (`dm/tools/nro_collect.py`: loose files, the current files of an indexed archive, or a scan for stored and zstd-framed NROs; Smash's NRRs of older releases also register 666 superseded copies, which `data.arc` still holds and which are left out), rewritten like any module (`patch_nso.py` reads NROs: the flat image, segments at +0x20, build ID at +0x40) and listed in `<patched dir>/nro.tsv`. The host maps them all at start and keeps them out of symbol lookups; `LoadModule` finds one by the image's SHA-256, restores its data and bss (after the first load), relocates it against the modules loaded then in load order, binds the earlier modules' symbol relocations it defines (main's `lua2cpp` stubs), fills `nn::ro::Module` as the SDK does (+0 module, +8 state 1, +0x10 image, +0x18 buffer) and calls its `DT_INIT`; `UnloadModule` calls `DT_FINI` and binds every relocation that pointed into it again (`loader.c` "NRO modules", `hle_ro.c`). `GetBufferSize` returns the bss size from header +0x38 as the SDK does. The startup init pass must skip NROs (their init ran unrelocated and crashed). Only data is written at a load, so it works with code embedded in the iOS executable: `gen_embed.py` packs the NROs into three sections (`__dm_nro_x0`, `__DM_NRO_W`, `__dm_nro_x1`) and a table of their pieces (`__dm_nro_tab`), since a Mach-O file has at most 255 sections and three per NRO would pass it, and `map_image` maps an NRO from there (`loader.c` `nro_pieces`).
-- **Found on:** Super Smash Bros. Ultimate (13.0.5): it loads six NROs in its first 30 s and calls none of the stubs. Played on an iPhone.
-
-- **`.nrolz`:** NERD's Hagi keeps a recompiled game as an NRO packed as a big-endian u32 size, then one LZ4 block (Super Mario Sunshine (Super Mario 3D All-Stars): `data/gekko/MarioSunshine/nx/MarioSunshine.nrolz`), which it unpacks and hands to `ro::LoadModule`, so its SHA-256 is the unpacked image's. `dm/tools/nro_collect.py` unpacks such files too and matches them against the NRRs.
-### NRO tables sized from the manifest and snapshots taken on demand
-
-- **Symptom:** `FATAL .../nro.tsv: more NROs than module slots (MAX_MOD 128)` before `nnMain` (GitHub issue [#372](https://github.com/seedds/nxnative/issues/372)); after increasing the capacity, startup eagerly copies several GB of inactive NRO data and bss.
-- **Cause:** the host used fixed 128-entry module and activation tables. It also allocated and copied every NRO's full writable image at startup so reload could restore it, including initially zero bss.
-- **Fix:** count the manifest once before loading and allocate both tables at their final size, preserving every `module_t` address. Keep each NRO's initialized data only when it is first loaded, before relocation and initialization. Reload restores that data and zeroes bss; unused NROs need no snapshot. The original NRO header supplies the initialized data size.
-- **Found on:** FINAL FANTASY X/X-2 HD Remaster, 1,432 NROs plus three initial modules; 5,836 MB of writable data and bss versus 767 MB of initialized data across all NROs. Most effect modules stay inactive on a short route.
-- **Check:** `make -C dm/host/tests GAME=01007BB017812000 nro` exercises manifest sizing, the last slot of a 1,435-slot table, load order, initialized-data restoration and zeroed bss after reload.
-
-### Online SDKs in NROs are never loaded
-
-- **Symptom:** `[EOS] Failed to create platform` (the game plays offline); `refused …: an online SDK (Epic Online Services), not loaded`; `refused an NRR that registers only online SDKs (1 hashes)`.
-- **Cause:** Epic Online Services in an NRO (`rom:/nro/EOSSDK-Switch-Shipping.nro`, loaded with `ro::LoadModule`; `main` imports the `EOS_*` functions). Before the host loaded NROs, the imports stayed `UNIMPL` stubs and `EOS_Platform_Create` handed back a garbage handle; the game checks it and plays offline.
-- **Fix:** the host now loads NROs ([Loading NROs with `ro::LoadModule`](#loading-nros-with-roloadmodule)), but never an online SDK, whatever the game: an NRO that exports `EOS_Platform_Create` is left out of the pack (`dm/tools/nro_collect.py` `ONLINE_SDKS`, a `refused` row in `nro.tsv`) and `ro::LoadModule` refuses it with one log line (`refused …: an online SDK (Epic Online Services), not loaded`), also by the export when an older `nro.tsv` has it. An NRR that registers only such modules fails `RegisterModuleInfo`, as every registration did before the host loaded NROs, so the game takes the path it took then. So both games behave as before: offline, local saves.
-- **Found on:** Absolum (SDK 18.3.2, one boot each); Hades: it never asks for the module (checked on 1.0.38233: `refused an NRR that registers only online SDKs (1 hashes)`, no `LoadModule`, its frames as before). Hades' `main` imports only EOS Auth, Connect and PlayerDataStorage, Epic-account cross-save the host cannot serve; the real SDK would at best fail its login and at worst wait on time-outs or contact Epic's servers, with an unknown risk to the player's account.
-- **Note:** open question for the maintainer: always load, refuse online SDKs (as now), or decide per profile.
-
-### GPU driver modules that are never loaded
-
-- **Symptom:** `main` imports EGL (SDL3's GL support) and `vkGetInstanceProcAddr` (its Vulkan support), but the game renders with NVN (`FNA3D_Driver_NVN.cpp`).
-- **Cause:** NVIDIA's OpenGL and Vulkan drivers (`subsdk1`, `subsdk0`) program the GPU through NvRm, which the host does not have.
-- **Fix:** they are never loaded (`profile_guess.py` `GPU_DRIVERS`); the EGL imports stay unbound stubs that nothing calls.
-- **Found on:** Absolum (FNA3D).
-
-### Modules only the NROs import from
-
-- **Symptom:** `UNIMPL _ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_`, `UNIMPL glslcInitialize`, then `UNIMPL _ZN5movie9ExtractorC1ENS_13ContainerTypeE` and a crash reading address 0x18 in an NRO (`pc=nro18+0x97f4`) as the first movie starts.
-- **Cause:** the provisional profile loads a subsdk only when `main` imports something from it that the host does not supply. The survey extracts only the code modules, so the NROs in the RomFS were not looked at. Portal's `main` is a launcher with SDL; its Source engine NROs play the movies through NintendoSDK_movie (`subsdk2`, imported by `video_nx.nro`) and initialize and call GLSLC (`subsdk0`, imported by `materialsystem.nro` and `video_nx.nro`). Left out, their imports were bound to stubs, and the stub constructor of `movie::Extractor` left the object empty.
-- **Fix:** once the rewrite stage has collected the NROs, the NSP script adds to a provisional profile every subsdk whose exports an NRO imports and that no loaded module, other NRO or host hook supplies (`profile_guess.py` `nro_modules`, written under a section `After the NRO collection`). NVIDIA's GPU drivers stay out, as above.
-- **Found on:** Portal (`modules main subsdk0 subsdk2 sdk`; `subsdk1`, NVIDIA's OpenGL driver, stays out).
-
-### A module the NROs import from, missing from the build row
-
-- **Symptom:** a game with a provisional profile stays black where its opening movie plays; the log has `modules of main's build …: main sdk (the profile lists 3)`, and `movie::Extractor`'s constructor is unimplemented.
-- **Cause:** since the host loads the modules of the `build` row for main's build ([A derived profile leaves out a module that moved to another slot](packing.md#a-derived-profile-leaves-out-a-module-that-moved-to-another-slot)), a module in `modules` alone is not loaded. The NRO step above added its subsdks to `modules` only, and the provisional profile's row, written by the survey, named the modules `main` imports from.
-- **Fix:** after the NRO collection, `provisional_modules` (`scripts/build_app.py`) writes `modules` and completes the row of this ExeFS's main build in one write: every module of `modules` the ExeFS has, with its build ID. It runs on every build of a provisional profile, so a profile written before is repaired; the rows of other versions packed from the same folder are left as they are. A changed row rebuilds the Mac host, which has the rows compiled in.
-- **Found on:** Mario Golf: Super Rush (4.0.0, issue #814), from the PR author's run ([PR #2215](https://github.com/seedds/nxnative/pull/2215)): `subsdk0` (NintendoSDK_movie) in `modules` and not in the row; with it in the row the opening movie plays (4,921 frames decoded) and the title follows; on the Mac here too (M6, 2026-11-13).
-
-### `ro::LookupModuleSymbol` for a name the module does not define
-
-- **Symptom:** `[RED] ro::LookupModuleSymbol BuiltDebug: not defined in that module` once at boot; nothing goes wrong after it.
-- **Cause:** the Source engine asks each module it loads for `BuiltDebug`, which only its debug builds define. `ldr:ro` fails such a lookup on Horizon too, and the game takes the failure as "release build".
-- **Fix:** the host's answer was already Horizon's (a failure result). The line is no longer red when the module is a loaded one; a lookup in a module the host does not know stays red (`hle_ro.c`).
-- **Found on:** Portal.
-
-### IL2CPP common string table intact
-
-- Not needed in the end: the tolerant common string table of pull request #15. Ace Attorney Investigations Collection 1.0.0.2's `main` has the table intact at `main+0x46169ac`, 109 entries ending at `Hash128`.
-
-### Code inherited from another title at fixed addresses
-
-- **Symptom:** harmless on the build it was written for, silent memory corruption on any other.
-- **Cause:** code that calls fixed module addresses. d2r-mobile's 3D render scale read a renderer pointer at `main+0x31e0848` and called `main+0x8582f0`; in Mario v0 that is the middle of a static initializer and only did nothing because the pointer happened to read 0.
-- **Fix:** such code checks `module_t.build_id` now (written into `fixups.tsv` by the rewriter) and stays off on other builds.
-- **Found on:** Super Mario Bros. Wonder (v0, code inherited from d2r-mobile).
 
 ### Built-in fonts and the audio device notification of SDK 21
 
@@ -1670,21 +1471,6 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Cause:** the game chooses its output from `nn::vi::QueryDisplayBufferMaxResolution` (its tables: 0 is 720p, 1 is 1080p, 2 is 1440p, 3 is 4K), and what the game got before the hook gave it 720p.
 - **Fix:** `hle_vi.c` answers as a Switch 2 does: in handheld mode its own 1080p screen; in console mode the largest of the four that the display the game is shown on holds, as a docked Switch 2 does with its TV. The display's size comes from the front end (`front_display_pixels`: on the Mac the window's screen in its current mode, an iPhone's or iPad's screen), 1080p when it is not known. The host logs the answer once.
 - **Found on:** Fire Emblem Fortune's Weave: its DLSS output is 2048x1152 for 1440p and for 4K, from 1024x576; for 1080p it renders 960x540 into 1920x1080, a fifth fewer pixels at each stage, and the output matches the screen.
-
-### A game that decodes its code at run time
-
-- **Symptom:** `registered NROs not found` from `nro_collect.py` in a game whose RomFS has an NRR, or `[RED] ro::LoadModule: no rewritten NRO with SHA-256 …`. `main` is small (about 600 KB of code) beside a data segment of random-looking bytes.
-- **Cause:** `main` is a boot stub. Mario Tennis Fever's (`nxboot`) starts six threads, one per stream, which unscramble and unpack the game's code out of `main`'s data segment into one buffer; it then registers the RomFS's NRR and calls `nn::ro::LoadModule` on that buffer. No file holds the NRO, so nothing can rewrite it offline, while iOS runs no code loaded at run time and the host only loads rewritten copies.
-- **Fix:** the host's run of the stub is the decoder. `DM_NRO_CAPTURE=<folder>` writes the image of a `LoadModule` it has no rewritten copy of to `<folder>/<SHA-256>.nro` and ends the run (`hle_ro.c`). The NSP script (`capture_nro`) boots the rewritten `main` and `sdk` so when `nro_collect.py --missing-ok` lists a registered hash no file holds, about 2 s on the Mac, checks the image against the hash the NRR registers, adds it to the collected NROs and rewrites. A build then runs like any game with NROs, and the shader split takes the folder (`DM_NRO_DIR`) as well as `main`. Decisions that follow what the game imports count the NROs too (`dm_game_imports`): this `main` imports no `ScalableFontEngineHelper::Decode`, its NRO does.
-- **Check:** `scripts/build_app.py <folder> --platform mac` after removing `patched_*` and `nro_*` from the build folder: rewrite, capture, rewrite, split.
-- **Found on:** Mario Tennis Fever.
-
-### NRR version 1
-
-- **Symptom:** a crash in `ro::RegisterModuleInfo`, or an NRR that seems to register millions of hashes: the words at +0x340 and +0x344 are random.
-- **Cause:** an NRR with 1 in the byte at +5 (the Switch 2's) has a header 0x180 bytes longer. The same fields follow it: program ID +0x4b0, size +0x4b8, hash table +0x4c0, its count +0x4c4.
-- **Fix:** `hle_ro.c` and `nro_collect.py` read the table by that byte.
-- **Found on:** Mario Tennis Fever.
 
 ### Mods made for emulators do nothing, or only half of them does
 

@@ -239,13 +239,6 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 - **Found on:** Pokémon Brilliant Diamond: reported on 1.0.0 in [PR #190](https://github.com/seedds/nxnative/pull/190); the 1.3.0 bring-up passed that transition before this fix.
 - **Check:** `t_audio_spsc` covers a partially consumed buffer, queue wraparound, release notification, repeated Stop and buffers queued before Start, then runs its 100,000-buffer producer/consumer stress test.
 
-### RemoteIO's default I/O buffer duration
-
-- **Symptom:** crackling on iOS only.
-- **Cause:** RemoteIO asks for as many frames per callback as the audio session's I/O buffer duration, about 21 ms by default (1024 frames at 48 kHz), while the renderer keeps 4 blocks × 5 ms = 20 ms in flight. Every callback came up 1.3 ms short and was padded with zeros, about 47 gaps per second. Reproduced on the Mac by forcing 1024-frame callbacks (`DM_DBG_AU_FRAMES=1024` with `DM_AUDIO=1`: 1999 underruns in 2000 callbacks).
-- **Fix:** `AVAudioSession` `setPreferredIOBufferDuration:0.005` (and 48 kHz) before the game opens audio and again on return to the foreground (`front_ios_audio_session` in `front_ios.m`); the device then calls back with 240 frames and nothing underruns.
-- **Check:** when checking a new device, read the host's `audio #N device callbacks` line, normally reported every 2000 callbacks: frames per callback, queued blocks, underruns. A busy diagnostic writer can merge windows; the line states their actual callback count.
-
 ### The Mac's default I/O buffer
 
 - **Symptom:** clicks and dropouts on the Mac, heard as clipping; the log's `audio #N device callbacks` lines show hundreds of underruns per 2000 callbacks. Closing an output can also log `[RED] audio device buffer: ... (status 560947818)` (`!obj`).
@@ -262,14 +255,6 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 - **Fix:** when `DM_WINDOW` is unset, the Mac front end requests `TASK_DEFAULT_APPLICATION` to lift the QoS ceiling. Set `DM_WINDOWLESS_ROLE=0` to keep the existing role for an A/B run. If macOS refuses the request, the host logs the Mach error and starts the guest.
 - **Check:** `t_front_role` always checks the opt-out and the installed role. The `xcode-27` runner on macOS 27.0.1 set the role but kept interactive priority at 20. `taskpolicy -c utility` reproduced that result on an Apple M6 with macOS 27.2.1, where an ordinary launch went from 31 to 46. The test skips the priority increase assertion when both readings agree below the legacy ceiling. [GitHub sanitizer job](https://github.com/seedds/nxnative/actions/runs/44516888710/job/135542380500), NieR role comparison.
 - **Found on:** NieR:Automata The End of YoRHa Edition.
-
-### The ring / silent switch muted the game on iOS
-
-- **Symptom:** a game is silent on an iPhone whose ring / silent switch is set to silent, though the volume is up; a game or video app plays through the switch.
-- **Cause:** the audio session's category was `AVAudioSessionCategorySoloAmbient`, which iOS silences with the switch.
-- **Fix:** `front_ios_audio_session` in `front_ios.m` sets `AVAudioSessionCategoryPlayback`: the switch no longer mutes the game, and it still interrupts other apps' audio, as `SoloAmbient` did. The host still suspends its output when the app goes to the background (no background audio mode is declared).
-- **Found on:** The Legend of Zelda: Breath of the Wild (iPhone: reported by the player); also [issue #155](https://github.com/seedds/nxnative/issues/155), whose commenter has to toggle the switch to hear any game.
-- **Check:** open question, not run on a device: with the switch on silent, the game's sound should play; the log's `audio session:` line shows the session came up.
 
 ### Interruptions that stop RemoteIO callbacks
 

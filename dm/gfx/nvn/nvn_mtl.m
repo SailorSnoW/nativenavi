@@ -14,7 +14,6 @@
 #include <sys/sysctl.h>
 #include <fcntl.h>
 #include <sys/file.h>   // flock: the lock beside Metal's build folders (ga_claim)
-#include <TargetConditionals.h>
 #include <IOKit/IOKitLib.h>   // the GPU's core count (nvn_geometry.inc mesh_scratch)
 #include <os/os_sync_wait_on_address.h>   // the uniform copy hand-off (nvn_rec.h ubc_wait)
 #include <IOKit/IOKitLib.h>   // gpu_cores

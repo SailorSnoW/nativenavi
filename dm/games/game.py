@@ -4,9 +4,9 @@
 #   game.py modules <id> <folder of rewritten modules> (the modules to load from it: the build row of its main's build, else the profile's modules);
 #   game.py dir <id> (print the profile folder); game.py link <id> <link> (point a symlink at the profile folder: make cannot take paths with spaces)
 #   From Python: import game; g = game.load() (takes DM_GAME, or Ocarina of Time, game.DEFAULT, when it is unset); game.by_title(title ID); g.get / g.words / g.int / g.builds() / g.table(file name)
-# DM_GAMES_DIR (folders separated by ':') adds profile folders outside the repository, searched after dm/games: the NSP script writes a provisional profile for a game without one into
-#   <NSP folder>/<id>_build/profile/<id>/ and points DM_GAMES_DIR at <id>_build/profile, so the shader tools, the host build and build_ipa.sh all find it.
-#   DM_GAMES_FIRST=1 searches DM_GAMES_DIR before dm/games (the NSP script's --provisional: a provisional profile for a game that has one in dm/games, to test the guesses)
+# DM_GAMES_DIR (folders separated by ':') adds profile folders outside the repository, searched after dm/games: the packing script writes a derived profile for a version the profile does not register into
+#   <build folder>/profile/<id>/ and points DM_GAMES_DIR at <build folder>/profile, so the shader tools and the host build find it.
+#   DM_GAMES_FIRST=1 searches DM_GAMES_DIR before dm/games (a derived profile takes the place of the one in dm/games)
 import os, re, sys
 from pathlib import Path
 
@@ -84,7 +84,7 @@ def load(name=None):
     return Game(d)
 
 
-def all_games(skip=()):   # skip: profile folders left out (the NSP script's own provisional and derived profiles, which it never takes as registered ones)
+def all_games(skip=()):   # skip: profile folders left out (the packing script's own derived profiles, which it never takes as registered ones)
     out, seen, skip = [], set(), {Path(d).resolve() for d in skip}
     for root in search_dirs():
         if not root.is_dir() or root.resolve() in skip: continue
@@ -97,7 +97,7 @@ def by_title(tid, skip=()):
     return next((g for g in all_games(skip) if g.title_id == tid), None)
 
 
-def by_build(main_id, skip=()):   # the profile whose build rows register this main build ID (a release of the same build under another title ID: the NSP script's same_build)
+def by_build(main_id, skip=()):   # the profile whose build rows register this main build ID (a release of the same build under another title ID)
     return next((g for g in all_games(skip) if any(b.get('main') == main_id for b in g.builds().values())), None)
 
 

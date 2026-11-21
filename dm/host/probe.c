@@ -1,6 +1,5 @@
 // Probes DM_PROBE: when the debugger needs a system authorization prompt on the Mac, use this to print registers and a backtrace at a guest address.
 #include "dm.h"
-#include <TargetConditionals.h>
 #include <signal.h>
 #include <dlfcn.h>
 #include <sys/ucontext.h>

@@ -2,7 +2,6 @@
 // Everything runs on the main queue, where the front ends' own pad callbacks run.
 #import "pad_switch2_apple.h"
 #import <CoreBluetooth/CoreBluetooth.h>
-#import <TargetConditionals.h>
 #import <IOBluetooth/IOBluetooth.h>   // IOBluetoothHostController: this Mac's own Bluetooth address, which a bonded controller wakes toward
 #include "dm.h"
 #include <stdio.h>

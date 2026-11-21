@@ -152,7 +152,7 @@ class DeriveProfile(Base):
         for what, kw in (('version', {'ver': 'v131072'}), ('modules', {'mods': ('main', 'sdk')})):
             with self.subTest(what):
                 self.derive(); self.later_stages(); self.derive(); self.assert_kept()
-                self.derive(**kw); self.assert_fresh()
+                self.derive(**kw); self.assert_fresh()   # pyright: ignore[reportArgumentType]  (each keyword set has its own value type)
 
     def test_a_file_the_split_does_not_read_refreshes_the_copies_and_keeps_later_stages(self):   # a geo_mesh.tsv row used to wipe the split's tables
         changes = {

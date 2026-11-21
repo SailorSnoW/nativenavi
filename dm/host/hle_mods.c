@@ -5,7 +5,6 @@
 #include <dirent.h>
 #include <strings.h>
 #include <sys/stat.h>
-#include <TargetConditionals.h>
 
 #define MOD_MAX 64
 #define PFILE_MAX 256

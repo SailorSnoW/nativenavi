@@ -2,7 +2,6 @@
 // All engines and players belong to one serial queue. Guest threads enqueue ordered snapshots only.
 #import "haptics_apple.h"
 #import <CoreHaptics/CoreHaptics.h>
-#import <TargetConditionals.h>
 #import <AppKit/AppKit.h>
 #import <IOKit/IOKitLib.h>
 #import <IOKit/hid/IOHIDDevice.h>

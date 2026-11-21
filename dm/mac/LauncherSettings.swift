@@ -112,7 +112,7 @@ final class LauncherModel: ObservableObject {
         if !ignoreSaved { if s.isDefault(v) { defaults.removeObject(forKey: "launcher." + s.env) } else { defaults.set(v, forKey: "launcher." + s.env) } }
     }
 
-    // A choice made while the game runs (the iOS in-game menu, GameMenu.swift): saved as Play saves it, so the settings screen shows it at the next start, and put in the environment.
+    // A choice made while the game runs: saved as Play saves it, so the settings screen shows it at the next start, and put in the environment.
     // A value an env file or the launch fixed stays
     func choose(_ s: Setting, _ v: String) {
         guard !fixed.contains(s.env), s.accepts(v) else { return }

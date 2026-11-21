@@ -11,7 +11,6 @@ import shutil
 import sys
 import tempfile
 from typing import Any
-import runpy
 import unittest
 from unittest import mock
 

@@ -17,9 +17,9 @@ SDK = REPO / 'dm/tools/sdk_patches.py'
 HOST = ['dm/host', 'dm/gfx', 'dm/mac']   # tracked files only: dm/host/gen and other build output are git-ignored
 HOST_EXT = ('.c', '.m', '.mm', '.h', '.inc', '.swift')
 # What a build-keyed host table does (the table's name in the source; a row of another table is listed under its own name)
-TABLES = {'k_locks': 'engine frame limit set to fps_target', 'k_ue': "Unreal's allocator on a host malloc zone", 'k_nier_dr': 'frame interval and dynamic-resolution floor'}
+TABLES = {}   # none in this host: a build-keyed table added to it is named here
 # Profile keys that are not behaviour switches: per-game data or controls, not something the host does differently
-NOT_SWITCHES = {'pad_layout', 'depth_mode', 'mem_used', 'sys_resource'}
+NOT_SWITCHES = {'depth_mode', 'mem_used', 'sys_resource'}
 
 # ---- Binding: what a patch's correctness is anchored to, from the loosest (GitHub issue #635). A patch is at its goal when its binding is the loosest it could have; the gap between the two
 # is the work list. A patch file's BINDING is a list of {'what', 'now', 'goal', 'purpose', 'why'} with an optional 'blocked' (why the gap cannot close yet) or 'kept' (why it stays
@@ -27,9 +27,9 @@ NOT_SWITCHES = {'pad_layout', 'depth_mode', 'mem_used', 'sys_resource'}
 # translator rules and profile switches have their entries below, since they have no patch file. Every one must be classified: the page is not written otherwise. A bring-up need not guess
 # the goal: a game's own build-bound patch may say goal 'unreviewed' (listed under Gaps, after the reviewed ones); nothing shared (sdk_patches.py, host rows, translator rules, switches) may
 BINDINGS = {   # binding: (anchored to, found by, survives)
-    'host': ('Horizon / NVN / Vulkan semantics', 'nothing in the binary', 'every game and update'),
+    'host': ('Horizon / NVN semantics', 'nothing in the binary', 'every game and update'),
     'sdk': ('Nintendo SDK code (the `sdk` module)', 'a symbol, or a fingerprint of a reviewed SDK implementation', 'any game shipping that implementation'),
-    'engine': ('middleware code: Unreal, Unity, Snowdrop, KTGL, sead, PhysX', 'a registered name, a string, or a fingerprint per engine version', 'any game on that engine version'),
+    'engine': ('middleware code: sead, Havok, CRIWARE', 'a registered name, a string, or a fingerprint per engine version', 'any game on that engine version'),
     'game': ("the game's own code, or its profile's data", 'a function fingerprint (`MATCH_CUTS`), or a profile key', "the game's updates that keep the function"),
     'build': ('fixed offsets', 'the NSO build ID', 'nothing: redone for every update'),
 }
@@ -68,21 +68,6 @@ def payoff(gap):   # the Gaps order: open gaps, then blocked, kept and unreviewe
 
 # The host's build-keyed rows: (table, the start of the row's label ('' = any), main build ('' = any), entry); the first that fits classifies a row
 HOST_BINDING = [
-    ('k_locks', 'RE Engine', '', {'what': "RE Engine's frame limit at a fixed pointer", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
-     'why': 'engine code other RE Engine games ship', 'blocked': 'one RE Engine game here'}),
-    ('k_locks', 'NLG', '', {'what': "Next Level Games' frame limiter target at a fixed address", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
-     'why': "the studio's engine, which its other games ship", 'blocked': 'one game on that engine here'}),
-    ('k_locks', 'Criterion', '', {'what': "Criterion's 60 fps mode, frame ticks and game step at fixed addresses", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
-     'why': "the studio's engine, which its other games ship", 'blocked': 'one game on that engine here'}),
-    ('k_locks', 'FIFA', '', {'what': "Frostbite's frame regulator at a fixed pointer", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
-     'why': "engine code other Frostbite games ship (the simulation's own rate is already set by name)", 'blocked': 'one Frostbite game here'}),
-    ('k_ue', '', 'feae83dc9e9fb34c77d0a62f1fa9ae9f', {'what': "UE3's GMalloc setup skipped, the host allocator in (hle_uemalloc.c)", 'now': 'build', 'goal': 'game', 'purpose': 'address space',
-     'why': "UE3 inlines the allocator's constructor into the GMalloc setup and has its own vtable layout (25 slots, 32-bit sizes), so the Unreal 4/5 discovery does not apply"}),
-    ('k_nier_dr', '', '', {'what': "NieR's frame interval and dynamic-resolution floor at fixed addresses", 'now': 'build', 'goal': 'game', 'purpose': 'frame rate',
-     'checked': "both releases' mains, where these rows were found; the global main's sites mapped into ASTRAL CHAIN and Bayonetta 1-3 (2026-11-09)",
-     'why': "the game's own display object; the Asian release's function is the global one's 0x13c0 further on, so the rewriter's function match could give the host both releases' "
-            "addresses. No PlatinumGames sibling shares the code: none of its sites has an exact match in ASTRAL CHAIN or Bayonetta 1-3 (nso_fnmap, 2026-11-09)",
-     'kept': "1.0.3 (v131072) is the newest update of both releases and likely their last: a function match would serve no other build; the rewriter would also need matched rules that write fixups and declare capabilities, a new mechanism (2026-11-09)"}),
 ]
 # Translator rules keyed by one shader's code hash: (the start of the rule's comment, entry)
 SHADER_BINDING = [
@@ -99,8 +84,6 @@ SWITCH_BINDING = [
     ('draw_barriers', '', {'what': 'draw passes ordered by the game\'s own barriers', 'now': 'game', 'goal': 'host', 'purpose': 'frame rate', 'why': f'what NVN specifies: {DEFAULT_SOON}'}),
     ('mem_map_limit', '', {'what': 'MapPhysicalMemory limited to the application pool', 'now': 'game', 'goal': 'host', 'purpose': 'memory',
      'why': "Horizon's limit; off by default because Ace Attorney Investigations Collection maps a little more than its profile's 1 GB pool, which is the thing to fix"}),
-    ('alloc_big_align', '', {'what': "StandardAllocator blocks of 64 KB and more aligned to 64 KB", 'now': 'game', 'goal': 'host', 'purpose': 'memory',
-     'why': "the cause is a memory pool's GPU address, big-page aligned on hardware and the CPU address here: pool GPU addresses aligned as hardware does, or this alignment for every game"}),
     ('vconv_range', '', {'what': 'CPU vertex conversion over the vertices a draw reads', 'now': 'game', 'goal': 'host', 'purpose': 'power',
      'why': f'the same vertices as the whole range, for less work; DM_NVN_VCONV_CHECK checks it: {DEFAULT_SOON}'}),
     ('tex_flush_upload', '', {'what': 'CPU-written textures uploaded after a flush', 'now': 'game', 'goal': 'host', 'purpose': 'rendering',
@@ -109,34 +92,16 @@ SWITCH_BINDING = [
      'why': 'as tex_flush_upload, for pools the CPU writes without a flush'}),
     ('tex_dyn_slots', '', {'what': "buffer-texture handles indexed through c2's tables", 'now': 'game', 'goal': 'host', 'purpose': 'shaders',
      'why': "right only where the handle comes from c2's tables: the translator could prove that per shader"}),
-    ('feedback_snap', '', {'what': 'draws that sample their own colour attachment read a snapshot', 'now': 'game', 'goal': 'host', 'purpose': 'rendering',
-     'why': 'the replay could find such draws itself, at the cost of a pass split each'}),
     ('enc_thread', '', {'what': 'Metal encoding on its own thread on the Mac', 'now': 'game', 'goal': 'host', 'purpose': 'frame rate',
      'why': f'what iOS does for every game: {DEFAULT_SOON}'}),
     ('present_snap', '', {'what': 'present snapshots', 'now': 'game', 'goal': 'host', 'purpose': 'rendering', 'why': f'a setting the game was tested with: {DEFAULT_SOON}'}),
-    ('pso_mtl4', '', {'what': 'MTL4Compiler pipelines on iOS', 'now': 'game', 'goal': 'host', 'purpose': 'rendering', 'why': f'a setting the game was tested with on an iPhone: {DEFAULT_SOON}'}),
-    ('screen_aspect', '', {'what': 'a picture of a taller screen\'s own shape (DM_SCREEN_ASPECT)', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
-     'why': "the output size is the host's, but the stubs that follow it (projections, layout panes, screen copies) are this build's code"}),
     ('game_env', 'DOTNET_GCRegionRange=', {'what': ".NET's garbage-collector region range", 'now': 'game', 'goal': 'game', 'purpose': 'address space', 'why': "measured for the game's regions"}),
-    ('stdalloc_cap', '', {'what': "StandardAllocator's address space", 'now': 'game', 'goal': 'game', 'purpose': 'address space',
-     'why': "what the regions after it need, measured by the NSP script's region check, or 1 GB from its heap check; the host's cap is the default"}),
     ('shader_key_skip', '', {'what': 'control-section bytes left out of shader keys', 'now': 'game', 'goal': 'game', 'purpose': 'shaders',
      'why': "the engine shares one control section among shaders; leaving GLSLC's compile information out of every game's keys would change every shader key"}),
-    ('ue_texture_pool', '', {'what': "Unreal's texture streaming pool", 'now': 'game', 'goal': 'game', 'purpose': 'memory', 'why': "the game's own budget, raised to its Windows value"}),
-    ('snowdrop_pools', '', {'what': "Snowdrop's three page pools' address ranges", 'now': 'game', 'goal': 'game', 'purpose': 'address space',
-     'why': "the rewriter finds the allocator in any build (snowdrop_pools.py); the sizes are measured against each game's regions, and the cause, an iPhone's address space, is a platform limit"}),
     ('present_interval', '', {'what': 'one frame per display tick', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'right only for games whose logic does not count frames'}),
     ('fps_hold', '', {'what': 'no frame held past the cap', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': "the game's pacing"}),
     ('fps_target', '', {'what': 'frame rate target', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'a choice per game'}),
-    ('ue_fps_cvar', '', {'what': "the game's own Unreal frame-limit variable", 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': "the game's own variable, which its settings apply to t.MaxFPS; the rewriter finds it by name (ue_cvar.py)"}),
     ('perf_mode', '', {'what': 'Boost whatever the operation mode', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': 'a combination a Switch 1 never reports: a choice per game'}),
-    ('launch_param', '', {'what': 'the launch parameter its launcher program passes', 'now': 'game', 'goal': 'game', 'purpose': 'runtime',
-     'why': "what another program of the application hands over with oe::ExecuteProgram, for one run alone"}),
-    ('programs', '', {'what': 'the other programs of a game of several programs', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': 'which programs a game has that this host can run: a fact of its files, the profiles that exist for them'}),
-    ('program_of', '', {'what': 'the first program of the game this one belongs to', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': 'as programs'}),
-    ('jit_key_data', '', {'what': 'the bytes of a nn::jit request that make the request', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the layout of the game's own request struct, for the image an iPhone serves"}),
-    ('jit_route', '', {'what': 'a route for the nn::jit capture', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the game's own menus, for the image an iPhone serves"}),
-    ('jit_out_code', '', {'what': 'where a nn::jit output lists the code it made', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the layout of the game's own output buffer, for the image an iPhone serves"}),
     ('op_mode', '', {'what': 'the operation mode at start', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the game's controls (handheld: the touch screen instead of a gyro pointer)"}),
 ]
 
@@ -386,15 +351,15 @@ def page():
     assert len(rule_lines) == n_rules, f'sdk_patches.py MATCH_CUTS: {len(rule_lines)} commented rules of {n_rules}'
 
     L = ['# Game-specific patches', '',
-         'Every piece of code that runs for one game and not the others: the rewriter\'s patches of a game\'s builds (`dm/games/<id>/patches.py`, keyed by NSO build ID: '
-         '[rewriter](../reference/rewriter.md)), the host\'s rows keyed by a game\'s build ID, the SDK cuts of the Nintendo SDK builds the games ship, translator rules keyed by one '
+         'Every piece of code that is bound to the game or to one of its builds: the rewriter\'s patches of the game\'s builds (`dm/games/<id>/patches.py`, keyed by NSO build ID: '
+         '[rewriter](../reference/rewriter.md)), the host\'s rows keyed by a build ID, the SDK cuts of the Nintendo SDK build the game ships, translator rules keyed by one '
          'shader\'s code, and the profile keys that switch host behaviour. Each patch\'s reason is the one in its source; why it is needed, and what was measured, is in the game\'s note. '
          'Each patch states its binding: what it depends on now, the loosest it could depend on (its goal), its purpose and why ([Binding](#binding)); the [gaps](#gaps) are the work list. '
          'Offsets are from the module\'s start. Generated by `dm/tools/docs_patches.py` from those sources (a patch file\'s `BINDING`; the host rows\', translator rules\' and profile '
          'switches\' entries in `docs_patches.py`): change the source, then run it.', '',
          '## Binding', '',
-         'A patch\'s binding is what its correctness is anchored to, from the loosest. A patch is good design when its binding is the loosest that is correct (AGENTS.md prefers general '
-         'fixes); the rules are in GitHub issue #635.', '',
+         'A patch\'s binding is what its correctness is anchored to, from the loosest. The looser a binding, the more of the game\'s updates a patch survives without work (the rules come from '
+         'nxnative\'s issue #635, written for many games).', '',
          '| Binding | Anchored to | Found by | Survives |', '|---|---|---|---|',
          *[f'| `{b}` | {a} | {f} | {s} |' for b, (a, f, s) in BINDINGS.items()], '',
          '- Status: **at goal** (the binding now is the goal), **gap** (it could be looser: the work list), **blocked** (a gap with the reason it cannot close yet), **kept** (a gap left '
