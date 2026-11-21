@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
         child(argv[0], "--seed", save); child(argv[0], "--restart", save); child(argv[0], "--restart", save);
         assert(!rm_tree(root)); puts("t_account_save: OK (independent commits, failure isolation, two fresh boots)"); return 0;
     }
-    setenv("DM_SAVE", argv[2], 1); unsetenv("DM_SAVE_SYNC"); unsetenv("DM_TEST_FS_FAIL"); unsetenv("DM_TEST_FS_FAILAT");
+    setenv("DM_SAVE", argv[2], 1); unsetenv("DM_TEST_FS_FAIL"); unsetenv("DM_TEST_FS_FAILAT");
     Uid u2 = user_uid(1), picked, list[8]; uint8_t settings[0x88] = {0}, exists; int n;
     if (!strcmp(argv[1], "--seed")) {
         selected = FRONT_USER_CREATE;
