@@ -16584,6 +16584,27 @@ static uint64_t loop_state(NvShader *cs) {
     }
     return cs->loop_gpu;
 }
+static int ndve_may_take(NvShader *cs); static int up_chain_named(NvShader *cs);
+static int dispatch_host_may_take(NvShader *cs) { return ndve_may_take(cs) || up_chain_named(cs) || up_mfx_wanted(cs); }
+// The common pipeline of a compute shader a dispatch found none for: made here, on the dispatching thread, and kept (g_cps); nil when it cannot run (logged once, remembered)
+static id<MTLComputePipelineState> dispatch_cps(NvShader *cs, int off, const cps_key *k) {
+    if (cs->cps_failed) return nil;   // the same function fails the same way: asked again at every dispatch, Mario Kart World's refused shaders took 3,138 pipeline builds in 60 s
+    NSError *e = nil; uint64_t bt = bp_now(); id<MTLComputePipelineState> ps = cps_new_b(cs->fn, off, &e);
+    g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
+    if (!ps) { cs->cps_failed = 1; MLOG("[RED] failed to create compute pipeline for %s: %s (its dispatches are skipped)", cs->key, e.localizedDescription.UTF8String); return nil; }
+    // A pipeline's thread limit falls with the kernel's registers on the M1 and M2 (dmsh_rewrite.py max_threads); a dispatch of the shader's local size past it runs no invocation
+    NSUInteger want = (NSUInteger)MAX(cs->rf.tg[0], 1) * MAX(cs->rf.tg[1], 1) * MAX(cs->rf.tg[2], 1);
+    if (!cs->builtin && cs->rf.tg[0] && want > ps.maxTotalThreadsPerThreadgroup) {
+        cs->cps_failed = 1;
+        MLOG("[RED] compute pipeline for %s allows %lu threads a threadgroup, its local size %ux%ux%u needs %lu (its dispatches are skipped)", cs->key,
+             (unsigned long)ps.maxTotalThreadsPerThreadgroup, cs->rf.tg[0], cs->rf.tg[1], cs->rf.tg[2], (unsigned long)want);
+        return nil;
+    }
+    pso_record("C\t%s\n", cs->key);
+    if (cs->key[0]) pso_user_record("C\t%s\n", cs->key);
+    hm_put_id(&g_cps, k, ps);
+    return ps;
+}
 static void dispatch_(const p_dispatch *dp) {
     // An empty direct grid invokes no shader and changes no resources. Metal
     // rejects it; indirect counts belong to the GPU and are left untouched.
@@ -16602,23 +16623,10 @@ static void dispatch_(const p_dispatch *dp) {
     int off = !border_need(cs, 5);
     cps_key k = {(__bridge const void *)cs, (uintptr_t)off};
     id<MTLComputePipelineState> ps = hm_get_id(&g_cps, &k);
-    if (!ps) {
-        if (cs->cps_failed) return;   // the same function fails the same way: asked again at every dispatch, Mario Kart World's refused shaders took 3,138 pipeline builds in 60 s
-        NSError *e = nil; uint64_t bt = bp_now(); ps = cps_new_b(cs->fn, off, &e);
-        g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
-        if (!ps) { cs->cps_failed = 1; MLOG("[RED] failed to create compute pipeline for %s: %s (its dispatches are skipped)", cs->key, e.localizedDescription.UTF8String); return; }
-        // A pipeline's thread limit falls with the kernel's registers on the M1 and M2 (dmsh_rewrite.py max_threads); a dispatch of the shader's local size past it runs no invocation
-        NSUInteger want = (NSUInteger)MAX(cs->rf.tg[0], 1) * MAX(cs->rf.tg[1], 1) * MAX(cs->rf.tg[2], 1);
-        if (!cs->builtin && cs->rf.tg[0] && want > ps.maxTotalThreadsPerThreadgroup) {
-            cs->cps_failed = 1;
-            MLOG("[RED] compute pipeline for %s allows %lu threads a threadgroup, its local size %ux%ux%u needs %lu (its dispatches are skipped)", cs->key,
-                 (unsigned long)ps.maxTotalThreadsPerThreadgroup, cs->rf.tg[0], cs->rf.tg[1], cs->rf.tg[2], (unsigned long)want);
-            return;
-        }
-        pso_record("C\t%s\n", cs->key);
-        if (cs->key[0]) pso_user_record("C\t%s\n", cs->key);
-        hm_put_id(&g_cps, &k, ps);
-    }
+    // A dispatch the host may draw itself (nn::ndve's network by the host's engine, the game's upscaler by MetalFX) gets its pipeline only once the host has left it to the
+    // shader, below: a pipeline made first was compiled for nothing, and without the offline archive Apple's compiler takes minutes on each of nn::ndve's kernels
+    const int later = !ps && !cs->builtin && dispatch_host_may_take(cs);
+    if (!ps && !later && !(ps = dispatch_cps(cs, off, &k))) return;
     if (cs->builtin) {   // Built-in compute kernel: n = uniform buffer 0, src = storage buffer 0, dst = storage buffer 1
         const p_bind_buf *u = &S.ubo[5][0], *a0 = &S.ssbo[5][0], *a1 = &S.ssbo[5][1];
         void *ub, *sb, *db; uint64_t uo, so, dof;
@@ -16654,6 +16662,7 @@ static void dispatch_(const p_dispatch *dp) {
     // upscaler shaders too (Ocarina of Time's square-rooted networks, up_mfx_color), which then replaces only that one dispatch, once the chain has given up (up_chain_fail)
     if (up_chain_dispatch(cs, dp->ind != 0)) return;
     if (up_mfx_wanted(cs) && !dp->ind && up_mfx_encode(cs)) return;   // the game's upscaler, drawn by MetalFX instead (DM_UPSCALER=metalfx)
+    if (!ps && !(ps = dispatch_cps(cs, off, &k))) return;   // the host left it to the shader (later, above)
     // Threadgroup memory past Metal's 32 KB, in a device buffer (dmsh_rewrite.py tg_spill): a slice for every workgroup of the grid. An indirect dispatch's grid is in GPU memory, written earlier
     // in the frame: the replay waits for the GPU (as an indirect-count multi-draw does, mdi_wait) and reads it. Mario Kart World's spilled dispatches are all direct, of 1 to 3 workgroups
     uint64_t tg_groups = 0;

@@ -2190,6 +2190,15 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Note:** the host's network rounds each HMMA's f16 accumulator once per 8 products, as the translated helper does since [HMMA rounds its f16 accumulator once per 8 products](#hmma-rounds-its-f16-accumulator-once-per-8-products) (resolved; before that both rounded after every product, as `simdgroup_half8x8` does, and differed from the Switch in the low bits of most HMMAs). The host's network follows the helper, and `test_ndve_engine.py` fails when the two differ.
 - **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#frame-rate): its title and opening movies ([issue 1375](https://github.com/seedds/nxnative/issues/1375), PR #1894).
 
+### The game's movie kernels compiled although the host's engine runs them
+
+- **Symptom:** a development build (`--platform mac`, no offline pipeline bundle) never shows the title movie: the run stops at the movie's first frame with the submit thread waiting in `newComputePipelineStateWithFunction`, and `sample` shows `MTLCompilerService` in LLVM's `InstructionCombiningPass` for minutes on end. A packed app does not show it: its bundle holds the pipelines.
+- **Cause:** `dispatch_` made a compute shader's pipeline before asking whether the host draws the dispatch itself ([The NDVE movie network by the host](#the-ndve-movie-network-by-the-host), the game's upscaler through MetalFX). The 12 kernels of `nn::ndve`'s network were compiled at their first dispatch although the engine replaces every one, and Apple's compiler takes minutes on each on an M2 Pro. The engine was also made at the first colour conversion, in the background, so the network's first frame, one dispatch later, found it not ready and ran the game's kernels for that frame.
+- **Fix:** general, in the host. A dispatch the host may take (`dispatch_host_may_take`: the network's kernels and the resampler with the engine on, the upscaler chain's shaders, the upscaler MetalFX draws) gets its pipeline only after the host has left it to the shader (`dispatch_cps`); other dispatches are unchanged. The network's first frame waits for the engine being made (`ndve_engine_dispatch`, bounded at 5 s; the wait is logged, 10.6 and 18.8 ms on an M2 Pro), so the game's kernels run only when the engine fails or is off.
+- **Check:** Ocarina of Time on an M2 Pro with no bundle and an empty archive (`DM_PSO_BUNDLE=off`): the title movie and the file select play, the save loads, `NDVE engine: first movie frame by the engine (11 dispatches skipped)`, no `[RED]` line; before, the run never left the movie's first frame. With the app's bundle: the same pictures as before at 60 fps.
+- **Open:** the prewarm lists still name the network's kernels (`C` rows), which a start without a bundle compiles in the background.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#frame-rate).
+
 ### Driver-segment reads outside fragment shaders
 
 - **Symptom:** a vertex or compute shader reads zeros from NVN's driver segment `c0`.

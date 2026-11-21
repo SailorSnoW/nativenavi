@@ -203,6 +203,8 @@ static void ndve_compare(id<MTLTexture> a, id<MTLTexture> b, int slot) {
              slot ? "resampler" : "network", (unsigned long long)*n, c[2 * slot], (unsigned long)a.width, (unsigned long)a.height, c[2 * slot + 1]);
     }
 }
+// Whether the engine may take the shader's dispatches: the network's and the resampler's (not the colour conversion, which always runs), with the engine on
+static int ndve_may_take(NvShader *cs) { return ndve_mode() && !ndve_check() && !g_nd.off && g_nd.state >= 0 && ndve_index(cs, 1) >= 1; }
 // 1 when the dispatch was taken (skipped or replaced by the engine), 0 to run it
 static int ndve_engine_dispatch(NvShader *cs, const p_dispatch *dp) {
     const int chk = ndve_check();
@@ -227,7 +229,16 @@ static int ndve_engine_dispatch(NvShader *cs, const p_dispatch *dp) {
         return !chk;
     }
     // dispatch i of the sequence: the keys repeat (a8b4, e6be, 0a56 twice), so position decides
-    if (g_nd.pos == 0) { if (i != 1) return 0; if (g_nd.state != 2) return 0; }
+    if (g_nd.pos == 0) {
+        if (i != 1) return 0;
+        // The engine is made at the first colour conversion, the dispatch before this one. Its first frame waits for it: the game's network for that frame alone means compiling its
+        // 12 kernels, which the offline archive holds for a packed app and Apple's compiler takes minutes on without it. Bounded, so an engine that does not come leaves the game's
+        if (g_nd.state == 1) {
+            uint64_t t0 = bp_now(); while (g_nd.state == 1 && bp_now() - t0 < 5000000000ull) usleep(500);
+            MLOG("NDVE engine: the first movie frame waited %.1f ms for the engine%s", (bp_now() - t0) / 1e6, g_nd.state == 1 ? " in vain; the game's network runs until it is ready" : "");
+        }
+        if (g_nd.state != 2) return 0;
+    }
     else if (ndve_index(cs, g_nd.pos) != g_nd.pos) return ndve_fail(cs, "a dispatch out of the network's order");
     const int p = g_nd.pos ? g_nd.pos : 1;
     const p_bind_buf *w = &S.ssbo[5][2], *b = &S.ssbo[5][3];
