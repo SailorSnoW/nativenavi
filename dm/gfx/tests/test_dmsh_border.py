@@ -14,7 +14,6 @@ TOOLS = Path(__file__).resolve().parents[1] / 'tools'
 sys.path.insert(0, str(TOOLS))
 import dmsh_abi as abi   # noqa: E402
 import dmsh_fetch   # noqa: E402
-import dmsh_geometry   # noqa: E402
 
 from dmsh_reflect import reflect   # noqa: E402
 from dmsh_rewrite import border_emu   # noqa: E402

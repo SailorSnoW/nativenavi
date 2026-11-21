@@ -96,8 +96,6 @@ SWITCH_BINDING = [
      'why': f'what iOS does for every game: {DEFAULT_SOON}'}),
     ('present_snap', '', {'what': 'present snapshots', 'now': 'game', 'goal': 'host', 'purpose': 'rendering', 'why': f'a setting the game was tested with: {DEFAULT_SOON}'}),
     ('game_env', 'DOTNET_GCRegionRange=', {'what': ".NET's garbage-collector region range", 'now': 'game', 'goal': 'game', 'purpose': 'address space', 'why': "measured for the game's regions"}),
-    ('shader_key_skip', '', {'what': 'control-section bytes left out of shader keys', 'now': 'game', 'goal': 'game', 'purpose': 'shaders',
-     'why': "the engine shares one control section among shaders; leaving GLSLC's compile information out of every game's keys would change every shader key"}),
     ('present_interval', '', {'what': 'one frame per display tick', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'right only for games whose logic does not count frames'}),
     ('fps_hold', '', {'what': 'no frame held past the cap', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': "the game's pacing"}),
     ('fps_target', '', {'what': 'frame rate target', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'a choice per game'}),

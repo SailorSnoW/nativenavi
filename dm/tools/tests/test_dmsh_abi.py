@@ -16,16 +16,16 @@ sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
 import dmsh_abi as abi   # noqa: E402
 
 # Literals of the ABI still written in each file (outside comments), counted as the ratchet below does: the value, or the kind string (repr). These stay for other reasons:
-# a json key spelled like a kind ('c1', 'geometry', 'tex', 'img' in the facts and reflection json), an NVN stage name ("geometry"), and 0x100
+# a json key spelled like a kind ('c1', 'tex', 'img' in the facts and reflection json), and 0x100
 # where it is not the push constant block's size (DMSH_PUSH_SIZE): a viewport swizzle value in nvn_mtl.m, the start of compute code in a package record in dmsh_build.py.
 # 0x1000 where it is not the pool table's entry count (DMSH_GMEM_MAP_ENTRIES): the 4 KB page step of nvn_mtl.m's sparse residency map.
 # A count may only go down; when it does, lower it here.
 BASELINE = {
-    'dm/gfx/nvn/nvn_mtl.m': {"'geometry'": 3, '0x100': 2, '0x1000': 2},
+    'dm/gfx/nvn/nvn_mtl.m': {'0x100': 2, '0x1000': 2},
     'dm/gfx/nvn/nvn_refl.m': {"'c1'": 1},
     'dm/gfx/nvn/nvn_refl.h': {},
     'dm/gfx/nvn/nvn_obj.h': {},
-    'dm/gfx/tools/dmsh_build.py': {"'c1'": 4, "'geometry'": 3, "'img'": 1, "'tex'": 1, '0x100': 2},
+    'dm/gfx/tools/dmsh_build.py': {"'c1'": 4, "'img'": 1, "'tex'": 1, '0x100': 2},
     'dm/gfx/tools/dmsh_fetch.py': {},
     'dm/gfx/tools/dmsh_rewrite.py': {},
     'dm/gfx/tools/dmsh_reflect.py': {},
@@ -82,7 +82,7 @@ class Header(unittest.TestCase):
         self.assertEqual(a.SEPTEX_SLOT0 + a.C2_SEP_SLOTS, 256, 'the host has 256 texture slots a stage (nvn_mtl.m NTEX)')
         self.assertEqual(a.C0_CS_UBO + a.C0_ROW * a.C0_CS_UBO_SLOTS, a.C0_SSBO_CS)
         self.assertLessEqual(a.C0_DISPATCH + 12, a.C0_CS_UBO)
-        bases = sorted((a.C0_SSBO_VS, a.C0_SSBO_CS, a.C0_SSBO_GS, a.C0_SSBO_PS))
+        bases = sorted((a.C0_SSBO_VS, a.C0_SSBO_CS, a.C0_SSBO_PS))
         for lo, hi in zip(bases, bases[1:]): self.assertLessEqual(lo + a.C0_ROW * a.C0_SSBO_SLOTS, hi, 'storage buffer tables overlap')
         self.assertLessEqual(bases[-1] + a.C0_ROW * a.C0_SSBO_SLOTS, a.C0_POINT_SIZE)
         # The task and mesh tables sit where Mario Kart World's shaders read them, past the graphics stages' single words (issue #1186: at 0x610 / 0x710 every task and mesh draw read the dummy buffer)
@@ -98,11 +98,11 @@ class Build(unittest.TestCase):
         ns: dict[str, Any] = dict(vars(dmsh_reflect))
         self.assertEqual((ns['TEX_BASE'], ns['IMG_BASE'], ns['IMG_SLOTS'], ns['SEPTEX_BASE'], ns['SEPTEX_SLOT0'], ns['SAMP_BASE']),
                          (abi.C2_TEX, abi.C2_IMG, abi.C2_IMG_SLOTS, abi.C2_SEPTEX, abi.SEPTEX_SLOT0, abi.C2_SAMP))
-        self.assertEqual(ns['SSBO'], {'vs': abi.C0_SSBO_VS, 'cs': abi.C0_SSBO_CS, 'gs': abi.C0_SSBO_GS, 'ps': abi.C0_SSBO_PS, 'ts': abi.C0_SSBO_TS, 'ms': abi.C0_SSBO_MS})
+        self.assertEqual(ns['SSBO'], {'vs': abi.C0_SSBO_VS, 'cs': abi.C0_SSBO_CS, 'ps': abi.C0_SSBO_PS, 'ts': abi.C0_SSBO_TS, 'ms': abi.C0_SSBO_MS})
         self.assertEqual(ns['DRV_FILL'][2][-1], (abi.C2_SAMP, abi.C2_SAMP + abi.C2_ROW * abi.C2_SEP_SLOTS))
 
     def test_every_kind_is_written_by_the_build(self):
-        build = [REPO / 'dm/gfx/tools' / f for f in ('dmsh_build.py', 'dmsh_reflect.py', 'dmsh_rewrite.py', 'dmsh_entry.py', 'dmsh_rt_compile.py')]   # the build and the modules that write its reflection
+        build = [REPO / 'dm/gfx/tools' / f for f in ('dmsh_build.py', 'dmsh_reflect.py', 'dmsh_rewrite.py', 'dmsh_entry.py')]   # the build and the modules that write its reflection
         for p in build[:3]: self.assertRegex(p.read_text(), r'(?m)^import .*\bdmsh_abi as abi\b', p.name)   # dmsh_entry.py writes no binding
         src = ''.join(p.read_text() for p in build)
         unused = [k for k in abi.VALUES if k.startswith('KIND_') and f'abi.{k}' not in src]

@@ -42,7 +42,7 @@ For which Metal object each NVN object and command lands on, see [nvn_metal_mapp
 
 ### Shader translation chain
 
-The game's shaders are GPU machine code: Ampere code for the Switch 2's NVN2, which Ocarina of Time ships (`tools/dmsh_ampere.py`), and Maxwell code for the Tegra X1's NVN. The translation from this machine code to Metal Shading Language is not done at run time; all of it happens offline:
+The game's shaders are GPU machine code: Ampere code for the Switch 2's NVN2, which Ocarina of Time ships (`tools/dmsh_ampere.py`). The chain translates only an NVN2 game's vertex, pixel, compute, task and mesh shaders, all the stages the game has; a shader of another stage or an NVN1 (Maxwell) shader stops the split or the build ([reference](../../docs/reference/shaders.md#a-shader-the-chain-does-not-translate-stops-the-split-and-the-build)). The translation from this machine code to Metal Shading Language is not done at run time; all of it happens offline:
 
 ```
 Original Switch shader package
@@ -53,7 +53,7 @@ Original Switch shader package
 
 The whole chain is driven by `tools/dmsh_build.py`; `scripts/build_app.py` runs it as part of packing the app. Key points:
 
-- **Key**: each shader is keyed by the first 16 hexadecimal digits of the sha256 of its control section (the first 0x880 bytes, or the section's own length at control +0x20 when that is shorter, as in SDK 10's 0x850-byte sections) followed by its code area (many shaders share a control section and differ in code). At run time the game hands both to `nvnProgramSetShaders`, and the replay layer computes the same key to find the library.
+- **Key**: each shader is keyed by the first 16 hexadecimal digits of the sha256 of its control section's key bytes (the first 0x48 bytes of the NVN2 section, its length word at +0x30 as zeros) followed by its code area (many shaders share a control section and differ in code). At run time the game hands both to `nvnProgramSetShaders`, and the replay layer computes the same key to find the library.
 - **Build outputs**: `<key>_b.metallib` (the shader library), `<key>_b.json` (reflection used by replay: each binding's kind, slot number, index within the argument buffer and so on), `<key>_b.metal` (the MSL source). Some fragment shaders additionally have `<key>_bf.metallib`, a "readable tile" version used for pass merging (see the file header of `tools/dmsh_fetch.py`). `_b_build.json` in the directory records the success or failure of each key in this run.
 - **The library ABI**: `nvn/dmsh_abi.h` is the one definition of what the libraries and the replay must agree on: the NVN driver segments' layout (the `c2` handle tables, the `c0` storage and uniform buffer tables and the words the host fills) and the binding kinds of `<key>_b.json`. The host includes it; `tools/dmsh_abi.py` reads it for `dmsh_build.py` and stops on any line it cannot read. Both are part of the chain version, and `dm/tools/tests/test_dmsh_abi.py` guards them (the translator's `Program.cs` keeps its own copy of the `c2` layout, which the test compares).
 - **`dm/games/<id>/shader_map.tsv`**: the shader map, one row per shader variant. At run time only its "key → stage (vertex / fragment / compute)" is used.

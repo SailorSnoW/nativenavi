@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fuzz the in-memory shader container readers of dm/gfx/tools/shader_split.py, dispatched as scan_file does for a loose file: scan_blob (BNSH, BAHS, NDSR, NDVE, and SARC and
 Yaz0 around them), and uniq_keys / var_pairs over what they return.
-Seeds: one synthetic shader pair (a 0x880-byte control section and a small code area per stage, vertex and pixel), wrapped as a BNSH, a BAHS with its binary and program arrays,
+Seeds: one synthetic NVN2 shader pair (a 0xe0-byte control section and a small code area per stage, vertex and pixel), wrapped as a BNSH, a BAHS with its binary and program arrays,
 and a SARC of the BNSH compressed with Yaz0.
 Clean rejection: red() (SystemExit with a '[RED] ' message naming the problem), or a result (an empty one included). Any other exception is a finding: scan_file's net still
 turns it into an 'unreadable' red line, but one that names no layout problem (test_split_unreadable.py: a reader names its layout, "not an IndexError"); a hang or an oversized
@@ -15,14 +15,14 @@ ss = fuzzlib.import_shader_split()
 
 HARNESS = 'shader_split'
 fuzzlib.guard(ss)
-CTL, GFX = ss.CTL_MAGIC, ss.GFX_MAGIC
+CTL = ss.CTL_MAGIC
 
 
 def stage(sph_type):
-    """(control section, code area) of one stage: the control's +0x20 holds its length, +0x704 the code area's; the code area is a 0x30 header, the SPH (word 0: stage in bits 10..13),
-    then a few instruction words"""
-    code = bytearray(GFX + bytes(0x2c)); code += struct.pack('<I', sph_type) + bytes(0x4c); code += bytes.fromhex('0f00000000000000') * 8
-    ctl = bytearray(0x880); ctl[:4] = CTL; struct.pack_into('<I', ctl, 0x20, 0x880); struct.pack_into('<I', ctl, 0x704, len(code))
+    """(control section, code area) of one NVN2 stage: the control's version 0xc9 at +4, its +0x38 the instructions' length, +0x40 and +0x44 the code area's; the code area is the
+    0x80-byte SPH (word 0: stage in bits 10..13), then a few instruction words"""
+    code = bytearray(struct.pack('<I', sph_type) + bytes(0x7c)); code += bytes.fromhex('0f00000000000000') * 8
+    ctl = bytearray(0xe0); ctl[:4] = CTL; struct.pack_into('<I', ctl, 4, 0xc9); struct.pack_into('<IIII', ctl, 0x38, len(code), 0, len(code), len(code))
     return bytes(ctl), bytes(code)
 
 
@@ -41,12 +41,35 @@ def bnsh():
     return bytes(d)
 
 
+def bnsh_of(variations):
+    """A BNSH of the variations given, each a list of (program-pointer offset, control section, code area): vertex at 8, pixel at 0x28, task at 0x40, mesh at 0x48.
+    → (file, the offsets of each shader's program, descriptor, control section and code area)"""
+    programs = 0x100 + len(variations) * 0x40
+    descriptors = programs + len(variations) * 0x50
+    data = bytearray(descriptors + sum(map(len, variations)) * 0x20)
+    data[:8] = b'BNSH\0\0\0\0'; data[0x60:0x64] = b'grsc'
+    struct.pack_into('<IQ', data, 0x7c, len(variations), 0x100)
+    marks = []; descriptor = descriptors
+    for i, variation in enumerate(variations):
+        program = programs + i * 0x50
+        struct.pack_into('<Q', data, 0x110 + i * 0x40, program)
+        for slot, control, code in variation:
+            struct.pack_into('<Q', data, program + slot, descriptor)
+            pctl = len(data); pcode = pctl + len(control)
+            data.extend(control + code)
+            struct.pack_into('<QQII', data, descriptor + 8, pctl, pcode, len(code), len(control))
+            marks.append(dict(program=program, descriptor=descriptor, control=pctl, code=pcode))
+            descriptor += 0x20
+    struct.pack_into('<I', data, 0x1c, len(data))
+    return bytes(data), marks
+
+
 def bahs():
     d = bytearray(0x100); d[:4] = b'BAHS'
     struct.pack_into('<II', d, 0x40, 8 + 2 * 0x20, 2)       # the binary array: two records of 0x20 bytes, each holding the 16-byte entry at +0x10
-    region = 0x100 + 2 * 0x880
+    region = 0x100 + sum(len(ctl) for ctl, _ in (VS, PS))
     for i, (ctl, code) in enumerate((VS, PS)):
-        rec = 0x48 + 0x20 * i; ent = rec + 0x10; c = 0x100 + 0x880 * i
+        rec = 0x48 + 0x20 * i; ent = rec + 0x10; c = 0x100 + len(VS[0]) * i
         struct.pack_into('<II', d, rec, 0x20, i)            # record size, kind (0 vertex, 1 fragment)
         struct.pack_into('<IIIi', d, ent, 0x100 * i, 0, len(ctl), c - ent)
     struct.pack_into('<II', d, 0x88, 8 + 16, 1); struct.pack_into('<IIII', d, 0x90, 16, 0, 0x11, 0)   # the program array: one program from binary 0

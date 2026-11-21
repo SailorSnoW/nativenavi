@@ -4,7 +4,7 @@
 # (raster_facts). Functions of the MSL text and the library ABI (dmsh_abi.py) only, with no build state, so tests import them. Part of the translation chain (dmsh_chain.FILES)
 # and of every shader's cache key (dmsh_build.py CODE_FP): what they find goes into the shader's library and its reflection json.
 import re
-import dmsh_abi as abi, dmsh_fetch, dmsh_geometry
+import dmsh_abi as abi, dmsh_fetch
 
 # The NVN driver's constant segments have one layout in every game, which dm/gfx/nvn/dmsh_abi.h holds for the host and this build (through dmsh_abi.py); nvn_mtl.m fills them the same way at run time.
 #   c2 C2_TEX + 8 r: handles bound with nvnCommandBufferBindTexture (combined texture and sampler), slot r. The driver has 32 such slots, but a game may bind higher ones, whose words lie in the
@@ -14,10 +14,10 @@ import dmsh_abi as abi, dmsh_fetch, dmsh_geometry
 #   c2 C2_IMG + 8 r: images (nvnCommandBufferBindImage), slot r < C2_IMG_SLOTS
 #   c2 C2_SEPTEX + 8 r: separate textures (nvnCommandBufferBindSeparateTexture), reported as slot SEPTEX_SLOT0 + r, where the host binds them (hle_nvn.c, NVN_SEPTEX_SLOT0)
 #   c2 C2_SAMP + 8 r: separate samplers (nvnCommandBufferBindSeparateSampler), slot r < C2_SEP_SLOTS
-#   c0 base + 0x10 r: storage buffer r (64-bit address, 32-bit size), base C0_SSBO_<stage> (the hull / domain stages' bases were never seen)
+#   c0 base + 0x10 r: storage buffer r (64-bit address, 32-bit size), base C0_SSBO_<stage>, of the stages the game has
 TEX_BASE, IMG_BASE, IMG_SLOTS, SEPTEX_BASE, SEPTEX_SLOT0, SAMP_BASE = abi.C2_TEX, abi.C2_IMG, abi.C2_IMG_SLOTS, abi.C2_SEPTEX, abi.SEPTEX_SLOT0, abi.C2_SAMP
 
-SSBO = {'vs': abi.C0_SSBO_VS, 'cs': abi.C0_SSBO_CS, 'gs': abi.C0_SSBO_GS, 'ps': abi.C0_SSBO_PS, 'ts': abi.C0_SSBO_TS, 'ms': abi.C0_SSBO_MS}
+SSBO = {'vs': abi.C0_SSBO_VS, 'cs': abi.C0_SSBO_CS, 'ps': abi.C0_SSBO_PS, 'ts': abi.C0_SSBO_TS, 'ms': abi.C0_SSBO_MS}
 
 def attributes(src):
     """The vertex attribute declarations, as matches of (type, name, location). Searched only in the lines from the first to the last: from any word of a 220 KB source the pattern costs 9 ms"""
@@ -427,7 +427,6 @@ def reflect(key, stage, msl, res):
         if ty == 'sampler' and nm.endswith('Smplr' + abi.BORDER_TWIN):   # a sampler's twin (border_emu): the same sampler, its bit in the block in the order of the twins
             nm = nm[:-len(abi.BORDER_TWIN)]; e['border_bit'] = sum(1 for b in binds if 'border_bit' in b)
         if nm == abi.BORDER_MEMBER: e.update(kind=abi.KIND_BORDER)
-        elif nm in dmsh_geometry.HELPERS: e.update(kind=abi.KIND_GEOMETRY, reg=dmsh_geometry.HELPERS[nm])
         elif pool and not nm.endswith('_cb0_40000000'):   # a table of a uniform buffer's handles (pool_arrays): reg and off as an array of them, below
             ut, us = decode_ubo_tex(nm.removesuffix('Smplr'))   # pyright: ignore[reportGeneralTypeIssues]  (not None: pool_arrays made this pool only for a name it decodes)
             e.update(kind=abi.KIND_SAMP_HTAB if pool.group(1) == 'sampler' else abi.KIND_TEX_HTAB, elem=pool.group(1), reg=ut[0], off=ut[1], **({'soff': us[1], 'sreg': abi.SREG_C2} if us[0] == 'c2' else {}))
@@ -482,7 +481,7 @@ def reflect(key, stage, msl, res):
                 e['fetch1d'] = True
         binds.append(e)
     # Storage buffers: SPIR-V binding number → c0 offset → NVN storage buffer slot (c0 base SSBO[stage], C0_ROW bytes per slot)
-    base = SSBO.get(stage)   # storage buffer base for the hull / domain stages has not been measured: a storage buffer there is reported with no slot
+    base = SSBO.get(stage)   # a stage with no table here (the game has none) gets its storage buffers reported with no slot
     sb_sorted = sorted(res['sbufs'], key=lambda b: b['binding'])
     for e in binds:
         if e['kind'] == abi.KIND_SBUF:
@@ -524,7 +523,7 @@ def gptr_sites(stage, res):
     if sorted(sites) != list(range(len(sites))) or len(sites) > abi.GPTR_MAX: raise ValueError(f'gptr sites {sorted(sites)} are not 0..n-1 within {abi.GPTR_MAX}')
     return [sites[k] for k in range(len(sites)) if sites[k][0] >= 0]
 
-DRV_FILL = {0: [(b, b + abi.C0_ROW * abi.C0_SSBO_SLOTS) for k, b in sorted(SSBO.items(), key=lambda kv: kv[1]) if k not in ('ts', 'ms')],   # c0: storage buffer address tables (vertex / compute / geometry / pixel; a task or mesh stage's: unfillable())
+DRV_FILL = {0: [(b, b + abi.C0_ROW * abi.C0_SSBO_SLOTS) for k, b in sorted(SSBO.items(), key=lambda kv: kv[1]) if k not in ('ts', 'ms')],   # c0: storage buffer address tables (vertex / compute / pixel; a task or mesh stage's: unfillable())
             2: [(TEX_BASE, SEPTEX_BASE), (IMG_BASE, IMG_BASE + abi.C2_ROW * IMG_SLOTS), (SEPTEX_BASE, SAMP_BASE), (SAMP_BASE, SAMP_BASE + abi.C2_ROW * abi.C2_SEP_SLOTS)]}   # c2: the handle tables above, all filled by the replay layer
 
 INDEX_BUILTINS = {'gl_SampleID': (0, abi.C0_SAMPLE_BYTES - 1)}   # a computed index's inputs known to be bounded: the sample index, below the sample count (at most the table's bytes)

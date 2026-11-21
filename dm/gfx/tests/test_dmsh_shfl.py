@@ -19,7 +19,6 @@ import unittest
 TOOLS = Path(__file__).resolve().parents[1] / 'tools'
 sys.path.insert(0, str(TOOLS))
 import dmsh_chain
-import dmsh_geometry
 
 
 def program(arch, mode, immediate):
@@ -109,7 +108,6 @@ class ShuffleOnGpu(unittest.TestCase):
         r = subprocess.run([os.environ['DMSH_TEST_XLATE'], str(work / 'jobs.json'), str(work)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue((work / 'k.spv').exists(), r.stdout + r.stderr)
-        dmsh_geometry.flatten_sets(work / 'k.spv')
         r = subprocess.run([dmsh_chain.SPIRV_CROSS, *dmsh_chain.CROSS_MSL, str(work / 'k.spv')], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         (work / 'k.metal').write_text(harness(r.stdout))

@@ -182,15 +182,6 @@ int main(void) { @autoreleasepool {
         check("B texture without a resolved slot fails", 1, nvn_refl_from_json(b2, &r, err, sizeof err) != 0);
         printf("%-60s %s\n", "B negative control: unknown kind / missing slot", fail == f1 ? "✓" : "✗");
     }
-    {   int f1 = fail;   // the kinds of geometry and ray tracing shaders, which dmsh_abi.h names and this host does not draw: refused by name
-        static const char *const gone[] = {DMSH_KIND_GEOMETRY, DMSH_KIND_RT_SCENE, DMSH_KIND_RT_PARAMETERS, DMSH_KIND_RT_ERRORS, DMSH_KIND_RT_INSTANCE_SBT, DMSH_KIND_RT_BANK0, DMSH_KIND_RT_BANK3};
-        for (unsigned k = 0; k < sizeof gone / sizeof *gone; k++) {
-            NSDictionary *j = @{@"route": @"B", @"bindings": @[@{@"kind": @(gone[k]), @"reg": @0, @"arg_id": @0, @"msl_name": @"x", @"msl_type": @"device uint*"}]};
-            err[0] = 0;
-            check(gone[k], 1, nvn_refl_from_json(j, &r, err, sizeof err) != 0 && strstr(err, gone[k]) && strstr(err, "does not draw"));
-        }
-        printf("%-60s %s\n", "B geometry and ray tracing kinds refused by name", fail == f1 ? "✓" : "✗");
-    }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 } }

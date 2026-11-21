@@ -147,11 +147,7 @@ def header_one(g):
     if et not in ('on', 'off'): sys.exit(f'{g.id}: enc_thread must be on or off: {et}')
     cp = g.get('core_preempt', 'off')   # same-core preemption approximation (hle_thread.c): on / off
     if cp not in ('on', 'off'): sys.exit(f'{g.id}: core_preempt must be on or off: {cp}')
-    sks = g.get('shader_key_skip', '')   # control-section bytes the shader keys hash as zeros, <offset>+<length> (hle_nvn.c keys_hash, shader_split.py key_ctl; Batman: Arkham Knight: GLSLC's compile information, 0x770+0x78)
-    m = re.fullmatch(r'(0x[0-9a-fA-F]+|\d+)\+(0x[0-9a-fA-F]+|\d+)', sks) if sks else None
-    if sks and (not m or not 0x30 <= int(m[1], 0) or not 0 < int(m[2], 0) or int(m[1], 0) + int(m[2], 0) > 0x880 or (int(m[1], 0) < 0x760 and int(m[1], 0) + int(m[2], 0) > 0x700)):   # not over +0x700..+0x75f, the code area and compute fields the tools read
-        sys.exit(f'{g.id}: shader_key_skip takes <offset>+<length> within the first 0x880 bytes of the control section, past its header (+0x30) and clear of +0x700..+0x75f: {sks}')
-    sko, skl = (int(m[1], 0), int(m[2], 0)) if m else (0, 0)
+    if g.get('shader_key_skip', ''): print(f'{g.id}: shader_key_skip is ignored: an NVN2 shader key never left control bytes out, and the host and the shader chain read no other', file=sys.stderr)   # a profile written before the key went (a build folder's derived one)
     if g.get('render_cond', ''): print(f'{g.id}: render_cond is ignored: the host evaluates NVN conditional rendering for every game', file=sys.stderr)   # a profile written before the key went (a build folder's derived one)
     rah = g.get('replay_ahead', 'off')   # a queue parked on an event the game's CPU signals is translated meanwhile, its commits held until the signal (nvn_queue.inc nq_worker, nvn_rec.h hold_*; DM_NVN_REPLAY_AHEAD overrides; needs enc_thread): on / off
     if rah not in ('on', 'off'): sys.exit(f'{g.id}: replay_ahead must be on or off: {rah}')
@@ -211,7 +207,6 @@ def header_one(g):
          f'#define DM_GAME_OPMODE {int(om == "console")}',
          f'#define DM_GAME_PERF_BOOST {int(pm == "boost")}',
          f'#define DM_GAME_TEX_FLUSH_UPLOAD {int(tfu == "on")}',
-         f'#define DM_GAME_SHADER_KEY_SKIP_OFF {sko:#x}', f'#define DM_GAME_SHADER_KEY_SKIP_LEN {skl:#x}',
          f'#define DM_GAME_REPLAY_AHEAD {int(rah == "on")}',
          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',

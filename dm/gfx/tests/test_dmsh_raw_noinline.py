@@ -104,7 +104,7 @@ class RawNoinline(unittest.TestCase):
         build = (TOOLS / 'dmsh_build.py').read_text()
         self.assertIn("dmsh_rewrite.raw_noinline(src, mesh['kind'] if mesh else j['stage'])", build)   # native task / mesh shaders are translated as cs: their mesh_stage record names the stage
         self.assertLess(build.index("mesh = j.get('mesh_stage')"), build.index('dmsh_rewrite.raw_noinline('))
-        self.assertIn("dmsh_rewrite.raw_noinline(msl, 'ms')", build)   # a mesh library composed from vertex / geometry sources
+        self.assertEqual(build.count('dmsh_rewrite.raw_noinline('), 1)
 
     @unittest.skipUnless(shutil.which('xcrun'), 'no xcrun')
     def test_compiles(self):

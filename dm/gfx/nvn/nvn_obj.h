@@ -349,11 +349,11 @@ int mtl_tex_cpu_rewritten(const tex_t *t);                               // nvn_
 // hle_nvn.c: a texture tex_flush_upload / tex_dirty_upload registered and has not resolved yet; what the GPU writes into it is stored into its storage as well (nvn_mtl.m gsb_store)
 int nvn_ft_tracked(uint64_t serial);
 int nvn_tex_level_range(const tex_t *t, unsigned level, unsigned layer, uint64_t *lo, uint64_t *hi);   // one level of one layer in the texture's storage, as offsets; −1 out of range
-// A program's per-stage shader key (hle_nvn.c): the first 8 bytes of sha256(first 0x880 bytes of the control section (its own length when shorter) + code area). Computed at SetShaders (NVN lets the caller free the control section once it returns, and Unity does);
+// A program's per-stage shader key (hle_nvn.c): the first 8 bytes of sha256(first 0x48 bytes of the NVN2 control section, +0x30 as zero, + code area). Computed at SetShaders (NVN lets the caller free the control section once it returns, and Unity does);
 // a stage whose code area was not yet in any memory pool then is computed the first time it is asked for, from the host's copy of its control section. The keys belong to
 // the program's serial, so a copy of the NVNprogram the game made after SetShaders finds them. Returns 0 = no such stage
 int prog_key(const prog_t *p, unsigned stage, uint8_t key[8]);
-void nvn_ctl_lens(const void *control, uint32_t *nctl, uint32_t *ncode);   // a control section's bytes in the shader key and its code area's length (NVN or NVN2), hle_nvn.c
+void nvn_ctl_lens(const void *control, uint32_t *nctl, uint32_t *ncode);   // an NVN2 control section's bytes in the shader key and its code area's length (a section of another form: its 8 bytes of magic and version, no code), hle_nvn.c
 void mtl_reg_samp(int id, const samp_par *p);
 void mtl_prog_release(prog_t *p);
 void mtl_prog_unpin(prog_t *p); // submit lock held: release a queued descriptor or saved binding

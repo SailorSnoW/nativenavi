@@ -12,17 +12,17 @@
 # Usage: unit(msl) → (the compile unit, {'alpha': entry point names, 'logic': entry point names}), or (None, {'why': why}); cut(library bytes, names of each further library's functions...)
 # → (base bytes, each further library's bytes...); shared_body(msl) → msl with main0's body as dm_body_main0 (None on an unknown shape), calling(e, name, ret, tail) → an entry point calling it
 #
-# A vertex shader's libraries come from one Metal compile too (vs_unit). Its body was optimized nine times in two compiles, twelve in three with integer inputs: <key>_b held it in main0,
-# main0_z and main0_gs, the pulling library <key>_bp (dmsh_pull.py) in main0, main0_z and twice in each wide-line entry, the shadow-input library <key>_bv (dmsh_vin.py) in three more.
+# A vertex shader's libraries come from one Metal compile too (vs_unit). Its body was optimized in two compiles, three with integer inputs: <key>_b held it in main0 and
+# main0_z, the pulling library <key>_bp (dmsh_pull.py) in main0, main0_z and twice in each wide-line entry, the shadow-input library <key>_bv (dmsh_vin.py) in its own two.
 # The unit holds the body once, as dm_vs_body, and is cut into the same three libraries:
 #   · always_inline in the entry points pipelines are made of: main0 and main0_z, their pulling versions main0_p / main0_zp and their shadow-input versions main0_v / main0_zv (one
 #     unit cannot name them all main0: the reflection's `pull` and `vin` give the names, which the host and pso_offline.py read). The optimizer then sees in each what it saw
 #     before, the copy of the body, so the GPU gets the code it got: every output compared on the GPU was bit-identical (the libraries are not byte-identical: main0 applies the
 #     depth line once, after the call, where the copy had it before every return);
 #   · one out-of-line copy, dm_vs_body_o, for the wide-line entries main0_wl / main0_z_wl, which few draws take and which ran the body twice each. A plain static function, never
-#     noinline: marked noinline, a body shared with main0_gs changed that entry's results in 24 of 52 shaders tried (up to 12,544 units in the last place);
-#   · main0_gs (dmsh_geometry.capture) and the rarer entry points (main0_discard, main0_tf, the layer ones) stay whole copies: main0_gs has its capture epilogue at every return, and
-#     with it once after a call one shader of 52 gave other low bits (docs/reference/shaders.md, One compile for a vertex shader's libraries, has the measurements).
+#     noinline: marked noinline, a body shared with another entry point changed that entry's results in 24 of 52 shaders tried (up to 12,544 units in the last place);
+#   · the rarer entry point main0_discard (dmsh_entry.vs_discard) stays a whole copy: it returns nothing, where the body returns the outputs
+#     (docs/reference/shaders.md, One compile for a vertex shader's libraries, has the measurements).
 # Usage: vs_unit(source with every entry point, dmsh_pull.variant's source or None, dmsh_vin.variant's source or None) → (the compile unit, the reflection's names of the pulling
 # entry points {'entry', 'entry_z', 'entry_wl', 'entry_z_wl'}, of the shadow-input ones {'entry', 'entry_z'}); raises ValueError on a source of another shape
 import re, struct
@@ -178,7 +178,7 @@ def vs_unit(full, pulled=None, shadowed=None):
         if ui < 0: raise ValueError('no "using namespace metal;"')
         ui += len('using namespace metal;'); head = head[:ui] + '\n\n' + dmsh_pull.FETCH + (dmsh_pull.WL_MSL if wide else '') + head[ui:]
     src = (head + f'{VS_BODY}{decl})\n{{\n' + z + '\n' + (f'{VS_BODY_OUT}{decl})\n{{\n    return dm_vs_body({args});\n}}\n\n' if wide else '')
-           + calling(full[e0['start']:ez['end']], 'dm_vs_body', 1, 1) + full[ez['end']:])   # main0 and main0_z; what follows them stays: main0_gs and the rarer entry points, each a whole copy
+           + calling(full[e0['start']:ez['end']], 'dm_vs_body', 1, 1) + full[ez['end']:])   # main0 and main0_z; what follows them stays: main0_discard, a whole copy
     pn, vn = {}, {}
     if pulled:
         text, pn = renamed(pulled, VS_PULLED); src += text

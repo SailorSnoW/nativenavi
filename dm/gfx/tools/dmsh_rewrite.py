@@ -90,7 +90,7 @@ def tg_fence(src):
     return src[:m.end()] + '\n    ' + TG_FENCE + '\n' + src[block_end(src, m.end() - 1):]
 
 # A float add to storage memory whose result nothing reads (RED.F32, InstEmitMemory EmitAtomicAddF32) reaches the MSL as a compare-and-swap loop on the word. Metal has
-# atomic_float on device memory (MSL 3.0, which the Mac's and the iPhone's deployment targets both compile at), but the translator cannot ask for it: its storage buffers are uint arrays,
+# atomic_float on device memory (MSL 3.0, which the Mac's deployment target compiles at), but the translator cannot ask for it: its storage buffers are uint arrays,
 # and a float pointer to one is an OpBitcast that logical addressing forbids, which spirv-cross then writes as a reinterpret_cast of the loaded value, not its address. agl's
 # scene analysis adds every thread's value into the same few words, so the loops retried for each other: Ocarina of Time's 6e28359aa3558f61 (one workgroup of 256 threads,
 # four words) took 0.25 ms a frame and 1bba09ec4bc8ff67 0.40 ms on a MacBook Air M4, under 0.13 ms each as one atomic_fetch_add; the exposure the same (PR #1930). Only the
@@ -734,7 +734,7 @@ def gather_quad(off):
 # - with the call in a task or mesh function an M2 Pro's GPU locks up in its geometry stage ("firmware-detected lockup", kIOGPUCommandBufferCallbackErrorHang, then GPU access
 #   revoked) at some camera cuts of Ocarina of Time, and with the same source always_inline again it does not (A noinline call in a task or mesh function locks up an M2's GPU);
 # - some mesh programs calling it crash Apple's M1/M2 mesh compiler in MachineOperand::setReg (A noinline raw search crashes Apple's M1/M2 mesh compiler).
-# Those two stages build the search at every access again, including a mesh library composed from vertex / geometry sources already rewritten noinline; other stages keep one search
+# Those two stages build the search at every access again; other stages keep one search
 RAW_FIND = re.compile(r'\nstatic (?:inline __attribute__\(\(always_inline\)\)|__attribute__\(\(noinline\)\))\n(\w+ dmsh_raw_find\w*\()')
 RAW_INLINE_STAGES = ('ts', 'ms')
 def raw_noinline(msl, stage='cs'):

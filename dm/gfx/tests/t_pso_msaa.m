@@ -64,7 +64,7 @@ static void pass(NvProg *p, int samples, int color, int a2c, const char *what) {
     mtl_tex_release(&ds); if (color) mtl_tex_release(&c);
 }
 
-// The rest of the base's fixed state: a layered pass's input primitive class and a slice-merged pass's amplification count (AMP_MARK), as pso_desc sets them, through pso_build
+// The rest of the base's fixed state: an input primitive class and a slice-merged pass's amplification count (AMP_MARK, as pso_desc sets it), through pso_build
 static void fixed_state(NvProg *p) {
     if (!g_comp4) return;   // the MTLDevice builds pipelines whole: nothing is specialized
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];

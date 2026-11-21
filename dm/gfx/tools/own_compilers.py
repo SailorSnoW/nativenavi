@@ -36,7 +36,7 @@ def other_metal_message(metal):
             f'. Untested compilers are unsupported (GitHub issue #242). The Metal compiler is the selected Xcode\'s{selected_xcode()}: install {XCODE} '
             f'from https://developer.apple.com/download/all/ (beside a newer Xcode, as {XCODE_APP}), select it (sudo xcode-select -s {XCODE_APP}, '
             f'or DEVELOPER_DIR={XCODE_APP}/Contents/Developer for one build), then download its Metal toolchain (xcodebuild -downloadComponent MetalToolchain), '
-            f'or set {ALLOW}=1 (the NSP script\'s --allow-other-metal) to build with this one anyway')
+            f'or set {ALLOW}=1 (the packing script\'s --allow-other-metal) to build with this one anyway')
 
 def other_metal():
     """The Metal compiler when it differs from the lock and is present: [(lock key, tested, actual)]; a missing one is dmsh_build.py's to report"""

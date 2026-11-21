@@ -370,8 +370,8 @@ class Regress(unittest.TestCase):
             d = Path(td); stamp = {'chain': chain, 'chain_metal': 'mac', 'chain_compiler': compiler}
             (d / '_b_build.json').write_text(json.dumps([{'key': k, 'st': 'ok'}]))
             (d / f'{k}_b.json').write_text(json.dumps({'key': k + '_b', **stamp}))
-            (d / f'{k}_bg0.json').write_text(json.dumps({'key': k + '_bg0', 'bindings': list(bindings), **stamp}))
-            (d / f'{k}_bg0.metal').write_text(msl)
+            (d / f'{k}_bx.json').write_text(json.dumps({'key': k + '_bx', 'bindings': list(bindings), **stamp}))
+            (d / f'{k}_bx.metal').write_text(msl)
             (d / f'{k}_bp.metallib').write_bytes(pull)   # pull variants leave only their metallib here
             return regress.nvn_manifest(d, 1)[k]['var']
         def var(**kw):

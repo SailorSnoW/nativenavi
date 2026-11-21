@@ -13,7 +13,11 @@ import sys
 import tempfile
 import unittest
 
-from dm.tools.tests.test_split_rt import REPO, bnsh, fz, ss
+REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO / 'dm/tools/fuzz'))
+import fuzz_shader_split as fz  # noqa: E402
+
+ss, bnsh = fz.ss, fz.bnsh_of
 
 
 def nso(data):

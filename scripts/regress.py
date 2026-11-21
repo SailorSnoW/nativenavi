@@ -27,7 +27,7 @@
 # What it checks, per game:
 # 1. Chain (static): the game's shaders translated by each revision's chain (dmsh_build.py through own_compilers.py), compared shader by shader: built or failed
 #    (newly failing by the rule of dm/gfx/tools/shader_regressions.py, which the packing script applies to the game's previous build; a new shader that fails is listed apart),
-#    the SHA-256 of the MSL (<key>_b.metal), of the reflection (<key>_b.json without its chain fields) and of the variant libraries (_bf, _bv, _bp, _bg*). A build is kept per chain version,
+#    the SHA-256 of the MSL (<key>_b.metal), of the reflection (<key>_b.json without its chain fields) and of the variant libraries (_bf, _bv, _bp, _bx). A build is kept per chain version,
 #    shader package, profile inputs and compilers (<game folder>/<id>-work/regress/chain/<key>/; only the few used last stay, prune_chains), so a revision whose chain did not change costs nothing, and dmsh_build.py uses a bounded per-game regression cache with read-only reuse of the player's cache (DMSH_CAS), so MSL
 #    that did not change is not compiled again. Then the vertex / pixel interface of every pipeline base pso_offline.py would put into the pipeline archive (shader_pairs.tsv and
 #    pso_pairs.tsv): a pixel shader input [[user(locnN)]] the vertex shader does not write, or writes with another type, makes metal-tt refuse the whole archive (GitHub issue #283).

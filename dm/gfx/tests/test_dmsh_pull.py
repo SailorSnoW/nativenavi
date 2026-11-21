@@ -2,7 +2,7 @@
 add the layout block at buffer 16 and the vertex / instance / base instance ids it lacks (keeping the ones the shader declares), fill every input through dm_fetch with as_type to
 its declared type, add the wide-line entries (main0_wl, main0_z_wl: the body as a function run for both endpoints of the corner's segment, its outputs interpolated when the
 segment is clipped; no entries when a parameter or an output is one it cannot handle), leave the other entry points out, decline shaders it does not fit, and compile with the
-Metal compiler for macOS and iOS (temporary files only in a temporary folder). t_wline.m draws with the wide-line entry on the GPU."""
+Metal compiler for macOS (temporary files only in a temporary folder). t_wline.m draws with the wide-line entry on the GPU."""
 from pathlib import Path
 import subprocess
 import sys
@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import dmsh_pull
 
-def shader(types, extra='', ids='', tf=False, gs=False, ret=False):
+def shader(types, extra='', ids='', discard=False, ret=False):
     """types: the MSL type of each input in location order ('float4' / 'uint4' / 'int4'); ids: extra parameters of main0 / main0_z (e.g. a [[vertex_id]]); ret: more outputs
     (an interpolated one before the position, a flat one, clip distances) and an early return"""
     ins = ''.join(f'    {t} m_{l} [[attribute({l})]];\n' for l, t in enumerate(types))
@@ -25,8 +25,7 @@ def shader(types, extra='', ids='', tf=False, gs=False, ret=False):
     src = ('#include <metal_stdlib>\n#include <simd/simd.h>\n\nusing namespace metal;\n\nstruct main0_out\n{\n' + outs + '};\n\n'
            'struct main0_in\n{\n' + ins.rstrip('\n') + '\n};\n' + extra)
     src += main('main0') + main('main0_z')
-    if tf: src += '\nvertex void main0_tf(main0_in in [[stage_in]], constant float4& u [[buffer(0)]], uint dm_vid [[vertex_id]], device uint* dm_tf0 [[buffer(8)]])\n{\n    dm_tf0[dm_vid] = 0u;\n}\n'
-    if gs: src += '\nvertex void main0_gs(main0_in in [[stage_in]], constant float4& u [[buffer(0)]], uint dm_vid [[vertex_id]])\n{\n    (void)in;\n}\n'
+    if discard: src += '\nvertex void main0_discard(main0_in in [[stage_in]], constant float4& u [[buffer(0)]])\n{\n    main0_out out = {};\n    out.gl_Position = u + float4(in.m_0);\n    return;\n}\n'   # dmsh_entry.vs_discard's entry point, after the depth pair
     return src
 
 class PullingInputs(unittest.TestCase):
@@ -86,8 +85,8 @@ class PullingInputs(unittest.TestCase):
         self.compiles(v)
 
     def test_other_entry_points_left_out(self):
-        v, info = dmsh_pull.variant(shader(['float4', 'float4'], tf=True, gs=True))
-        self.assertNotIn('main0_tf', v); self.assertNotIn('main0_gs', v)
+        v, info = dmsh_pull.variant(shader(['float4', 'float4'], discard=True))
+        self.assertNotIn('main0_discard', v)
         self.compiles(v)
 
     def test_declined(self):

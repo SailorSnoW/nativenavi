@@ -321,8 +321,8 @@ int main(void) {
       EXPECT("empty DM_NVN_TSV: call counts off", 0, WIFEXITED(st) ? WEXITSTATUS(st) : -1); }
     setenv("DM_NVN_COUNT", "1", 1);   // the call-count checks below need the counting trampolines (off by default)
     {   // A missing control section must not publish uninitialized bytes or poison a serial's key cache.
-        uint8_t control[0x880] = {0}, key[8];
-        const uint8_t expected[8] = {0x56, 0x26, 0xd9, 0xa8, 0xf1, 0xd7, 0x36, 0x4b}; // SHA-256 of 0x880 zero bytes
+        uint8_t control[0x880] = {0x34, 0x12, 0x76, 0x98, 0xc9}, key[8];   // an NVN2 control section (magic, version 0xc9) of a shader without code
+        const uint8_t expected[8] = {0x2a, 0x1f, 0x1a, 0xab, 0x43, 0xc4, 0x3f, 0x85}; // SHA-256 of its first 0x48 bytes, the key bytes
         prog_t p = {.nstage=1};
         for (int cached = 0; cached < 2; cached++) {
             p.serial = cached ? nvn_new_serial() : 0; p.sd[0].control = NULL;
@@ -332,7 +332,19 @@ int main(void) {
             p.sd[0].control = control;
             EXPECT("supplying control after failure hashes it", 1, prog_key(&p, 0, key));
             EXPECT("a failed key was not cached as zero", 0, memcmp(key, expected, sizeof key));
+            control[0x30] = 0xd8; control[0x48] = 1; p.serial = cached ? nvn_new_serial() : 0;   // +0x30 (the section's length in a BNSH) hashes as zero, and the key ends at +0x48
+            EXPECT("the key takes the first 0x48 bytes, +0x30 as zero", 1, prog_key(&p, 0, key) && !memcmp(key, expected, sizeof key));
+            control[0x30] = control[0x48] = 0;
         }
+        // A control section of another form (NVN1's: version 1) has no key: the library holds only NVN2 shaders (one red line, hle_nvn.c keys_hash)
+        uint8_t old[0x880] = {0x34, 0x12, 0x76, 0x98, 0x01}; uint32_t nctl = 1, ncode = 1;
+        for (int cached = 0; cached < 2; cached++) {
+            p.serial = cached ? nvn_new_serial() : 0; p.sd[0].control = old; memset(key, 0xa5, sizeof key);
+            EXPECT("a control section that is not NVN2's has no key", 0, prog_key(&p, 0, key));
+            EXPECT("and leaves the output untouched", 0xa5, key[0]);
+        }
+        nvn_ctl_lens(old, &nctl, &ncode); EXPECT("its copy keeps the magic and version, and it has no code", 1, nctl == 8 && ncode == 0);
+        nvn_ctl_lens(control, &nctl, &ncode); EXPECT("an NVN2 section's key bytes and code length", 1, nctl == 0x48 && ncode == 0);
     }
     // Engine-native limiters have no FPS state page. Their launcher cap must
     // still pace presents and select the display-link rate in display mode.

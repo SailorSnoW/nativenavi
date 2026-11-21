@@ -1,12 +1,11 @@
 // A vertex shader's libraries cut from one compile (dmsh_side.vs_unit, as dmsh_build.py's vs_libraries makes them) against the three compiles they replace, on the GPU.
-// A vertex shader in the translator's shape, with an integer input and an early return, becomes the build's source (dmsh_entry.vs_depth, dmsh_geometry.capture), its pulling and
+// A vertex shader in the translator's shape, with an integer input and an early return, becomes the build's source (dmsh_entry.vs_depth), its pulling and
 // shadow-input variants (dmsh_pull.py, dmsh_vin.py) and the unit; each is compiled offline with the chain's Mac flags (dmsh_chain.MAC_METAL), and the unit's library is cut
 // (dmsh_side.cut). 2,000 random triangles (half positions, snorm normals, 8-bit integers) then go through every entry point:
 //   · the unit's own entry point, its pulling and its shadow-input version, in both depth conventions: one draws depth, another draws with depth test EQUAL, every ordered pair,
 //     and every covered pixel must pass (the hybrid swaps a pair's pipelines between passes, t_pull_inv.m; the body is inlined in all of them);
 //   · each of the six against the entry point it replaces: the same depth, both ways round, and the same colour image bit for bit;
-//   · the wide-line entries main0_wl / main0_z_wl, which run the body's out-of-line copy: the same depth and colour as the pulling library's own;
-//   · the capture entry main0_gs, which stays a whole copy: the same captured words as the plain source's.
+//   · the wide-line entries main0_wl / main0_z_wl, which run the body's out-of-line copy: the same depth and colour as the pulling library's own.
 // Control: a unit whose depth line multiplies by 0.50000006 must fail the comparison, so a pass means equal positions
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -24,9 +23,9 @@ static NSString *k_vs =
 static NSString *k_fs = @"#include <metal_stdlib>\nusing namespace metal;\nstruct I { float4 c [[user(locn0)]]; };\nfragment float4 fs(I in [[stage_in]]) { return in.c; }\n";
 // The libraries, as the build makes them: a_* the three compiles of before, u_* the unit's pieces, c_* a unit with another depth line (the control)
 static NSString *k_py =
-@"import sys, os, subprocess\nsys.path.insert(0, '../tools')\nimport dmsh_chain, dmsh_entry, dmsh_geometry, dmsh_pull, dmsh_vin, dmsh_side\n"
+@"import sys, os, subprocess\nsys.path.insert(0, '../tools')\nimport dmsh_chain, dmsh_entry, dmsh_pull, dmsh_vin, dmsh_side\n"
 "d = sys.argv[1]; src = open(os.path.join(d, 'v.metal')).read()\n"
-"full = dmsh_entry.vs_depth(src)[1] + dmsh_geometry.capture(src)\n"
+"full = dmsh_entry.vs_depth(src)[1]\n"
 "pv, pinfo = dmsh_pull.variant(full); vv, shadows = dmsh_vin.variant(full)\n"
 "unit, pn, vn = dmsh_side.vs_unit(full, pv, vv)\n"
 "assert pn == {'entry': 'main0_p', 'entry_z': 'main0_zp', 'entry_wl': 'main0_wl', 'entry_z_wl': 'main0_z_wl'} and vn == {'entry': 'main0_v', 'entry_z': 'main0_zv'}, (pn, vn)\n"
@@ -44,9 +43,7 @@ static NSString *k_py =
 typedef struct { uint64_t base; uint32_t stride, divisor; } dm_vstream_c;
 typedef struct { dm_vstream_c s[16]; uint32_t attr[32]; } dm_vlayout_c;   // dmsh_pull.metal dm_vlayout
 typedef struct { uint64_t ib; float vp[2]; float width; uint32_t prim, count; int32_t base; uint32_t isz, restart, ri, zclip, rect, pad; } wl_block;   // dmsh_pull.py dm_wline
-enum { CAPW = 144 };
-typedef struct { uint64_t dst, pad; uint32_t info[4]; uint32_t stride; int16_t slot[CAPW]; uint8_t end[12]; } capture_block;   // dmsh_geometry.py dm_geometry_capture
-_Static_assert(sizeof(capture_block) == 336 && sizeof(wl_block) == 56, "the blocks as the shader declares them");
+_Static_assert(sizeof(wl_block) == 56, "the block as the shader declares it");
 enum { NT = 2000, NV = NT * 3, W = 256, NSEG = 600, PLAIN = 0, PULL = 1, SHADOW = 2, WIDE = 3 };
 static id<MTLDevice> dev; static id<MTLCommandQueue> q; static id<MTLFunction> g_fs;
 static id<MTLBuffer> g_vb, g_lay, g_zero; static id<MTLDepthStencilState> g_less, g_equal; static float g_m[16];
@@ -105,22 +102,6 @@ static void pair(pipe_t first, pipe_t second, int *covered, int *passed, int *sa
     if (same) *same = !memcmp(a, b, W * W * 16);  // NOLINT(bugprone-suspicious-memory-comparison): compares the rendered float bits, including signed zero.
     free(a); free(b);
 }
-static id<MTLBuffer> capture(id<MTLLibrary> lib) {   // main0_gs's records of every vertex, CAPW words each, every slot kept
-    NSError *e = nil; MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-    d.vertexFunction = [lib newFunctionWithName:@"main0_gs"]; d.vertexDescriptor = layout(0); d.rasterizationEnabled = NO; d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-    id<MTLRenderPipelineState> ps = d.vertexFunction ? [dev newRenderPipelineStateWithDescriptor:d error:&e] : nil;
-    if (!ps) { fprintf(stderr, "capture pipeline: %s\n", e ? e.localizedDescription.UTF8String : "no main0_gs"); exit(1); }
-    id<MTLBuffer> cap = [dev newBufferWithLength:NV * CAPW * 4 options:MTLResourceStorageModeShared]; memset(cap.contents, 0xa5, cap.length);
-    capture_block b = { cap.gpuAddress, 0, { 0, NV, 0, 1 }, CAPW, { 0 }, { 0 } }; for (int k = 0; k < CAPW; k++) b.slot[k] = (int16_t)k;
-    MTLTextureDescriptor *dd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:W height:W mipmapped:NO]; dd.usage = MTLTextureUsageRenderTarget; dd.storageMode = MTLStorageModePrivate;
-    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor new]; rp.depthAttachment.texture = [dev newTextureWithDescriptor:dd]; rp.depthAttachment.loadAction = MTLLoadActionClear; rp.depthAttachment.storeAction = MTLStoreActionDontCare;
-    id<MTLCommandBuffer> cb = [q commandBuffer]; id<MTLRenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
-    [en setRenderPipelineState:ps]; [en setVertexBytes:g_m length:64 atIndex:0]; [en setVertexBuffer:g_vb offset:0 atIndex:16]; [en setVertexBytes:&b length:sizeof b atIndex:13];
-    [en useResource:cap usage:MTLResourceUsageWrite stages:MTLRenderStageVertex];
-    [en drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:NV]; [en endEncoding]; [cb commit]; [cb waitUntilCompleted];
-    EXPECT("capture: no GPU error", 0, cb.error != nil);
-    return cap;
-}
 int main(void) { @autoreleasepool {
     dev = MTLCreateSystemDefaultDevice(); q = [dev newCommandQueue]; g_keep = [NSMutableArray array]; NSError *e = nil;
     char tmp[] = "/tmp/t_vs_unit.XXXXXX"; if (!mkdtemp(tmp)) return 1;
@@ -177,10 +158,6 @@ int main(void) { @autoreleasepool {
     }
     pair(pipe_of(ab, @"main0", PLAIN), pipe_of(cbl, @"main0", PLAIN), &covered, &passed, &same);   // the control: another depth
     checks++; if (covered - passed < covered / 20 || same) { fprintf(stderr, "control: %d of %d pixels pass with another depth line (same image: %d): the comparison does not tell depths apart\n", passed, covered, same); failed++; }   // a unit in the last place of 0.5 moves the depth of about four pixels in ten
-    id<MTLBuffer> ca = capture(ab), cu = capture(ub);
-    EXPECT("main0_gs: the captured words are the plain source's", 0, memcmp(ca.contents, cu.contents, ca.length) != 0);
-    size_t written = 0; for (size_t i = 0; i < ca.length / 4; i++) written += ((uint32_t *)ca.contents)[i] != 0xa5a5a5a5u;
-    EXPECT("main0_gs: every word of every record written", ca.length / 4, written);
     printf("t_vs_unit: %d checks, %d failed\n", checks, failed);
     return failed != 0;
 } }

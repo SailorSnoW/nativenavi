@@ -154,7 +154,7 @@ class DeriveProfile(Base):
                 self.derive(); self.later_stages(); self.derive(); self.assert_kept()
                 self.derive(**kw); self.assert_fresh()   # pyright: ignore[reportArgumentType]  (each keyword set has its own value type)
 
-    def test_a_file_the_split_does_not_read_refreshes_the_copies_and_keeps_later_stages(self):   # a geo_mesh.tsv row used to wipe the split's tables
+    def test_a_file_the_split_does_not_read_refreshes_the_copies_and_keeps_later_stages(self):   # an edit of a table the split does not read used to wipe the split's tables
         changes = {
             'source chain header': lambda: (self.src / 'dmsh_chain.h').write_text('#define DMSH_CHAIN "new"\n'),
             'new source file': lambda: (self.src / 'bf_want.tsv').write_text('# new\n'),
@@ -396,13 +396,13 @@ class SplitShaders(Base):
 
     def test_extraction_settings_and_auxiliary_modules_reextract(self):
         g = self.own(); self.go(g)
-        for i, (key, value) in enumerate((('shader_groups', 'foo=bar'), ('shader_note', 'Other sources'), ('shader_key_skip', '0x770+0x78'), ('modules', 'main sdk')), 2):
+        for i, (key, value) in enumerate((('shader_groups', 'foo=bar'), ('shader_note', 'Other sources'), ('modules', 'main sdk')), 2):
             g = put(g, **{key: value})
             self.go(g); self.assertEqual(self.splits, i)
         nso(self.ex / 'ExeFS/sdk', BID)
-        self.go(g); self.assertEqual(self.splits, 6)
+        self.go(g); self.assertEqual(self.splits, 5)
         nso(self.ex / 'ExeFS/sdk', BID2)
-        self.go(g); self.assertEqual(self.splits, 7)
+        self.go(g); self.assertEqual(self.splits, 6)
 
     def test_missing_or_modified_package_is_not_reused(self):
         g = self.own(); self.go(g)
@@ -576,7 +576,7 @@ class ShaderProfileKey(Base):   # the shader step's key takes the profile's shad
     def test_shader_inputs_change_the_key(self):
         changes = {
             'shader map': lambda: (self.src / 'shader_map.tsv').write_text('# registered\npkg.bin\t0\tvertex\tother\tx\n'),
-            'geo_mesh.tsv': lambda: (self.src / 'geo_mesh.tsv').write_text('a\tb\n'),
+            'bf_want.tsv': lambda: (self.src / 'bf_want.tsv').write_text('a\n'),
             'an nvn_ key': lambda: (self.src / 'game.tsv').write_text((self.src / 'game.tsv').read_text() + 'nvn_test\ton\n'),
         }
         for what, change in changes.items():

@@ -1,6 +1,6 @@
 """Shadow vertex inputs (dm/gfx/tools/dmsh_vin.py): small vertex shaders in the translator's MSL shape, no game needed. The variant must give each integer input a float4 shadow and
 then other-sign shadows while attribute indices 16-30 last, OR them into the input in both entry points, leave the transform feedback entry out, and compile with the Metal compiler
-for macOS and iOS (temporary files only in a temporary folder)."""
+for macOS (temporary files only in a temporary folder)."""
 import os
 from pathlib import Path
 import re
@@ -12,14 +12,14 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import dmsh_vin
 
-def shader(types, tf=False):
+def shader(types, discard=False):
     """types: the MSL type of each input in location order ('float4' / 'uint4' / 'int4')"""
     ins = ''.join(f'    {t} m_{l} [[attribute({l})]];\n' for l, t in enumerate(types))
     use = ''.join(f'    acc += float4(as_type<float4>(in.m_{l}));\n' if t != 'float4' else f'    acc += in.m_{l};\n' for l, t in enumerate(types))
     main = lambda name: f'\nvertex main0_out {name}(main0_in in [[stage_in]], constant float4& u [[buffer(0)]])\n{{\n    main0_out out = {{}};\n    float4 acc = u;\n{use}    out.gl_Position = acc;\n    return out;\n}}\n'
     src = '#include <metal_stdlib>\n#include <simd/simd.h>\n\nusing namespace metal;\n\nstruct main0_out\n{\n    float4 gl_Position [[position]];\n};\n\nstruct main0_in\n{\n' + ins.rstrip('\n') + '\n};\n'
     src += main('main0') + main('main0_z')
-    if tf: src += '\nvertex void main0_tf(main0_in in [[stage_in]], constant float4& u [[buffer(0)]], uint dm_vid [[vertex_id]], device uint* dm_tf0 [[buffer(8)]])\n{ dm_tf0[dm_vid] = 0u; }\n'
+    if discard: src += '\nvertex void main0_discard(main0_in in [[stage_in]], constant float4& u [[buffer(0)]])\n{\n    main0_out out = {};\n    out.gl_Position = u + float4(in.m_0);\n    return;\n}\n'   # dmsh_entry.vs_discard's entry point, after the depth pair
     return src
 
 class ShadowInputs(unittest.TestCase):
@@ -57,9 +57,10 @@ class ShadowInputs(unittest.TestCase):
         self.assertIn('    in.m_15 = dm_in.m_15;', v)
         self.compiles(v)
 
-    def test_transform_feedback_entry_left_out(self):
-        v, sh = dmsh_vin.variant(shader(['uint4'], tf=True))
-        self.assertNotIn('main0_tf', v)
+    def test_the_discard_entry_keeps_the_plain_inputs(self):   # only main0 / main0_z take the shadow inputs; main0_discard's pipelines keep the CPU conversion
+        v, sh = dmsh_vin.variant(shader(['uint4'], discard=True))
+        self.assertIn('vertex void main0_discard(main0_in in [[stage_in]]', v)
+        self.assertEqual(v.count('main0_in_v dm_in [[stage_in]]'), 2)
         self.compiles(v)
 
     def test_split_input_array(self):

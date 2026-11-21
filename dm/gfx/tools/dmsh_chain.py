@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Translation chain version of the B shader library: one version for every game, which the host is compiled with (dm/gfx/nvn/dmsh_chain.h). The build result must be determined by source alone.
 # Chain version V = first 12 digits of the sha256 of the contents of the following in-repo files + the translation options: this script, dmsh_build.py, dmsh_fetch.py (readable-tile version), dmsh_vin.py (shadow vertex inputs), dmsh_pull.py and dmsh_pull.metal (pulling vertex inputs),
-# dmsh_geometry.py, dmsh_facts.py, dmsh_rewrite.py, dmsh_reflect.py and dmsh_entry.py (a shader's MSL rewrites, reflection and entry points), the library ABI dm/gfx/nvn/dmsh_abi.h with its reader dmsh_abi.py, the dmsh_xlate sources (Program.cs, csproj), the Mac host's minimum macOS dm/mac/min_os.mk (MAC_MIN), and the tool lock dmsh_chain.lock (measured fingerprints of the native translator, which holds the Ryujinx shader library / spirv-cross / metal compiler).
+# dmsh_facts.py, dmsh_rewrite.py, dmsh_reflect.py and dmsh_entry.py (a shader's MSL rewrites, reflection and entry points), dmsh_meshstage.py (task and mesh shaders), the library ABI dm/gfx/nvn/dmsh_abi.h with its reader dmsh_abi.py, the dmsh_xlate sources (Program.cs, csproj), the Mac host's minimum macOS dm/mac/min_os.mk (MAC_MIN), and the tool lock dmsh_chain.lock (measured fingerprints of the native translator, which holds the Ryujinx shader library / spirv-cross / metal compiler).
 # A game's own inputs are not part of V: its profile's shader tables and nvn_* / shader_* keys are in each shader's cache key (dmsh_build.py shader_key), so a change rebuilds the shaders it affects,
 # and their digest (inputs below) stamps the library: <cache dir>/b-<V>/inputs.tsv says which game and which inputs it was built from. c1_full.tsv / cb_extent.tsv name V and that digest in their
 # header (dm/tools/shader_lib.py table_head), and the host takes them only when both match its library.
@@ -15,9 +15,10 @@ from typing import Any
 import os, sys, ast, hashlib
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HERE = os.path.dirname(os.path.abspath(__file__)); GFX = os.path.dirname(HERE); HOME = os.path.expanduser('~')
-FILES = ['tools/dmsh_chain.py', 'tools/dmsh_build.py', 'tools/dmsh_atomic.py', 'tools/dmsh_wide.py', 'tools/dmsh_fetch.py', 'tools/dmsh_vin.py', 'tools/dmsh_pull.py', 'tools/dmsh_pull.metal', 'tools/dmsh_alpha.py', 'tools/dmsh_logic.py', 'tools/dmsh_side.py', 'tools/dmsh_rewrite.py', 'tools/dmsh_reflect.py', 'tools/dmsh_entry.py', 'tools/dmsh_geometry.py', 'tools/dmsh_tess.py', 'tools/dmsh_mesh.py', 'tools/dmsh_meshstage.py', 'tools/dmsh_facts.py', 'tools/dmsh_ampere.py', 'nvn/dmsh_abi.h', 'tools/dmsh_abi.py', 'tools/dmsh_xlate/Program.cs', 'tools/dmsh_xlate/dmsh_xlate.csproj', 'tools/dmsh_chain.lock']
+FILES = ['tools/dmsh_chain.py', 'tools/dmsh_build.py', 'tools/dmsh_atomic.py', 'tools/dmsh_wide.py', 'tools/dmsh_fetch.py', 'tools/dmsh_vin.py', 'tools/dmsh_pull.py', 'tools/dmsh_pull.metal', 'tools/dmsh_alpha.py', 'tools/dmsh_logic.py', 'tools/dmsh_side.py', 'tools/dmsh_rewrite.py', 'tools/dmsh_reflect.py', 'tools/dmsh_entry.py', 'tools/dmsh_meshstage.py', 'tools/dmsh_facts.py', 'tools/dmsh_ampere.py', 'nvn/dmsh_abi.h', 'tools/dmsh_abi.py', 'tools/dmsh_xlate/Program.cs', 'tools/dmsh_xlate/dmsh_xlate.csproj', 'tools/dmsh_chain.lock']
 # This target-specific lowering lives in the vendored translator. Include its
-# sources as well as the rebuilt translator's fingerprint; no old shader cache can bypass it.
+# sources as well as the rebuilt translator's fingerprint; no old shader cache can bypass it. The translator is the whole Ryujinx shader library, so the list also names sources of
+# stages the game has none of (geometry, ray tracing), which the binary still holds: they stay listed with it.
 FILES += ['../third_party/ryujinx/src/Ryujinx.Graphics.Shader/' + f for f in (
     'Instructions/InstEmitSurface.cs', 'IntermediateRepresentation/TextureFlags.cs',
     'Translation/TranslationFlags.cs', 'Translation/HostCapabilities.cs',
@@ -25,7 +26,7 @@ FILES += ['../third_party/ryujinx/src/Ryujinx.Graphics.Shader/' + f for f in (
     'StructuredIr/ShaderProperties.cs', 'StructuredIr/AstOperand.cs', 'StructuredIr/AstOptimizer.cs', 'StructuredIr/StructuredProgram.cs',
     'Translation/Optimizations/BindlessElimination.cs', 'Translation/Optimizations/Optimizer.cs',
     'Translation/Optimizations/GlobalToStorage.cs', 'CodeGen/Spirv/SpirvGenerator.cs')]
-FILES += ['tools/' + f for f in ('dmsh_rt.py', 'dmsh_rt_build.py', 'dmsh_rt_compile.py', 'shader_split.py')]
+FILES += ['tools/shader_split.py']
 FILES += ['../third_party/ryujinx/src/Ryujinx.Graphics.Shader/' + f for f in (
     'IGpuAccessor.cs', 'Decoders/DecoderAmpere.cs', 'Instructions/InstEmitAmpere.cs',
     'Instructions/InstEmitAmpereAlu.cs', 'Instructions/InstEmitAmpereMem.cs',
@@ -66,7 +67,7 @@ def __getattr__(name) -> Any:   # MAC_MIN, MAC_MIN_FLAG and MAC_METAL as the mod
 # directly followed one (spirv_msl.cpp, OpControlBarrier): a fence made of that line ordered memory and no longer waited for the group (GitHub issue #2786). 3.1's texture atomics follow
 MSL_VERSION = '30200'
 CROSS_MSL = ['--msl', '--msl-version', MSL_VERSION, '--msl-argument-buffers', '--msl-texture-buffer-native']
-INPUT_TABLES = ['shader_facts.tsv', 'shader_map.tsv', 'shader_map.tsv.conflicts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv', 'bf_want.tsv', 'geo_mesh.tsv', 'dual_want.tsv']   # in the game profile folder
+INPUT_TABLES = ['shader_facts.tsv', 'shader_map.tsv', 'shader_map.tsv.conflicts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv', 'bf_want.tsv', 'dual_want.tsv']   # in the game profile folder
 LOCK = os.path.join(HERE, 'dmsh_chain.lock'); HEADER = os.path.join(GFX, 'nvn/dmsh_chain.h')
 STAMP = 'inputs.tsv'   # in the library directory b-<V>/
 # the translator defaults to the in-repo build that matches the lock file (dm/tools/native_tools.sh; a rebuild has another fingerprint)
@@ -106,31 +107,13 @@ def load_game():   # the current game profile (DM_GAME), only for what needs one
 def profile_rows(g):   # the profile keys that change how a shader is built (nvn_*, shader_*)
     return ''.join(f'{k}\t{chr(9).join(v)}\n' for k, v in g.rows if k.startswith(('nvn_', 'shader_'))).encode()
 
-def table_pairs(p, kind=None):
-    """{(vertex key, geometry key)} of a pair table: geo_mesh.tsv's rows (kind None), or the G rows of a pipeline record (kind 'G'); a missing table has none"""
-    out = set()
-    if not p.exists(): return out
-    for ln in p.read_text().splitlines():
-        c = ln.split('\t') if kind else ln.split()
-        if kind: c = c[1:] if c[:1] == [kind] else []
-        elif not ln.strip() or ln.startswith('#'): continue
-        if len(c) >= 2 and c[0] and c[1]: out.add((c[0][:16], c[1][:16]))
-    return out
-
-def mesh_pairs(g):
-    """The vertex / geometry pairs that get a mesh library (dmsh_mesh.py): those the game drew with a lean geometry kernel and no mesh library, which the host writes to the pipeline record
-    as G rows (pso_manifest.tsv; nvn_geometry.inc geo_mesh_fn), and the hand-written geo_mesh.tsv, for pairs no recording has reached yet"""
-    return table_pairs(g.table('pso_manifest.tsv'), 'G') | table_pairs(g.table('geo_mesh.tsv'))
-
 def inputs(g):
-    """Digest of a game profile's inputs to its shader library: the shader tables (a missing one counts as such) and the nvn_* / shader_* keys. Of the pipeline record only its G rows
-    (mesh_pairs), and only when it has any: a profile whose record has none keeps its digest, and recording other pipelines again changes nothing"""
+    """Digest of a game profile's inputs to its shader library: the shader tables (a missing one counts as such) and the nvn_* / shader_* keys. The pipeline record
+    (pso_manifest.tsv) is not one: no shader is built from it, so recording pipelines again changes nothing"""
     h = hashlib.sha256()
     for f in INPUT_TABLES:
         p = g.table(f)
         h.update(f'game/{f}'.encode() + b'\0' + (p.read_bytes() if p.exists() else b'missing') + b'\0')
-    rec = table_pairs(g.table('pso_manifest.tsv'), 'G')
-    if rec: h.update(b'game/pso_manifest.tsv G\0' + ''.join(f'{v}\t{k}\n' for v, k in sorted(rec)).encode() + b'\0')
     h.update(profile_rows(g))
     return h.hexdigest()[:12]
 

@@ -651,7 +651,7 @@ def derive_profile(g, pdir, ver, d, mods, shader_only=False):
     text, kf, skf = '\n'.join(out) + '\n', derived_key(pdir), derived_split_key(pdir)   # beside the profile, not in it: no tool reads them as tables
     key = fingerprint(('files', src), text)
     # What the split reads of the derived profile besides the tables it writes (split_profile_inputs): game.tsv's settings and the registered tables of SPLIT_TABLES the folder
-    # copies (the hand-written facts). When only other copied files changed (the game's note, the prewarm list, geo_mesh.tsv, the patches.py link), the copies are made again and
+    # copies (the hand-written facts). When only other copied files changed (the game's note, the prewarm list, the patches.py link), the copies are made again and
     # the tables the split and the shader step wrote are kept, so the split's reuse holds: wiping them made the split run again on unchanged game files
     skey = fingerprint(('files', [p for p in src if p.name in SPLIT_TABLES]), text)
     def rows(text):   # the same whitespace and comment rules as game.Game
@@ -748,7 +748,7 @@ SPLIT_TABLES = ('shader_facts_manual.tsv', 'shader_map.tsv', 'shader_facts.tsv',
 
 
 def split_profile_inputs(g):   # shader_split.py's GAME reads, plus the tables the packer checks or writes; renderer settings, notes and translation tables are not extraction inputs
-    settings = [(name, g.get(name, '')) for name in ('modules', 'shader_groups', 'shader_note', 'shader_key_skip')]
+    settings = [(name, g.get(name, '')) for name in ('modules', 'shader_groups', 'shader_note')]
     tables = [g.table(n) for n in SPLIT_TABLES]
     return [g.id, settings, ('files', tables)]
 
@@ -1267,7 +1267,7 @@ def prune_shader_cache(sh, chain):
 
 
 def shader_profile_key(py, repo, env, g):
-    """The profile's part of the shader step's key: the game and the digest of its shader inputs (dmsh_chain.py --inputs: the shader tables, geo_mesh.tsv, bf_want.tsv, dual_want.tsv and the
+    """The profile's part of the shader step's key: the game and the digest of its shader inputs (dmsh_chain.py --inputs: the shader tables, bf_want.tsv, dual_want.tsv and the
     nvn_* / shader_* keys), which the libraries' stamp records and every per-shader cache key already assumes are all a shader build reads of the profile. Hashing every profile file
     instead restored every library from the cache and rewrote the image after an edit of the game's note or prewarm list. Without the digest: every file, as before"""
     r = subprocess.run([str(py), str(repo / 'dm/gfx/tools/dmsh_chain.py'), '--inputs'], env=env, capture_output=True, text=True)

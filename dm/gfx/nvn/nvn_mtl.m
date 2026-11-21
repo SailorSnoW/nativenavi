@@ -5529,8 +5529,7 @@ static void ts_boundary(void) {   // the end of a segment and the start of the n
 }
 static int enc_open(void) { return g_enc != nil; }
 // Target info of the current render pass: determined once from the attachments at rp_begin and shared by all draws in the pass (pipeline key, depth-stencil, viewport / scissor all depend only on it)
-static struct { uint32_t cfmt[8], dfmt, sfmt, samples; int hd, hs; NSUInteger tw, th; uint64_t serial; int layered; } g_pass;
-static int g_rp_layered;   // the pass about to open is for a vertex shader that writes the layer (draw → rp_begin_ex)
+static struct { uint32_t cfmt[8], dfmt, sfmt, samples; int hd, hs; NSUInteger tw, th; uint64_t serial; } g_pass;
 // Slice-merged passes (DM_NVN_SLICE_MERGE, on by default; 0 off): consecutive passes that each draw into another layer of one level of the same array or cube texture,
 // with nothing between them but state, uniform updates and draws (no game barrier, clear, copy or dispatch: sm_scan), run as one layered pass. Each draw reaches its layer through a vertex
 // amplification view mapping (count 1, renderTargetArrayIndexOffset), which needs pipelines built with maxVertexAmplificationCount 2 (sm_amp_get; a pipeline with the default 1 ignores
@@ -5986,7 +5985,7 @@ static void rt_mirror_add(const tex_t *t, id<MTLTexture> mt, NSUInteger level, N
     if (g_nrtm == (int)(sizeof g_rtm / sizeof g_rtm[0])) { RED_ONCE(131, "more than %d render targets in storage the CPU can read in one pass: the rest are not stored into it", g_nrtm); return; }
     g_rtm[g_nrtm++] = (typeof(g_rtm[0])){*t, (void *)CFBridgingRetain(mt), (unsigned)level, (unsigned)slice, 1, att};
 }
-// Once the pass's layers are known: a layered or slice-merged pass (renderTargetArrayLength) draws into that many layers of each attachment from its attached slice on, all stored
+// Once the pass's layers are known: a slice-merged or face-split pass (renderTargetArrayLength) draws into that many layers of each attachment from its attached slice on, all stored
 static void rt_mirror_layers(MTL4RenderPassDescriptor *pd) {
     for (int i = 0; i < g_nrtm; i++) { MTLRenderPassColorAttachmentDescriptor *c = pd.colorAttachments[g_rtm[i].att];
         g_rtm[i].slice = (unsigned)(c.texture.textureType == MTLTextureType3D ? c.depthPlane : c.slice); g_rtm[i].n = pd.renderTargetArrayLength > 1 ? (unsigned)pd.renderTargetArrayLength : 1; }
@@ -6339,7 +6338,7 @@ static void *rp_begin_ex_(int clear_only) {
         return NULL;
     }
     g_rp_aw = g_rp_ah = 0;
-    if (rpa_on() && !g_rp_whole && !clear_only && R.has_sc && !g_rp_layered && !R.clear_d && !R.clear_s) {
+    if (rpa_on() && !g_rp_whole && !clear_only && R.has_sc && !R.clear_d && !R.clear_s) {
         int cl = 0; for (int i = 0; i < 8; i++) cl |= R.clear_c[i];
         NSUInteger tw = 0, th = 0; if (!cl) rt_dims(&tw, &th);
         if (tw * th >= (1u << 24)) { NSUInteger w = MIN(tw, (NSUInteger)MAX((long)R.sc.x + R.sc.w, 1)), h = MIN(th, (NSUInteger)MAX((long)R.sc.y + R.sc.h, 1));
@@ -6355,7 +6354,7 @@ static void *rp_begin_ex_(int clear_only) {
             MTLRenderPassAttachmentDescriptor *a = i < (NSUInteger)R.rt.n ? pd.colorAttachments[i] : pd.depthAttachment.texture ? pd.depthAttachment : pd.stencilAttachment;
             int ds = i == (NSUInteger)R.rt.n, cd = ds && pd.depthAttachment.texture && pd.depthAttachment.loadAction == MTLLoadActionClear, cs = ds && pd.stencilAttachment.texture && pd.stencilAttachment.loadAction == MTLLoadActionClear;
             if (!a.texture || (ds ? !cd && !cs : a.loadAction != MTLLoadActionClear)) continue;
-            NSUInteger nl = g_rp_layered ? 1 : att_layers(a, ds ? &R.rt.dview : &R.rt.cview[i], ds ? R.rt.has_dview : R.rt.has_cview[i]);
+            NSUInteger nl = att_layers(a, ds ? &R.rt.dview : &R.rt.cview[i], ds ? R.rt.has_dview : R.rt.has_cview[i]);
             if (nl < 2 && mip_extent(a.texture.width, a.level) <= pw && mip_extent(a.texture.height, a.level) <= ph) continue;
             MTL4RenderPassDescriptor *cp = [MTL4RenderPassDescriptor new];
             if (nl > 1) cp.renderTargetArrayLength = nl;
@@ -6434,18 +6433,6 @@ static void *rp_begin_ex_(int clear_only) {
         pd.visibilityResultBuffer = g_vis;
     }
     g_enc_vis = 0; g_enc_has_vis = g_vis_on;
-    // Layered rendering: a vertex shader that writes the layer selects the attachment layer per primitive only when the pass has renderTargetArrayLength; without it every layer went to the
-    // attached one. Pokémon Legends: Z-A builds its 32x32x32 colour grading LUT this way (b29f08619f379a83, one instance per depth plane) and tone-maps through it: only plane 0 was written and the
-    // whole picture came out black. The pass gets every layer the attachments have from their attached one on (3D: depth planes); the pass is split when the next draw's shader differs (draw)
-    g_pass.layered = g_rp_layered;   // what the pass was opened for, even when the attachments have one layer (then the draws need no split)
-    if (g_rp_layered) {
-        NSUInteger nl = NSUIntegerMax;
-        for (int i = 0; i < 8; i++) { MTLRenderPassColorAttachmentDescriptor *c = pd.colorAttachments[i]; id<MTLTexture> t = c.texture; if (!t) continue;
-            NSUInteger have = t.textureType == MTLTextureType3D ? MAX(t.depth >> c.level, 1u) - c.depthPlane : t.arrayLength * (t.textureType == MTLTextureTypeCube || t.textureType == MTLTextureTypeCubeArray ? 6 : 1) - c.slice;
-            if (have < nl) nl = have; }
-        if (pd.depthAttachment.texture) { id<MTLTexture> t = pd.depthAttachment.texture; NSUInteger have = t.arrayLength * (t.textureType == MTLTextureTypeCube || t.textureType == MTLTextureTypeCubeArray ? 6 : 1) - pd.depthAttachment.slice; if (have < nl) nl = have; }
-        if (nl != NSUIntegerMax && nl > 1) { pd.renderTargetArrayLength = nl; PD("L %llu layered pass: %lu layers", g_stat_pass + 1, (unsigned long)nl); }
-    }
     if (g_nrtm) rt_mirror_layers(pd);
     g_fsm_na = 0;
     if (g_fsm_np) { if (g_fsp_pass) fsm_attach(pd); g_fsm_np = 0; }   // later face-split draws of the same level size moved into this pass (fsm_plan)
@@ -6615,10 +6602,9 @@ static void shmap_read(void) {
     MLOG("shader route B (translated Switch originals): shader map %lu entries (%s), metallib directory %s", (unsigned long)g_shmap.count, path.UTF8String, g_msl_dir.UTF8String);
 }
 
-@interface NvShader : NSObject { @public id<MTLFunction> fn, discard_fn, fn_d, dump_fn; NSString *u_name; id<MTLLibrary> ulib; NSMutableDictionary *ufn; int u_side, ulib_state, u_alpha, u_logic;   // u_name: the typed-output entry point (dmsh_entry.py fs_uint), nil when the shader has none; in the side library <key>_bx when u_side, else in its own (ulib: that library, loaded on first need when u_side; ulib_state as afn_state); ufn: it specialized per pipeline's target classes, alpha test and logic operation (typed_fn); u_alpha / u_logic: it holds those two (the reflection's entry_u_alpha, entry_u_logic); fn_d: the dual-source one (dmsh_entry.py fs_dual)
+@interface NvShader : NSObject { @public id<MTLFunction> fn, discard_fn, fn_d; NSString *u_name; id<MTLLibrary> ulib; NSMutableDictionary *ufn; int u_side, ulib_state, u_alpha, u_logic;   // u_name: the typed-output entry point (dmsh_entry.py fs_uint), nil when the shader has none; in the side library <key>_bx when u_side, else in its own (ulib: that library, loaded on first need when u_side; ulib_state as afn_state); ufn: it specialized per pipeline's target classes, alpha test and logic operation (typed_fn); u_alpha / u_logic: it holds those two (the reflection's entry_u_alpha, entry_u_logic); fn_d: the dual-source one (dmsh_entry.py fs_dual)
     id<MTLLibrary> xlib; int xlib_state;   // the side library <key>_bx, loaded once on first need (bx_lib) for at_fn, lo_fn and typed_fn
-    uint32_t cb_ext[16], sb_ro; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage, layer_out; uint64_t logged; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
-    uint8_t dump_tried;   // dump_fn: the capture entry point the vertex dump draws with (nvn_vsdump.inc vsdump_fn), looked up at the first dump of this shader
+    uint32_t cb_ext[16], sb_ro; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage; uint64_t logged; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
     uint8_t mesh_kind, mesh_notask; uint16_t mesh_threads, mesh_payload;   // an NVN2 task (1) or mesh (2) shader, a mesh shader with no task, its workgroup's threads, its payload's bytes (dmsh_meshstage.py)
     id<MTLFunction> mesh_obj;   // a mesh shader with no task: the object function that launches its workgroups in blocks of DMSH_MESH_GRID (dmsh_meshstage.py main0_o)
     int cps_failed;   // Metal refused this compute shader's pipeline (dispatch): its dispatches are skipped without asking again
@@ -6941,8 +6927,6 @@ static NvShader *shader_load(NSString *pc, int stage) {
     }
     if (o->mesh_notask && !(o->mesh_obj = j[@"entry_object"] ? fn4_note([lib newFunctionWithName:j[@"entry_object"]], lib, j[@"entry_object"], nil) : nil))
         MLOG("[RED] mesh shader %s: no object entry point (entry_object) in its library: its draws are skipped", pc.UTF8String);
-    // writes the layer: its passes are layered and its pipelines get an input class (pso_desc), by the reflection's layer_out (dmsh_entry.py layer_out)
-    if (stage == 0) o->layer_out = [j[@"layer_out"] boolValue];
     if (stage == 0) o->has_pull = [j[@"pull"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) o->has_alpha = [j[@"alpha"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) o->has_bz = [j[@"blend_zero"] boolValue];
@@ -7022,7 +7006,7 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
     shmap_load();
     NvProg *o = [NvProg new];
     for (unsigned i = 0; i < p->nstage; i++) {
-        // Key = sha256(first 0x880 bytes of the control section + code area): many of Mario's shaders share a control section but differ in code (dm/gfx/tools/shader_split.py). It was computed at SetShaders (hle_nvn.c): by now the game may have freed the control section
+        // Key = sha256(first 0x48 bytes of the NVN2 control section, +0x30 as zero, + code area): many shaders share a control section but differ in code (dm/gfx/tools/shader_split.py). It was computed at SetShaders (hle_nvn.c): by now the game may have freed the control section
         uint8_t md[8]; if (!prog_key(p, i, md)) MDIE("program stage %u has no shader key", i);
         NSString *k = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
         NSString *stage = g_shmap[k];
@@ -8570,7 +8554,7 @@ static void pull_load(NvShader *vs) {
     }
 }
 static id<MTLFunction> pull_fn(NvShader *vs) {
-    if (!vs->has_pull || vs->layer_out) return nil;
+    if (!vs->has_pull) return nil;
     os_unfair_lock_lock(&g_pull_lock);
     if (!vs->pfn_state) pull_load(vs);
     id<MTLFunction> f = vs->pfn_state == 1 ? vs->pfn : nil;
@@ -8609,7 +8593,7 @@ static int vconv_wanted(const nvn_refl *rf, int v, const pso_key *k, int on) {  
 // the shadow inputs took what they can) and the shader has a pulling library. dm_fetch decodes every format on the GPU into the register words Maxwell's fetch gives, for the
 // vertices drawn only (docs/reference/rendering.md, "Attributes the vertex fetch cannot read, pulled"). DM_NVN_VCONV_CPU=1 keeps the CPU conversion
 static int pull_conversion(NvShader *vs, const pso_key *k) {
-    if (!vs->has_pull || vs->layer_out || vin_cpu()) return 0;
+    if (!vs->has_pull || vin_cpu()) return 0;
     int on = vin_on(vs, k, 0);
     for (int v = 0; v < vs->rf.nv; v++) if (vconv_wanted(&vs->rf, v, k, on)) return 1;
     return 0;
@@ -8926,8 +8910,6 @@ static os_unfair_lock g_bf_fn_lock = OS_UNFAIR_LOCK_INIT;   // bf_fn: a shader's
 static nvn_hmap g_pso = {.klen = sizeof(pso_key)}, g_dss;
 static nvn_hmap g_pso_fail = {.klen = sizeof(pso_key)};   // pipelines that failed to build: remembered and never retried (previously every draw recompiled it, over 10,000 times in one iPhone session)
 static const char g_amp_mark, g_discard_mark;
-static char g_vsdump_mark;
-#define VSDUMP_MARK ((const void *)&g_vsdump_mark)   // pso_key.fsfn of the vertex dump's capture pipeline (nvn_vsdump.inc)
 #define AMP_MARK ((const void *)&g_amp_mark)   // pso_key.fsfn of a slice-merged pass's pipeline (vertex amplification, sm_amp_get)
 #define DISCARD_MARK ((const void *)&g_discard_mark)   // vertex work still runs, without rasterization or a fragment stage
 static const char g_fsp_mark;
@@ -9252,7 +9234,7 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
         if (lf) d.fragmentFunction = lf;
         else if (fsfn) RED_ONCE(136, "logic operation not applied to a specialized fragment (readable-tile merge or diagnostic) of %s", fs->key);
     }
-    if (vs && (k->fsfn == VSDUMP_MARK || k->fsfn == DISCARD_MARK)) { d.fragmentFunction = nil; d.rasterizationEnabled = NO; }
+    if (vs && k->fsfn == DISCARD_MARK) { d.fragmentFunction = nil; d.rasterizationEnabled = NO; }
     d.rasterSampleCount = k->samples ? k->samples : 1;
     d.alphaToCoverageEnabled = k->a2c;
     if (fs && fs->rf.reads_prim_id) d.label = PSO_WHOLE;
@@ -9290,13 +9272,11 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
     }
     d.depthAttachmentPixelFormat = (MTLPixelFormat)k->dfmt; d.stencilAttachmentPixelFormat = (MTLPixelFormat)k->sfmt;
     if (!vs) return d;   // a native mesh pipeline reuses only the fragment and attachment state
-    if (vs->layer_out && k->fsfn != VSDUMP_MARK) d.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
     if (k->fsfn == AMP_MARK || k->fsfn == FSP_MARK) d.maxVertexAmplificationCount = 2;   // a slice-merged pass's or a face-split draw's pipeline: the view mapping's layer offset applies (see g_sm_plan, fsp_plan)
     if (k->fsfn == FSP_MARK) d.label = PSO_FACE;
-    if (k->fsfn == VSDUMP_MARK) d.vertexFunction = vs->dump_fn;
     if (k->fsfn == DISCARD_MARK) { d.vertexFunction = vs->discard_fn; }
     MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
-    const nvn_refl *rf = &vs->rf; int nconv = 0, on = vin_on(vs, k, k->fsfn == VSDUMP_MARK || k->fsfn == DISCARD_MARK);
+    const nvn_refl *rf = &vs->rf; int nconv = 0, on = vin_on(vs, k, k->fsfn == DISCARD_MARK);
     if (on) { d.vertexFunction = vs->vfn; g_vin_psos++; }   // the shadow-input entry point (see vin_on)
     #define ZERO_ATTR(i, ct_) do { vd.attributes[i].format = (ct_) == NVN_CT_UINT ? MTLVertexFormatUInt4 : (ct_) == NVN_CT_INT ? MTLVertexFormatInt4 : MTLVertexFormatFloat4; vd.attributes[i].offset = 0; vd.attributes[i].bufferIndex = 30; \
                                   vd.layouts[30].stride = 16; vd.layouts[30].stepFunction = MTLVertexStepFunctionConstant; vd.layouts[30].stepRate = 0; } while (0)   // reads the zero buffer
@@ -10774,7 +10754,7 @@ static dispatch_queue_t pp_bg_queue(void) {
     return q[atomic_fetch_add(&rr, 1) % (unsigned)n];
 }
 // Draws that waited for their pipeline on the submit thread, by why no stand-in served them: 0 hybrid pipelines off, 1 merged pass or readable-tile fragment, 2 diagnostic fragment,
-// 3 no pulling entry (layer-writing vertex shader, or no pulling library), 4 pulling base not made yet; count and time (prediction walks left out)
+// 3 no pulling entry (no pulling library), 4 pulling base not made yet; count and time (prediction walks left out)
 static uint64_t g_pw_n[5], g_pw_ns[5];
 static const char *const g_pw_why[5] = {"hybrid off", "merged pass or readable tile", "diagnostic fragment", "no pulling entry", "pulling base not made yet"};
 // Takes a slot for k (with g_pp_mu held): a free one, else the oldest finished entry no draw took (its worker no longer touches it). spec: 0 a demanded build; 1 a speculative guess,
@@ -10881,8 +10861,8 @@ static int pso_pend_try(const pso_key *k, id<MTLRenderPipelineState> *out) {
 // state, while the pipeline for its vertex layout is built in the background (pso_pend_demand); a later draw takes that one when it is ready (pso_pend_try). The pulling pipeline costs
 // vertex time (the run-time format decode: about 1 ms per million vertices on an M2 Max), so it only bridges those frames. Both compute the same positions: [[position, invariant]],
 // built with preserved invariance, from bit-identical inputs (t_pull.m, t_pull_inv.m). Only a pulling base already made or in the archive is used (the prebuild makes them); otherwise
-// the draw waits as before and the pulling base is built in the background for the pair's next miss. Not for merged passes, readable-tile or diagnostic fragments, or layer-writing
-// vertex shaders. DM_PSO_HYBRID=0 turns it off
+// the draw waits as before and the pulling base is built in the background for the pair's next miss. Not for merged passes or readable-tile or diagnostic fragments.
+// DM_PSO_HYBRID=0 turns it off
 static int hybrid_on(void) {
     static int v = -1;
     if (v < 0) { const char *e = getenv("DM_PSO_HYBRID"); pso4_init(); v = g_comp4 && !(e && !strcmp(e, "0")); if (!v) MLOG("hybrid pipelines off: a draw whose pipeline is not built yet waits for it"); }
@@ -11059,7 +11039,6 @@ static MTL4RenderPipelineDescriptor *pre_desc(NSString *vk, NSString *fk, int ze
     int pull = [vj[@"pull"] isKindOfClass:[NSDictionary class]];
     if (pull) ventry = side_entry(vj[@"pull"], zero && vj[@"entry_z"] ? @"entry_z" : @"entry", ventry);   // its name in the pulling library, as shader_load gives pull_load
     if (!pull && [vj[@"vertex_inputs"] count]) return nil;   // stage inputs and no pulling library: its pipelines need the draw's layout
-    if ([vj[@"layer_out"] boolValue]) return nil;   // writes the layer (as shader_load takes it): its pipelines take an input primitive class (pso_desc), no pulling pipeline
     NSDictionary *fr = fj[@"raster"]; if ([fr isKindOfClass:[NSDictionary class]] && [fr[@"primitive_id"] intValue]) return nil;   // reads the primitive ID: its pipelines are built whole (pso_build_ex), no base
     NSError *e = nil;
     if (pre_lib_absent(vk, pull ? @"_bp.metallib" : @"_b.metallib") || pre_lib_absent(fk, @"_b.metallib")) return nil;
@@ -11333,7 +11312,7 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRe
     NSError *e = nil; uint64_t bt = bp_now(), pred0 = g_pt_pred_ns;
     g_pso_pull = 0; int why = g_pso_lmap ? 1 : ms_fn ? 2 : 0;
     if (!took && !g_pso_lmap && !ms_fn && hybrid_on()) {
-        why = !vs->has_pull || vs->layer_out ? 3 : 4;
+        why = !vs->has_pull ? 3 : 4;
         int st = pso_pend_try(&k, &ps);
         if (st == 2) took = 1;   // built in the background (nil: it failed, and is built again below for its message)
         else {
@@ -11421,7 +11400,7 @@ static NvShader *warm_shader(NSString *key, int stage) {
     dispatch_group_enter(load->done); g_warm_loads[key] = load;
     os_unfair_lock_unlock(&g_warm_dict_lock);
     NvShader *n = shader_load(key, stage);
-    if (n && n->stage == 0 && n->has_pull && !n->layer_out && hybrid_on()) pull_load(n);   // fully prepare before publishing
+    if (n && n->stage == 0 && n->has_pull && hybrid_on()) pull_load(n);   // fully prepare before publishing
     os_unfair_lock_lock(&g_warm_dict_lock);
     g_warm_dict[key] = n ?: (id)NSNull.null;
     load->shader = n;
@@ -13749,7 +13728,7 @@ static void shader_prefetch_rest(void) {
     NSMutableArray *res = [NSMutableArray arrayWithCapacity:n]; for (NSUInteger i = 0; i < n; i++) [res addObject:NSNull.null];
     dispatch_apply(n, DISPATCH_APPLY_AUTO, ^(size_t i) { @autoreleasepool {
         NvShader *o = shader_load(keys[i], stages[i].intValue);
-        if (o && hy && o->stage == 0 && o->has_pull && !o->layer_out) pull_load(o);
+        if (o && hy && o->stage == 0 && o->has_pull) pull_load(o);
         os_unfair_lock_lock(&g_pf_lock); if (o) res[i] = o; os_unfair_lock_unlock(&g_pf_lock);
     } });
     unsigned got = 0;
@@ -13962,7 +13941,7 @@ static int sm_scan(const uint8_t *p, const p_set_rt *rt, int cur, int *lo, int *
 static int draw_samples_rt(NvProg *pr); static int fb_mode(void); static int fb_depth_on(void);
 static void sm_plan(NvProg *pr) {
     g_sm_plan.on = 0;
-    if (!pr || !pr->sh[0] || pr->sh[0]->layer_out || R.clear_d || R.clear_s || draw_samples_rt(pr)) return;
+    if (!pr || !pr->sh[0] || R.clear_d || R.clear_s || draw_samples_rt(pr)) return;
     for (int i = 0; i < 8; i++) if (R.clear_c[i]) return;
     int cur; if (!sm_rt_slice(&R.rt, &R.rt, &cur) || cur >= 64) return;
     id<MTLTexture> t = tex_mtl_replay(R.rt.color[0]);
@@ -13987,7 +13966,7 @@ static void fsp_plan(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
     g_fsp_plan.on = 0;
     static int mode = -1; if (mode < 0) { mode = sw_mode("DM_NVN_FACE_SPLIT", 1); if (!mode) MLOG("DM_NVN_FACE_SPLIT=0: a draw into several layers of one texture level keeps a target per layer"); }
     int n = 0; while (R.has_rt && n < R.rt.n && n < 8 && R.rt.color[n]) n++;   // the leading targets; none after them
-    if (!sw_on(mode) || !pr || !pr->sh[0] || !pr->sh[1] || pr->sh[3] || pr->sh[4] || pr->sh[0]->layer_out || !R.has_rt || R.rt.depth || n < 4) return;
+    if (!sw_on(mode) || !pr || !pr->sh[0] || !pr->sh[1] || pr->sh[3] || pr->sh[4] || !R.has_rt || R.rt.depth || n < 4) return;
     for (int i = n; i < R.rt.n && i < 8; i++) if (R.rt.color[i]) return;
     if (S.rast_discard || S.ms.a2c || S.color.blend_en || R.clear_d || R.clear_s || g_pso_lmap) return;
     for (int i = 0; i < 8; i++) if (R.clear_c[i]) return;
@@ -15431,7 +15410,6 @@ static int mdx_next(const p_draw *dw, const p_draw_idx *di) {
 }
 
 static int skip_fs_draw(NvProg *pr);   // DM_NVN_SKIP_FS (diagnostic), also for task / mesh draws
-#include "nvn_vsdump.inc"   // DM_NVN_VSDUMP: a vertex shader's outputs for one draw
 #include "nvn_mesh.inc"   // NVN2 task and mesh shaders: DrawMeshTasks
 #include "nvn_wline.inc"   // lines wider than a pixel: a quad per segment
 
@@ -15755,7 +15733,6 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     // Xenoblade Chronicles 3 uses vertex-only work before its skinned-model draws; Metroid Prime Remastered fills its fog volume with image stores from points.
     if (S.rast_discard && (!pr->sh[0] || !pr->sh[0]->discard_fn)) { PD("Z %llu draw skipped: rasterizer discard with no vertex storage or image writes vs=%s", g_stat_pass + !g_enc, pr->sh[0] ? pr->sh[0]->key : "-"); return; }
     if (g_nubd && (g_enc || ubd_lazy()) && ubd_conflict(pr, dw, di)) { g_ubd_conflicts++; rp_end(); ubd_land(); }   // land the deferred inline updates before this draw (see ubd_conflict)
-    vertex_dump(pr->sh[0], dw, di);
     if (g_nlc && !g_enc) lc_take(pr);   // waiting clears: this pass's load actions, or landed before it (see lc_take)
     if (ixc_wanted(dw, di) && !ixc_find(dw, di)) ixc_run(dw, di);   // indirect quads / fans / 8-bit indices: converted on the GPU before the render pass, at their own place in the replay (see ixc_run)
     uint64_t mdx = 0;   // the masked copy of the record (mdx_run); a draw it could not copy waits for the count instead
@@ -15790,21 +15767,18 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     }
     if (!g_enc && !g_mtk_raster && cshoist_on() && !g_split_resume) cs_hoist_try(pr, dw, di);   // see DM_NVN_CS_HOIST
     g_split_resume = 0;
-    g_rp_layered = pr->sh[0] && pr->sh[0]->layer_out;
-    if (g_enc && g_pass.layered != g_rp_layered) rp_end();   // a layered pass only for layer-writing vertex shaders (see rp_begin_ex)
     if (g_enc && g_sm_pass && draw_samples_rt(pr)) { PD("M %llu a draw in the slice-merged pass samples its attachment; split here", g_stat_pass); rp_end(); }
     if (g_enc && g_sm_pass && g_wl.on) { PD("M %llu a wide line in the slice-merged pass: split here", g_stat_pass); rp_end(); }   // its pipeline is not amplified (wl_pso)
-    if (!g_enc && !g_rp_layered && g_exec_next && !g_mtk_raster && !g_wl.on && sm_on()) sm_plan(pr);
-    if (!g_enc && !g_rp_layered && !g_wl.on && !g_mtk.on) fsp_plan(pr, dw, di);
+    if (!g_enc && g_exec_next && !g_mtk_raster && !g_wl.on && sm_on()) sm_plan(pr);
+    if (!g_enc && !g_wl.on && !g_mtk.on) fsp_plan(pr, dw, di);
     if (g_fsp_plan.on) fsm_plan(pr, dw, di);   // later face-split draws of the same level size that can join this pass (DM_NVN_FACE_MERGE)
     vbuf_prepare(pr->sh[0] ? &pr->sh[0]->rf : NULL, dw, di);   // an unaligned GPU-written stream, or one the draw reads past, needs its ordered copy before the render encoder
     id<MTLRenderCommandEncoder> en = rp_begin_ex(0);
-    g_rp_layered = 0; g_sm_plan.on = 0; g_fsp_plan.on = 0;
+    g_sm_plan.on = 0; g_fsp_plan.on = 0;
     if (!en) { PD("Z %llu draw skipped: the render pass did not begin vs=%.16s fs=%.16s", g_stat_pass, pr && pr->sh[0] ? pr->sh[0]->key : "-", pr && pr->sh[1] ? pr->sh[1]->key : "-"); return; }   // Z lines: why a draw was dropped at these early returns
     if ((g_fb_early_seq == g_draw_seq || g_fb_learn_seq == g_draw_seq) && !fb_early_after()) {   // planned a tile read for another pass than the one that opened: its snapshot, then the pass again
         rp_end(); g_fb_noearly = 1; fb_prepare(pr); g_fb_noearly = 0;
-        g_rp_layered = pr->sh[0] && pr->sh[0]->layer_out;
-        vbuf_prepare(pr->sh[0] ? &pr->sh[0]->rf : NULL, dw, di); en = rp_begin_ex(0); g_rp_layered = 0;
+        vbuf_prepare(pr->sh[0] ? &pr->sh[0]->rf : NULL, dw, di); en = rp_begin_ex(0);
         if (!en) return;
     }
     // The pipeline depends only on (program, render pass targets, blend / color / write mask / multisample state, vertex layout): if these did not change, reuse the previous one
@@ -16113,7 +16087,7 @@ void mtl_prog_prefetch(const prog_t *cp) {
         if (!progpf_first(pc)) continue;
         dispatch_async(pp_bg_queue(), ^{ @autoreleasepool {
             NvShader *sh = shader_load(pc, st);
-            if (sh && st == 0 && sh->has_pull && !sh->layer_out && hybrid_on()) pull_load(sh);   // its pulling entry too, as the prewarm does (warm_shader)
+            if (sh && st == 0 && sh->has_pull && hybrid_on()) pull_load(sh);   // its pulling entry too, as the prewarm does (warm_shader)
             if (!sh) return;
             WarmItem *item = [WarmItem new]; item->kind = 0; item->record = 1; item->key = pc; item->shader = sh; warm_enqueue(item);
             if (!g_progpf_loaded++) MLOG("shader prefetch at program creation: first library %s loaded in the background (DM_NVN_PREFETCH=0 turns it off)", pc.UTF8String);

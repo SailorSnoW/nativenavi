@@ -81,8 +81,7 @@ static void conversion_selection(void) {
     S.attr[0].fmt=0x51;
     EXPECT("integer to float conversion uses GPU fetch",1,pull_conversion(vs,NULL));
     vs->has_pull=0;EXPECT("missing pulling library keeps CPU fallback",0,pull_conversion(vs,NULL));
-    vs->has_pull=1;vs->layer_out=1;EXPECT("layer-writing shader keeps its pipeline",0,pull_conversion(vs,NULL));
-    vs->layer_out=0;vs->rf.nv=0;EXPECT("no attributes keeps native fetch",0,pull_conversion(vs,NULL));
+    vs->has_pull=1;vs->rf.nv=0;EXPECT("no attributes keeps native fetch",0,pull_conversion(vs,NULL));
     state_reset();
 }
 int main(void) { @autoreleasepool {

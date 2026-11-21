@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # The entry points dmsh_build.py adds to a translated shader's MSL, or rewrites in it: a vertex shader's outputs and its void entry for rasterizer discard (vs_writes, vs_discard),
-# integer vertex inputs (int_inputs), outputs set before the body (vs_init), the base instance from Metal (vs_base_instance), the point size and the layer (drop_point_size,
-# vs_layer, layer_out, vs_layer_entry), the depth entry point (vs_depth), and a pixel shader's typed-output and dual-source entry points (fs_uint, fs_dual). Functions of
+# integer vertex inputs (int_inputs), outputs set before the body (vs_init), the base instance from Metal (vs_base_instance), a layer output, which the build refuses
+# (writes_layer), the depth entry point (vs_depth), and a pixel shader's typed-output and dual-source entry points (fs_uint, fs_dual). Functions of
 # the MSL text only, with no build state, so tests import them. Part of the translation chain (dmsh_chain.FILES) and of every shader's cache key (dmsh_build.py CODE_FP).
 import re, sys
 import dmsh_abi, dmsh_side, dmsh_alpha, dmsh_logic
@@ -75,66 +75,12 @@ def vs_base_instance(src):
         return m.group(0) if '[[base_instance]]' in m.group(0) else m.group(0)[:-1] + ', uint gl_BaseInstance [[base_instance]])'
     return re.sub(r'\bvertex\s+\w+\s+main0\s*\((?:[^()]|\([^()]*\))*\)', add, src)   # the parameter list, whose attributes hold parentheses ([[buffer(0)]])
 
-def drop_point_size(src):
-    """Take the point size output out of vertex functions whose output struct no longer has it. A write goes; where the translated body takes the output by reference (_88(out.gl_Position, out.gl_PointSize)), that function still needs something to write, so the
-    vertex function gets a local float for it"""
-    src = re.sub(r'\n    out\.gl_PointSize = [^;\n]*;', '', src)
-    while 'out.gl_PointSize' in src:
-        use = src.find('out.gl_PointSize')
-        a = [m for m in re.finditer(r'\bvertex\s+\w+\s+\w+\s*\(', src) if m.start() < use]
-        if not a: sys.exit('[RED] a point size output used outside a vertex function')
-        b, depth = src.find('{', a[-1].end()), 0
-        for e in range(b, len(src)):
-            depth += src[e] == '{'; depth -= src[e] == '}'
-            if not depth: break
-        src = src[:b + 1] + '\n    float dmsh_point_size = 1.0;' + src[b + 1:e].replace('out.gl_PointSize', 'dmsh_point_size') + src[e:]
-    return src
-
-def vs_layer(src):
-    """A vertex shader that writes the layer (render_target_array_index) loses the point size output. The translator writes gl_PointSize = 1.0 in every vertex shader; Metal builds a pipeline
-    whose vertex function writes the layer only with an input primitive class, and one that writes a point size only with the point class (or none), so with both no pipeline can be built.
-    Pokémon Legends: Z-A's layered full-screen passes (57246f9a04af8529, b29f08619f379a83: a triangle per instance, layer = instance + offset) draw triangles, where the point size is unused;
-    the host gives such pipelines the triangle class (layer_out, nvn_mtl.m pso_desc). Shaders that do not write the layer are unchanged"""
-    if not layer_out(src): return src
-    i = src.find('struct main0_out\n{\n'); j = src.find('\n};', i)
-    if '[[point_size]]' not in src[i:j]: return src
-    src = src[:i] + re.sub(r'\n    float gl_PointSize \[\[point_size\]\];', '', src[i:j], count=1) + src[j:]
-    return drop_point_size(src)
-
-def layer_out(src):
-    """Whether main0 (and so main0_z) writes the layer: render_target_array_index in main0's output. The reflection records it per library (layer_out) for the host and
-    pso_offline.py, which read nothing else for it: a vertex shader that writes the layer makes its passes layered, and its pipelines take an input primitive class (nvn_mtl.m pso_desc),
-    so they get no pulling pipeline and no base in the pipeline archive. Layer entry points (vs_layer_entry) do not count: the host draws with them only in place of a slice-writing
-    geometry shader, and asks for them by name (entry_layer). Before the reflection held it, the host and pso_offline.py looked for the layer's name anywhere in the library, and
-    left every pair of a library with layer entry points out of the archive (Ocarina of Time's effect vertex shaders, compiled at their first draw)"""
+def writes_layer(src):
+    """Whether main0 writes the layer: render_target_array_index in main0's output. No vertex shader of Ocarina of Time does (none of its 15,850), so the chain has no layered
+    vertex path (the point size taken out of such a shader, its pipelines given an input primitive class, a pass with every layer of its attachments): dmsh_build.py fails a
+    shader that does, by this test, where it would otherwise build a library that draws every layer into the first"""
     i = src.find('struct main0_out\n{\n'); j = src.find('\n};', i)
     return i >= 0 and j >= 0 and '[[render_target_array_index]]' in src[i:j]
-
-def vs_layer_entry(full):
-    """Layer entry points for a vertex shader that writes integer bits taken from the instance index into an output component (Unreal Engine 4.18's WriteToSliceMainVS: the slice = instance −
-    base instance + its first slice, DRAGON QUEST XI S 7ceb7898171a9ae9). main0_l and main0_lz are main0 and main0_z writing that component as the layer (render_target_array_index), without
-    the point size (see vs_layer); the host draws with them when the program's geometry shader is a slice writer reading that component (gs_slice). → (source with the two entry points added,
-    {'loc', 'comp'}), or (source, None) when no output qualifies"""
-    i = full.find('struct main0_out\n{\n'); j = full.find('\n};', i)
-    if i < 0 or j < 0 or 'gl_InstanceIndex' not in full or '[[render_target_array_index]]' in full[i:j]: return full, None
-    locs = {m.group(1): int(m.group(2)) for m in re.finditer(r'\n    float4 (\w+) \[\[user\(locn(\d+)\)\]\];', full[i:j])}
-    m = next((m for m in re.finditer(r'\n    out\.(\w+)\.([xyzw]) = as_type<float>\(', full) if m.group(1) in locs), None)
-    if not m: return full, None
-    name, comp = m.group(1), m.group(2)
-    st = re.sub(r'\n    float gl_PointSize \[\[point_size\]\];', '', full[i:j + 3]).replace('struct main0_out', 'struct main0l_out', 1)
-    st = st[:-3] + '\n    uint gl_Layer [[render_target_array_index]];\n};'
-    add = '\n' + st + '\n'
-    for ep, new in (('main0', 'main0_l'), ('main0_z', 'main0_lz')):
-        a = re.search(rf'\bvertex\s+main0_out\s+{ep}\s*\(', full)
-        if not a: return full, None
-        b, depth = full.find('{', a.end()), 0
-        for e in range(b, len(full)):
-            depth += full[e] == '{'; depth -= full[e] == '}'
-            if not depth: break
-        fn = full[a.start():e + 1].replace('main0_out', 'main0l_out').replace(f' {ep}(', f' {new}(', 1)
-        fn = drop_point_size(fn)
-        add += '\n' + fn.replace('return out;', f'out.gl_Layer = as_type<uint>(out.{name}.{comp});\n    return out;') + '\n'
-    return full + add, {'loc': locs[name], 'comp': comp}
 
 def vs_depth(src):
     """Two entry points for the depth convention: the translator's vertex shader leaves z unchanged (NVN's near=0 convention); the main function is copied here - main0 gets the GL convention's (near=-w) z' = z/2 + w/2 before every return out

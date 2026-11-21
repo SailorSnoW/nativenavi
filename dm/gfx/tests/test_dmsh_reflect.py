@@ -22,9 +22,12 @@ def bindings(stage, offsets, flags, cb_slot=0):
 
 
 class StorageBuffers(unittest.TestCase):
-    def test_geometry_driver_table_offsets(self):
-        got = bindings('gs', [0x410, 0x430], [1, 1])
-        self.assertEqual([(b['kind'], b['reg']) for b in got], [('sbuf', 0), ('sbuf', 2)])
+    def test_driver_table_offsets_of_each_stage(self):   # 16-byte entries from the stage's table in c[0] (dmsh_abi.h DMSH_C0_SSBO_*)
+        self.assertEqual(set(dmsh_reflect.SSBO), {'vs', 'ps', 'cs', 'ts', 'ms'})   # the stages the chain translates
+        for stage, base in dmsh_reflect.SSBO.items():
+            with self.subTest(stage=stage):
+                got = bindings(stage, [base, base + 0x20], [1, 1])
+                self.assertEqual([(b['kind'], b['reg']) for b in got], [('sbuf', 0), ('sbuf', 2)])
 
     def test_write_flag_from_translator_json(self):
         # BufferUsageFlags.Write = 1 << 0; Program.cs serializes it unchanged.

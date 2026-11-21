@@ -27,7 +27,7 @@ ASSIGNMENT = re.compile(r"(?<![\w.])(_\d+)\s*(?:<<|>>|[-+*/%&|^])?=(?!=)|(?<![\w
 TOKEN = re.compile(r"\s*(0[xX][0-9a-fA-F]+[uU]?|\d+\.\d*(?:[eE][-+]?\d+)?f?|\d+[uU]?|[A-Za-z_]\w*(?:\.\w+)*|\.\w+|<<|>>|<=|>=|==|!=|&&|\|\||[-+*/%&|^~!?:(),<>\[\]])")
 UNBOUNDED = (None, None)
 CASTS = {"int", "uint", "short", "ushort", "long", "ulong"}
-OUTPUT = re.compile(r"[0-9a-f]{16}_b\w*\.(metal|json)")   # what dmsh_build.py writes: <key>_b.metal, <key>_bg0.json ... (as its OUT_KEY); nothing else in the folder is a shader
+OUTPUT = re.compile(r"[0-9a-f]{16}_b\w*\.(metal|json)")   # what dmsh_build.py writes: <key>_b.metal, <key>_b.json (as its OUT_KEY); nothing else in the folder is a shader
 BINARY = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5, "==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7, "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10}
 
 
@@ -206,7 +206,7 @@ def outputs(version_dir, ext):
     return [n for n in sorted(romfs.os.listdir(version_dir)) if (m := OUTPUT.fullmatch(n)) and m.group(1) == ext]
 
 
-# Each shader's answer follows from its own files alone (its .metal and its reflection json) and from these tools' code, so with DMSH_TABLE_MEMO set to a folder (the NSP script sets its
+# Each shader's answer follows from its own files alone (its .metal and its reflection json) and from these tools' code, so with DMSH_TABLE_MEMO set to a folder (the packing script sets its
 # shader cache folder) c1_guard.py and cb_extent.py keep it there as <tool>.memo: a line per shader, the SHA-256 of the files it read, then its answer. A build that restores every shader
 # from the cache gives back the same files, so the tables are made again from the memo instead of the analysis: about 100 s of a 42,848-shader game's reuse build (Ocarina of Time), the
 # progress bar at 99% meanwhile. The memo's first line is the tools' fingerprint; another one (an edit to these files) starts it empty. It keeps the answers of the last run only

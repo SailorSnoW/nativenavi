@@ -101,8 +101,6 @@ class TranslatedMembar(unittest.TestCase):
             (work / 'jobs.json').write_text(json.dumps([dict(key='k', stage='cs', code=str(work / 'k.bin'), tex={}, img={}, attr={}, fout={}, local=[64, 1, 1], debug=True, shared=0x1000)]))
             r = subprocess.run([os.environ['DMSH_TEST_XLATE'], str(work / 'jobs.json'), d], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            import dmsh_geometry
-            dmsh_geometry.flatten_sets(work / 'k.spv')
             msl = cross((work / 'k.spv').read_bytes())
         self.assertEqual(barriers(msl), [FENCE % 'threadgroup', BAR, FENCE % 'device', BAR])
 

@@ -10,7 +10,7 @@ Stage memory, in shared memory (memory()), all of it zero when the body starts:
 A mesh shader with no task also gets an object function, main0_o: Metal launches at most METAL_MAX_GRID threadgroups in a mesh grid, a limit the object grid does not have, and a draw's
 workgroups went past it (Ocarina of Time's foliage: up to 1,056 a draw, PRAGMATA's 6,623; past the limit the GPU read out of bounds). Each of its one-thread threadgroups launches a
 block of up to METAL_MAX_GRID mesh threadgroups and hands them the block's first workgroup in its payload, so a draw is one Metal draw of ceil(count / METAL_MAX_GRID) object
-threadgroups (nvn_geometry.inc mtk_encode). The task and object functions read the draw's {count, first} at buffer MESH_DRAW_SLOT, NVN's DrawMeshTasksIndirect record
+threadgroups (nvn_mesh.inc mtk_encode). The task and object functions read the draw's {count, first} at buffer MESH_DRAW_SLOT, NVN's DrawMeshTasksIndirect record
   INPUT         the payload a mesh shader's task wrote (ISBERD mode 0x38). Its word 0 is the mesh workgroup's number among its task's launches, which the hardware puts there
   outputs       a task's payload (0xb8): its word 1 is the number of mesh workgroups to launch, its records start at +0x10
                 or a mesh shader's attributes (0xf8): all blocks of 32 vertices (the components the SPH's OMAP enables, 0x80 bytes each, a word per vertex), followed by all blocks of 32
@@ -91,7 +91,7 @@ def memory(i):
 
 # The per-primitive system values a Metal mesh hands on, by their OMAP bit (attribute 0x40 + 4 * bit, NAK_ATTR_*): the primitive id (0x60). The fragment stage's [[primitive_id]] then
 # reads the value the mesh shader wrote, as NVN's gl_PrimitiveID does, and a vertex pipeline's fragment function (the same function) still reads Metal's own. The layer (0x64) and the
-# viewport (0x68) keep their room but are not handed on: no game's mesh shader is known to write them, and a layered mesh pass would need the host's layered-pass handling
+# viewport (0x68) keep their room but are not handed on: no game's mesh shader is known to write them, and a layered mesh pass would need layered passes, which the host has none of
 PRIMITIVE_BUILTINS = {8: ('dm_pid', 'primitive_id')}
 
 
@@ -148,7 +148,7 @@ def _members(comps):
 
 def pixel_reads(sph):
     """{generic attribute n: the mask of its components (bit c) a pixel shader reads} from its SPH's input map: byte 0x18 + n, two bits a component (0 unused, 1 constant,
-    2 perspective, 3 linear; Ryujinx ShaderHeader ImapTypes), the same place in a Maxwell and an Ampere pixel SPH."""
+    2 perspective, 3 linear; Ryujinx ShaderHeader ImapTypes), in an Ampere pixel SPH."""
     return {n: sum(1 << c for c in range(4) if sph[0x18 + n] >> (2 * c) & 3) for n in range(32) if sph[0x18 + n]}
 
 
@@ -247,7 +247,7 @@ def to_stage(msl, i, reads=None):
         release = ''
     head = f'struct dm_payload_t {{ uint w[{max(pay, 1)}]; }};\n'
     sig = ', '.join(params + extra)
-    draw = f'constant uint* dm_draw [[buffer({abi.MESH_DRAW_SLOT})]]'   # the draw's {count, first}, which the host binds (nvn_geometry.inc mtk_encode)
+    draw = f'constant uint* dm_draw [[buffer({abi.MESH_DRAW_SLOT})]]'   # the draw's {count, first}, which the host binds (nvn_mesh.inc mtk_encode)
     scr = f', device uchar* dm_scr [[buffer({abi.MESH_SCRATCH_SLOT})]]' if spill else ''   # the scratch buffer the host binds when the reflection says mesh_spill
     if kind == 'ts':
         return src + '\n' + head + (

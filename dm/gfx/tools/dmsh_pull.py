@@ -2,8 +2,8 @@
 # (dmsh_pull.metal, at [[buffer(16)]]). A pipeline made with it has no vertex descriptor, so it serves every vertex layout the game binds with that pair of shaders: the host draws
 # with it while the pipeline for the draw's own layout is being built (nvn_mtl.m, hybrid pipelines), and so never waits for the Metal compiler on a draw. dm_fetch decodes the
 # NVN attribute format at run time into the 32-bit register words Maxwell's fetch gives the shader, bit-identical to Metal's vertex-descriptor fetch (t_pull.m), and the input
-# takes them with as_type, so the body runs unchanged. Entry points main0 / main0_z (the depth modes); the others (transform feedback, geometry capture, layer) are left out, and
-# their pipelines keep the vertex descriptor. Built offline into a library of its own beside <key>_b, with the same argument buffer and the same compile flags (-fpreserve-invariance:
+# takes them with as_type, so the body runs unchanged. Entry points main0 / main0_z (the depth modes); another (main0_discard) is left out, and
+# its pipelines keep the vertex descriptor. Built offline into a library of its own beside <key>_b, with the same argument buffer and the same compile flags (-fpreserve-invariance:
 # the position is [[invariant]] there, so both pipelines of a draw compute it alike). Usage: variant(msl) → (new MSL, {'entry', 'entry_z', 'slot', 'inputs'[, 'entry_wl', 'entry_z_wl']}) or (None, reason)
 import os, re
 

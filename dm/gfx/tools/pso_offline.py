@@ -6,8 +6,8 @@
 #   · the vertex shader's pulling library <key>_bp (a vertex shader without stage inputs: its own <key>_b), entry `entry`, or `entry_z` for the near = 0 depth mode, from its reflection
 #     <key>_b.json: the pulling library's under `pull` there (vertex_entry); the pixel shader's <key>_b, entry `entry` (main0); no vertex descriptor, one sample, every colour
 #     attachment unspecialized
-#   · left out as the host leaves them out (to the draws): a reflection of another chain version or none, a vertex shader with stage inputs and no pulling library, a vertex library that
-#     writes the layer (its reflection's layer_out, dmsh_entry.py layer_out: its pipelines take an input primitive class), a pixel shader that reads the primitive ID (its reflection's
+#   · left out as the host leaves them out (to the draws): a reflection of another chain version or none, a vertex shader with stage inputs and no pulling library,
+#     a pixel shader that reads the primitive ID (its reflection's
 #     raster.primitive_id: the host builds its pipelines whole, since through a base every primitive reads 0), a missing library or entry point
 #   · a function that declares function constants is specialized as the host's prebuild specializes it (pre_fn in nvn_mtl.m): the border colour corrections' dm_border_off set (true:
 #     off), the specialization the draws that bind no sampler with a twin share (fn_off). metal-tt specializes a <key>_b or <key>_bp function, cut by dmsh_side.cut or not, and the host
@@ -167,7 +167,7 @@ def plan(lib_dir, chain, pairs, zero):
             try: fns[lib] = constants(lib_dir / f'{lib}.metallib')
             except (OSError, ValueError): fns[lib] = None
         return fns[lib]
-    bases, rest, seen, left = [], [], set(), dict.fromkeys(('reflection', 'mesh', 'stage inputs', 'library', 'layer', 'primitive ID', 'entry'), 0)
+    bases, rest, seen, left = [], [], set(), dict.fromkeys(('reflection', 'mesh', 'stage inputs', 'library', 'primitive ID', 'entry'), 0)
     for vk, fk in pairs:
         vj, fj = refl(vk), refl(fk)
         if not vj or not fj or vj.get('chain') != chain or fj.get('chain') != chain: left['reflection'] += 1; continue
@@ -175,7 +175,6 @@ def plan(lib_dir, chain, pairs, zero):
         ventry = vertex_entry(vj, zero); fentry = fj.get('entry') or 'main0'
         pull = isinstance(vj.get('pull'), dict)
         if not pull and vj.get('vertex_inputs'): left['stage inputs'] += 1; continue
-        if vj.get('layer_out'): left['layer'] += 1; continue
         if (fj.get('raster') or {}).get('primitive_id'): left['primitive ID'] += 1; continue
         vl, fl = vk + ('_bp' if pull else '_b'), fk + '_b'
         vf, ff = fn(vl), fn(fl)

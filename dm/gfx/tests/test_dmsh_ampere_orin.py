@@ -598,7 +598,6 @@ int main(int argc, char **argv) { @autoreleasepool {
 def run_op(o, work, runner, steps, xc, env):
     """('ok', metal rows) or (stage that failed, its message)"""
     import array
-    import dmsh_geometry
     d = work / o['name']
     d.mkdir()
     (d / 'k.bin').write_bytes(o['program'])
@@ -612,7 +611,6 @@ def run_op(o, work, runner, steps, xc, env):
     r = subprocess.run([os.environ['DMSH_TEST_XLATE'], str(d / 'jobs.json'), str(d)], capture_output=True, text=True, env=env)
     if r.returncode or not (d / 'k.spv').exists():
         return 'translator', next((ln for ln in (r.stdout + r.stderr).splitlines() if '[RED]' in ln), (r.stdout + r.stderr).strip()[-300:])
-    dmsh_geometry.flatten_sets(d / 'k.spv')
     r = subprocess.run([str(TOOLS / 'spirv_cross_bin/spirv-cross'), *xc, str(d / 'k.spv')], capture_output=True, text=True)
     if r.returncode:
         return 'spirv-cross', r.stderr.strip()[-300:]

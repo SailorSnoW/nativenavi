@@ -1,5 +1,5 @@
 """The logic operation (dmsh_logic.py, dmsh_side.py, dmsh_entry.fs_uint): main0's entry point, or main0_u under its constant, reads each colour output's attachment and combines it with what the body returned,
-integer outputs bit for bit and float outputs through their normalized target's bits, the output stays a library that compiles for the Mac and the iPhone, and shaders without colour
+integer outputs bit for bit and float outputs through their normalized target's bits, the output stays a library that compiles for the Mac, and shaders without colour
 outputs get none. With --fixture <dir>, writes the replay test's shaders (t_logic.m): the base and side libraries and their generated reflection"""
 import ast, collections, json, os, pathlib, re, shutil, struct, subprocess, sys, tempfile, threading, types, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))

@@ -49,8 +49,6 @@ class LdcOffset(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertTrue((work / 'k.spv').exists(), r.stdout + r.stderr)
             self.res = json.loads((work / 'k.res.json').read_text())   # the translator's own report of the shader
-            import dmsh_geometry
-            dmsh_geometry.flatten_sets(work / 'k.spv')
             m = subprocess.run([str(TOOLS / 'spirv_cross_bin/spirv-cross'), '--msl', '--msl-version', dmsh_chain.MSL_VERSION, '--msl-argument-buffers', str(work / 'k.spv')], capture_output=True, text=True)
             self.assertEqual(m.returncode, 0, m.stderr)
             return m.stdout

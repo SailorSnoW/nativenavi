@@ -108,19 +108,13 @@ class Pairing(unittest.TestCase):
         self.assertNotEqual(missing, present)
         self.assertNotEqual(present, dmsh_chain.inputs(self.g))
 
-    def test_mesh_pairs_from_record_and_hand_table(self):
+    def test_the_prewarm_list_is_no_shader_input(self):   # no shader is built from its rows (the chain composes no mesh library from a recorded pair): recording pipelines again rebuilds nothing
         manifest = self.g.table('pso_manifest.tsv')
-        self.assertEqual(dmsh_chain.mesh_pairs(self.g), set())
         before = dmsh_chain.inputs(self.g)
-        manifest.write_text('# prewarm list\nS\tv_b\t0\nR\t00ff\nM\t-\t00ff\n')   # no G rows: the digest stays, so recording other pipelines again rebuilds nothing
-        self.assertEqual(dmsh_chain.inputs(self.g), before)
-        manifest.write_text('S\tv_b\t0\nG\t1111111111111111\t2222222222222222\nG\t1111111111111111\t2222222222222222\n')
-        self.g.table('geo_mesh.tsv').write_text('# kind: evidence  hand rows\n3333333333333333\t2222222222222222\n')
-        self.assertEqual(dmsh_chain.mesh_pairs(self.g), {('1111111111111111', '2222222222222222'), ('3333333333333333', '2222222222222222')})
-        recorded = dmsh_chain.inputs(self.g)
-        self.assertNotEqual(recorded, before)
-        manifest.write_text('G\t1111111111111111\t2222222222222222\nS\tv_b\t0\nR\t00ff\n')   # order and other rows do not count
-        self.assertEqual(dmsh_chain.inputs(self.g), recorded)
+        for text in ('# prewarm list\nS\tv_b\t0\nR\t00ff\nM\t-\t00ff\n', 'S\tv_b\t0\nG\t1111111111111111\t2222222222222222\n'):
+            manifest.write_text(text); self.assertEqual(dmsh_chain.inputs(self.g), before)
+        self.assertFalse(hasattr(dmsh_chain, 'mesh_pairs'))
+        self.assertNotIn('geo_mesh.tsv', dmsh_chain.INPUT_TABLES)
 
     def test_vertex_cache_depends_on_extra_pairs_and_pixel_code(self):
         self.ns.update(FACTS={}, MAP_ROWS={}, MAP_CONFLICT_ROWS={}, TOOL_FP=b'tools', CODE_FP='code',

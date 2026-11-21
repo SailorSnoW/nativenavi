@@ -1,22 +1,17 @@
 """A vertex shader's libraries from one Metal compile (dmsh_side.vs_unit): small vertex shaders in the translator's MSL shape, made into the build's source as dmsh_build.py makes it
-(dmsh_entry.vs_depth, dmsh_geometry.capture), no game needed. The unit must hold the body once as dm_vs_body, inlined into main0, main0_z and their pulling (main0_p, main0_zp) and
-shadow-input (main0_v, main0_zv) versions, with one plain static copy for the wide-line entries and never a noinline; keep main0_gs and the rarer entry points whole copies; name
-the side libraries' entry points as the reflection's `pull` and `vin` take them; refuse a source of another shape; compile for macOS and iOS and cut into <key>_b, <key>_bp and
-<key>_bv with each library's own entry points, main0_gs's code byte for byte what the plain source compiles to (temporary files only in a temporary folder).
-The build step (dmsh_build.py vs_libraries, run here with the Metal cache replaced): one compile a target, the reflection's names, a target without the pulling library, a
-layer shader's shadow-input library, and each library compiled from its own source, with a red line, for a unit that does not build. t_vs_unit.m draws with the cut libraries on the GPU."""
+(dmsh_entry.vs_depth, and dmsh_entry.vs_discard for a shader with writes), no game needed. The unit must hold the body once as dm_vs_body, inlined into main0, main0_z and their
+pulling (main0_p, main0_zp) and shadow-input (main0_v, main0_zv) versions, with one plain static copy for the wide-line entries and never a noinline; keep main0_discard a whole copy;
+name the side libraries' entry points as the reflection's `pull` and `vin` take them; refuse a source of another shape; compile for macOS and cut into <key>_b, <key>_bp and
+<key>_bv with each library's own entry points, main0_discard's code byte for byte what the plain source compiles to (temporary files only in a temporary folder).
+The build step (dmsh_build.py vs_libraries, run here with the Metal cache replaced): one compile a target, the reflection's names, a target without the pulling library,
+and each library compiled from its own source, with a red line, for a unit that does not build. t_vs_unit.m draws with the cut libraries on the GPU."""
 import ast, collections, os, pathlib, shutil, subprocess, sys, tempfile, unittest, warnings
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
-import dmsh_side, dmsh_pull, dmsh_vin, dmsh_entry, dmsh_geometry, pso_offline
+import dmsh_side, dmsh_pull, dmsh_vin, dmsh_entry, pso_offline
 
 BODY = 'float4 acc = u;'   # a line the body has once
 CALL_GL = '    main0_out out = dm_vs_body(in, u);\n    ' + dmsh_side.VS_DEPTH + '\n    return out;\n}\n'
 CALL_Z = '    return dm_vs_body(in, u);\n}\n'
-TF = '\nvertex void main0_tf(main0_in in [[stage_in]], constant float4& u [[buffer(0)]], uint dm_vid [[vertex_id]], device uint* dm_tf0 [[buffer(8)]])\n{\n    dm_tf0[dm_vid] = as_type<uint>(in.m_0.x + u.x);\n}\n'
-LAYER = ('\nstruct main0l_out\n{\n    float4 gl_Position [[position, invariant]];\n    uint gl_Layer [[render_target_array_index]];\n};\n'
-         + ''.join(f'\nvertex main0l_out {n}(main0_in in [[stage_in]], constant float4& u [[buffer(0)]])\n{{\n    main0l_out out = {{}};\n    out.gl_Position = in.m_0 + u;\n    out.gl_Layer = 1u;\n    return out;\n}}\n'
-                   for n in ('main0_l', 'main0_lz')))
-
 
 def single(types, ids='', ret=True):
     """The translator's vertex shader, with main0 alone. types: the MSL type of each input in location order; ids: extra parameters of main0; ret: an interpolated output and an early
@@ -29,9 +24,9 @@ def single(types, ids='', ret=True):
             f'\nvertex main0_out main0(main0_in in [[stage_in]], constant float4& u [[buffer(0)]]{ids})\n{{\n    main0_out out = {{}};\n    float4 acc = u;\n{use}{early}    out.gl_Position = acc;\n    return out;\n}}\n')
 
 
-def source(types, ids='', ret=True, tail=''):   # the source with every entry point, as dmsh_build.py's finish makes it: main0 with the depth line, main0_z, main0_gs, then the rarer ones
+def source(types, ids='', ret=True, discard=False):   # the source with every entry point, as dmsh_build.py's finish makes it: main0 with the depth line, main0_z, then main0_discard for a shader with writes
     src = single(types, ids, ret)
-    return dmsh_entry.vs_depth(src)[1] + dmsh_geometry.capture(src) + tail
+    return dmsh_entry.vs_depth(src)[1] + (dmsh_entry.vs_discard(src) if discard else '')
 
 
 def unit(full, pull=True, vin=True):
@@ -42,32 +37,32 @@ class Unit(unittest.TestCase):
     def test_the_body_once(self):
         full = source(['float4', 'uint4', 'int4'])
         pv, pinfo = dmsh_pull.variant(full); vv, _ = dmsh_vin.variant(full)
-        self.assertEqual((full.count(BODY), pv.count(BODY), vv.count(BODY)), (3, 4, 3))   # the three sources: main0, main0_z, main0_gs; the pulling pair and a body function for each wide-line entry; the shadow-input library's three
+        self.assertEqual((full.count(BODY), pv.count(BODY), vv.count(BODY)), (2, 4, 2))   # the three sources: main0 and main0_z; the pulling pair and a body function for each wide-line entry; the shadow-input library's two
         u, pn, vn = dmsh_side.vs_unit(full, pv, vv)
-        self.assertEqual(u.count(BODY), 2)   # dm_vs_body, and main0_gs's whole copy
+        self.assertEqual(u.count(BODY), 1)   # dm_vs_body
         self.assertEqual(pn, {'entry': 'main0_p', 'entry_z': 'main0_zp', 'entry_wl': 'main0_wl', 'entry_z_wl': 'main0_z_wl'})
         self.assertEqual(vn, {'entry': 'main0_v', 'entry_z': 'main0_zv'})
         self.assertEqual(set(pn), {k for k in pinfo if k.startswith('entry')})   # the keys of the reflection's `pull` that name entry points
         self.assertEqual(u.count('static __attribute__((always_inline)) main0_out dm_vs_body(main0_in in, constant float4& u)\n{\n'), 1)
         self.assertEqual(u.count('static main0_out dm_vs_body_o(main0_in in, constant float4& u)\n{\n    return dm_vs_body(in, u);\n}\n'), 1)
-        self.assertNotIn('noinline', u)   # a noinline body changed the capture entry's results when that entry shared it: the out-of-line copy is a plain static function
+        self.assertNotIn('noinline', u)   # a noinline body changed the results of an entry that shared it: the out-of-line copy is a plain static function
         es = dmsh_side.vs_entries(u)
-        self.assertEqual(sorted(es), ['main0', 'main0_gs', 'main0_p', 'main0_v', 'main0_wl', 'main0_z', 'main0_z_wl', 'main0_zp', 'main0_zv'])
+        self.assertEqual(sorted(es), ['main0', 'main0_p', 'main0_v', 'main0_wl', 'main0_z', 'main0_z_wl', 'main0_zp', 'main0_zv'])
         body = lambda n: u[es[n]['body']:es[n]['end']]
         self.assertEqual(body('main0'), CALL_GL)   # the depth line once, after the call, where the copy had it before each of its two returns
         self.assertEqual(body('main0_z'), CALL_Z)
         self.assertEqual(es['main0']['params'], 'main0_in in [[stage_in]], constant float4& u [[buffer(0)]]')
         self.assertIn('    float4 m_0 [[attribute(0)]];\n    uint4 m_1 [[attribute(1)]];', u)   # main0_in keeps its attributes for them
 
-    def test_main0_gs_and_the_rarer_entry_points_stay_whole_copies(self):
-        full = source(['float4', 'uint4'], tail=TF + LAYER)
+    def test_the_discard_entry_stays_a_whole_copy(self):
+        full = source(['float4', 'uint4'], discard=True)
+        self.assertEqual(full.count(BODY), 3)
         u, pn, vn = unit(full)
         fe, ue = dmsh_side.vs_entries(full), dmsh_side.vs_entries(u)
-        for n in ('main0_gs', 'main0_tf', 'main0_l', 'main0_lz'):
-            self.assertEqual(u[ue[n]['start']:ue[n]['end']], full[fe[n]['start']:fe[n]['end']], n)
-        self.assertEqual(u.count('{ dm_cw('), full.count('{ dm_cw('))   # the capture epilogue at each of the body's two returns, not once after a call
-        self.assertEqual(full.count('{ dm_cw('), 2)
-        self.assertFalse({'main0_gs', 'main0_tf', 'main0_l', 'main0_lz'} & (set(pn.values()) | set(vn.values())))   # they stay in <key>_b
+        self.assertEqual(u[ue['main0_discard']['start']:ue['main0_discard']['end']], full[fe['main0_discard']['start']:fe['main0_discard']['end']])
+        self.assertEqual(u.count(BODY), 2)   # dm_vs_body, and main0_discard's: it returns nothing where the body returns the outputs
+        self.assertNotIn('main0_discard', set(pn.values()) | set(vn.values()))   # it stays in <key>_b
+        self.assertEqual(sorted(ue), ['main0', 'main0_discard', 'main0_p', 'main0_v', 'main0_wl', 'main0_z', 'main0_z_wl', 'main0_zp', 'main0_zv'])
 
     def test_pulling_entry_points(self):
         u, pn, _ = unit(source(['float4', 'uint4', 'int4']))
@@ -105,9 +100,9 @@ class Unit(unittest.TestCase):
         full = source(['float4', 'uint4'])
         u, pn, vn = unit(full, pull=False)
         self.assertEqual((pn, vn), ({}, {'entry': 'main0_v', 'entry_z': 'main0_zv'}))
-        self.assertEqual(sorted(dmsh_side.vs_entries(u)), ['main0', 'main0_gs', 'main0_v', 'main0_z', 'main0_zv'])
+        self.assertEqual(sorted(dmsh_side.vs_entries(u)), ['main0', 'main0_v', 'main0_z', 'main0_zv'])
         for absent in ('dm_fetch', 'dm_vlayout', 'dm_vs_body_o', 'dm_wl'): self.assertNotIn(absent, u)
-        self.assertEqual(u.count(BODY), 2)
+        self.assertEqual(u.count(BODY), 1)
 
     def test_no_wide_line_entries_no_out_of_line_copy(self):
         full = source(['float4'], ids=', uint gl_ViewIndex [[amplification_id]]')   # a parameter a wide-line entry cannot pass on
@@ -115,7 +110,7 @@ class Unit(unittest.TestCase):
         u, pn, vn = unit(full)
         self.assertEqual((pn, vn), ({'entry': 'main0_p', 'entry_z': 'main0_zp'}, {}))   # and no integer input: no shadow-input entry points
         self.assertNotIn('dm_vs_body_o', u); self.assertNotIn('dm_wline', u)
-        self.assertEqual(u.count(BODY), 2)
+        self.assertEqual(u.count(BODY), 1)
 
     def test_refuses_another_shape(self):
         full = source(['float4', 'uint4'])
@@ -147,7 +142,7 @@ class Libraries(unittest.TestCase):
         return out.read_bytes()
 
     def test_cut_into_the_three_libraries(self):
-        full = source(['float4', 'uint4', 'int4'], tail=TF)
+        full = source(['float4', 'uint4', 'int4'], discard=True)
         u, pn, vn = unit(full)
         with tempfile.TemporaryDirectory() as t:
             d = pathlib.Path(t)
@@ -157,24 +152,24 @@ class Libraries(unittest.TestCase):
                     pieces = dmsh_side.cut(lib.read_bytes(), set(pn.values()), set(vn.values()))   # as vs_libraries cuts it
                     got = []
                     for name, data in zip(('b', 'bp', 'bv'), pieces): (d / f'{name}.metallib').write_bytes(data); got.append(pso_offline.functions(d / f'{name}.metallib'))
-                    self.assertEqual(got, [{'main0': False, 'main0_z': False, 'main0_gs': False, 'main0_tf': False},
+                    self.assertEqual(got, [{'main0': False, 'main0_z': False, 'main0_discard': False},
                                            {'main0_p': False, 'main0_zp': False, 'main0_wl': False, 'main0_z_wl': False}, {'main0_v': False, 'main0_zv': False}])
 
-    def test_main0_gs_is_the_plain_sources_code(self):   # the capture entry is the copy it was: byte for byte the function the plain source compiles to. main0 is not (the depth line once)
-        full = source(['float4', 'uint4', 'int4'])
+    def test_main0_discard_is_the_plain_sources_code(self):   # the discard entry is the copy it was: byte for byte the function the plain source compiles to. main0 is not (the depth line once)
+        full = source(['float4', 'uint4', 'int4'], discard=True)
         u, _, _ = unit(full)
         with tempfile.TemporaryDirectory() as t:
             d = pathlib.Path(t)
             for sdk, flags in self.FLAGS:
                 with self.subTest(sdk=sdk):
                     plain, _ = self.compile(d, 'plain', full, sdk, flags); cut, _ = self.compile(d, 'unit', u, sdk, flags)
-                    self.assertEqual(self.one(d, cut, sdk, 'main0_gs'), self.one(d, plain, sdk, 'main0_gs'))
+                    self.assertEqual(self.one(d, cut, sdk, 'main0_discard'), self.one(d, plain, sdk, 'main0_discard'))
 
     def test_a_unit_without_the_pulling_library_and_one_without_wide_lines(self):
         with tempfile.TemporaryDirectory() as t:
             d = pathlib.Path(t)
-            for name, (u, pn, vn), want in (('nopull', unit(source(['float4', 'uint4']), pull=False), [{'main0': False, 'main0_z': False, 'main0_gs': False}, {'main0_v': False, 'main0_zv': False}]),
-                                            ('nowide', unit(source(['float4'], ids=', uint gl_ViewIndex [[amplification_id]]')), [{'main0': False, 'main0_z': False, 'main0_gs': False}, {'main0_p': False, 'main0_zp': False}])):
+            for name, (u, pn, vn), want in (('nopull', unit(source(['float4', 'uint4']), pull=False), [{'main0': False, 'main0_z': False}, {'main0_v': False, 'main0_zv': False}]),
+                                            ('nowide', unit(source(['float4'], ids=', uint gl_ViewIndex [[amplification_id]]')), [{'main0': False, 'main0_z': False}, {'main0_p': False, 'main0_zp': False}])):
                 for sdk, flags in self.FLAGS:
                     with self.subTest(unit=name, sdk=sdk):
                         _, lib = self.compile(d, name, u, sdk, flags)
@@ -243,12 +238,6 @@ class BuildStep(unittest.TestCase):
         got, mtl, lines, _ = self.run_step(source(['float4']))
         self.assertEqual(mtl.calls, [('mac', ['_b', '_bp'], [self.PULLED])])
         self.assertEqual(sorted(got), ['pull']); self.assertEqual(lines, [])
-
-    def test_a_layer_shader_keeps_its_shadow_input_library_a_compile_of_its_own(self):   # that library repeats main0_l for the host (vin_fn), and one unit cannot hold it twice
-        got, mtl, lines, _ = self.run_step(source(['float4', 'uint4'], tail=LAYER))
-        self.assertEqual(mtl.calls, [('mac', ['_b', '_bp'], [self.PULLED]), ('mac', '_bv')])
-        self.assertEqual((got['pull']['entry'], got['vin']), ('main0_p', {'entry': 'main0', 'entry_z': 'main0_z', 'shadow': [{'location': 1, 'float': 16, 'sint': 17}]}))
-        self.assertEqual(lines, [])
 
     def test_a_unit_that_does_not_build_is_compiled_library_by_library(self):
         got, mtl, lines, ns = self.run_step(source(['float4', 'uint4']), fail={('mac', 'unit')})

@@ -5,15 +5,17 @@
 #   · BNSH ('BNSH\0\0\0\0', carried by bfsha / particle effect esetb / UI layout blarc / embedded in main):
 #       +0x60 grsc block; +0x7c variation count u32; +0x80 variation table pointer (pointers are relative to the BNSH start). A variation is 0x40 bytes; the binary program is at +0x10;
 #       the binary program has 6 stage pointers from +0x08: vertex, hull, domain, geometry, pixel, compute; NVN2 adds ray tracing at +0x38 and task/mesh at +0x40/+0x48. The stage code descriptor has +0x08 control pointer, +0x10 code area pointer, +0x18 code area length, +0x1c control length.
-#   · BAHS (agl's sharcb: the agl / gsys resource packs, GameAglShader in the Secred pack): file header +0x1c code region start, +0x18 code region length;
-#       each binary entry in the table area is 16 bytes {code offset (relative to the code region, 0x100-aligned), 0, control length 0x880 / 0x88c (3D World 0x848), signed offset of the control relative to this entry's address}.
-#       Control sections are shared between programs, so pairing goes by entry, never by finding code from a control; entries are recognized by a triple check of "control magic + code magic + consistent lengths".
+#   · BAHS (agl's sharcb: the agl / gsys resource packs): file header +0x1c code region start, +0x18 code region length;
+#       each binary entry in the table area is 16 bytes {code offset (relative to the code region, 0x100-aligned), 0, control length, signed offset of the control relative to this entry's address}.
+#       Control sections are shared between programs, so pairing goes by entry, never by finding code from a control; entries are recognized by "an NVN2 control section + consistent lengths".
 #   · NDSR (agl's upscaler pack, Lib/agl/agl_resource.*.sarc.zs agl_ndsr.pck) and NDVE (nn::ndve's movie enhancement file, Movie/Ndve/*.dat.zs): see ndsr_shaders and ndve_shaders
-# Code area: 0x30 header + (graphics) 0x50 SPH + instructions; header magic 0x12345678 for graphics, 0x12345679 for compute. The control section starts with 0x98761234, +0x704 = code area length,
-#   +0x700 = start of the c1 constant segment within the code area; for compute +0x748 thread group xyz (u32 ×3), +0x754 shared memory bytes (checked one by one against PC reflection on D2R's 22 compute shaders).
-# Stage: BNSH uses the stage slot; BAHS uses bits 10..13 of SPH word 0 (1 vertex 2 hull 3 domain 4 geometry 5 pixel), and a compute header means compute.
-# Key = sha256(first 0x880 bytes of the control section (its own length when control +0x20 says it is shorter, see ctl_len) + code area)[:16], the same as the host's prog_get: in this game many shaders share a control section but differ in code
-#   (SecredUber's 16600 stage shaders have only 3079 distinct control sections, with 6367 cases of same control, different code), so hashing the control alone picks the wrong library.
+# Every shader of the game is an NVN2 (Switch 2) one: Ampere code, a 0x80-byte SPH leading a graphics stage's code area and no code header; the control section starts with 0x98761234,
+#   version 0xc9, +0x44 = code area length (dmsh_ampere.py); for compute +0x58 thread group xyz (u32 ×3). Its stages are vertex, pixel, compute, task and mesh. An NVN1 (Maxwell) control
+#   section (version 1, 0x880 bytes, a code header) or a hull, domain, geometry or ray tracing shader is not read here any more: one met in the game's files stops the split (refuse),
+#   it is never left out silently.
+# Stage: BNSH uses the stage slot; elsewhere the control's stage byte (+0x56: 5 compute, 6 task, 7 mesh) or bits 10..13 of SPH word 0 (1 vertex, 5 pixel), see nvn2_stage.
+# Key = sha256(first 0x48 bytes of the control section, +0x30 as zero (see key_ctl) + code area)[:16], the same as the host's keys_hash: in this game many shaders share a control section but differ in code,
+#   so hashing the control alone picks the wrong library.
 # Output: <package dir>/<stage>_<source group>.bin, each record = 'BTCDBTCD' + header (+0x08 the key's 8 bytes, +0x28 control length, +0x2c code length) padded to 0x38 + code area + control section, one copy per key
 #   (dmsh_build.py finds a map row's record by that key, not by the row's index: a package from another split than the map stops it instead of translating a neighbour's bytes, issue #1841);
 #   map rows have the same columns as D2R's shader_map.tsv (column 5 records where the key first appeared); the answer table has one row per compute shader {"local", "shared"} (shared memory rounded up to 16 bytes, as D2R did).
@@ -28,21 +30,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 GAME = _game.load()   # the game profile (Ocarina of Time's, or DM_GAME's derived one): source group rules and the table header note
 GROUPS, NOTE = GAME.pairs('shader_groups'), GAME.get('shader_note')
-KEY_SKIP = tuple(int(x, 0) for x in GAME.get('shader_key_skip', '0+0').split('+'))   # control bytes the keys hash as zeros (key_ctl); dm/games/game.py checks the form
 
-CTL_MAGIC, GFX_MAGIC, CS_MAGIC = bytes.fromhex('34127698'), bytes.fromhex('78563412'), bytes.fromhex('79563412')
-STAGES = ['vs', 'hs', 'ds', 'gs', 'ps', 'cs']
-SPH_STAGE = {1: 'vs', 2: 'hs', 3: 'ds', 4: 'gs', 5: 'ps'}
-def sph_stage(code):
-    """A graphics code area's stage from its SPH word 0: shader type in bits 10..13. Catherine: Full Body's GLSLC (SDK 8.2.1, GPU code version 1.15) writes 0 there in every vertex shader
-    (word 0 = 0x0061: SPH type 1 VTG, version 3), in its shaders_binary files and in what it compiles at run time, where every other game's vertex shaders have 1 (0x0461); Ryujinx's ShaderHeader
-    reads a graphics header's 0 as a vertex shader as well, so it is one here"""
-    if len(code) < 0x34: return None   # shorter than the header and SPH word 0
-    w = struct.unpack_from('<I', code, 0x30)[0]
-    return 'vs' if (w >> 10) & 0xf == 0 and w & 0x1f == 1 else SPH_STAGE.get((w >> 10) & 0xf)
-STAGE_NAME = {'vs': 'vertex', 'hs': 'hull', 'ds': 'domain', 'gs': 'geometry', 'ps': 'pixel', 'cs': 'compute', 'ts': 'task', 'ms': 'mesh', 'rt': 'raytracing'}   # shader_map.tsv column 3
+CTL_MAGIC = bytes.fromhex('34127698')
+STAGES = ['vs', 'hs', 'ds', 'gs', 'ps', 'cs']   # a BNSH program's stage slots, in order
+SPH_STAGE = {1: 'vs', 2: 'hs', 3: 'ds', 4: 'gs', 5: 'ps'}   # SPH word 0, bits 10..13
+STAGE_NAME = {'vs': 'vertex', 'ps': 'pixel', 'cs': 'compute', 'ts': 'task', 'ms': 'mesh'}   # shader_map.tsv column 3: the stages the game has, the only ones the chain translates (dmsh_build.py STAGES)
+GONE = {'hs': 'hull', 'ds': 'domain', 'gs': 'geometry', 'rt': 'ray tracing'}
 
 def red(msg) -> NoReturn: sys.exit('[RED] ' + msg)
+
+class Refused(SystemExit):
+    """A shader of a form or a stage this chain does not translate (stop). Unlike a file no reader can read, which scan_file leaves out with its red line, this ends the split:
+    the file was read, and going on without its shader would build a library that lacks one the game may ask for"""
+def stop(msg) -> NoReturn: raise Refused('[RED] ' + msg)
 
 def field(d, fmt, at, where):
     """struct.unpack_from(fmt, d, at) of a field a header or table points at: red() naming where and the offset when it is not inside d (a damaged or cut file)"""
@@ -53,6 +53,10 @@ def span(d, at, n, where):
     """d[at:at + n], or red() naming where when the range is not inside d (a slice would silently come out short)"""
     if not (0 <= at and 0 <= n <= len(d) - at): red(f'{where}: {n:#x} bytes at {at:#x} lie outside the {len(d):#x} bytes there are')
     return d[at:at + n]
+
+def refuse(where, st):
+    """Stops the split at a shader of a stage the chain no longer translates (hull, domain, geometry, ray tracing: the game has none; dmsh_build.py would stop at its map row)"""
+    if st in GONE: stop(f'{where}: a {GONE[st]} shader: this chain translates only the vertex, pixel, compute, task and mesh shaders of an NVN2 game, as Ocarina of Time has no other')
 
 def zstd_mod():
     """The zstd module: compression.zstd from Python 3.14, its backport before (pip install backports.zstd), the same API"""
@@ -68,57 +72,28 @@ def nvn2_ctl(ctl):
     effects, 0x930 / 0x338 in sead's primitive drawer) and 0 in agl's BAHS files and in memory, so the key takes the first 0x48 bytes with +0x30 as zero (the host's keys_hash)"""
     return len(ctl) >= NVN2_KEY_CTL and ctl[:4] == CTL_MAGIC and ctl[4:8] == b'\xc9\0\0\0'
 
-def ctl_len(ctl):
-    """Number of control bytes in the key: an NVN2 section's own length (+0x30; the host's keys_hash takes the same); else control +0x20 holds the section's own length. Every control section of Mario, Fire Emblem Engage, Metroid Dread and 13 Sentinels is at least 0x880 bytes, so the first 0x880 are used;
-    SDK 10's Super Mario 3D World + Bowser's Fury has 2,888 that are only 0x850 bytes (the bfsha in ShaderData, 6 layouts), with other data right after them, so only their own length is used (the same as the host's keys_hash)"""
-    if nvn2_ctl(ctl): return NVN2_KEY_CTL
-    n = struct.unpack_from('<I', ctl, 0x20)[0]
-    return n if 0x760 <= n < 0x880 else 0x880
-
 def key_ctl(ctl):
-    """The control bytes in the key: ctl_len of them, with the profile's shader_key_skip range as zeros (the host's keys_hash does the same). Batman: Arkham Knight's engine shares one control section
-    among shaders whose sections differ only in GLSLC's compile information (+0x778..+0x791, +0x7d0..+0x7e7; its shader_key_skip 0x770+0x78): masked, its 24,721 sections are 5,615"""
-    c = ctl[:ctl_len(ctl)]
-    if nvn2_ctl(ctl): return c[:0x30] + bytes(4) + c[0x34:]
-    return c[:KEY_SKIP[0]] + bytes(KEY_SKIP[1]) + c[KEY_SKIP[0] + KEY_SKIP[1]:] if KEY_SKIP[1] and KEY_SKIP[0] + KEY_SKIP[1] <= len(c) else c
+    """The control bytes in the key: an NVN2 section's first NVN2_KEY_CTL bytes with its own length (+0x30) as zero (nvn2_ctl; the host's keys_hash does the same). Only called on an
+    NVN2 section (check)"""
+    c = ctl[:NVN2_KEY_CTL]
+    return c[:0x30] + bytes(4) + c[0x34:]
 
 def skey(ctl, code):
     return hashlib.sha256(key_ctl(ctl) + code).hexdigest()[:16]
 
 def same_shader(a, b):
-    """Two copies of one key hold the same shader: the code areas are equal, and so are the control sections up to their own length (control +0x20). Pokémon Legends: Z-A's UI layout archives
-    (__ArchiveShader.bnsh inside the .truiv packs) give 104 KB control sections whose stage descriptor length runs 456 bytes past their own length, and those trailing bytes differ between copies"""
+    """Two copies of one key hold the same shader: the code areas are equal, and so are the control sections' bytes in the key (what lies past them, a section's own
+    length at +0x30 among it, differs between a BNSH copy and a BAHS one)"""
     (ca, ka), (cb, kb) = a, b
-    if any(nvn2_ctl(c) and len(c) > 0x56 and c[0x56] == 8 for c in (ca, cb)):
-        # RT entries, continuations and resources are serialized after the
-        # standard key's first 0x48 control bytes. Equal keys/code can still have
-        # different execution semantics. Mask only the declared section length,
-        # as the runtime key does; never discard conflicting RT metadata.
-        return ka == kb and ca[:0x30] + bytes(4) + ca[0x34:] == cb[:0x30] + bytes(4) + cb[0x34:]
-    n = struct.unpack_from('<I', ca, 0x20)[0] if len(ca) >= 0x24 else len(ca)
-    n = n if 0x760 <= n <= min(len(ca), len(cb)) else max(len(ca), len(cb))
-    if nvn2_ctl(ca): return ka == kb and key_ctl(ca) == key_ctl(cb)
-    o, ln = KEY_SKIP
-    if ln and o + ln <= n: ca, cb = ca[:o] + ca[o + ln:n], cb[:o] + cb[o + ln:n]; n = n - ln   # shader_key_skip: the bytes the key leaves out may differ
-    return ka == kb and ca[:n] == cb[:n]
+    return ka == kb and key_ctl(ca) == key_ctl(cb)
 
+NVN1 = 'not an NVN2 control section (version 0xc9): an NVN1 (Maxwell) shader, which this chain does not translate'   # check's answer that ends the split (stop)
 def check(where, st, ctl, code):
     """control section and code area consistent; returns the reason if not"""
-    if ctl[:4] != CTL_MAGIC or len(ctl) < 0x24 or len(ctl) < ctl_len(ctl): return 'bad control section'
-    if st == 'rt':
-        from dmsh_rt import InvalidModule, parse_module
-        if not nvn2_ctl(ctl) or len(ctl) < 0x68 or ctl[0x56] != 8: return 'bad NVN2 ray-tracing control section'
-        nmeta, pmeta, ncode = struct.unpack_from('<III', ctl, 0x5c)
-        if ncode != len(code): return 'RT control +0x64 does not match the code area length'
-        if not nmeta or pmeta < 0x68 or pmeta % 8 or pmeta > len(ctl) or nmeta > len(ctl) - pmeta: return 'RT metadata range lies outside the control section'
-        try: parse_module(ctl[pmeta:pmeta + nmeta], code)
-        except InvalidModule as e: return f'invalid RT metadata: {e}'
-    if nvn2_ctl(ctl):   # NVN2: Ampere code, a 0x80-byte SPH and no code header; the control section names the code area's length at +0x44 (dmsh_ampere.py)
-        return None if struct.unpack_from('<I', ctl, 0x44)[0] == len(code) else 'control +0x44 does not match the code area length'
-    # a compute code area may have no header (SDK 10's Super Mario 3D World + Bowser's Fury and D2R: instructions start at +0; dmsh_build strips only a 0x12345679 header)
-    if st == 'cs' and code[:4] in (CS_MAGIC, GFX_MAGIC) and code[:4] != CS_MAGIC or st != 'cs' and code[:4] != GFX_MAGIC: return 'code area header magic does not match the stage'
-    if struct.unpack_from('<I', ctl, 0x704)[0] != len(code): return 'control +0x704 does not match the code area length'
-    return None
+    if ctl[:4] != CTL_MAGIC or len(ctl) < 0x24: return 'bad control section'
+    # NVN2 only: Ampere code, a 0x80-byte SPH and no code header; the control section names the code area's length at +0x44 (dmsh_ampere.py)
+    if not nvn2_ctl(ctl): return NVN1
+    return None if struct.unpack_from('<I', ctl, 0x44)[0] == len(code) else 'control +0x44 does not match the code area length'
 
 def bnsh_shaders(d, base, label):
     where = f'{label} BNSH @{base:#x}'
@@ -134,22 +109,16 @@ def bnsh_shaders(d, base, label):
             pctl, pcode, ncode, nctl = field(d, '<QQII', base + sc + 8, f'{where} variation {v} {st}')
             ctl, code = span(d, base + pctl, nctl, f'{where} variation {v} {st} control section'), span(d, base + pcode, ncode, f'{where} variation {v} {st} code area')
             why = check(label, st, ctl, code)
-            if why: red(f'{label} BNSH @{base:#x} variation {v} {st}: {why}')
+            if why: (stop if why is NVN1 else red)(f'{label} BNSH @{base:#x} variation {v} {st}: {why}')
+            refuse(f'{where} variation {v}', st)
             out.append((f'{label}#BNSH@{base:#x}#var{v}', st, ctl, code))
-        # Older programs end at +0x38. Only a pointer whose control header
-        # actually identifies NVN2 stage8 admits this optional RT descriptor;
-        # after that identification, malformed lengths/metadata are errors.
+        # Older programs end at +0x38. A pointer there whose control header identifies NVN2 stage 8 is a ray tracing module, which the chain has no path for: refused, not left out
         if base + prog + 0x40 <= len(d):
             sc = struct.unpack_from('<Q', d, base + prog + 0x38)[0]
             if sc and base + sc + 0x20 <= len(d):
-                pctl, pcode, ncode, nctl = struct.unpack_from('<QQII', d, base + sc + 8)
+                pctl = struct.unpack_from('<Q', d, base + sc + 8)[0]
                 prefix = d[base + pctl:base + pctl + 0x57]
-                if nvn2_ctl(prefix) and len(prefix) == 0x57 and prefix[0x56] == 8:
-                    ctl = span(d, base + pctl, nctl, f'{where} variation {v} rt control section')
-                    code = span(d, base + pcode, ncode, f'{where} variation {v} rt code area')
-                    why = check(label, 'rt', ctl, code)
-                    if why: red(f'{where} variation {v} rt: {why}')
-                    out.append((f'{label}#BNSH@{base:#x}#var{v}', 'rt', ctl, code))
+                if nvn2_ctl(prefix) and len(prefix) == 0x57 and prefix[0x56] == 8: refuse(f'{where} variation {v}', 'rt')
         # NVN2's task and mesh stages follow, at +0x40 and +0x48 of the program (Ocarina of Time's foliage and models: Shader/Foliage*.bfsha, Model*.bfsha, drawn by DrawMeshTasksIndirect). An older BNSH's
         # program ends before them, so only a pointer to a control section of that stage counts
         for off, st, stage in ((0x40, 'ts', 6), (0x48, 'ms', 7)):
@@ -159,15 +128,15 @@ def bnsh_shaders(d, base, label):
             pctl, pcode, ncode, nctl = struct.unpack_from('<QQII', d, base + sc + 8)
             if not 0x48 <= nctl < 0x10000 or base + pctl + nctl > len(d) or base + pcode + ncode > len(d): continue
             ctl, code = d[base + pctl:base + pctl + nctl], d[base + pcode:base + pcode + ncode]
-            if not nvn2_ctl(ctl) or len(ctl) <= 0x56 or ctl[0x56] != stage: continue
+            if not nvn2_ctl(ctl) or len(ctl) <= 0x56 or ctl[0x56] != stage: continue   # not a task / mesh descriptor (an older BNSH's program ends before these words)
             why = check(label, st, ctl, code)
-            if why: red(f'{label} BNSH @{base:#x} variation {v} {st}: {why}')
+            if why: (stop if why is NVN1 else red)(f'{label} BNSH @{base:#x} variation {v} {st}: {why}')
             out.append((f'{label}#BNSH@{base:#x}#var{v}', st, ctl, code))
     return out
 
-def nvn2_stage(ctl, code):   # compute, task, mesh and RT use the control's stage byte (+0x56: 5..8); graphics uses the SPH at the code area's start
+def nvn2_stage(ctl, code):   # compute, task, mesh and ray tracing use the control's stage byte (+0x56: 5..8); graphics uses the SPH at the code area's start (word 0, bits 10..13)
     if len(ctl) > 0x56 and ctl[0x56] in (5, 6, 7, 8): return {5: 'cs', 6: 'ts', 7: 'ms', 8: 'rt'}[ctl[0x56]]
-    return sph_stage(bytes(0x30) + code[:4]) if len(code) >= 4 else None
+    return SPH_STAGE.get(struct.unpack_from('<I', code)[0] >> 10 & 0xf) if len(code) >= 4 else None
 
 
 def bahs_shaders(d, label):
@@ -176,22 +145,28 @@ def bahs_shaders(d, label):
     found = []
     for a in range(0, region - 16, 4):
         off, z, csz, rel = struct.unpack_from('<IIIi', d, a)
-        nvn2 = 0x48 <= csz < 0x10000 and 0 <= a + rel and a + rel + csz <= region and nvn2_ctl(d[a + rel:a + rel + csz])
-        # control length: Mario 0x880 / 0x88c, 3D World's BAHS version 9 0x848; NVN2 (Donkey Kong Bananza's agl resources) 0xd8
-        if z or not (nvn2 or csz in (0x880, 0x88c) or 0x760 <= csz < 0x880) or off % 0x100: continue
         c = a + rel
-        if c < 0 or c + csz > region or d[c:c + 4] != CTL_MAGIC: continue
-        n = struct.unpack_from('<I', d, c + (0x44 if nvn2 else 0x704))[0]
+        nvn2 = 0x48 <= csz < 0x10000 and 0 <= c and c + csz <= region and nvn2_ctl(d[c:c + csz])
+        if z or off % 0x100: continue
+        if not nvn2:
+            # An NVN1 entry (control length 0x880 / 0x88c, or its own 0x760..0x87f; the code area, its length at control +0x704, starting with a code header): the chain reads
+            # none, and a file that holds one is not passed over as if it held no shader
+            if (csz in (0x880, 0x88c) or 0x760 <= csz < 0x880) and 0 <= c and c + csz <= region and d[c:c + 4] == CTL_MAGIC and d[c + 4:c + 8] != b'\xc9\0\0\0':
+                n = struct.unpack_from('<I', d, c + 0x704)[0]
+                if off + n <= rsz and d[region + off:region + off + 4] in (bytes.fromhex('78563412'), bytes.fromhex('79563412')):
+                    stop(f'{label}#BAHS@{a:#x}: an NVN1 (Maxwell) shader entry: this chain translates only NVN2 (Switch 2) shaders')
+            continue
+        n = struct.unpack_from('<I', d, c + 0x44)[0]
         if off + n > rsz: continue
         code, ctl = d[region + off:region + off + n], d[c:c + csz]
-        st = nvn2_stage(ctl, code) if nvn2 else 'cs' if code[:4] == CS_MAGIC else sph_stage(code) if code[:4] == GFX_MAGIC else None
+        st = nvn2_stage(ctl, code)
         if not st or check(label, st, ctl, code): continue
         found.append((a, c, (f'{label}#BAHS@{a:#x}', st, ctl, code)))
     # A program entry never lies inside a control section. An NVN2 section's +0x38..+0x47 (instruction length, c1 start and end, code length: 0x1100, 0, 0x1100, 0x1100) reads as
     # an entry whose offset, control length and control distance are all that length: Ocarina of Time's agl_common.sharcb@0x357f0 paired compute shader 30's control with a vertex
     # shader's code, a shader the game never loads, and its SPH came to the translator as an instruction ("Ampere instruction 481 at 0x0"). Each section counts with its own
-    # length (ctl_len), not the length an entry gives it, which for such a false entry covers real entries after it
-    spans = {(c, c + ctl_len(s[2])) for _, c, s in found}
+    # length (the NVN2_KEY_CTL bytes the key takes), not the length an entry gives it, which for such a false entry covers real entries after it
+    spans = {(c, c + NVN2_KEY_CTL) for _, c, s in found}
     candidates = [(a, s) for a, _, s in found if not any(lo <= a < hi for lo, hi in spans)]
     # A validated binary array is authoritative: descriptor-shaped words may also
     # occur after the control header, inside a record's other payload. Mario Kart
@@ -203,7 +178,9 @@ def bahs_shaders(d, label):
         records, end = array
         offsets.intersection_update(a for a, _ in records)
         bahs_variations(d, label, offsets, records, end)
-    return [s for a, s in candidates if a in offsets]
+    out = [s for a, s in candidates if a in offsets]
+    for where, st, _, _ in out: refuse(where, st)
+    return out
 
 
 def ndsr_shaders(d, label):
@@ -230,6 +207,7 @@ def ndsr_shaders(d, label):
         st = nvn2_stage(ctl, code)
         if st is None or check(label, st, ctl, code): continue
         where = f'{label}#NDSR@{c:#x}'
+        refuse(where, st)
         out.append((where, st, ctl, code))
         if st == 'vs': prog = where
         elif st == 'ps' and prog: BAHS_VAR[prog] = BAHS_VAR[where] = f'{label}#NDSR#{prog.rsplit("@", 1)[1]}'; prog = None
@@ -249,7 +227,7 @@ def ndve_shaders(d, label):
             own, n = struct.unpack_from('<I', d, c + 0x30)[0], struct.unpack_from('<I', d, c + 0x44)[0]
             ctl, code = d[c:c + own], d[c + own:c + own + n]
             st = nvn2_stage(ctl, code)
-            if st and len(code) == n and not check(label, st, ctl, code): out.append((f'{label}#NDVE@{c:#x}', st, ctl, code))
+            if st and len(code) == n and not check(label, st, ctl, code): refuse(f'{label}#NDVE@{c:#x}', st); out.append((f'{label}#NDVE@{c:#x}', st, ctl, code))
         c = d.find(CTL_MAGIC, c + 4)
     return out
 
@@ -450,6 +428,7 @@ def scan_file(args):
     A file no reader can read (a format revision the reader does not know: its red line, or the exception it raised) is left out, and the split goes on: one such
     archive used to end the whole split with nothing written (PR #282: one of Mario Strikers: Battle League's 879 Next Level Games archives). main reports them"""
     try: return scan_file_in(args)
+    except Refused: raise   # a shader the chain does not translate ends the split (stop)
     except (Exception, SystemExit) as e:   # red() is a SystemExit
         why = unreadable_why(e, args[1])
         print(f'[RED] {why} (its shaders are left out)', flush=True)
@@ -485,7 +464,7 @@ def scan_batch(jobs):   # scan_file over a batch of jobs, in a pool worker
 
 
 def pooled(ex, jobs, total, start=0, chunk=1):
-    """scan_file over jobs in the pool, the results in job order, with a 'progress: <done>/<total>' line at most twice a second (the NSP script shows it as
+    """scan_file over jobs in the pool, the results in job order, with a 'progress: <done>/<total>' line at most twice a second (the packing script shows it as
     the stage's count). The count is of the jobs finished in any order: counted in order it would stall behind one slow archive range while the others finish"""
     batches = [jobs[i:i + chunk] for i in range(0, len(jobs), chunk)]
     futures = {ex.submit(scan_batch, b): len(b) for b in batches}
@@ -537,7 +516,7 @@ def main():
         rows.append((name, len(recs[name]), STAGE_NAME[st], key, where)); recs[name].append(bytes(rec)); stat[st] += 1
         if st == 'cs':
             # NVN2: the thread group at +0x58 (32 1 1 in Donkey Kong Bananza's effects); shared memory taken from +0x64, not yet seen nonzero (unverified)
-            at = (0x58, 0x64) if nvn2_ctl(ctl) else (0x748, 0x754)
+            at = (0x58, 0x64)
             x, y, z = struct.unpack_from('<3I', ctl, at[0]); sh = struct.unpack_from('<I', ctl, at[1])[0]
             if not x * y * z: red(f'compute shader {key}: control +{at[0]:#x} thread group is 0 ({where})')
             facts[key] = {'local': [x, y, z], 'shared': (sh + 15) // 16 * 16}

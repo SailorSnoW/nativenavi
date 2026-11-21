@@ -4,8 +4,8 @@
 # attributes on the CPU every draw (nvn_mtl.m vconv_bind; about a quarter of Age of Calamity's replay thread in battle). This variant declares every integer input also as a float4
 # and as the integer of the other sign, at Metal attribute indices 16-30 (NVN attributes are 0-15), and ORs the three into the input the body reads before it runs. The host sends each
 # attribute to the index of its format's class and the zero buffer to the others (nvn_mtl.m vin_ct), so the shader sees Maxwell's register bits, whatever mix of formats a pipeline has.
-# Built offline into a library of its own beside <key>_b, with the same argument buffer; entry points main0 / main0_z (the transform feedback entry is left out: those draws keep
-# the CPU conversion). Usage: variant(msl) → (new MSL, [{'location', 'float', 'sint' | 'uint'}]) or (None, reason)
+# Built offline into a library of its own beside <key>_b, with the same argument buffer; entry points main0 / main0_z.
+# Usage: variant(msl) → (new MSL, [{'location', 'float', 'sint' | 'uint'}]) or (None, reason)
 import re
 
 SLOT0, SLOT_END = 16, 31   # Metal vertex attribute indices 16..30
@@ -32,8 +32,6 @@ def variant(msl):
     covered = {e['location']: e for e in shadows}
     head = msl[:m.end()] + '\n\nstruct main0_in_v\n{\n' + m.group(1) + '\n' + '\n'.join(extra) + '\n};'
     body = msl[m.end():]
-    cut = body.find('\nvertex void main0_tf(')
-    if cut >= 0: body = body[:cut] + '\n'
     pro = '    main0_in in = {};\n'
     for t, n, l in members:
         e = covered.get(l)

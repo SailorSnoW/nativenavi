@@ -2,7 +2,7 @@
 spellings (a product with 1.0 / w either way round, a quotient) and not when a name is assigned twice or the components come from different outputs; screen_varyings finds the
 clip → screen varying ((x + w) / 2, (w − y) / 2, ·, w) of gl_Position in every vertex entry point, after branches, and not with a flipped y, another w, an assignment in a branch,
 an early return or a uniform coefficient; a sample at gl_FragCoord.xy [/ render scale] times a uniform is marked 'frag_pos' with its uniform references, and not at another
-position, scale or uniform; the readable-tile version main0_f compiles for the Mac and the iPhone, beside the other entry points calling main0's body (main0_d, a compile unit's), with
+position, scale or uniform; the readable-tile version main0_f compiles for the Mac, beside the other entry points calling main0's body (main0_d, a compile unit's), with
 only the body rewritten and main0 without function constants. With --fixture <dir>, writes t_feedback.m's tile-read shaders: fb_vs.metal, fb_fs.metal, the readable-tile library
 fedcba9876543210_bf.metallib (main0_f, cut from the shader's compile as the build cuts it) and facts.json (the vertex shader's screen varyings and the fragment shader's calls), the
 pixel-position shader fb_pos.metal with fedcba9876543211_bf.metallib and pos.json, and the output-mapping-only fedcba9876543212_bf.metallib with om.json"""

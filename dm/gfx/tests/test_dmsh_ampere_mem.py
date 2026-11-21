@@ -26,8 +26,7 @@ class Translated(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertTrue((work / 'k.spv').exists(), r.stdout + r.stderr)
             self.res = json.loads((work / 'k.res.json').read_text())   # the translator's own report of the shader
-            sys.path.insert(0, str(TOOLS)); import dmsh_geometry
-            dmsh_geometry.flatten_sets(work / 'k.spv')
+            sys.path.insert(0, str(TOOLS))
             r = subprocess.run([str(TOOLS / 'spirv_cross_bin/spirv-cross'), *dmsh_chain.CROSS_MSL, str(work / 'k.spv')], capture_output=True, text=True)
             import dmsh_atomic   # with image atomics: the native-atomic checks and rewrites, as dmsh_build makes them (dmsh_atomic.py)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -217,8 +216,7 @@ class PixelCovered(unittest.TestCase):
             (work / 'jobs.json').write_text(json.dumps([dict(key='k', stage='ps', arch='sm86', code=str(work / 'k.bin'), tex={}, img={}, attr={}, fout={}, debug=True)]))
             r = subprocess.run([os.environ['DMSH_TEST_XLATE'], str(work / 'jobs.json'), d], capture_output=True, text=True)
             if not (work / 'k.spv').exists(): return None, r.stdout + r.stderr
-            sys.path.insert(0, str(TOOLS)); import dmsh_geometry
-            dmsh_geometry.flatten_sets(work / 'k.spv')
+            sys.path.insert(0, str(TOOLS))
             m = subprocess.run([str(TOOLS / 'spirv_cross_bin/spirv-cross'), '--msl', '--msl-version', dmsh_chain.MSL_VERSION, '--msl-argument-buffers', str(work / 'k.spv')], capture_output=True, text=True)
             self.assertEqual(m.returncode, 0, m.stderr)
             return m.stdout, r.stdout + r.stderr

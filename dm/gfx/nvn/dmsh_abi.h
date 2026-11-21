@@ -25,16 +25,15 @@
 #define DMSH_C0_SSBO_SLOTS 16            // storage buffer slots of a stage's table
 #define DMSH_C0_SSBO_VS 0x110            // vertex stage storage buffer table: slot r at 0x110 + 0x10 r
 #define DMSH_C0_SSBO_CS 0x310            // compute stage storage buffer table
-#define DMSH_C0_SSBO_GS 0x410            // geometry stage storage buffer table (NieR:Automata); the hull and domain stages' bases were never seen
 #define DMSH_C0_SSBO_PS 0x510            // pixel stage storage buffer table
 #define DMSH_C0_SSBO_TS 0x670            // NVN2 task stage storage buffer table: Mario Kart World's task shaders read c0 0x670 and 0x680, and the game binds their buffers at slots 0 and 1
 #define DMSH_C0_SSBO_MS 0x770            // NVN2 mesh stage storage buffer table: its mesh shaders read c0 0x770, 0x780, 0x790 and 0x7b0, and it binds slots from 0
-#define DMSH_MESH_DRAW_SLOT 29           // a task or object function's buffer: the draw's {count, first} workgroups, NVN's DrawMeshTasksIndirect record (dmsh_meshstage.py, nvn_geometry.inc mtk_encode)
+#define DMSH_MESH_DRAW_SLOT 29           // a task or object function's buffer: the draw's {count, first} workgroups, NVN's DrawMeshTasksIndirect record (dmsh_meshstage.py, nvn_mesh.inc mtk_encode)
 #define DMSH_MESH_GRID 1024              // Metal's limit of threadgroups in a mesh grid: a mesh shader with no task shader is drawn by an object function launching blocks of this many (dmsh_meshstage.py)
 // A mesh function whose stage array is 6000 to 16384 bytes (a 32-thread group; dmsh_meshstage.py to_stage, reflection key mesh_spill) keeps it in a device slice, not in threadgroup memory:
 // buffer DMSH_MESH_SCRATCH_SLOT of the mesh stage, which shares the vertex argument table. A mesh draw binds slot 0 (the arguments) and this one; vertex draws use the others (1-12
-// converted streams, 8-11 transform feedback, 12-13 geometry, 14-29 streams, 30 the zero buffer) and rebind what they read, as nvn_mtl.m enc_r_vbuf tracks every write.
-// The buffer (shared storage, nvn_geometry.inc mesh_scratch) is DMSH_MESH_SCRATCH_HEAD bytes of 32-bit words and then a power-of-two count of slices of DMSH_MESH_SCRATCH_STRIDE bytes, at most
+// converted streams, 14-29 streams, 30 the zero buffer) and rebind what they read, as nvn_mtl.m enc_r_vbuf tracks every write.
+// The buffer (shared storage, nvn_mesh.inc mesh_scratch) is DMSH_MESH_SCRATCH_HEAD bytes of 32-bit words and then a power-of-two count of slices of DMSH_MESH_SCRATCH_STRIDE bytes, at most
 // DMSH_MESH_SCRATCH_SLICES. Head words: _TICKET the groups' ticket counter (any start value); _MASK the slice count - 1 (the host's); _TAG at least the fence of every submission the GPU runs that
 // draws a spilled mesh, written before its commit; _DONE the last fence whose submission completed, failed ones too (the host's post_complete); _OVER the groups that found no slice. From byte
 // _FLAGS a word a slice: 0 free, else its owner's tag. Lane 0 takes a ticket and claims the slice at ticket & mask when its flag is 0 or a tag no newer than _DONE (a group a failed submission
@@ -90,7 +89,7 @@
 // stage i's buffer entries: compute has one stage and reads block 1 where its c0 layout counts it (control +0xaa, in words, right after block 0's +0xa9; the translator maps it
 // to c[24] + DMSH_PUSH_SIZE); graphics stage i reads its block through its own bank (DMSH_NVN2_STAGE_BANK + i), up to the pixel stage's block 5. PRAGMATA pushes 16-byte buffer
 // entries (a 64-bit GPU address, then a size) or 8-byte handles there before its dispatches and draws, and its shaders load and store through those addresses
-#define DMSH_PUSH_BLOCKS 8              // native groups each contain eight 256-byte banks; RT consumes the compute group's full 0x800 bytes
+#define DMSH_PUSH_BLOCKS 8              // native groups each contain eight 256-byte banks
 #define DMSH_C0_POINT_SIZE 0x610         // graphics stages: the largest point size, to which GLSLC clamps a shader-written gl_PointSize (Super Mario Odyssey's point sprites)
 #define DMSH_C0_SAMPLE_TABLE 0x620       // pixel stage: GLSLC's sample position table, one byte per (pixel of the location grid, sample): x and y in 1/16 pixel, low and high nibble
 #define DMSH_C0_SAMPLE_BYTES 16          // bytes of that table
@@ -105,7 +104,6 @@
 #define DMSH_KIND_TBIAS "tbias"          // the buffer images' element offsets, c[DMSH_TBIAS_BANK]: NVN_RB_TBIAS
 #define DMSH_KIND_SBLEN "sblen"          // the bounded storage buffers' lengths, c[DMSH_SBLEN_BANK]: NVN_RB_SBLEN
 #define DMSH_KIND_SUPPORT "support"      // the translator's support buffer
-#define DMSH_KIND_GEOMETRY "geometry"    // one of the geometry lowering's helper buffers, reg = its index (dmsh_geometry.py HELPERS)
 #define DMSH_KIND_SBUF "sbuf"            // storage buffer slot reg, its address in the stage's c0 table; rw = the shader writes it
 #define DMSH_KIND_SBUF_UBO "sbuf_ubo"    // a storage buffer whose address the game keeps in its own uniform slot reg at byte off
 #define DMSH_KIND_SBUF_PUSH "sbuf_push"  // a storage buffer whose address the game pushed: c[24] (both push blocks, DMSH_PUSH_BLOCKS) at byte off. Both kinds: sbx = its slot in the length table (DMSH_SBLEN_BANK), if bounded
@@ -130,26 +128,6 @@
 #define DMSH_KIND_BORDER "border"        // the shader's border colour block (dmsh_rewrite.py border_emu): a mask of the samplers to correct, then each one's factors
 
 #define DMSH_KIND_GMEM_MAP "gmem_map"    // the memory pool table for global memory the translator traced to no storage buffer (an address the shader loaded from memory): the host binds its table (nvn_mtl.m gmem_map)
-
-// Native RT kernels use their own descriptor arena and scheduler resources;
-// these are not ordinary game UBO slots. Handles remain opaque16-byte tokens.
-#define DMSH_KIND_RT_SCENE "rt_scene"
-#define DMSH_KIND_RT_PARAMETERS "rt_parameters"
-#define DMSH_KIND_RT_ERRORS "rt_errors"
-#define DMSH_KIND_RT_INSTANCE_SBT "rt_instance_sbt"
-#define DMSH_KIND_RT_BANK0 "rt_bank0"
-#define DMSH_KIND_RT_BANK3 "rt_bank3"
-#define DMSH_RT_CORE_BYTES 0x140
-#define DMSH_RT_DESCRIPTOR_BYTES 0x1430
-#define DMSH_RT_DESCRIPTOR_C0_BYTES 0x430
-#define DMSH_RT_DESCRIPTOR_HANDLES 0x430
-#define DMSH_RT_DESCRIPTOR_PUSH 0xB98
-#define DMSH_RT_HANDLE_BYTES 16
-#define DMSH_RT_RECORD_ALIGN 32
-#define DMSH_RT_LOCAL_BIAS 0x10000
-#define DMSH_RT_IMAGE_CLASSES 16
-#define DMSH_RT_IMAGE_SLOTS 8
-#define DMSH_RT_MEMBERSHIP 24
 
 // Raw global memory: the translator reserves that table as a storage buffer under this constant buffer slot, which no game has (Ryujinx GlobalToStorage.GmemMapCbSlot), finds the pool
 // holding an address by a binary search over the table's starts and accesses the address plus the pool's delta through a physical storage buffer pointer

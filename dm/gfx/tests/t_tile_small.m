@@ -25,10 +25,11 @@ static tex_t target(uint32_t w, uint32_t h, uint32_t layers, id<MTLTexture> *mt)
     id<MTLTexture> o = [g_dev newTextureWithDescriptor:td]; res_add(o); mtl_tex_init(&t); serial_put(t.serial, o); *mt = o;
     return t;
 }
-static id<MTL4RenderCommandEncoder> pass(tex_t *t, int layered) {
+static id<MTL4RenderCommandEncoder> pass(tex_t *t, int layers) {   // layers > 1: a slice-merged pass over that many (g_sm_plan)
     state_reset(); memset(&R, 0, sizeof R);
     R.has_rt = R.has_sc = 1; R.sc = (p_scissor){0, 0, (int)t->d.width, (int)t->d.height}; R.rt.n = 1; R.rt.color[0] = t; R.clear_c[0] = 1; R.cc[0] = MTLClearColorMake(0, 0, 0, 1);
-    g_rp_layered = layered; id<MTL4RenderCommandEncoder> e = rp_begin_ex(0); g_rp_layered = 0;
+    if (layers > 1) { g_sm_plan.on = 1; g_sm_plan.lo = 0; g_sm_plan.hi = layers - 1; }
+    id<MTL4RenderCommandEncoder> e = rp_begin_ex(0); g_sm_plan.on = 0;
     if (e) { enc_r_viewport(e, (MTLViewport){0, 0, t->d.width, t->d.height, 0, 1}); enc_r_scissor(e, (MTLScissorRect){0, 0, t->d.width, t->d.height}); enc_r_cull(e, MTLCullModeNone); }
     return e;
 }
@@ -51,7 +52,7 @@ int main(void) { @autoreleasepool {
     atomic_store(&g_ab_phase, 1);   // the rule on
     for (size_t i = 0; i < sizeof sizes / sizeof *sizes; i++) {
         id<MTLTexture> mt; tex_t t = target(sizes[i][0], sizes[i][1], sizes[i][2], &mt);
-        uint64_t n0 = g_tile_small_n; mtl_sub_begin(); id<MTL4RenderCommandEncoder> e = pass(&t, sizes[i][2] > 1); CHECK(e != nil, "the pass opens"); rp_end();
+        uint64_t n0 = g_tile_small_n; mtl_sub_begin(); id<MTL4RenderCommandEncoder> e = pass(&t, (int)sizes[i][2]); CHECK(e != nil, "the pass opens"); rp_end();
         mtl_sub_commit(); mtl_drain(); CHECK(!mtl_last_commit_error(), "the submission completes without Metal errors");
         NSUInteger tiles = ((sizes[i][0] + 31) / 32) * ((sizes[i][1] + 31) / 32) * sizes[i][2]; int want = tiles < 4 * cores, got = g_tile_small_n != n0;
         printf("%4ux%-4u x%u: %4lu tiles of 32x32, 16x16 tiles %s (expected %s)\n", sizes[i][0], sizes[i][1], sizes[i][2], (unsigned long)tiles, got ? "yes" : "no", want ? "yes" : "no");
@@ -60,13 +61,13 @@ int main(void) { @autoreleasepool {
     }
     CHECK(4 * cores > 16, "a 128x128 pass has fewer tiles than four per core on every Apple GPU (5 cores or more)");
     atomic_store(&g_ab_phase, 0); { id<MTLTexture> mt; tex_t t = target(SIDE, SIDE, 1, &mt); uint64_t n0 = g_tile_small_n;
-        mtl_sub_begin(); pass(&t, 0); rp_end(); mtl_sub_commit(); mtl_drain(); CHECK(g_tile_small_n == n0, "with the rule off a small pass keeps Metal's tiles"); mtl_tex_release(&t); }
+        mtl_sub_begin(); pass(&t, 1); rp_end(); mtl_sub_commit(); mtl_drain(); CHECK(g_tile_small_n == n0, "with the rule off a small pass keeps Metal's tiles"); mtl_tex_release(&t); }
 
     // The picture: the same 300 blended triangles with the rule off (phase 0) and on (phase 1)
     static uint8_t px[2][SIDE * SIDE * 4];
     for (int on = 0; on < 2; on++) {
         atomic_store(&g_ab_phase, on); id<MTLTexture> mt; tex_t t = target(SIDE, SIDE, 1, &mt); uint64_t n0 = g_tile_small_n;
-        mtl_sub_begin(); id<MTL4RenderCommandEncoder> e = pass(&t, 0); enc_r_pso(e, pso);
+        mtl_sub_begin(); id<MTL4RenderCommandEncoder> e = pass(&t, 1); enc_r_pso(e, pso);
         enc_r_draw_instanced(e, MTLPrimitiveTypeTriangle, 0, 3, TRIS, 0); rp_end();
         mtl_sub_commit(); mtl_drain(); CHECK(!mtl_last_commit_error(), "the drawing completes without Metal errors");
         CHECK((g_tile_small_n != n0) == on, "the drawing pass took the tiles its phase gives");

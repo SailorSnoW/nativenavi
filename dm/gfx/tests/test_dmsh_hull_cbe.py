@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""A hull shader that writes its control points straight into the stage's circular buffer, through the offline translator (DirectCbeWrites in the translator; docs/reference/shaders.md,
-A hull shader's control points written into the stage's circular buffer). The hull below is assembled by hand in the form NVIDIA's compiler gives every such shader: the buffer's address
+"""A hull shader that writes its control points straight into the stage's circular buffer, through the offline translator (DirectCbeWrites in the translator, which keeps it: the
+shader chain no longer builds hull shaders, as Ocarina of Time has none). The hull below is assembled by hand in the form NVIDIA's compiler gives every such shader: the buffer's address
 from system registers 21 and 22, the count of per-patch words and the stride from ISBERD with O at 0x7e and 0x7f, output word k of lane L at
 address + 0x80 * (1 + ceil(N / 4) + p) + 4 * L + 4 * S * k (p by a predicated add), a copy of an output into the buffer after the body. The output words are the header's output map: position xyzw,
 then generic attribute 0's x and y. Needs DMSH_TEST_XLATE (the translator) like the other translator tests."""
@@ -69,8 +69,6 @@ class HullCircularBuffer(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertTrue((work / 'k.spv').exists(), r.stdout + r.stderr)
             notes = json.loads((work / 'k.res.json').read_text()).get('notes', [])
-            sys.path.insert(0, str(TOOLS)); import dmsh_geometry
-            dmsh_geometry.flatten_sets(work / 'k.spv')
             r = subprocess.run([str(TOOLS / 'spirv_cross_bin/spirv-cross'), '--msl', '--msl-version', dmsh_chain.MSL_VERSION, '--msl-argument-buffers', str(work / 'k.spv')], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             return r.stdout, notes

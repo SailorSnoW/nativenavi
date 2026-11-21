@@ -2,7 +2,6 @@
 Exercise the builder's real key/restore functions without game files or Xcode.
 """
 import ast
-import collections
 import concurrent.futures as cf
 import hashlib
 import importlib.util
@@ -25,8 +24,6 @@ TOOLS = REPO / 'dm/gfx/tools'
 sys.path.insert(0, str(TOOLS))
 import dmsh_chain  # noqa: E402
 import dmsh_mtlcache  # noqa: E402
-import dmsh_rewrite  # noqa: E402
-import dmsh_rt_compile  # noqa: E402
 import shader_cache  # noqa: E402
 sys.path.insert(0, str(REPO / 'dm/tools'))
 import romfs  # noqa: E402
@@ -48,7 +45,7 @@ class ShaderCache(unittest.TestCase):
                        DUAL_WANT=set(), BF_WANT=set(), STORE=shader_cache.Store(root / 'cas.db'), out=str(root / 'out'),
                        CHAIN='test-chain', clone=shutil.copyfile, shader_rule_source=lambda name: b'',
                        STAGE='stage/test', want=set(), OUT_KEY=re.compile(r'([0-9a-f]{16})_b'), OLD_IMAGE=None, shader_lib=shader_lib, romfs=romfs, shutil=shutil,
-                       STAMP_BEFORE=None, INPUTS='inputs', dmsh_rt_compile=dmsh_rt_compile, RT_KEYS=set())
+                       STAMP_BEFORE=None, INPUTS='inputs')
         (root / 'out').mkdir()
         names = {'tool_fingerprint', 'shader_key', 'cache_path', 'cache_outputs', 'restore_cache', 'publish_cache', 'atomic_json', 'cache_meta_path',
                  'vs_pad', 'partner_inputs', 'output', 'commit', 'publish_library', 'owned_output', 'submit', 'results'}
@@ -107,15 +104,14 @@ class ShaderCache(unittest.TestCase):
     def test_unchanged_compiler_reuses_key(self):
         self.assertEqual(self.digest(), self.digest())
 
-    def test_cache_restores_the_base_and_geometry_outputs(self):
+    def test_cache_restores_the_base_outputs(self):
         mac = Path(self.ns['out'])
-        # Geometry's side outputs are restored; vertex and fragment side libraries are regenerated from the base MSL.
+        # The base outputs are restored; vertex and fragment side libraries are regenerated from the base MSL.
         expected = {}
-        for suffix in ('_b', '_bg0', '_bg1', '_bg2', '_bg3', '_bg4', '_bgv', '_bl0', '_bl1', '_bl3'):
-            for ext in ('.metal', '.json', '.metallib'):
-                p = mac / ('key' + suffix + ext)
-                p.write_text(json.dumps({'chain': 'test-chain', 'stage': 'gs'}, indent=1) if ext == '.json' else suffix + ext)
-                expected[p] = p.read_bytes()
+        for ext in ('.metal', '.json', '.metallib'):
+            p = mac / ('key_b' + ext)
+            p.write_text(json.dumps({'chain': 'test-chain', 'stage': 'vs'}, indent=1) if ext == '.json' else '_b' + ext)
+            expected[p] = p.read_bytes()
         self.ns['publish_cache']('key', 'digest', 'rule', 'source')
         for p in expected: p.unlink()
         self.assertTrue(self.ns['restore_cache']('key', 'digest'))
@@ -268,30 +264,6 @@ class ShaderCache(unittest.TestCase):
         self.assertEqual((out / (key + '_b.metal')).read_text(), 'source')
         self.assertFalse(os.path.exists(shader_lib.image_of(str(out))))
 
-
-class MeshLibrary(unittest.TestCase):
-    def test_mesh_compiles_and_stages_its_library(self):
-        tree = ast.parse((TOOLS / 'dmsh_build.py').read_text())
-        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'mesh_finish')
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / 'vertex_b.metal').write_text('vertex source')
-            (root / 'geometry_bl3.metal').write_text('geometry source')
-            (root / 'geometry_bl3.json').write_text(json.dumps({'geometry': {'capture_reads': [36]}}))
-            compile_target = mock.Mock()
-            compose = mock.Mock(return_value='mesh source')
-            def output(name, td=td):
-                p = Path(td) / name
-                return p.read_bytes() if p.is_file() else None
-            ns: dict[str, Any] = dict(os=os, json=json, subprocess=subprocess, out=td, w=td, MESH_STATS=collections.Counter(),
-                      MTL=types.SimpleNamespace(compile=compile_target), dmsh_mesh=types.SimpleNamespace(compose=compose),
-                      dmsh_rewrite=dmsh_rewrite, output=output, commit=mock.Mock())
-            exec(compile(ast.Module(body=[function], type_ignores=[]), '<mesh library>', 'exec'), ns)
-            ns['mesh_finish'](('vertex', 'geometry'))
-            compose.assert_called_once_with('vertex source', 'geometry source', [36])
-            self.assertEqual([call.args[0] for call in compile_target.call_args_list], ['mac'])
-            self.assertEqual(ns['MESH_STATS']['built'], 1)
-            ns['commit'].assert_called_once_with(names=['vertex_geometry_m3.metallib'])   # its library staged as a shader's outputs are
 
 class StageCache(unittest.TestCase):
     def setUp(self):

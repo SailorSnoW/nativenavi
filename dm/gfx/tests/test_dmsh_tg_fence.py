@@ -164,8 +164,6 @@ class Placement(unittest.TestCase):
             (work / 'jobs.json').write_text(json.dumps(job))
             r = subprocess.run([os.environ['DMSH_TEST_XLATE'], str(work / 'jobs.json'), d], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            import dmsh_geometry
-            dmsh_geometry.flatten_sets(work / 'k.spv')
             r = subprocess.run([str(TOOLS / 'spirv_cross_bin/spirv-cross'), '--msl', '--msl-version', dmsh_chain.MSL_VERSION, str(work / 'k.spv')], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
         body = r.stdout[r.stdout.index('kernel void main0'):]

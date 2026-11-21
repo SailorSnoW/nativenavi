@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """NVN2 task and mesh shaders as Metal stage functions (dmsh_meshstage.py), on the shape of Mario Kart World's: the control section's facts, the SPH's outputs, the stage memory's layout
-and the wrapper's entry points. When the Metal compiler is installed, the stages compile for macOS and iOS."""
+and the wrapper's entry points. When the Metal compiler is installed, the stages compile for macOS."""
 from pathlib import Path
 import os
 import shutil
