@@ -91,7 +91,7 @@ class GzipSources(unittest.TestCase):
                 source.write_bytes(data); dest = root / label; dest.mkdir()
                 out = [dest / n for n in ('pkg', 'map.tsv', 'facts.tsv', 'pairs.tsv', 'pso.tsv')]
                 proc = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', rom, main, *out], capture_output=True, text=True,
-                                      env=dict(os.environ, DM_GAME='0100C1F0051B6000', J='2'))
+                                      env=dict(os.environ, DM_GAME='0400486024DEC000', J='2'))
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr); self.assertNotIn('[RED]', proc.stdout + proc.stderr)
                 self.assertIn('shaders: 2 (', proc.stdout)
                 results.append({str(p.relative_to(dest)): p.read_bytes() for p in dest.rglob('*') if p.is_file()})

@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/tools')); sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
 import nso_match   # noqa: E402
 import nso_syms   # noqa: E402
-_had = os.environ.get('DM_GAME'); os.environ['DM_GAME'] = '010029B0118E8000'   # shader_split loads a profile at import; other tests expect no default game
+_had = os.environ.get('DM_GAME'); os.environ['DM_GAME'] = '0400486024DEC000'   # shader_split loads a profile at import; other tests expect no default game
 import shader_split   # noqa: E402
 if _had is None: del os.environ['DM_GAME']
 else: os.environ['DM_GAME'] = _had

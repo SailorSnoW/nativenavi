@@ -16,7 +16,7 @@ spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scri
 if spec is None or spec.loader is None: raise ImportError('scripts/build_ipa_from_nsp.py')
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
-TID = 0x010015100B514000   # a game with a profile in dm/games
+TID = 0x0400486024DEC000   # a game with a profile in dm/games
 
 
 def profile_ipa():

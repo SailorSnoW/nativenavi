@@ -101,30 +101,11 @@ class Regress(unittest.TestCase):
                 with self.assertRaises(regress.HarnessError): regress.run_env(g, art, route, root / 'run', NS(env=[f'DM_SAVE_SYNC={root}/cloud'], no_hud=True))
                 self.assertEqual(regress.run_env(g, art, route, root / 'run', NS(env=['DM_SAVE_SYNC=0'], no_hud=True))[0]['DM_SAVE_SYNC'], '0')
 
-    def test_impact_without_machine_paths(self):
-        env = {k: v for k, v in regress.os.environ.items() if k not in ('REGRESS_ROOT', 'REGRESS_GAMES')}
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            command = [regress.sys.executable, REPO / 'scripts/regress.py']
-            result = regress.sh([*command, 'impact', 'HEAD..HEAD'], cwd=root, env=env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('## regress.py impact', result.stdout)
-            self.assertEqual(list(root.iterdir()), [])   # an unset root must not become cwd/reports
-            out = root / 'explicit'
-            result = regress.sh([*command, 'impact', 'HEAD..HEAD', '--out', out], cwd=root, env=env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads((out / 'impact.json').read_text())['schema'], 'nxnative-impact/1')
-            self.assertTrue((out / 'impact.md').is_file())
-            harness = root / 'harness'; harness.mkdir()
-            result = regress.sh([*command, '--root', harness, 'impact', 'HEAD..HEAD'], cwd=root, env=env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(len(list((harness / 'reports').glob('*/impact.json'))), 1)
-
     def test_game_commands_require_machine_paths(self):
         env = dict(regress.os.environ, REGRESS_ROOT='', REGRESS_GAMES='')
         with tempfile.TemporaryDirectory() as td:
             command = [regress.sys.executable, REPO / 'scripts/regress.py']
-            for cmd in ('baseline', 'check', 'chain', 'usage', 'list'):
+            for cmd in ('baseline', 'check', 'chain', 'list'):
                 with self.subTest(cmd=cmd):
                     result = regress.sh([*command, cmd], cwd=td, env=env)
                     self.assertEqual(result.returncode, 2)

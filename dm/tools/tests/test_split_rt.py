@@ -112,7 +112,7 @@ class RayTracingSplit(unittest.TestCase):
             result = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', rom, main,
                                      root / 'package', root / 'map.tsv', root / 'facts.tsv'],
                                     capture_output=True, text=True,
-                                    env=dict(os.environ, DM_GAME='01007BB017812000', J='1'))
+                                    env=dict(os.environ, DM_GAME='0400486024DEC000', J='1'))
             # scan_file reports damaged/conflicting files through its existing
             # RED/skip channel; it must not quietly retain one of these modules.
             self.assertIn('control section or code area differs', result.stdout + result.stderr)
@@ -126,7 +126,7 @@ class RayTracingSplit(unittest.TestCase):
             result = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', rom, main,
                                      root / 'package', root / 'map.tsv', root / 'facts.tsv'],
                                     capture_output=True, text=True,
-                                    env=dict(os.environ, DM_GAME='01007BB017812000', J='1'))
+                                    env=dict(os.environ, DM_GAME='0400486024DEC000', J='1'))
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('control section or code area differs', result.stdout + result.stderr)
 
@@ -170,7 +170,7 @@ class RayTracingSplit(unittest.TestCase):
             package, mapping, facts = (root / name for name in ('package', 'map.tsv', 'facts.tsv'))
             result = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', rom, main,
                                      package, mapping, facts], capture_output=True, text=True,
-                                    env=dict(os.environ, DM_GAME='01007BB017812000', J='1'))
+                                    env=dict(os.environ, DM_GAME='0400486024DEC000', J='1'))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertNotIn('[RED]', result.stdout + result.stderr)
             rows = [line.split('\t') for line in mapping.read_text().splitlines()

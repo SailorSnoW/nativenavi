@@ -44,7 +44,7 @@ class Base(unittest.TestCase):
                 target = 'mac' if o == self.sh / 'cache' else 'ios'
                 if target in targets: (d / 'k_b.metallib').write_bytes(b'lib')
                 if target == 'mac': (d / 'k_b.metal').write_text('MSL'); (d / 'k_b.json').write_text('{}'); (d / '_b_cas.txt').write_text(''.join(x + '\n' for x in self.cas_used))
-                (o / f'b-{CHAIN}' / 'inputs.tsv').write_text(f'# stamp\ngame\t0100535012974000\ninputs\t{INPUTS}\n')
+                (o / f'b-{CHAIN}' / 'inputs.tsv').write_text(f'# stamp\ngame\t0400486024DEC000\ninputs\t{INPUTS}\n')
             for n in ('c1_full.tsv', 'cb_extent.tsv'): (self.tmp / n).write_text(f'# chain b-{CHAIN} inputs {INPUTS} 2026-10-23T00:00:00+00:00\n')
             log.write_text('shaders 1: ok 1\n')
 
@@ -81,7 +81,7 @@ class Layer(Base):
 class Nvn(Base):
     def setUp(self):
         super().setUp()
-        self.g = types.SimpleNamespace(table=lambda n: self.tmp / n, dir=self.tmp)
+        self.g = types.SimpleNamespace(table=lambda n: self.tmp / n, dir=self.tmp, id='0400486024DEC000')
         for cm in (mock.patch.object(nsp, 'fingerprint', lambda *a, **k: 'K'), mock.patch.object(nsp, 'chain_of', lambda repo: CHAIN)):   # one chain version for every game
             cm.__enter__(); self.addCleanup(cm.__exit__, None, None, None)
 
@@ -331,7 +331,7 @@ class Nvn(Base):
         self.build(False)
         nsp.shader_lib.expand(self.sh / 'cache' / f'b-{CHAIN}'); (self.sh / 'cache' / f'b-{CHAIN}' / 'inputs.tsv').unlink()
         self.assertEqual(self.build(True), self.sh / 'cache'); self.assertEqual(len(self.ran), 1)
-        self.assertEqual(nsp.shader_lib.read_stamp(self.sh / 'cache' / f'b-{CHAIN}')['game'], '0100535012974000')
+        self.assertEqual(nsp.shader_lib.read_stamp(self.sh / 'cache' / f'b-{CHAIN}')['game'], '0400486024DEC000')
 
     def test_stale_tables(self):   # a reused build makes a table again when it does not name the Mac libraries' stamp
         self.build(True)

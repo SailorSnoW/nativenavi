@@ -18,7 +18,7 @@ if spec is None or spec.loader is None: raise ImportError('scripts/build_ipa_fro
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 vars(nsp)['nacp'] = nacp   # main sets it
 
-BOTW = '01007EF00011E000'
+OOT = '0400486024DEC000'
 SWITCH = ['en-US', 'en-GB', 'ja', 'fr', 'de', 'es-419', 'es', 'it', 'nl', 'fr-CA', 'pt', 'ru', 'ko', 'zh-Hant', 'zh-Hans', 'pt-BR']   # the 16 entries of a Switch NACP, in its order
 
 
@@ -55,7 +55,7 @@ class Languages(unittest.TestCase):
     def test_the_game_language_row_offers_them(self):
         def row(listed):
             with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=listed), patch.dict(os.environ, {'GFXAPI': 'nvn', 'DM_LANG': 'en-US'}):
-                return next(s for s in settings.build(BOTW, tmp, Path(tmp) / 'control.nacp')['settings'] if s['env'] == 'DM_LANG')
+                return next(s for s in settings.build(OOT, tmp, Path(tmp) / 'control.nacp')['settings'] if s['env'] == 'DM_LANG')
         self.assertEqual(row(['en-US', 'pl', 'th'])['options'], [['en-US', 'American English'], ['pl', 'Polish'], ['th', 'Thai']])
         self.assertEqual(row([])['options'][-2:], [['pl', 'Polish'], ['th', 'Thai']])   # no list: every language, with the note
 

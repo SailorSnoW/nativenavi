@@ -3,7 +3,7 @@
 # Usage: game.py list (list all profiles); game.py <id> <key> [<default>] (print that key's value, for shell; without a default a missing key is an error); game.py header <id> <out.h> (generate the host's game_profile.h);
 #   game.py modules <id> <folder of rewritten modules> (the modules to load from it: the build row of its main's build, else the profile's modules);
 #   game.py dir <id> (print the profile folder); game.py link <id> <link> (point a symlink at the profile folder: make cannot take paths with spaces)
-#   From Python: import game; g = game.load() (takes DM_GAME; there is no default game: unset is an error that lists the profiles); game.by_title(title ID); g.get / g.words / g.int / g.builds() / g.table(file name)
+#   From Python: import game; g = game.load() (takes DM_GAME, or Ocarina of Time, game.DEFAULT, when it is unset); game.by_title(title ID); g.get / g.words / g.int / g.builds() / g.table(file name)
 # DM_GAMES_DIR (folders separated by ':') adds profile folders outside the repository, searched after dm/games: the NSP script writes a provisional profile for a game without one into
 #   <NSP folder>/<id>_build/profile/<id>/ and points DM_GAMES_DIR at <id>_build/profile, so the shader tools, the host build and build_ipa.sh all find it.
 #   DM_GAMES_FIRST=1 searches DM_GAMES_DIR before dm/games (the NSP script's --provisional: a provisional profile for a game that has one in dm/games, to test the guesses)
@@ -72,11 +72,11 @@ def find_dir(name):   # the profile folder of a title ID (the first of search_di
     return next((d / name for d in search_dirs() if (d / name / 'game.tsv').exists()), HERE / name)
 
 
+DEFAULT = '0400486024DEC000'   # The Legend of Zelda: Ocarina of Time, the one game of this repository: what load() takes when neither a name nor DM_GAME is given
+
+
 def load(name=None):
-    name = name or os.environ.get('DM_GAME')
-    if not name:   # there is no default game
-        have = ', '.join(f'{g.id} ({g.get("name", "")})' for g in all_games())
-        raise SystemExit(f'[RED] DM_GAME is not set: pick a game profile by base game title ID: {have}')
+    name = name or os.environ.get('DM_GAME') or DEFAULT
     d = find_dir(name)
     if not (d / 'game.tsv').exists():   # profile folders are named after the base game's title ID (the old names smbw / fe_engage are gone)
         have = ', '.join(f'{g.id} ({g.get("name", "")})' for g in all_games())

@@ -79,7 +79,7 @@ class ReadImage(unittest.TestCase):
     def test_build_scanners_discover_the_same_inputs_from_image_and_folder(self):
         import gl_shaders
         import vk_shaders
-        with patch.dict(os.environ, DM_GAME='010020D01AD24000'):
+        with patch.dict(os.environ, DM_GAME='0400486024DEC000'):
             import shader_split
         self.assertEqual(list(gl_shaders.sources([str(self.virtual)])), list(gl_shaders.sources([str(self.src)])))
         self.assertEqual([Path(p).relative_to(self.virtual) for p in vk_shaders.spirv_files(str(self.virtual))],
@@ -95,7 +95,7 @@ class ReadImage(unittest.TestCase):
     @unittest.skipUnless(shutil.which('zstd'), 'zstd command required')
     def test_zstd_file_inside_an_image(self):
         # Mario Wonder's .zs files: the zstd command cannot open a path inside the image, so unzs feeds it the bytes.
-        with patch.dict(os.environ, DM_GAME='010020D01AD24000'):
+        with patch.dict(os.environ, DM_GAME='0400486024DEC000'):
             import shader_split
         (self.src / 'data/table.byml.zs').write_bytes(subprocess.run(['zstd', '-c', '-q'], input=self.data, capture_output=True, check=True).stdout)
         romfs_image.pack(self.src, self.image)

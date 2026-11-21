@@ -515,20 +515,6 @@ class Build(BuildCase):
         (self.prof / 'game.tsv').write_text('title_id\t0100000000001000\nname\tTest\ndepth_mode\tnear0\n')
         with self.assertRaises(SystemExit): self.main('--script-only')
 
-    def test_profile_archives_match_observed_depth(self):
-        # Issue #758 and its seven-game follow-up, then four found by reading the NSP script's check boots: these builds' NVN calls select near=0 (evidence in each game note).
-        # Exercise the real profiles through the builder with synthetic pairs: an omitted key must not quietly build main0.
-        profiles = ('01008CF01BAAC000', '010089C01E9CA000', '010056B015FE8000', '01007BB017812000',
-                    '01003E601E324000', '010020400E1C2000', '0100429011144000', '010014C011146000',
-                    '0100ACD0163D0000', '010040801A4C8000', '0100C49025D3E000', '0100A3900C3E2000',
-                    '01006A800016E000')   # Super Smash Bros. Ultimate: a player's start log (its note)
-        for gid in profiles:
-            with self.subTest(game=gid):
-                self.main('--game', gid, '--pairs', str(self.prof / 'shader_pairs.tsv'), '--script-only')
-                self.assertIn('depth\tnear=0\n', (self.out / 'prebuilt.tsv').read_text())
-                script = json.loads(next(self.work.glob('*.mtl4-json')).read_text())
-                self.assertEqual(script['pipeline_descriptors']['render_pipeline_descriptors'][0]['vertex_function_descriptor'], 'fnd:v_bp.main0_z')
-
     def test_library_digest_is_the_names_and_bytes_in_order(self):   # read on a few threads: the key every earlier build's archive has
         bases, computes = [('v_bp', 'main0_z', 'f_b', 'main0'), ('v_b', 'main0', 'c_b', 'main0')], [('c_b', 'main0')]
         h = hashlib.sha256()
@@ -1089,10 +1075,6 @@ class Default(unittest.TestCase):
                              're': re, 'BuildError': RuntimeError}
                     exec(block, scope)
                     self.assertEqual(scope['gpus'], explicit or setting or expected)
-
-    def test_breath_of_the_wild(self):   # the profile that turns the Metal 4 path on: its app gets the archive
-        r = subprocess.run([sys.executable, str(REPO / 'dm/games/game.py'), '01007EF00011E000', 'pso_mtl4', 'off'], capture_output=True, text=True)
-        self.assertEqual(r.stdout.strip(), 'on')
 
 
 if __name__ == '__main__':

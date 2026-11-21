@@ -1,10 +1,5 @@
-# Game profile (dm/games/<id>/): the host is built for it (make GAME=base game title ID, required: there is no default game). game_profile.h is generated from game.tsv into gen/<id>/; the chain version header dmsh_chain.h (one for every game) lives in dm/gfx/nvn
-# without GAME only clean passes; anything else (a bare make too, whose default goal is the host) stops and lists the profiles
-ifeq ($(strip $(GAME)),)
-ifneq ($(filter-out clean,$(or $(MAKECMDGOALS),dmhost)),)
-$(error GAME is not set: make GAME=<base game title ID>: $(shell python3 ../games/game.py list | awk -F'\t' '{printf "%s (%s)  ", $$1, $$3}'))
-endif
-endif
+# Game profile (dm/games/<id>/): the host is built for one, Ocarina of Time's unless GAME names another (a derived profile's title ID). game_profile.h is generated from game.tsv into gen/<id>/; the chain version header dmsh_chain.h lives in dm/gfx/nvn
+GAME ?= 0400486024DEC000
 # A profile outside the repository (DM_GAMES_DIR, e.g. the NSP script's provisional profile) is reached through the symlink gen/<id>/profile: make cannot take paths with spaces.
 # DM_GAMES_FIRST=1 (the NSP script's --provisional) takes it even when dm/games has the game
 ifneq ($(strip $(GAME)),)

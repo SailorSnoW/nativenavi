@@ -35,7 +35,7 @@ Off, the default, keeps the 3D picture at full size. On lets the game lower its 
 
 The size of the 3D picture, from 50 to 100 %. Below 100 % the size is fixed there and the game's own dynamic resolution is off; 100 % keeps the game's own. Lower can be lighter on the GPU but is blurrier; the HUD and text keep their sharpness. Only games the app can scale offer it.
 
-Hades II goes up to 300 %: it renders its whole picture, the HUD and text included, at 1280x720 docked and handheld, and above 100 % it renders larger instead of being scaled up: 150 % is 1920x1080, 200 % 2560x1440, 300 % 3840x2160. Sharper on a large screen or window, at more GPU time (about 2.5 times the GPU time at 200 % on an Apple M6); on a small screen the difference is slight. [Its note](../dm/games/0100A00019DE0000/README.md#rendering) has the measurements.
+Hades II goes up to 300 %: it renders its whole picture, the HUD and text included, at 1280x720 docked and handheld, and above 100 % it renders larger instead of being scaled up: 150 % is 1920x1080, 200 % 2560x1440, 300 % 3840x2160. Sharper on a large screen or window, at more GPU time (about 2.5 times the GPU time at 200 % on an Apple M6); on a small screen the difference is slight. Its note has the measurements.
 
 ### Console mode
 
@@ -57,7 +57,7 @@ flowchart LR
 Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its world at 900p and scales that to 1080p itself, before the app sees the picture. MetalFX works in either mode: handheld saves the most GPU time and heat, docked looks sharper than smooth scaling. Rendering at the screen's resolution stays the sharpest picture, where the GPU can afford it.
 
 - **When to change it:** turn it on if the picture looks soft and the device has GPU time to spare: on a Mac, or on an iPhone in handheld mode at 30 fps. For long sessions at 60 fps on an iPhone leave it at Standard.
-- **Cost:** more GPU time each frame, which can increase heat on an iPhone. [Breath of the Wild's measurements](../dm/games/01007EF00011E000/README.md#upscaling-current) cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Nothing changes while the game's picture is as large as the screen. Unsupported devices and sizes use Standard scaling.
+- **Cost:** more GPU time each frame, which can increase heat on an iPhone. Breath of the Wild's measurements cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Nothing changes while the game's picture is as large as the screen. Unsupported devices and sizes use Standard scaling.
 - **On the Mac:** choose **MetalFX** under **Upscaling** in the [settings window](#the-mac-settings-window)'s Advanced settings, or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
 
 ### Game's upscaler

@@ -23,7 +23,7 @@ env:
   # named by path so the image's default moving to another Xcode does not move CI. The build check checks the Metal compiler against the lock first.
   # dm/tools/tests/test_ci_toolchain.py keeps this version, the image and README's in step
   DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
-  GAME: 010015100B514000   # Super Mario Bros. Wonder: the profile the host and gfx tests are built for (any profile does; the tests are about code, not the game)
+  GAME: 0400486024DEC000   # The Legend of Zelda: Ocarina of Time: the one profile, which the host and gfx tests are built for
 
 defaults:
   run:
@@ -203,7 +203,7 @@ jobs:
         run: |
           mkdir -p logs
           failed=0
-          for f in dm/tools/tests/test_*.py dm/ios/tests/test_*.py dm/gfx/tests/test_*.py; do
+          for f in dm/tools/tests/test_*.py dm/gfx/tests/test_*.py; do
             echo "::group::$f"
             python -m unittest -v "$f" 2>&1 | tee "logs/$(basename "$f").log" || { echo "::error::$f failed"; failed=1; }
             echo "::endgroup::"
@@ -231,16 +231,11 @@ jobs:
           xcodebuild -version
           xcrun metal --version
           python3 dm/gfx/tools/own_compilers.py --check-metal
-      - name: Mac host for three profiles (Vulkan, NVN, OpenGL)
+      - name: Mac host
         run: |
           mkdir -p logs
-          # Wonder: NVN; Hades: Vulkan; Digimon Story Cyber Sleuth: OpenGL. The second and third reuse the libvpx build in dm/host/gen/vpx.
-          for g in 010015100B514000 0100535012974000 010014E00DB56000; do
-            echo "::group::dmhost $g"
-            make -C dm/host GAME=$g -j3 dmhost 2>&1 | tee "logs/dmhost-$g.log"
-            test -x dm/host/dmhost
-            echo "::endgroup::"
-          done
+          make -C dm/host GAME="$GAME" -j3 dmhost 2>&1 | tee logs/dmhost.log
+          test -x dm/host/dmhost
       - name: Every gfx test compiled, not run
         run: |
           mkdir -p logs

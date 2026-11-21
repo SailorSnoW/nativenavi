@@ -99,7 +99,7 @@ Binding conventions followed during translation (the NVN driver's layout, the sa
 | `tex/` | Texture format mapping, deswizzling, BC decompression, see [tex/README.md](tex/README.md) |
 | `vk/hle_vk.m` | Vulkan on Metal, for games that render with Vulkan (Hades, Super Mario Galaxy); their SPIR-V shaders are translated by `tools/vk_shaders.py` |
 | `gl/hle_gl.m` | OpenGL through EGL on Metal, for games that render with NVIDIA's GL driver (Digimon Story Cyber Sleuth: Complete Edition; Balatro, LÖVE on its core-profile paths); their GLSL sources are translated by `tools/gl_shaders.py` (glslang, then SPIRV-Cross) |
-| `metal/` | A standalone minimal Metal offscreen example, not compiled into the host, see [metal/README.md](metal/README.md) |
+| `metal/` | A standalone minimal Metal offscreen example, not compiled into the host, see metal/README.md |
 | `tools/` | Offline tools, see below |
 | `tests/` | Unit tests |
 | `hle_vi.c`, `hle_nv.c` | Glue layer for display service and graphics driver initialization: returns host static objects or does nothing |
@@ -138,7 +138,6 @@ The per-shader cache key in `dmsh_build.py` (`shader_key`) covers the profile's 
 ```sh
 make -C dm/gfx/tests run        # graphics layer unit tests
 make -C dm/gfx/tex/tests run    # texture submodule unit tests; the real-data items need texture samples from both the Switch and PC versions, see tex/README.md
-make -C dm/gfx/metal run        # offscreen example self-test, see metal/README.md
 ```
 
 The tests in `dm/gfx/tests` compile the production code in directly and need a Metal device on the local machine; a few of them run under `MTL_DEBUG_LAYER=1` (the Metal validation layer). Most tests do not read the workspace; the exceptions are `t_refl` and `t_rt_range_ro`, which read the translated shader reflection json under `$DM_ROOT/build/cache/metal_shader_cache`, and `test_tbdr_budget.py`, which creates a temporary directory under `$DM_ROOT/run/gfx`. Main contents:

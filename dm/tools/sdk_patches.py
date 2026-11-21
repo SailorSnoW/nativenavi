@@ -1,17 +1,6 @@
 # The rewriter's patches of Nintendo SDK module builds (sdk), which several games can ship: dm/tools/patch_nso.py applies those of a module's NSO build ID, whatever the game.
 # A patch of a game's own module (main) goes in its profile's patches.py (dm/games/<id>/patches.py). CUTS as described in patch_nso.py ("Registered patches")
-CUTS = {
-  # Kingdom Battle 1.9.589692, SDK 4.4.0: the older VammManager reserves a
-  # full 1 GB node area (constructor +0x93dd8, occupied range +0x93e98).
-  # Snowdrop's compact 3 GB region follows its small metadata reservation;
-  # 1 GB placement alignment still cannot fit it in the iPhone guest block.
-  # Platform-limit cuts: 64 MB node area and 32 MB large-region alignment.
-  '9de92bad67c4150268943ab4843ace65': [
-    (0x93dfc, 'e9030232', '0980a052', 'VammManager node area limit: 1 GB to 64 MB'),
-    (0x93e8c, 'ea030232', '0a80a052', 'VammManager occupied node area: 1 GB to 64 MB'),
-    (0x93fe0, 'ea030232', '0a40a052', 'AllocateAddressRegion: align regions of 1 GB and more to 32 MB'),
-  ],
-}
+CUTS = {}   # none: no cut is bound to an sdk build of Ocarina of Time (its sdk takes the SDK-wide MATCH_CUTS below, where their functions match)
 
 # SDK-wide function patches (dm/tools/nso_match.py): the two fixes above that hold for any game on an iPhone's small address space, for every game's sdk of a build with no CUTS
 # (patch_nso.py "Registered patches"), so a new game or a new version of one gets them without a cut for its build. The Switch's alias region is
@@ -191,7 +180,4 @@ BINDING = [
     {'what': 'node area 1 GB → 62 MB and regions of 4 MB and more aligned to 2 MB, as SDK 20: the SDK-wide rules', 'now': 'sdk', 'goal': 'sdk', 'purpose': 'address space',
      'checked': '20 registered builds rewritten byte-identical with the rules alone, 2026-10-29 and 2026-10-30; the 2 MB alignment on every sdk build on the drive, 2026-10-30',
      'why': 'one rule per reviewed implementation; every sdk build without CUTS gets them'},
-    {'what': 'VammManager node area and alignment, SDK 4.4.0 (9de92bad)', 'now': 'build', 'goal': 'sdk', 'purpose': 'address space',
-     'why': 'an older implementation no rule covers (its large regions aligned to 32 MB, not the rules\' 2 MB); a rule once a second game ships it',
-     'blocked': 'one game ships it'},
 ]

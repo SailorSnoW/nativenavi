@@ -57,7 +57,7 @@ class Representatives(unittest.TestCase):
         mains = ','.join(str(m) for _, m in [(self.rom, self.main), *versions])
         result = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', roms, mains, *out],
                                 capture_output=True, text=True,
-                                env=dict(os.environ, DM_GAME='01007BB017812000', J=str(workers),
+                                env=dict(os.environ, DM_GAME='0400486024DEC000', J=str(workers),
                                          DM_UE_SHADERS=str(self.root / 'ue_shaders'), DM_GLSLC_CAPTURE=str(self.root / 'glslc_capture')))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('[RED]', result.stdout + result.stderr)

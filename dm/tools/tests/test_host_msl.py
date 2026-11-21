@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[3]
-GAME = '010015100B514000'
+GAME = '0400486024DEC000'
 DRY = f'clang -O2 -c main.c -o gen/{GAME}/obj/host/main.c.o\nclang -O2 -o gen/{GAME}/dmhost gen/{GAME}/obj/host/main.c.o -framework Metal\ndsymutil gen/{GAME}/dmhost\n'   # make -n's host lines
 
 

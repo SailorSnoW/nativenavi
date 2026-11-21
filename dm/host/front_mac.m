@@ -1807,8 +1807,7 @@ void front_gpu_lost(void) {
             NSAlert *a = [NSAlert new];
             a.alertStyle = NSAlertStyleCritical;
             a.messageText = [@"The GPU stopped running " stringByAppendingString:@(DM_GAME_NAME)];   // @(): the name is UTF-8, which %s would not read as such
-            a.informativeText = [NSString stringWithFormat:@"After a GPU error, macOS stopped running the game's GPU work, so nothing more can be drawn and the game quits. The log has the details. "
-                                                           "Please report it on GitHub with python3 scripts/bug_report.py %@, which collects the log.", @(DM_GAME_ID)];
+            a.informativeText = @"After a GPU error, macOS stopped running the game's GPU work, so nothing more can be drawn and the game quits. The log has the details.";
             [a addButtonWithTitle:@"Quit"];
             // An app opened in the background would leave the alert behind other apps' windows, and DM_WINDOW_TOP's floating game window would cover it
             [NSApp activateIgnoringOtherApps:YES];

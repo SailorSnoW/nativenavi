@@ -22,8 +22,8 @@ nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 pack_nup = nsp.pack_nup
 zstd = pack_nup.zstd
 
-TID = 0x040074A01BF12000   # a game with a profile in dm/games, whose registered version is an update
-VER = 458752
+TID = 0x0400486024DEC000   # Ocarina of Time, whose registered version is an update
+VER = 131072
 
 
 def npdm(tid):
@@ -690,18 +690,6 @@ class Main(Base):
             self.assertIn(pack_nup.NO_BASE, said)
             with self.assertRaisesRegex(nsp.BuildError, 'version to pack .* is not in the folder'):
                 self.run_main(target, package='v0')
-
-    def test_both_forms_of_no_base_pack_alike(self):   # Mario's profile needs v0 and registers the update: without a base game it is packed from a derived profile, whichever the form
-        tid, ver = 0x010015100B514000, 327680
-        for packages, flags in (([(1, tid, ver, version(tid=tid), META)], pack_nup.STANDALONE), ([(0, 0, 0, {'exefs': {}}, META), (1, tid, ver, version(tid=tid), b'')], 0)):
-            with self.subTest(flags=flags):
-                write_nup(self.path, packages, update_flags=flags)
-                work, said = self.run_main(self.path, extract=True)
-                self.assertFalse((work / 'extract/v0').exists())
-                self.assertEqual((work / f'extract/v{ver}/ExeFS/main').read_bytes(), b'code')
-                self.assertEqual(nacp.name(work / f'extract/v{ver}/control.nacp'), 'Test Game')
-                self.assertTrue(any('the folder has no v0' in s for s in said), said)
-                self.assertIn(pack_nup.NO_BASE, said)
 
     def test_a_version_it_cannot_pack_is_a_red_line(self):   # through cli(): the disk check reads the RomFS folder before any extraction
         exefs_only = {'exefs': version()['exefs']}

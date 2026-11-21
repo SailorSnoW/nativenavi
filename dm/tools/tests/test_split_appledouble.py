@@ -42,7 +42,7 @@ class ExternalShaders(unittest.TestCase):
         (root / 'main').write_bytes(b'NSO0' + bytes(0xfc))  # three empty NSO segments
         folder, key = ('glslc_capture', 'DM_GLSLC_CAPTURE') if kind == 'glslc' else ('ue_shaders', 'DM_UE_SHADERS')
         source = root / ('external' if override else folder); source.mkdir()
-        env = dict(os.environ, DM_GAME='01007BB017812000', J='1')
+        env = dict(os.environ, DM_GAME='0400486024DEC000', J='1')
         for name in ('DM_GLSLC_CAPTURE', 'DM_UE_SHADERS', 'DM_GAMES_DIR'): env.pop(name, None)
         if override: env[key] = str(source)
         return source, env

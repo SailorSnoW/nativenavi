@@ -81,7 +81,7 @@ class Split(unittest.TestCase):
             (rom / 'Shaders/Shaders.arc').write_bytes(u8(b'program.glslc', fz.glslc([fz.VS, fz.PS])))
             main = t / 'main'; main.write_bytes(b'NSO0' + bytes(0xfc))   # an NSO header of three empty segments
             out = [t / n for n in ('pkg', 'map.tsv', 'facts.tsv', 'pairs.tsv', 'pso.tsv')]
-            r = subprocess.run([sys.executable, TOOLS / 'shader_split.py', rom, main, *out], capture_output=True, text=True, env=dict(os.environ, DM_GAME='01007BB017812000', J='1'))
+            r = subprocess.run([sys.executable, TOOLS / 'shader_split.py', rom, main, *out], capture_output=True, text=True, env=dict(os.environ, DM_GAME='0400486024DEC000', J='1'))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertNotIn('[RED]', r.stdout)
             rows = [ln.split('\t') for ln in out[1].read_text().splitlines() if not ln.startswith('#') and ln.split('\t')[0].endswith('.bin')]

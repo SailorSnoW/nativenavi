@@ -136,11 +136,12 @@ def load_patches():
                 table[bid], where[kind, bid] = v, path
     return tables, where
 PATCHES, PATCH_WHERE = load_patches()
+PROFILE = os.path.basename((os.environ.get('DM_GAME') or '0400486024DEC000').rstrip('/'))   # the game profile whose function-matched rules apply: Ocarina of Time unless DM_GAME names a derived profile's folder
 BUILD_ID = MOD.build_id[:0x10].hex()
 cuts = list(PATCHES['CUTS'].get(BUILD_ID, []))
 if BUILD_ID not in PATCHES['CUTS']:
     from nso_match import resolve
-    profile = os.path.basename(os.environ.get('DM_GAME', '').rstrip('/'))
+    profile = PROFILE
     # the repository profile's build rows (a derived profile replaces them with its own version's): the builds of this module the game was brought up on, and what they had cut
     known, rows, own = [], [], set()
     try:
@@ -167,10 +168,10 @@ if BUILD_ID not in PATCHES['CUTS']:
 FS_MATCH = None
 if NAME == 'main' and BUILD_ID not in PATCHES['FRAME_STEP']:
     from nso_match import locate_stub
-    FS_MATCH = locate_stub(IMG, TEXT_END, PATCHES['MATCH_FRAME_STEP'].get(os.path.basename(os.environ.get('DM_GAME', '').rstrip('/')), {}).get(NAME, []))
+    FS_MATCH = locate_stub(IMG, TEXT_END, PATCHES['MATCH_FRAME_STEP'].get(PROFILE, {}).get(NAME, []))
 # Ordinary matched stubs do not declare a frame step. Keep their FPS dependency
 # separate: finding the engine interval alone does not prove every consumer scales.
-STUB_RULES = PATCHES['MATCH_STUBS'].get(os.path.basename(os.environ.get('DM_GAME', '').rstrip('/')), {}).get(NAME, [])
+STUB_RULES = PATCHES['MATCH_STUBS'].get(PROFILE, {}).get(NAME, [])
 assert all(isinstance(r.get('fps_required', False), bool) for r in STUB_RULES), 'fps_required must be a bool'
 NATIVE_FPS_BLOCKED = any(r.get('fps_required', False) for r in STUB_RULES)
 STUB_MATCH = None

@@ -138,7 +138,7 @@ def info_plist(a, minos, icon):
     return p
 
 
-def source_commit():   # DMCommit: the checkout that packed the app (scripts/bug_report.py reads it), short hash, +dirty with uncommitted changes to tracked files; None outside a checkout
+def source_commit():   # DMCommit: the checkout that packed the app, short hash, +dirty with uncommitted changes to tracked files; None outside a checkout
     repo = HERE.parent.parent
     try:
         head = subprocess.run(['git', '-C', repo, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()

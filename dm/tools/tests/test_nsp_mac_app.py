@@ -775,7 +775,7 @@ class App(unittest.TestCase):
         self.assertEqual((p['DMTitleID'], p['DMLanguage'], p['DMRomfsMarker'], p['CFBundleIconFile']), (TID, 'fr', 'region_common/audio/edward.bfsar', 'AppIcon'))
         self.assertIs(p['LSSupportsGameMode'], False)   # macOS's Game Mode holds the GPU at its lowest clock (frame-rate.md)
         self.assertEqual(p['DMSettings'], [])   # launcher.json's settings, as the saved choices they accept: none here
-        self.assertRegex(p['DMCommit'], r'^[0-9a-f]{12}(\+dirty)?$')   # the packing checkout (scripts/bug_report.py, the host's start line)
+        self.assertRegex(p['DMCommit'], r'^[0-9a-f]{12}(\+dirty)?$')   # the packing checkout (the host's start line)
         self.assertEqual(p['DMChain'], '0123456789ab')   # the chain of the libraries packed (msl/b-<chain>)
 
     def test_library_given_as_its_image(self):

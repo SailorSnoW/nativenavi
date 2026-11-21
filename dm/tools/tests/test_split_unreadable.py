@@ -13,7 +13,7 @@ from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
-_had = os.environ.get('DM_GAME'); os.environ['DM_GAME'] = '01007BB017812000'   # shader_split loads a profile at import; other tests expect no default game
+_had = os.environ.get('DM_GAME'); os.environ['DM_GAME'] = '0400486024DEC000'   # shader_split loads a profile at import; other tests expect no default game
 import shader_split as ss
 if _had is None: del os.environ['DM_GAME']
 else: os.environ['DM_GAME'] = _had
@@ -70,7 +70,7 @@ class ScanFile(unittest.TestCase):
         main = self.tmp / 'main'; main.write_bytes(b'NSO0' + bytes(0xfc))   # an NSO header of three empty segments
         out = [self.tmp / n for n in ('pkg', 'map.tsv', 'facts.tsv', 'pairs.tsv', 'pso.tsv')]
         r = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', rom, main, *out], capture_output=True, text=True,
-                           env=dict(os.environ, DM_GAME='01007BB017812000', J='2'))
+                           env=dict(os.environ, DM_GAME='0400486024DEC000', J='2'))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('\n[RED] 1 file(s) could not be read, their shaders are left out (first: /sub/a.dict: the index', '\n' + r.stdout)
         self.assertIn('shaders: 0 (', r.stdout)
