@@ -1,5 +1,5 @@
 """The game languages the tools know (dm/tools/nacp.py LANGUAGES): Polish and Thai are read from control data, offered in the Game language row and taken
-by the NSP script's language option, by code or by name. No game files, keys or Xcode needed."""
+by the packing script's language option, by code or by name. No game files, keys or Xcode needed."""
 import importlib.util
 import os
 from pathlib import Path

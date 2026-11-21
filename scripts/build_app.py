@@ -850,9 +850,8 @@ def check_formats(dirs):
     one again on every pass of its background loader (412% CPU on the Mac). The result is kept beside the image (RomFS.img.formats) with its size and time, so an unchanged image is
     not read again (102,185 .zs files, 16 s from a USB SSD)"""
     import romfs_image
-    for ver, img in ((ver, img) for ver, d in dirs.items() for img in [d / 'RomFS.img', *sorted((d / pack_nup.PROGRAMS).glob('*.img'))]):   # the other programs' RomFS too, when a NUP has any
+    for ver, img in ((ver, d / 'RomFS.img') for ver, d in dirs.items()):
         stamp = img.with_name(img.name + '.formats')
-        if img.parent.name == pack_nup.PROGRAMS: ver = f'{ver} program {img.stem}'
         st = img.stat(); ident = f'{st.st_size} {st.st_mtime_ns}'
         try: lines = stamp.read_text().splitlines()
         except OSError: lines = []
@@ -871,7 +870,7 @@ def check_formats(dirs):
 
 def extract_aoc(work, app, fam):
     """The NUP's DLC → <build folder>/aoc/<index>.img (the RomFS of each one; index = title ID − the application's add-on content base ID). The host reports these indices as owned
-    and mounts them (DM_AOC_DIR). pack_nup.pack_dlc keeps each image while its inputs are unchanged and removes those of DLC no longer in the NUP. Returns None without DLC"""
+    (DM_AOC_DIR: nn::aoc's count and list); no module of the game names MountAddOnContent, so nothing mounts one. pack_nup.pack_dlc keeps each image while its inputs are unchanged and removes those of DLC no longer in the NUP. Returns None without DLC"""
     if not fam['dlc']: return None
     PROG.stage('unpack DLC', step='unpacking')
     try: pack_nup.pack_dlc(fam['nup'], app, dict(fam['dlc']), work / 'aoc', say=lambda s: None)
@@ -1639,8 +1638,7 @@ def mac_app(py, repo, out, app, work, game, patched, host, font, msl, aoc, lang,
     split_pairs = work / 'shader/pso_pairs.tsv'   # the split's copy of pso_pairs.tsv, for a profile without the table (as mac_run's DM_PSO_PAIRS)
     for opt, v in (('--version', version), ('--category', g.get('app_category')), ('--marker', g.get('romfs_marker')), ('--aoc', aoc), ('--icon', icon),
                    ('--pso', pso), ('--pso-pairs', split_pairs if not g.table('pso_pairs.tsv').is_file() and split_pairs.is_file() else None),
-                   ('--env-file', Path(os.path.expanduser(env_file)).resolve() if env_file else None), ('--settings', settings),
-                   ('--control-nacp', next((p for p in (control, game / 'control.nacp') if p and Path(p).is_file()), None))):
+                   ('--env-file', Path(os.path.expanduser(env_file)).resolve() if env_file else None), ('--settings', settings)):
         if v: cmd += [opt, v]
     unchanged = False
     def line(ln):

@@ -1,4 +1,4 @@
-"""A subprocess in a process group of its own, which the caller owns with every process it starts (the NSP script's run, regress.py's run_heavy).
+"""A subprocess in a process group of its own, which the caller owns with every process it starts (the packing script's run, regress.py's run_heavy).
 
 The caller's interrupt does not reach that group by itself: Spyder's interrupt goes to its kernel alone, a front end's SIGTERM to the script alone, and a terminal's Ctrl-C to
 the terminal's foreground group, which this group is not in (a session of its own: no signal from the terminal reaches it, and a member that reads the terminal fails at once

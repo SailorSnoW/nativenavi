@@ -54,7 +54,7 @@ def build(gid, patched, control):
     keys = fixups_keys(Path(patched) / 'main.fixups.tsv')
     mac_mic = nso_syms.audio_input_capable(Path(patched).glob('*.patched.bin'))
     have = nacp.languages(control)
-    langs = [(c, n) for c, n in nacp.LANGUAGES if not have or c in have]   # no list (a dump or a NUP has no control data, none of its packages may): any language may be the game's, as DM_LANG and the NSP script's check take it
+    langs = [(c, n) for c, n in nacp.LANGUAGES if not have or c in have]   # no list (none of the NUP's packages may have control data): any language may be the game's, as DM_LANG and the packing script's check take it
 
     def macro(name, n):
         if name not in macros: sys.exit(f'settings.tsv:{n}: no {name} in the game profile header (game.py header)')

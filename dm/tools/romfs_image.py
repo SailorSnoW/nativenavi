@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Pack an extracted RomFS folder into one image file the host reads in place of the folder (hle_fs.c, "RomFS image"): DM_ROMFS may name the image instead of a folder.
-# One file instead of hundreds of thousands copies to an iPhone at full speed (Tears of the Kingdom's 304,000 files ran the phone's file service out of open files), and the host
+# One file instead of hundreds of thousands: the format was made for copies to an iPhone at full speed (Tears of the Kingdom's 304,000 files ran the phone's file service out of open files), and the host
 # keeps one descriptor open for the whole RomFS.
 # Layout (little-endian):
 #   header  32 bytes: magic "DMROMFS1", u64 index offset, u64 index size, u64 entry count
@@ -23,7 +23,7 @@ ENT = struct.Struct('<QQIHBB')
 GUEST_NAME = 'org.d2rmobile.guest-name'
 # Files a dump tool leaves in every folder of the game's tree, which are not game files: an FTP dump keeps the server's listing as .listing (as the NUP spec's §6.3 says a producer
 # may). Packed, a game that lists a folder sees one more entry: Nintendo Switch Sports Resort cuts each name at its first '.', loaded "Parameter/<folder>/" with an empty name, got
-# no resource and crashed at main+0x9d7c60. A folder's artifacts are left out of the image (and out of a NUP's, pack_nup.py), as they are of the survey's file list
+# no resource and crashed at main+0x9d7c60. A folder's artifacts are left out of the image (and out of a NUP's, pack_nup.py)
 ARTIFACTS = {b'.listing'}
 
 
@@ -150,7 +150,7 @@ def read_index(img):   # for tests and checks: {guest path: (is dir, offset, siz
 
 
 # File names that promise a format, and the first bytes that format starts with. A file whose name promises one and whose bytes start with none of its heads is damaged:
-# a NUP or a dump folder carries no NCA hashes, so this is the check its extraction has. A zstd stream starts with a frame (28 b5 2f fd) or a skippable frame (5? 2a 4d 18).
+# a NUP carries no NCA hashes, so this is the check its extraction has. A zstd stream starts with a frame (28 b5 2f fd) or a skippable frame (5? 2a 4d 18).
 # Found on a NUP of Ocarina of Time whose three .zs textures began with 12,288 zero bytes: the game asked for one again on every pass of its background loader (PR #1530).
 FORMAT_HEADS = {'.zs': ((b'\x28\xb5\x2f\xfd', b'\xff\xff\xff\xff'), (b'\x50\x2a\x4d\x18', b'\xf0\xff\xff\xff'))}   # suffix: ((bytes, mask), ...)
 
@@ -167,61 +167,7 @@ def format_mismatches(img, progress=None):   # [(guest path, size, first 4 bytes
     return bad
 
 
-ID_MAGIC = 'DMROMFSID1'
-_FNV_OFFSET, _FNV_PRIME, _MASK = 0xcbf29ce484222325, 0x100000001b3, (1 << 64) - 1
-
-
-def _clean(text):   # one token of the identity line: no spaces, no newlines
-    return ''.join(c if c.isalnum() or c in '._-+' else '_' for c in str(text)) or '-'
-
-
-def identity(img, title='', version='', build=''):
-    """The identity line of a complete image (dm/host/romfs_identity.h defines the format and the C reader): its size and an FNV-1a 64 hash of its header and index
-    (the file data is not read, so a 14 GB image takes a moment). Raises ValueError for a cut off or invalid image."""
-    size = os.path.getsize(img)
-    with open(img, 'rb') as f:
-        head = f.read(HEAD.size)
-        if len(head) != HEAD.size: raise ValueError(f'not a RomFS image: {img}')
-        magic, ioff, isz, _ = HEAD.unpack(head)
-        if magic != MAGIC or ioff < HEAD.size or ioff > size or isz != size - ioff: raise ValueError(f'incomplete or invalid RomFS image: {img}')
-        h, rest = _FNV_OFFSET, b''
-        f.seek(ioff)
-        def mix(h, data):
-            for w in struct.unpack(f'<{len(data) // 8}Q', data): h = ((h ^ w) * _FNV_PRIME) & _MASK
-            return h
-        h = mix(h, head)
-        left = isz
-        while left:
-            chunk = f.read(min(left, 8 << 20))
-            if not chunk: raise ValueError(f'incomplete RomFS image: {img}')
-            left -= len(chunk)
-            chunk = rest + chunk
-            keep = len(chunk) % 8 if left else 0
-            rest = chunk[len(chunk) - keep:]; chunk = chunk[:len(chunk) - keep]
-            if not left and len(chunk) % 8: chunk += b'\0' * (8 - len(chunk) % 8)
-            h = mix(h, chunk)
-    return f'{ID_MAGIC} title={_clean(title)} version={_clean(version)} build={_clean(build)} size={size} index={h:016x}'
-
-
-def parse_identity(text):   # {field: value} of an identity line; size is an int
-    parts = text.split()
-    if not parts or parts[0] != ID_MAGIC: raise ValueError('not an identity line')
-    d = dict(p.split('=', 1) for p in parts[1:] if '=' in p)
-    if 'size' not in d or 'index' not in d: raise ValueError('identity line without size or index')
-    d['size'] = int(d['size']); return d
-
-
-def same_identity(a, b):   # two lines name the same image when size and index agree (title, version and build only describe it)
-    x, y = parse_identity(a), parse_identity(b)
-    return (x['size'], x['index']) == (y['size'], y['index'])
-
-
 if __name__ == '__main__':
-    import sys
-    if sys.argv[1:2] == ['--identity']:   # romfs_image.py --identity IMAGE [TITLE [VERSION [BUILD]]]: the identity line of IMAGE
-        try: print(identity(*sys.argv[2:6]))
-        except (OSError, ValueError, TypeError) as e: sys.exit(f'[RED] {e}')
-        sys.exit(0)
     ap = argparse.ArgumentParser(description='Pack a RomFS folder into an indexed image')
     ap.add_argument('--reuse', action='store_true', help='keep the image only while its source tree, packer and image are unchanged')
     ap.add_argument('source'); ap.add_argument('image')

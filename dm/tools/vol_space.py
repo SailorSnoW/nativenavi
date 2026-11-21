@@ -1,4 +1,4 @@
-"""The space on a path's volume that a write the user started can use, for the checks that stop a build before it writes (the NSP script, pack_app.py, pso_offline.py).
+"""The space on a path's volume that a write the user started can use, for the checks that stop a build before it writes (the packing script, pack_app.py, pso_offline.py).
 
 statvfs (shutil.disk_usage) counts only unallocated blocks. On APFS, space held by purgeable data (local Time Machine snapshots, caches the system deletes on demand)
 is not in it, and macOS frees that space while the build writes: Finder showed 68 GB available where statvfs showed 18.8 GB, and a build wrote 92 GB there. macOS

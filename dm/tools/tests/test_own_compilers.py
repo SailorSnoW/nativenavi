@@ -1,6 +1,6 @@
 """The tested Metal compiler as a requirement (GitHub issue #242): dm/gfx/tools/own_compilers.py requires the pinned spirv-cross, and stops on another Metal
 compiler (macOS or iOS) with a message naming the Xcode to install, unless DM_ALLOW_OTHER_METAL=1; a missing compiler or another translator still fails as dmsh_build.py reports it.
-The NSP script checks the Metal compiler before an NVN game's shader steps (check_metal), and ALLOW_OTHER_METAL / --allow-other-metal skips the check and passes the override to the
+The packing script checks the Metal compiler before an NVN game's shader steps (check_metal), and ALLOW_OTHER_METAL / --allow-other-metal skips the check and passes the override to the
 shader step. No Xcode, translator or game files needed: the tools' fingerprints are stand-ins."""
 import importlib.util
 import io
@@ -75,7 +75,7 @@ class CheckTools(unittest.TestCase):
             got, out = self.check(bad)
             self.assertEqual(got, want); self.assertEqual(out, '')
 
-    def test_check_metal(self):   # --check-metal, as the NSP script runs it: the message when it would stop, '' otherwise
+    def test_check_metal(self):   # --check-metal, as the packing script runs it: the message when it would stop, '' otherwise
         for actual, allow, stops in ((LOCKED['metal_macosx'], False, False), (OTHER, False, True), (OTHER, True, False), ('missing', False, False)):
             env = {k: v for k, v in os.environ.items() if k != own_compilers.ALLOW}
             if allow: env[own_compilers.ALLOW] = '1'

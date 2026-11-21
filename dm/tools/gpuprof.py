@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarise the host's GPU profile lines in a log (Mac run log or the iPhone's Documents/log.txt).
+"""Summarise the host's GPU profile lines in a run's log.
 
 DM_NVN_GPUPROF=<frame>[-<frame>] or every:<n> prints one "[gpuprof]" line per encoder of the profiled frames (render pass: size, colour attachments, depth, draws,
 attachment load / store KB, Metal pixel formats; compute / copy: copies, uniform updates, dispatches, barriers inside the encoder) and a "frame" line per frame. DM_AB=<frames> prints one "[ab]"
@@ -149,7 +149,7 @@ def ab_summary(phases, skip=1):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('log', help='the run log or Documents/log.txt')
+    ap.add_argument('log', help='the run log')
     ap.add_argument('--frames', type=int, nargs='+', help='only these profiled frames')
     ap.add_argument('--by', choices=('shape', 'class'), default='shape', help='group passes by exact shape (default) or by size class relative to the largest colour pass')
     ap.add_argument('--top', type=int, default=25, help='groups listed (default 25); the rest are summed as "other"')

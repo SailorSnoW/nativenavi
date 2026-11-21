@@ -10,7 +10,7 @@ import os, sys
 from fontTools import subset
 from fontTools.ttLib import TTFont
 
-SOURCE = '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'   # macOS's; STD_FONT / the second argument names another (build_ipa.sh, the NSP script)
+SOURCE = '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'   # macOS's; STD_FONT / the second argument names another (the packing script)
 LETTERS = '/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf'   # the button icons' letters (make_ext_font.py)
 # Type → file name (hle_sdk16.c font_file) and the name the font engine reports for it (LoadFont's name; short, as Nintendo's are)
 TYPES = [(0, 'standard.ttf', 'DM Standard'), (1, 'chinese_simplified.ttf', 'DM Chinese Simplified'), (2, 'chinese_simplified_ext.ttf', 'DM Chinese Simplified Ext'),

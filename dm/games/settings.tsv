@@ -1,6 +1,6 @@
 # Player-facing settings: the Mac app's settings window (dm/mac/Launcher.swift) shows them before the game starts; Mac front ends read the same list.
 # dm/games/settings.py writes one game's list into its app (dm/launcher.json; dm/mac/pack_app.py through scripts/build_app.py): the rows whose condition holds for that game, with its defaults. Each sets an environment variable the host reads when the game starts; one an env file sets
-# (Documents/env.txt, the bundle's dm/env.txt) is shown but kept. Diagnostic switches stay environment-only, so they are not listed here. The player's page is docs/settings.md.
+# (the player's env.txt, the bundle's dm/env.txt) is shown but kept. Diagnostic switches stay environment-only, so they are not listed here. The player's page is docs/settings.md.
 # Columns, separated by tabs:
 #   variable  the environment variable the setting sets
 #   kind      choice: values value=label,..., an option only some games have with ?<shown>&<shown> after its label (languages: the game's own, from its control data; every language when it has none, with a note); range: values low:high:step, shown as a percentage;

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# A game in a NUP container (one .nup file: https://github.com/a55uka/nup, SPEC.md v1) → the layout build_app.py extracts NSPs into. build_app.py calls this when it is given
-# a .nup file, or a folder that holds one, and goes on with its other steps; run on its own, this script does only this step.
-# A NUP holds the same packages as a dump folder (scripts/pack_dump.py): the base game, updates by version and DLC by title ID, each an exefs/ and romfs/ tree, its files stored raw or as one zstd
-# frame each, with a SHA-256 per file. Its files are not encrypted, so it needs no keys. Unlike a dump it may carry control data in each package's meta block: the NACP and the icon. Its name,
+# A game in a NUP container (one .nup file: https://github.com/a55uka/nup, SPEC.md v1) → the extraction layout build_app.py builds from. build_app.py calls this for the
+# .nup file it is given, or the one in the folder it is given, and goes on with its other steps; run on its own, this script does only this step.
+# A NUP holds a game's packages: the base game, updates by version and DLC by title ID, each an exefs/ and romfs/ tree, its files stored raw or as one zstd
+# frame each, with a SHA-256 per file. Its files are not encrypted, so it needs no keys. It may carry control data in each package's meta block: the NACP and the icon. Its name,
 # publisher and display version records are labels the packer typed (Hyrule Warriors: Age of Imprisonment's says "HWAoI"), not the console's: without a NACP the name comes from the profile.
 # A container may hold no base game, in two forms that mean the same: no base record, with standalone_update on every update (SPEC §3.1.2), or a base record with no files (title ID 0), as packers
 # leave when an update holds the whole game (Pokemon Pokopia's v655360). The title ID is then the program ID of the code present, there is no version 0, and the selected update needs its own ExeFS
@@ -12,14 +12,12 @@
 #   extract/v<version>/ExeFS/   the version's code modules
 #   extract/v<version>/RomFS.img   its RomFS as one image (dm/tools/romfs_image.py), written straight from the container: the RomFS is never unpacked into loose files
 #   extract/v<version>/control.nacp, icon.jpg   the package's NACP and its icon, when it carries them (sips reads a PNG icon by its content)
-#   extract/v<version>/romfs_programs/<index>.img   for an application of several programs (a Switch 2 Edition of a Switch 1 game), the RomFS of each program not packed, which the
-#                                       packed one mounts by program index (nn::fs::MountRom(name, index, ...), hle_fs.c); --program picks the program, default the highest index
 #   aoc/<index>.img   each DLC's RomFS (index = DLC title ID − the NACP's AddOnContentBaseId, else − base title ID − 0x1000), the host's DM_AOC_DIR
-# An update's RomFS is packed on its own, never laid over the base: the dumps NUPs are packed from hold the patched RomFS of an update (pack_dump.py); an update with no romfs/ uses the base's.
+# An update's RomFS is packed on its own, never laid over the base: the dumps NUPs are packed from hold the patched RomFS of an update; an update with no romfs/ uses the base's.
 # Every file read is checked against its SHA-256. A repeat run keeps code modules whose content is the same and an image made from the same container tree by the same packer,
 # or, after a packer update, an image whose bytes check against the container's hashes.
-# Needs the zstd module: compression.zstd (Python 3.14+) or backports.zstd, as the NSP script.
-# Usage: pack_nup.py <game.nup> [--version N] [--program N] [--work-dir DIR]   (exit 1 on error)
+# Needs the zstd module: compression.zstd (Python 3.14+) or backports.zstd, as the packing script (build_app.py).
+# Usage: pack_nup.py <game.nup> [--version N] [--work-dir DIR]   (exit 1 on error)
 import argparse, hashlib, mmap, os, shutil, struct, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'dm/tools'))
@@ -54,7 +52,7 @@ class Package:
         self.title_id, self.root, self.exefs, self.romfs, self.version, self.kind, self.flags, r1, r2, self.meta_off, self.meta_size = rec
         if self.kind >= len(KINDS): raise Error(f'{nup.path}: package {index} of unknown kind {self.kind}')
         if r1 or r2 or self.flags & ~STANDALONE: raise Error(f'{nup.path}: package {index} has reserved fields or flags set')
-        self.name = f'{nup.path.name} ({KINDS[self.kind]}' + (f' {self.version}' if self.kind == UPDATE else f' {self.title_id:016X}' if self.kind == ADDON else '') + ')'   # what pick_nsps prints
+        self.name = f'{nup.path.name} ({KINDS[self.kind]}' + (f' {self.version}' if self.kind == UPDATE else f' {self.title_id:016X}' if self.kind == ADDON else '') + ')'   # what the scripts' messages call it
 
     def meta(self):   # {TLV type: payload}
         out, b = {}, self.nup.mm[self.meta_off:self.meta_off + self.meta_size] if self.meta_size else b''
@@ -70,7 +68,7 @@ class Nup:
     """A validated NUP (SPEC §6.1): the superblock, the TOC's SHA-256, every record's bounds. File content is checked against its SHA-256 as it is read"""
     def __init__(self, path):
         self.path = Path(path)
-        self.application, self.aoc_base, self.siblings = None, None, {}   # scan's: the application, its add-on content base ID, the other programs
+        self.application, self.aoc_base = None, None   # scan's: the application, its add-on content base ID
         with open(self.path, 'rb') as f:   # the map keeps its own descriptor
             try: self.mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
             except ValueError: raise Error(f'{self.path}: empty file') from None
@@ -181,17 +179,6 @@ class Nup:
             write = bytearray.extend
         b = Buf(); self.copy(i, b); return bytes(b)
 
-    def head(self, i, n=32):   # file i's first n bytes (fewer for a shorter file), for a survey's RomFS manifest; not checked against the SHA-256, which covers the whole file
-        name, size, sha, eoff, esz, codec = self.files[i]
-        if codec == 0 or not size: return bytes(self.mm[eoff:eoff + min(n, size)])
-        if zstd is None: raise Error('reading a NUP needs the zstd module: compression.zstd (Python 3.14+) or pip install backports.zstd')
-        d, out, p = zstd.ZstdDecompressor(), b'', eoff
-        try:
-            while len(out) < min(n, size) and p < eoff + esz and not d.eof:
-                out += d.decompress(self.mm[p:min(p + (64 << 10), eoff + esz)], max_length=n - len(out)); p += 64 << 10
-                while len(out) < min(n, size) and not d.needs_input and not d.eof: out += d.decompress(b'', max_length=n - len(out))
-        except zstd.ZstdError as e: raise Error(f'{self.path}: {name.decode(errors="replace")}: {e}') from e
-        return out[:n]
 
 
 def program_id(npdm, where):   # the ACI0 program ID of an NPDM
@@ -217,14 +204,11 @@ def nacp_ids(k):   # (application ID, add-on content base ID) from the package's
     return owner or None, aoc or None
 
 
-def scan(n, program=None):
-    """What a NUP holds: (title ID, base package or None, {update version: package}, {DLC title ID: package}), with the checks pack_dump.scan makes. The title ID is the program ID of the
-    program packed. One application can hold several programs, each its own base package and updates (a Switch 2 Edition of a Switch 1 game: Super Mario Bros. Wonder's Switch 1 program
-    010015100B514000 and its Switch 2 program 040015100B514001, whose code mounts the first one's RomFS by program index, nn::fs::MountRom(name, 0, ...)). Programs are told apart by their
-    NPDM's program ID, whose low 12 bits are the program index; they belong to one application when their NACPs name it (SaveDataOwnerId), else when their program IDs agree above those bits.
-    program: the index of the program to pack, default the highest (a Switch 2 Edition's Switch 2 program). Sets n.application, n.aoc_base (a DLC's index is its title ID minus this,
-    the NACP's AddOnContentBaseId, else the application's + 0x1000) and n.siblings ({index: (program ID, base package or None, {version: update})}: the other programs, whose RomFS
-    pack_version packs beside this one's)"""
+def scan(n):
+    """What a NUP holds: (title ID, base package or None, {update version: package}, {DLC title ID: package}). The title ID is the program ID of the code present (its NPDM's).
+    Packages of several programs are refused: on a Switch one application can hold several (a Switch 2 Edition of a Switch 1 game, whose Switch 2 program mounts the other's RomFS by
+    program index, nn::fs::MountRom(name, 0, ...)), and the host runs one program and has no MountRom by index. Sets n.application (the NACP's SaveDataOwnerId, else the program ID
+    without its index, the low 12 bits) and n.aoc_base (a DLC's index is its title ID minus this: the NACP's AddOnContentBaseId, else the application's + 0x1000)"""
     bases = [k for k in n.packages if k.kind == BASE]
     updates = [k for k in n.packages if k.kind == UPDATE]
     if not bases and (not updates or any(not k.flags & STANDALONE for k in updates)):
@@ -239,28 +223,20 @@ def scan(n, program=None):
             continue
         progs.setdefault(program_id(n.read(i), f'{k.name} exefs/main.npdm'), []).append(k)
     if not progs: raise Error(f'{n.path}: no exefs/main.npdm in the base or updates')
-    if loose and (len(progs) > 1 or len(loose) > 1): raise Error(f'{n.path}: a base package without exefs/main.npdm among several programs: which one it belongs to is unknown')
-    if loose: next(iter(progs.values())).insert(0, loose[0])   # the one program's base, as it was with one base package (its code in the updates)
-    owner = {pid: next((a for k in ks if (a := nacp_ids(k)[0]) is not None), pid & ~0xFFF) for pid, ks in progs.items()}
-    if len(set(owner.values())) > 1:
-        raise Error(f'{n.path}: packages of different applications: ' + ', '.join(f'program {pid:016X} of {a:016X}' for pid, a in sorted(owner.items())))
-    if len({pid & 0xFFF for pid in progs}) != len(progs): raise Error(f'{n.path}: two programs of index ' + ', '.join(f'{pid:016X}' for pid in sorted(progs)))
-    layout = {}
-    for pid, ks in progs.items():
-        own_bases = [k for k in ks if k.kind == BASE]
-        if len(own_bases) > 1: raise Error(f'{n.path}: {len(own_bases)} base packages of program {pid:016X}')
-        vers = {}
-        for k in ks:
-            if k.kind != UPDATE: continue
-            if k.version in vers: raise Error(f'{n.path}: two updates of version {k.version}' + (f' of program {pid:016X}' if len(progs) > 1 else ''))
-            if not k.version: raise Error(f'{n.path}: an update of version 0')
-            vers[k.version] = k
-        layout[pid & 0xFFF] = (pid, own_bases[0] if own_bases else None, vers)
-    if program is None: program = max(layout)
-    if program not in layout: raise Error(f'{n.path}: no program {program}; it holds ' + ', '.join(f'{i} ({pid:016X})' for i, (pid, _, _) in sorted(layout.items())))
-    app, base, vers = layout.pop(program)
-    n.application, n.siblings = owner[app], layout
-    newest = [vers[v] for v in sorted(vers, reverse=True)] + ([base] if base else []) + [k for _, b, vs in layout.values() for k in [*vs.values(), *([b] if b else [])]]
+    if len(progs) > 1: raise Error(f'{n.path}: packages of several programs (' + ', '.join(f'{pid:016X}' for pid in sorted(progs)) + '): one program with its updates is packed')
+    (app, ks), = progs.items()
+    if len(loose) > 1: raise Error(f'{n.path}: {len(loose)} base packages without exefs/main.npdm')
+    if loose: ks.insert(0, loose[0])   # the program's base, its code in the updates
+    bases = [k for k in ks if k.kind == BASE]
+    if len(bases) > 1: raise Error(f'{n.path}: {len(bases)} base packages of program {app:016X}')
+    base, vers = bases[0] if bases else None, {}
+    for k in ks:
+        if k.kind != UPDATE: continue
+        if k.version in vers: raise Error(f'{n.path}: two updates of version {k.version}')
+        if not k.version: raise Error(f'{n.path}: an update of version 0')
+        vers[k.version] = k
+    newest = [vers[v] for v in sorted(vers, reverse=True)] + ([base] if base else [])
+    n.application = next((a for k in ks if (a := nacp_ids(k)[0]) is not None), app & ~0xFFF)
     n.aoc_base = next((a for k in newest if (a := nacp_ids(k)[1]) is not None), n.application + 0x1000)
     dlc = {}
     for k in n.packages:
@@ -272,19 +248,7 @@ def scan(n, program=None):
     return app, base, vers, dlc
 
 
-def sibling_romfs(n, k):
-    """{program index: RomFS folder} of the other programs of the application (scan's n.siblings) at the version package k runs: each one's newest update of no higher version, else its
-    base (an update without romfs/ uses its base's). On Horizon the programs of an application are patched together, and a program mounts another's RomFS by its index"""
-    out = {}
-    for idx, (_, sbase, svers) in sorted(n.siblings.items()):
-        u = max((v for v in svers if v <= k.version), default=None)
-        d = svers[u].romfs if u is not None and svers[u].romfs != NO_DIR else sbase.romfs if sbase is not None else NO_DIR
-        if d != NO_DIR: out[idx] = d
-    return out
-
-
-def romfs_bytes(n, k, base):   # the bytes of the images packing version k writes: its own RomFS and the other programs'
-    return n.tree_bytes(romfs_of(k, base)) + sum(n.tree_bytes(d) for d in sibling_romfs(n, k).values())
+def romfs_bytes(n, k, base): return n.tree_bytes(romfs_of(k, base))   # the bytes of the image packing version k writes
 
 
 def exefs(n, k, dst):   # the package's ExeFS into dst, kept as it is when every file there has the same content
@@ -407,27 +371,14 @@ def romfs_of(k, base):   # the RomFS folder a version runs with: its own, or the
     return d
 
 
-PROGRAMS = 'romfs_programs'   # beside a version's RomFS.img: <index>.img, the RomFS of each other program of the application (the host's MountRom by program index, hle_fs.c)
-
-
 def pack_version(n, k, base, app, out, say=print, step=lambda s: None):
-    """One version (the base package, or an update package) → out/ExeFS, out/RomFS.img and its control data, and out/romfs_programs/<index>.img for each other program of the
-    application (sibling_romfs); returns how pack() got this program's image"""
+    """One version (the base package, or an update package) → out/ExeFS, out/RomFS.img and its control data; returns how pack() got the image"""
     if k.exefs == NO_DIR or n.child(k.exefs, b'main') is None or n.child(k.exefs, b'main.npdm') is None: raise Error(f'{k.name}: no exefs/main and exefs/main.npdm')
     if (pid := program_id(n.read(n.child(k.exefs, b'main.npdm')), f'{k.name} exefs/main.npdm')) != app: raise Error(f'{k.name}: program ID {pid:016X}, the base is {app:016X}')
     d = romfs_of(k, base)
     out.mkdir(parents=True, exist_ok=True)
     exefs(n, k, out / 'ExeFS')
     how = pack(n, d, out / 'RomFS.img', say, step)
-    others = {f'{idx}.img': sd for idx, sd in sibling_romfs(n, k).items()}
-    progs = out / PROGRAMS
-    if progs.is_dir():
-        for f in progs.iterdir():
-            if not any(f.name == w or f.name.startswith(w + '.') for w in others): f.unlink()   # an image and the files beside it (its stamp, the NSP script's format check)
-        if not others: progs.rmdir()
-    for name, sd in others.items():
-        say(f'program {name.removesuffix(".img")} of the application ({n.siblings[int(name.removesuffix(".img"))][0]:016X}): its RomFS → {PROGRAMS}/{name}')
-        pack(n, sd, progs / name, say, step)
     control(k, out, app_package(n) if base is None else None)
     return how
 
@@ -445,13 +396,12 @@ def main():
     ap = argparse.ArgumentParser(description='Pack a game in a NUP container into the extraction layout of build_app.py')
     ap.add_argument('nup', type=Path, help='the .nup file')
     ap.add_argument('--version', type=int, help='the update version to pack (default: the newest in the container; 0 = the base game)')
-    ap.add_argument('--program', type=int, help='a NUP holding several programs of one application (a Switch 2 Edition of a Switch 1 game): the index of the one to pack (default: the highest)')
     ap.add_argument('--work-dir', type=Path, help='the build folder (default: <folder of the .nup>/<title ID>_build)')
     a = ap.parse_args()
     path = a.nup.resolve()
     try:
         with Nup(path) as n:
-            app, base, vers, dlc = scan(n, a.program)
+            app, base, vers, dlc = scan(n)
             ver = a.version if a.version is not None else max(vers, default=0)
             if ver and ver not in vers: raise Error(f'no update {ver} in {path.name} (have: {", ".join(map(str, sorted(vers))) or "none"})')
             k = vers[ver] if ver else base

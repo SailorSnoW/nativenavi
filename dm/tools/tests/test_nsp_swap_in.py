@@ -1,4 +1,4 @@
-"""swap_in, the NSP script's publication of a finished output: whatever stops it, the destination holds the whole old output, the whole new one, or nothing, and a rerun
+"""swap_in, the packing script's publication of a finished output: whatever stops it, the destination holds the whole old output, the whole new one, or nothing, and a rerun
 publishes. Each call runs in a process of its own (fixtures/swap_in_run.py) with a fault injected into its renames or unlinks, or a SIGKILL."""
 from pathlib import Path
 import subprocess

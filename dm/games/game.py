@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Game profiles: dm/games/<base game title ID>/game.tsv (key <TAB> values..., lines starting with # are comments) + the shader tables (and patches.py, the rewriter's patches of the game's builds) in the same folder. The shader tools, the host build, iOS packaging and the NSP script take each game's constants from here.
+# Game profiles: dm/games/<base game title ID>/game.tsv (key <TAB> values..., lines starting with # are comments) + the shader tables (and patches.py, the rewriter's patches of the game's builds) in the same folder. The shader tools, the host build and the packing script take the game's constants from here.
 # Usage: game.py list (list all profiles); game.py <id> <key> [<default>] (print that key's value, for shell; without a default a missing key is an error); game.py header <id> <out.h> (generate the host's game_profile.h);
 #   game.py modules <id> <folder of rewritten modules> (the modules to load from it: the build row of its main's build, else the profile's modules);
 #   game.py dir <id> (print the profile folder); game.py link <id> <link> (point a symlink at the profile folder: make cannot take paths with spaces)
@@ -135,15 +135,15 @@ def header_one(g):
     vers = ', '.join('{' + q(b['main']) + ', ' + q(b['display']) + '}' for b in g.builds().values() if 'main' in b)
     pi = g.get('present_interval', 'game')   # present interval: game = as the game sets it (as on the Switch), display = one frame per display tick
     if pi not in ('game', 'display'): sys.exit(f'{g.id}: present_interval must be game or display: {pi}')
-    ft = g.get('fps_target', '0')   # frame rate cap of the rewriter's frame step (FRAME_STEP in the profile's patches.py: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0) or of the engine's own frame limit (hle_fpslock.c): 0 = the game's own step, 30 / 60
+    ft = g.get('fps_target', '0')   # frame rate cap of the rewriter's frame step (FRAME_STEP or MATCH_FRAME_STEP in the profile's patches.py): 0 = the game's own step, 30 / 60
     if ft not in ('0', '30', '60'): sys.exit(f'{g.id}: fps_target must be 0, 30 or 60: {ft}')
-    fm = g.get('fps_max', '60')   # the highest rate fps_target and the player's Frame rate may take: 120 only for a game checked at that speed (hle_nvn.c fps_high)
+    fm = g.get('fps_max', '60')   # the highest rate fps_target and the player's Frame rate may take (hle_nvn.c fps_high): 120 needs an engine frame limit the host writes, of which this tree has none
     if fm not in ('60', '120'): sys.exit(f'{g.id}: fps_max must be 60 or 120: {fm}')
     fh = g.get('fps_hold', 'on')   # whether the frame step may hold a frame longer than the cap's vsyncs when frames come late (hle_nvn.c fstep_tick): on / off
     if fh not in ('on', 'off'): sys.exit(f'{g.id}: fps_hold must be on or off: {fh}')
-    ps = g.get('present_snap', 'off')   # present snapshots by default (nvn_mtl.m mtl_snap_on; DM_PRESENT_SNAP and the iOS launcher's Frame buffering override it): on / off
+    ps = g.get('present_snap', 'off')   # present snapshots by default (nvn_mtl.m mtl_snap_on; DM_PRESENT_SNAP and the launcher's Frame buffering override it): on / off
     if ps not in ('on', 'off'): sys.exit(f'{g.id}: present_snap must be on or off: {ps}')
-    et = g.get('enc_thread', 'off')   # Metal encoding on its own thread on the Mac by default (nvn_rec.h rec_on; on iOS it is on for every game; DM_NVN_ENC_THREAD overrides): on / off
+    et = g.get('enc_thread', 'off')   # Metal encoding on its own thread by default (nvn_rec.h rec_on; DM_NVN_ENC_THREAD overrides): on / off
     if et not in ('on', 'off'): sys.exit(f'{g.id}: enc_thread must be on or off: {et}')
     cp = g.get('core_preempt', 'off')   # same-core preemption approximation (hle_thread.c): on / off
     if cp not in ('on', 'off'): sys.exit(f'{g.id}: core_preempt must be on or off: {cp}')
@@ -172,9 +172,9 @@ def header_one(g):
     upc = upscaler_keys(g, UPSCALER_CHAIN_SOURCE)   # the shaders of its upscaler chain, which the same choice replaces as a whole, before the single dispatch (nvn_mtl.m up_chain_dispatch)
     dbr = g.get('draw_barriers', 'full')   # how draw passes are ordered (nvn_mtl.m barrier_game): full = each waits for all earlier GPU work, game = by the game's own barriers, so vertex work overlaps the previous pass's fragments
     if dbr not in ('full', 'game'): sys.exit(f'{g.id}: draw_barriers must be full or game: {dbr}')
-    tsh = g.get('gpu_ts_hz', '0')   # the counter timestamps' tick rate (nvn_timestamp.h): 0 = by the game's NVN (614.4 MHz, nanoseconds on NVN2), 31250000 for a Switch 2 game that reads raw reports at its system counter rate
+    tsh = g.get('gpu_ts_hz', '0')   # the counter timestamps' tick rate (nvn_timestamp.h): 0 = NVN2's nanoseconds, 31250000 for a Switch 2 game that reads raw reports at its system counter rate
     if not tsh.isdigit(): sys.exit(f'{g.id}: gpu_ts_hz must be a rate in Hz, or 0 for the game\'s NVN: {tsh}')
-    om = g.get('op_mode', 'console')   # the operation mode reported at start (hle_oe.c dm_opmode; DM_OPMODE overrides): console = docked, handheld = touch screen in use (Super Mario Galaxy's pointer)
+    om = g.get('op_mode', 'console')   # the operation mode reported at start (hle_oe.c dm_opmode; DM_OPMODE overrides): console = docked, handheld
     if om not in ('console', 'handheld'): sys.exit(f'{g.id}: op_mode must be console or handheld: {om}')
     pm = g.get('perf_mode', 'follow')   # the performance mode reported (hle_oe.c): follow = the operation mode's (Boost docked, Normal handheld), boost = Boost always
     if pm not in ('follow', 'boost'): sys.exit(f'{g.id}: perf_mode must be follow or boost: {pm}')
@@ -197,8 +197,8 @@ def header_one(g):
          f'#define DM_GAME_APP_POOL {g.int("app_pool"):#x}ull',
          f'#define DM_GAME_MEM_USED {int(g.get("mem_used", "0x4000000"), 0):#x}ull',   # used memory reported beside the heap (hle_svc.c GetInfo UsedMemorySize)
          f'#define DM_GAME_SYS_RESOURCE {int(g.get("sys_resource", "0x2000000"), 0):#x}ull',   # the NPDM's system resource size (hle_svc.c GetInfo TotalSystemResourceSize; 0 = no virtual address memory)
-         f'#define DM_GAME_ARGS {q(g.get("game_args", ""))}',   # game arguments when the command line gives none (main.c; Octopath Traveler 0: Unreal's -SwitchVirtualAddressSpaceSize=)
-         f'#define DM_GAME_ENV {q(g.get("game_env", ""))}',   # KEY=VALUE pairs getenv answers (hle_os.c; Absolum: .NET's DOTNET_GCRegionRange)
+         f'#define DM_GAME_ARGS {q(g.get("game_args", ""))}',   # game arguments when the command line gives none (main.c; made for Octopath Traveler 0: Unreal's -SwitchVirtualAddressSpaceSize=)
+         f'#define DM_GAME_ENV {q(g.get("game_env", ""))}',   # KEY=VALUE pairs getenv answers (hle_os.c; made for Absolum: .NET's DOTNET_GCRegionRange)
          f'#define DM_GAME_MEM_MAP_LIMIT {int(mml == "on")}',
          f'#define DM_GAME_DISPLAY_VERSIONS {vers}',
          f'#define DM_GAME_PRESENT_DISPLAY {int(pi == "display")}',

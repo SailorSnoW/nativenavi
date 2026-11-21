@@ -40,7 +40,7 @@ func offeredOptions(_ s: Setting, current: String?) -> [[String]] {
 final class LauncherModel: ObservableObject {
     let settings: [Setting]
     let fixed: Set<String>      // set by an env file or by the launch environment: shown, not changed
-    let fromLaunch: Set<String>   // of those, the ones the launch environment set (a front end's launch overrides, Xcode; DM_ENV_LAUNCH_KEYS from launcher.c or main.m)
+    let fromLaunch: Set<String>   // of those, the ones the launch environment set (a front end's launch overrides, Xcode; DM_ENV_LAUNCH_KEYS from launcher.c)
     let ignoreSaved: Bool   // DM_SAVED_CHOICES=0: start from the defaults, and leave the saved choices as they are
     @Published var values: [String: String] = [:]
 
@@ -90,7 +90,7 @@ final class LauncherModel: ObservableObject {
         fputs("launcher: settings reset to the game's defaults\n", stderr)
     }
 
-    // Before the game starts: every setting not set by an env file goes into the environment (DM_LANG replaces the packed language main.m set as a default). Only a choice that
+    // Before the game starts: every setting not set by an env file goes into the environment (DM_LANG too: launcher.c sets the packed language afterwards, only where nothing set one). Only a choice that
     // differs from the game's default is stored: a setting the player left at its default follows the defaults of a later build (the settings it was tested with)
     func apply() {
         for s in settings {
@@ -102,21 +102,5 @@ final class LauncherModel: ObservableObject {
     }
     private func store(_ s: Setting, _ v: String) {
         if !ignoreSaved { if s.isDefault(v) { defaults.removeObject(forKey: "launcher." + s.env) } else { defaults.set(v, forKey: "launcher." + s.env) } }
-    }
-
-    // A choice made while the game runs: saved as Play saves it, so the settings screen shows it at the next start, and put in the environment.
-    // A value an env file or the launch fixed stays
-    func choose(_ s: Setting, _ v: String) {
-        guard !fixed.contains(s.env), s.accepts(v) else { return }
-        values[s.env] = v; store(s, v); setenv(s.env, v, 1)
-        fputs("launcher: \(s.env)=\(v) (in-game menu)\n", stderr)
-    }
-
-    // DM_LAUNCHER=0: no screen, but the saved choices still apply (only DM_SAVED_CHOICES=0 ignores them); nothing is written
-    func applySaved() {
-        for s in settings where !fixed.contains(s.env) {
-            let v = values[s.env] ?? s.def
-            if !s.isDefault(v) { setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v) (saved choice)\n", stderr) }
-        }
     }
 }

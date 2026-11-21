@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-# One uncompressed tar in place of a folder of many small files that only a build reads: Xcode's derived data (ipa/build/ios/pkg/dd), which Xcode wants as a folder. A build unpacks the folder, uses it with ordinary paths and packs it at the end, so the tools that read it do not change. The tar sits
-# beside the folder as <folder>.tar. A build that stops leaves the folder as it is, and the next one takes it. Times are kept: Xcode's incremental build and prune_shader_cache go by them.
+# One uncompressed tar in place of a folder of many small files that nothing reads for now. The scripts use pack_quiet: the quiet folders of a developer's work folder, at the end of scripts/build_app.py and scripts/regress.py.
+# unpack and pack are for a folder that only a build reads (in nxnative, Xcode's derived data and a compile cache; no build here has one): the build unpacks the folder, uses it with ordinary paths and packs it at the end, so the tools that read it do not change. The tar sits
+# beside the folder as <folder>.tar. A build that stops leaves the folder as it is, and the next one takes it. Times are kept.
 # Every state a stop can leave is handled by unpack:
 #   folder alone                a stopped build, or a build folder from before this: used as it is
 #   folder and tar              stopped after the unpack's rename or the pack's rename: the folder is complete and at least as new, the tar goes
 #   tar and <folder>.gone       stopped while the pack removed the folder: the tar is complete, the rest goes
 #   <folder>.unpack, <tar>.part unfinished, they go
-# unpack takes a lock on the parent folder that pack releases: regress.py's chain builds share a game's compile cache with the NSP script, and neither may pack it under the other.
+# unpack takes a lock on the parent folder that pack releases: of two builds that share a folder, neither may pack it under the other.
 import fcntl, os, shutil, subprocess, time
 from pathlib import Path
 
@@ -48,7 +49,7 @@ def _unlock(folder):
 
 
 def unpack(folder, say=print):
-    """Make folder the ordinary folder its build reads. Returns False when there is nothing yet: the build then makes it. A damaged tar only costs the work it held: both uses are caches"""
+    """Make folder the ordinary folder its build reads. Returns False when there is nothing yet: the build then makes it. A damaged tar only costs the work it held: such a folder is a cache"""
     folder = Path(folder); tar = tar_of(folder); work = Path(f'{folder}.unpack'); gone = Path(f'{folder}.gone')
     _lock(folder, say)
     _remove(work); _remove(Path(f'{tar}.part'))
@@ -69,7 +70,7 @@ def unpack(folder, say=print):
 def pack(folder, say=print, xattrs=False):
     """Replace folder with its tar and release unpack's lock. A folder another build is using is left to that build, which packs it at its end.
     A pack that fails (a full drive) is one [RED] line, not an error: the build is done, and the folder stays for the next one.
-    xattrs: keep extended attributes, which `tar --xattrs -xf` restores (a RomFS folder's case-collision names, hle_fs.c's guest_name; the two caches have none they need)"""
+    xattrs: keep extended attributes, which `tar --xattrs -xf` restores (a RomFS folder's case-collision names, hle_fs.c's guest_name; a build's cache has none it needs)"""
     folder = Path(folder); tar = tar_of(folder); part = Path(f'{tar}.part'); gone = Path(f'{folder}.gone')
     if not _lock(folder): return
     try:
@@ -99,7 +100,7 @@ def _quiet_size(folder, since):   # (files, bytes) under folder; None as soon as
 
 
 def pack_quiet(work, say=print, days: float = QUIET_DAYS, min_files=QUIET_MIN_FILES):
-    """Each top-level folder of a game's work folder (<NSP folder>/<id>-work) untouched for days becomes <name>.tar, `tar --xattrs -xf <name>.tar -C <name>` in a new folder bringing it back:
+    """Each top-level folder of a game's work folder (<NUP folder>/<id>-work) untouched for days becomes <name>.tar, `tar --xattrs -xf <name>.tar -C <name>` in a new folder bringing it back:
     what agents and investigations leave there, hundreds of thousands of files nothing reads again. regress/ is regress.py's own, a folder of few files is left readable, and a Python virtual
     environment (pyvenv.cfg) stays, however long it goes unchanged: its files are read and not written, and scripts run it by its path.
     An existing <name>.tar is never overwritten. The tar must fit on the drive beside the folder, with QUIET_FREE to spare. Returns the names packed"""

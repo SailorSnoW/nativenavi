@@ -1,6 +1,6 @@
-"""Shader regressions between two builds of a game's shader libraries (dm/gfx/tools/shader_regressions.py) and the NSP script's stop on them (build_app.py
+"""Shader regressions between two builds of a game's shader libraries (dm/gfx/tools/shader_regressions.py) and the packing script's stop on them (build_app.py
 shader_regressions; GitHub issue #272): a shader that translated in the newest other b-*/ of the same game and fails now is listed, new keys and shaders that failed before are not,
-another game's stamped library is never the previous build, and the NSP script stops unless ALLOW_SHADER_REGRESSIONS. Build reports only: no game files, translator or Metal needed.
+another game's stamped library is never the previous build, and the packing script stops unless ALLOW_SHADER_REGRESSIONS. Build reports only: no game files, translator or Metal needed.
 Also what a shader that built lost (losses, report_losses), which never stops a build."""
 import contextlib
 import importlib.util

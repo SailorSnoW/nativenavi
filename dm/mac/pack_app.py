@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # Pack a self-contained, double-clickable Mac app of a game (the packing script's --platform mac-app): the launcher (dm/mac/launcher.c, linked here with its settings window,
 # dm/mac/Launcher.swift, with its model and rows) as CFBundleExecutable, the Mac host beside it,
-# and in Contents/Resources: romfs.img (the RomFS image), control.nacp (the game's control data, which the host finds beside the RomFS: hle_fs.c control_read), msl/<b-chain.img> (the Mac shader library),
-# aoc/<index>/ (DLC), pso/ (an NVN game's pipeline archive made offline for this Mac's GPU, dm/gfx/tools/pso_offline.py: the launcher hands it to the host as DM_PSO_BUNDLE),
+# and in Contents/Resources: romfs.img (the RomFS image), msl/<b-chain.img> (the Mac shader library),
+# aoc/<index>/ (DLC), pso/ (the pipeline archive made offline for this Mac's GPU, dm/gfx/tools/pso_offline.py: the launcher hands it to the host as DM_PSO_BUNDLE),
 # and dm/ (the rewritten modules and their rewriter tables, the profile's shader_map.tsv / pso_manifest.tsv / c1_full.tsv / cb_extent.tsv / shader_pairs.tsv / pso_pairs.tsv, font/, env.txt,
 # launcher.json: the game's launcher settings, dm/games/settings.py, which the settings window and Mac front ends show),
 # plus AppIcon.icns from the game's icon (sips, iconutil) and the Info.plist keys the launcher reads (DMTitleID, DMRomfsMarker, DMLanguage).
@@ -23,8 +23,8 @@ import nso_syms
 import romfs as rfs
 import shader_lib
 import vol_space   # the space a build may write, with what APFS frees on demand
-MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv')   # what the host reads from the module folder (build_ipa.sh copies the same tables but changed.tsv: the iPhone's cheats never write code)
-MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json); an NVN game's b-<chain> goes in as one file of them (shader_lib.py)
+MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv')   # what the host reads from the module folder (changed.tsv: the mods' code patches, hle_mods.c)
+MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json); the shader chain's b-<chain> goes in as one file of them (shader_lib.py)
 # read beside DM_NVN_SHMAP; any of them may be absent. The shader pairs are the pipeline prebuild's (nvn_mtl.m pso_prebuild): without them the
 # app makes no pulling bases, a hybrid draw has no stand-in and a new pipeline compiles on the submit thread
 TABLES = ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv')
@@ -305,7 +305,7 @@ def msl_inputs(msl):
 
 
 def copy_msl(msl, msls, dst, clone):
-    """The shader libraries to dst, msl/<their name> in the app: an NVN game's as the one file dst.img, of what the host reads. Writing it costs the space of a copy, not a clone, as it leaves out the Mac build's sources"""
+    """The shader libraries to dst, msl/<their name> in the app: the shader chain's (b-<chain>) as the one file dst.img, of what the host reads. Writing it costs the space of a copy, not a clone, as it leaves out the Mac build's sources"""
     if is_chain_library(msl): shader_lib.subset(msl, f'{dst}.img'); return
     dst.mkdir(parents=True); copy(msls, dst, clone)
 
@@ -330,7 +330,7 @@ def selected_inputs(a):
     pairs = Path(a.pso_pairs) if a.pso_pairs and not any(p.name == 'pso_pairs.tsv' for p in tables) else None
     fonts = sorted(p for p in Path(a.font).glob('*.ttf') if not detritus(p.name))
     files = [Path(a.host)] + mods + msls + pso + tables + fonts + ([pairs] if pairs else [])
-    files += [Path(p) for p in (a.env_file, a.settings, a.icon, a.control_nacp) if p]
+    files += [Path(p) for p in (a.env_file, a.settings, a.icon) if p]
     for p in files:
         if not p.is_file(): raise SystemExit(f'no input file at {p}')
     return mods, msls, pso, tables, pairs, fonts, files
@@ -397,7 +397,7 @@ def pack(a):
             if key_file.is_file(): os.replace(key_file, set_aside)
     try:
         a = argparse.Namespace(**vars(a))
-        for name in ('out', 'host', 'patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'pso_pairs', 'env_file', 'settings', 'icon', 'control_nacp'):
+        for name in ('out', 'host', 'patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'pso_pairs', 'env_file', 'settings', 'icon'):
             if getattr(a, name): setattr(a, name, str(Path(getattr(a, name)).resolve()))
         mods, msls, pso, tables, pairs, fonts, files = selected_inputs(a)
         clang = Path(run(['xcrun', '--find', 'clang']).strip()).resolve()
@@ -455,7 +455,6 @@ def pack(a):
     if fonts: copy(fonts, dm / 'font', False)
     if a.env_file: shutil.copyfile(a.env_file, dm / 'env.txt')
     if a.settings: shutil.copyfile(a.settings, dm / 'launcher.json')
-    if a.control_nacp: shutil.copyfile(a.control_nacp, res / 'control.nacp')
     msl_dst = res / 'msl' / (a.msl_name or shader_lib.name_of(msl))
     old_app = out if out.is_dir() else None
     took = {f[0]: f[1:] for f in inputs['files']}   # what the app's key took of each selected file
@@ -469,7 +468,7 @@ def pack(a):
             step(label); data_shell(b, name, a.bundle_id or f'org.nxnative.{a.title_id.lower()}'); (b / 'Contents/Resources' / top).parent.mkdir(parents=True, exist_ok=True)
             fill(b / 'Contents/Resources' / top); fresh.append(b)
         link.parent.mkdir(parents=True, exist_ok=True); link.symlink_to(os.path.relpath(b / 'Contents/Resources' / top, link.parent))
-    image = msls[0] if is_chain_library(msl) and len(msls) == 1 and msls[0].suffix == '.img' else None   # an NVN game's library as one file: the app's is another file, cut from it
+    image = msls[0] if is_chain_library(msl) and len(msls) == 1 and msls[0].suffix == '.img' else None   # the shader chain's library as one file: the app's is another file, cut from it
     read = {}   # its SHA-256, for the record (as_packed): read on a thread of its own while the app's file is written
     def fill_msl(d):   # msl/<library>
         with concurrent.futures.ThreadPoolExecutor(1) as pool:
@@ -528,7 +527,6 @@ def parse(argv):
     ap.add_argument('--aoc', help='the DLC RomFS images or folders by index')
     ap.add_argument('--pso', help='the pipeline archive made offline for this Mac (the output of pso_offline.py: <arch>.mtl4a, prebuilt.tsv)')
     ap.add_argument('--pso-pairs', help='pso_pairs.tsv for a profile that has none (the shader split\'s copy)')
-    ap.add_argument('--control-nacp', help='the game\'s control data (control.nacp; Resources/control.nacp, beside the RomFS, where the host reads it: fs::GetCacheStorageMax)')
     ap.add_argument('--env-file', help='environment switches baked in (Resources/dm/env.txt)')
     ap.add_argument('--settings', help='the game\'s launcher settings (dm/games/settings.py output; Resources/dm/launcher.json, which the Mac front end reads)')
     ap.add_argument('--title-id', required=True); ap.add_argument('--name', required=True)

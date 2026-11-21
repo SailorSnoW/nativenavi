@@ -3,7 +3,7 @@
 # and frame-time percentiles from the host's per-frame timing rows (DM_NVN_TSV): frame time (start to start), the interval each frame stayed on screen, GPU time, frames per second.
 # Variants run the same route with other settings, in turn and repeated, so two hosts or two sets of switches compare under the same load; a screenshot after the measurement
 # window of every run shows whether a variant changes the picture without stalling a measured frame.
-# Usage: python3 scripts/bench.py <id>_build folder [options]   (the folder the NSP script made with --platform mac: tools/dmhost, the rewritten modules, the extracted RomFS,
+# Usage: python3 scripts/bench.py <id>_build folder [options]   (the folder the packing script made with --platform mac: tools/dmhost, the rewritten modules, the extracted RomFS,
 #   shader/cache and font; the game's title ID is the folder name's start). -h lists the options. Exit code 0 when every run gave frames, 1 otherwise.
 #   --route <name>: a route of the game's profile (dm/games/<id>/bench.tsv); the first one by default. --save <folder>: the save the route starts from (default <id>_build/run/save);
 #   each run gets a copy, the folder itself is not changed. --variant 'label:KEY=VALUE,KEY=VALUE': a variant (repeatable; KEY host=<path> runs another host binary, msl=<folder>
@@ -183,7 +183,7 @@ def main():
     a = ap.parse_args()
     build = Path(a.build).expanduser().resolve()
     m = re.match(r'([0-9A-Fa-f]{16})_build$', build.name)
-    if not m or not build.is_dir(): fail(f'{build} is not an <id>_build folder of the NSP script')
+    if not m or not build.is_dir(): fail(f'{build} is not an <id>_build folder of the packing script')
     gid = m.group(1).upper()
     rs = routes(gid)
     if a.route: route = rs.get(a.route) or fail(f'no route {a.route!r} in dm/games/{gid}/bench.tsv (routes: {", ".join(rs) or "none"})')

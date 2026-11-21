@@ -2,7 +2,7 @@
 No game files. Relocation is accepted; changed logic, callees, ambiguity and wrong
 profile/module selection are refused through the rewriter's actual registry code.
 A patch of several functions applies whole or not at all; the rewriter lists what an
-unregistered build kept, and the NSP script reports it.
+unregistered build kept, and the packing script reports it.
 """
 import ast
 import contextlib
@@ -446,7 +446,7 @@ class Patches(unittest.TestCase):
             with self.assertRaises(ValueError): validate(bad)
 
     def test_pack_report(self):
-        # the NSP script's summary of what modules of unregistered builds kept (report_fix_coverage)
+        # the packing script's summary of what modules of unregistered builds kept (report_fix_coverage)
         import importlib.util as iu
         repo = TOOLS.parents[1]
         sys.path.insert(0, str(repo / 'dm/games'))

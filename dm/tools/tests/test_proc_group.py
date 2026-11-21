@@ -1,4 +1,4 @@
-"""proc_group.py and its two callers, the NSP script's run and regress.py's run_heavy, on real process trees (fixtures/proc_tree.py: a wrapper and a child of it in the
+"""proc_group.py and its two callers, the packing script's run and regress.py's run_heavy, on real process trees (fixtures/proc_tree.py: a wrapper and a child of it in the
 group the supervisor owns, each ready before the test acts): a cancellation (an interrupt raised in the progress callback, a SIGTERM, a SIGHUP, an error writing the log, a second
 interrupt, a paused job) stops the whole group within its grace period, a child left running after the wrapper's normal exit (holding the output or not) is stopped and
 fails the step, exit codes in ok pass and others fail, and cli gives SIGTERM's and SIGHUP's handlers back. Every check is that no process of the group is left, not only the wrapper.
@@ -83,7 +83,7 @@ class Tree(unittest.TestCase):
 
 
 class Run(Tree):
-    """The NSP script's run"""
+    """The packing script's run"""
     def setUp(self):
         super().setUp()
         self.out = io.StringIO()

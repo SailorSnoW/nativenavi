@@ -1,8 +1,8 @@
-"""One swap_in call of the NSP script in a process of its own, with a fault injected, for test_nsp_swap_in.py:
+"""One swap_in call of the packing script in a process of its own, with a fault injected, for test_nsp_swap_in.py:
 
   swap_in_run.py SCRIPT ROOT FAULT
 
-SCRIPT: the NSP script to load (the repository's, or another revision's for a comparison). ROOT holds the staged output new.partial and the destination out.
+SCRIPT: the packing script to load (the repository's, or another revision's for a comparison). ROOT holds the staged output new.partial and the destination out.
 FAULT: none; rename-fail or rename-int (the rename of new.partial onto out raises OSError or KeyboardInterrupt); rename-kill (that rename SIGKILLs the process);
 rename-fail-back (that rename fails, and so does putting the old output back: out.old.partial onto out); aside-int (the old output's rename aside raises KeyboardInterrupt
 right after it is done, before the next step);
