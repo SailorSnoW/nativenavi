@@ -5,7 +5,7 @@ A graphical app that packs the game, or starts it, is a project of its own, not 
 - [Building: the packing script](#building-the-packing-script)
 - [The settings list](#the-settings-list)
 - [Starting a game](#starting-a-game)
-- [Local users and the account selector](#local-users-and-the-account-selector)
+- [Local users](#local-users)
 - [Saved choices](#saved-choices)
 - [Mods](#mods)
 - [An app that hosts the engine](#an-app-that-hosts-the-engine)
@@ -47,7 +47,6 @@ The built app carries the settings the game supports, as its settings window sho
 - `env`: the environment switch the setting sets. `kind`: `choice` (one of `options`, each `[value, label]`), `range` (a number from `min` to `max` in `step`s) or `toggle` (`on` or `off`, the values the switch takes).
 - `section`: the heading the row goes under, today `Game`, `Controls` or `Performance`. Sections come in the order of their first rows, and rows in the order to show them. A new section may appear in schema 1: a reader draws a section it does not know like the others, under its name, as the app's own window does.
 - `default`: the tested default ([Tested defaults](settings.md#tested-defaults)), with profile defaults resolved for the game. A front end that keeps only the choices that differ from it lets a newer build's tested defaults reach the player, as the app's own window does.
-- `base` (optional, render scale only): `{"docked": [w, h], "handheld": [w, h]}`, the 3D views' size that the scale multiplies, so a front end can show 0.75 as 1200×675 docked. It comes from the game's profile (`render_base`); Ocarina of Time's build has no render scale row, so its list has none.
 - `level` (optional): `basic` marks a setting to show first, for a front end that shows a short list and puts the rest behind a second step. Without it, the front end decides.
 - `needs` (optional): `<VAR>=<value>` makes the row a sub-setting of the row that sets `<VAR>`, drawn only while that row has that value (Rumble strength only while rumble is on). A row naming a variable the list does not have stays drawn.
 - An app without the file has no settings to offer: start it as it is.
@@ -64,13 +63,13 @@ The game quits when the player holds a controller's Home button for 2 seconds an
 
 Settings a player chose in a front end and wants kept, also for a start from Finder or the Dock, go in the app's saved choices ([Saved choices](#saved-choices)), not in its environment.
 
-## Local users and the account selector
+## Local users
 
-The account applet uses `front_user_select()` (`dm/host/front.h`) on the guest thread; the front end presents native UI on its main thread and blocks the caller until a choice or cancellation. The built-in Mac dialog accepts mouse and keyboard input. Show the host-supplied users (including their in-use labels), and Add user / Skip only when allowed. Return the user's slot or the named `FRONT_USER_*` action. A front end without an interactive surface returns `FRONT_USER_CANCEL`; it must not guess an account from the number of controllers. The host validates the answer, owns registration and session state, and applies the game's exclusions and permitted automatic selection.
+The host has no account selector and creates no users: `dm/host/front.h` has no user-selection call for a front end to implement. The preselected user the game opens is user 1 (`dm/host/hle_account.c`).
 
-User 1 keeps the original UID, `DM_NICK`, and `DM_SAVE` directory. Additional local users have stable UIDs and `Player N` names; their saves are sibling directories `<DM_SAVE>_userN` (N = 2 through 8). Registered slots are stored in `<DM_SAVE>.users` (a small `nxnative-users-1` record with a hexadecimal slot mask); do not edit it while the game runs. Registration is atomic and separate from save commits. Open sessions are never persisted.
+User 1 keeps the original UID, `DM_NICK`, and `DM_SAVE` directory. A save store that carries a registry of more users, `<DM_SAVE>.users` (a small `nxnative-users-1` record with a hexadecimal slot mask, which the host only reads), still lists them: they have stable UIDs and `Player N` names, and their saves are sibling directories `<DM_SAVE>_userN` (N = 2 through 8). A registry the host cannot read is left as it is and logged in red. Open sessions are never persisted.
 
-When moving, backing up or restoring an app's local saves, preserve the registry and all of these committed account directories together, as well as the existing device save. The transaction work directories (`.work` / `.new`) are not committed saves. A primary-save-only export does not contain the other users' progress.
+When moving, backing up or restoring an app's local saves, preserve the registry, when there is one, and all of these committed account directories together. The transaction work directories (`.work` / `.new`) are not committed saves.
 
 ## Saved choices
 
@@ -128,8 +127,6 @@ Front-ends: new: a kind of input, or a requirement, that a front end could offer
 ```
 
 Most commits have none. A line is the author's knowledge, so its absence is no proof that nothing changed.
-
-**Data a player already has moves by itself.** When a change makes the host read saves or other kept data differently, the host carries the old form forward, as with [saves named before backslash paths](reference/services.md#saves-named-before-backslash-paths): a front end has nothing to patch.
 
 ## What a front end cannot see yet
 

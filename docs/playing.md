@@ -46,14 +46,9 @@ English by default. Pick another when packing with `--language` (`-l`), by code 
 
 Lines like `DM_OPMODE=0` (handheld mode: lower resolution) in `~/Library/Application Support/nxnative/<title ID>/env.txt` win over the settings window, which then shows them greyed out ([the full list](settings.md#settings-in-a-file)). `DM_FPS_TARGET=30` runs the game at 30 fps instead of 60, which uses less power. `DM_LAUNCHER=0` skips the settings window.
 
-## Miis and console files
+## Console files
 
-Mii heads and your own Miis come from your console, not from this project. Copy them from your own console into `~/Library/Application Support/nxnative/system`:
-
-- `sysdata/<system data ID>/`: a system data archive's files, for example `sysdata/0100000000000802/` (the Switch's Mii heads) or `sysdata/0400000000000849/` (a Switch 2 game's);
-- `save/8000000000000030/MiiDatabase.dat`: your console's Miis, listed before the six default ones. The file is only read.
-
-Without them, Miis have no heads, and only the six default Miis are listed ([details](reference/services.md#a-consoles-own-mii-database-and-system-data)). When a game asks you to make a Mii, it gets the default Mii, kept in `system/host/` ([details](reference/services.md#a-mii-made-in-the-editors-place)).
+The host ships no console data. The one console file it reads is your console's Mii database, when you copy it from your own console to `~/Library/Application Support/nxnative/system/save/8000000000000030/MiiDatabase.dat`: a game that looks a Mii up there finds it. The file is only read; without it the database is empty.
 
 ## Shaders on first sight
 
