@@ -15,15 +15,9 @@
 #include <fcntl.h>
 #include <sys/file.h>   // flock: the lock beside Metal's build folders (ga_claim)
 #include <TargetConditionals.h>
-#if TARGET_OS_OSX
 #include <IOKit/IOKitLib.h>   // the GPU's core count (nvn_geometry.inc mesh_scratch)
-#endif
 #include <os/os_sync_wait_on_address.h>   // the uniform copy hand-off (nvn_rec.h ubc_wait)
-#if TARGET_OS_IPHONE
-#include <os/proc.h>   // os_proc_available_memory: for the memory readout line
-#else
 #include <IOKit/IOKitLib.h>   // gpu_cores
-#endif
 #include "nvn_mtl.h"
 #include "nvn_queue.h"
 #include <mach/mach.h>
@@ -5492,9 +5486,6 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     // os_proc_available_memory: how far this process is from being terminated by the system for memory, iOS only; the Mac writes "none". On a phone, a crash with no log is most likely this number reaching 0
     os_unfair_lock_lock(&g_rh_lk); unsigned rh_n = g_rh_n; uint64_t rh_bytes = g_rh_bytes; os_unfair_lock_unlock(&g_rh_lk);
     char avail[32] = "none";
-#if TARGET_OS_IPHONE
-    snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
-#endif
     MLOG("memory up to frame %llu: resident %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, serial objects %u, memory pools %d (resident %d; peak %d / tracking table capacity %d; freed but alive %lu, %llu MB), shared textures %u (%u kept by the sharing table alone, %llu MB, %llu MB of it drawn into or shader-written, the oldest idle %llu submissions; evicted with pools %llu (serial entries that went with them %llu), on storage takeover %llu in total), texture re-uploads %llu in total, per-frame arena blocks created %llu in total (alive %llu, %llu MB; released when idle %llu, %llu MB in total), finalized textures still referenced %u (small table, %llu put in total), retired but held by a serial %u, recycled texture heaps made %llu, reused %llu, freed %llu, waiting %u (%llu MB); headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, ns, live, pres, peak, cap, dead_n, dead_mb, ashared, au.entries, (unsigned long long)(au.bytes >> 20), (unsigned long long)(au.writable_bytes >> 20), (unsigned long long)au.oldest_idle, (unsigned long long)as.evicted, (unsigned long long)as.pool_entries, (unsigned long long)as.taken, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, (unsigned long long)g_arena_live, (unsigned long long)(g_arena_live_bytes >> 20), (unsigned long long)g_arena_freed, (unsigned long long)(g_arena_freed_bytes >> 20), nghost, (unsigned long long)ghost_puts, nwait,
          (unsigned long long)g_rh_made, (unsigned long long)g_rh_reused, (unsigned long long)g_rh_trimmed, rh_n, (unsigned long long)(rh_bytes >> 20), avail);
     { void mtl_vc_stats(unsigned *, uint64_t *, uint64_t *), mtl_tb2_stats(uint64_t *, uint64_t *, uint64_t *, uint64_t *, uint64_t *); uint64_t mtl_tex_mis_count(void); unsigned vn; uint64_t vh, vm, tb, tm, tf, tc, tcb;
@@ -6278,7 +6269,6 @@ static void bare_dims(NSUInteger *w, NSUInteger *h);
 static unsigned gpu_cores(void) {
     static unsigned n; static dispatch_once_t once;
     dispatch_once(&once, ^{
-#if TARGET_OS_OSX
         io_iterator_t it;
         if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("AGXAccelerator"), &it) != KERN_SUCCESS) return;   // takes the matching dictionary
         for (io_object_t s; !n && (s = IOIteratorNext(it)); IOObjectRelease(s)) {
@@ -6287,7 +6277,6 @@ static unsigned gpu_cores(void) {
             if (v) CFRelease(v);
         }
         IOObjectRelease(it);
-#endif
     });
     return n;
 }
@@ -9534,13 +9523,8 @@ static int pso4_on(void) {
     static int v = -1;
     if (v < 0) {
         const char *e = getenv("DM_PSO_MTL4");
-#if TARGET_OS_IPHONE
-        v = e ? !strcmp(e, "1") : DM_GAME_PSO_MTL4;   // the profile's pso_mtl4
-        if (!v) MLOG("render pipelines through the MTLDevice (iOS: DM_PSO_MTL4=1 or the profile key pso_mtl4 on turns on the Metal 4 bases, the pipeline archive and the hybrid pipelines)");
-#else
         v = !(e && !strcmp(e, "0"));
         if (!v) MLOG("DM_PSO_MTL4=0: render pipelines are built through the MTLDevice (no bases, no pipeline archive)");
-#endif
         // Metal cannot capture pipelines made from bases ("Capturing Render pipeline specialization is not supported"), and its Metal 4 → 3 conversion for the capture layer
         // crashes on the archives: a run that Metal lets capture GPU frames builds its pipelines through the MTLDevice. Metal answers that itself: a trace document on the Mac
         // when MTL_CAPTURE_ENABLED reads as a non-zero number (1 or 2; unset, empty, 0, "true" or "YES" do not), on iOS in a build with MetalCaptureEnabled (DM_METAL_CAPTURE=1),
@@ -9549,7 +9533,7 @@ static int pso4_on(void) {
         if (v) {
             MTLCaptureManager *m = [MTLCaptureManager sharedCaptureManager];
             int trace = [m supportsDestination:MTLCaptureDestinationGPUTraceDocument], tools = [m supportsDestination:MTLCaptureDestinationDeveloperTools];
-            if (trace || tools) { v = 0; MLOG("render pipelines through the MTLDevice: Metal may capture GPU frames in this run (%s)", tools ? "Xcode" : TARGET_OS_IPHONE ? "MetalCaptureEnabled" : "MTL_CAPTURE_ENABLED"); }
+            if (trace || tools) { v = 0; MLOG("render pipelines through the MTLDevice: Metal may capture GPU frames in this run (%s)", tools ? "Xcode" : "MTL_CAPTURE_ENABLED"); }
             else MLOG("render pipelines from Metal 4 bases and the pipeline archive (Metal cannot capture GPU frames in this run)");
         }
     }
@@ -18511,13 +18495,9 @@ uint64_t mtl_drawable_ns_take(void) { return atomic_exchange(&g_drawable_ns, 0);
 // Maximum refresh rate (Hz) of the screen when there is a window; returns 0 without a window. Mac uses CoreGraphics display modes (thread-safe C interface; the present configuration is read on the game thread)
 int mtl_display_hz(void) {
     if (!front_metal_layer()) return 0;
-#if TARGET_OS_OSX
     CGDisplayModeRef m = CGDisplayCopyDisplayMode(CGMainDisplayID());
     double hz = m ? CGDisplayModeGetRefreshRate(m) : 0; if (m) CGDisplayModeRelease(m);
     return (int)(hz + 0.5);
-#else
-    int hz = front_screen_max_fps(); return hz > 0 ? hz : 60;   // front_ios.m reads it on the main thread (UIKit is main-thread only, and UIScreen.mainScreen is deprecated); 60 until read
-#endif
 }
 static _Atomic uint64_t g_present_stall_ns;   // For unit tests: an extra pause before each present on the present thread (simulating a drawable that stays unavailable)
 void mtl_present_test_stall(uint64_t ns) { g_present_stall_ns = ns; }
@@ -19133,9 +19113,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     if (atomic_load(&g_gpu_lost)) return 0;   // the display command buffer would be ignored too: take no drawable from the screen the front end is about to close
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
     if (!layer) return 0;
-#if TARGET_OS_OSX
     if (!layer.displaySyncEnabled) layer.displaySyncEnabled = YES;   // Windowed mode follows the display's vsync to prevent tearing
-#endif
     present_pipeline(layer.pixelFormat);   // Same as the original path: the first frame compiles the pipeline before taking the drawable
     if (g_grab_cb) grab_present(src, crop, layer.drawableSize);   // Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
     uint64_t dt0 = now_ns();
@@ -19183,9 +19161,6 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     }
     [g_q4 signalDrawable:dr];
     g_present_alloc_fence[alloc_i] = ticket;
-#if TARGET_OS_SIMULATOR   // The iOS simulator SDK has no presentation-time callback and no minimum display duration (used only for picture acceptance, display-link ticks are not counted)
-    (void)period; [dr present];
-#else
     uint64_t pn = ticket;   // Record the present time by the game's present sequence number (ticket number): hle's present statistics are taken by "the game's nth present"; in the display link path the actual present count != the game's present count (old frames get merged and dropped)
     [dr addPresentedHandler:^(id<MTLDrawable> d) {   // Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)
         CFTimeInterval tt = d.presentedTime;
@@ -19195,7 +19170,6 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     // Each frame is displayed for at least one present period: when the GPU completion time jitters around a 120 Hz refresh boundary, the paired "25 ms + 8.33 ms" stutter no longer appears
     if (target_ts > 0) [dr present];
     else if (period > 0) [dr presentAfterMinimumDuration:period]; else [dr present];
-#endif
     (void)frame;
     return 1;
 }
@@ -19236,7 +19210,7 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
 static int g_link_drain_on = -1;   // -1 = not read yet (file-level so that t_present_rescue can set it)
 static int link_drain_on(void) {
     if (g_link_drain_on < 0) {
-        const char *e = getenv("DM_PRESENT_DRAIN"); g_link_drain_on = e ? atoi(e) != 0 : TARGET_OS_OSX;
+        const char *e = getenv("DM_PRESENT_DRAIN"); g_link_drain_on = e ? atoi(e) != 0 : 1;
         MLOG("display link: frames standing in the present queue are %s (DM_PRESENT_DRAIN)", g_link_drain_on ? "drained: the acquire waits them out once the game has kept up for 2 s" : "left standing");
     }
     return g_link_drain_on;
@@ -19245,7 +19219,7 @@ static int link_drain_on(void) {
 static int g_link_latch_on = -1;   // -1 = not read yet
 static int link_latch_on(void) {
     if (g_link_latch_on < 0) {
-        const char *e = getenv("DM_PRESENT_LATCH"); g_link_latch_on = e ? atoi(e) != 0 : TARGET_OS_OSX;
+        const char *e = getenv("DM_PRESENT_LATCH"); g_link_latch_on = e ? atoi(e) != 0 : 1;
         MLOG("display link: %s (DM_PRESENT_LATCH)", g_link_latch_on ? "the callback that woke the acquire waits briefly for its present and takes it" : "each callback takes the frame already queued");
     }
     return g_link_latch_on;

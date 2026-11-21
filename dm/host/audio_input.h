@@ -11,7 +11,6 @@ enum { DM_AUDIO_INPUT_PCM16 = 2, DM_AUDIO_INPUT_CHANNELS = 1, DM_AUDIO_INPUT_RAT
 #define DM_AUDIO_INPUT_DEVICE "AudioVirtualInput"
 
 // Platform hooks. The iOS host intentionally keeps the existing no-input behavior.
-#if TARGET_OS_OSX
 int dm_audio_input_platform_device_available(void); // Checks hardware and granted permission without prompting.
 int dm_audio_input_platform_prepare(void);     // Prepares capture only when launcher permission is granted; never prompts.
 int dm_audio_input_platform_start(void);
@@ -19,17 +18,6 @@ void dm_audio_input_platform_close(void);
 int dm_audio_input_platform_failed(void);
 int dm_audio_input_platform_route_changed(void);
 void dm_audio_input_platform_info(char name[0x100], char uid[0x100], double *sample_rate, int *channels);
-#else
-static inline int dm_audio_input_platform_device_available(void) { return 0; }
-static inline int dm_audio_input_platform_prepare(void) { return -1; }
-static inline int dm_audio_input_platform_start(void) { return -1; }
-static inline void dm_audio_input_platform_close(void) { }
-static inline int dm_audio_input_platform_failed(void) { return 1; }
-static inline int dm_audio_input_platform_route_changed(void) { return 0; }
-static inline void dm_audio_input_platform_info(char name[0x100], char uid[0x100], double *sample_rate, int *channels) {
-    (void)name; (void)uid; (void)sample_rate; (void)channels;
-}
-#endif
 
 int dm_audio_input_available(void);
 void dm_audio_input_device_name(char out[DM_AUDIO_INPUT_NAME_SIZE]);

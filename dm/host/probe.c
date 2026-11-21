@@ -7,9 +7,7 @@
 #include <sys/mman.h>
 #include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
-#if !TARGET_OS_IPHONE
 #include <mach/mach_vm.h>   // the write watch (DM_PROBE_WATCH): iOS's SDK has no mach_vm.h
-#endif
 #include <pthread.h>
 #include <stdatomic.h>
 #include <unistd.h>
@@ -17,7 +15,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 void crash_set_trap_hook(int (*fn)(ucontext_t *uc));
-#if !TARGET_OS_IPHONE
 // Syntax module:offset[@x0 offset]. Put a brk at the guest address; on hit print x0..x3 (and the readable strings they point to) and a backtrace, then execute the original instruction from a trampoline slot and jump back.
 // The trampoline borrows x16: place probes only at function entries or at points where x16 is dead; the original instruction must not be PC-relative (adr/adrp/b/bl/ldr literal/cbz...).
 #define MAX_PROBE 16
@@ -371,7 +368,6 @@ static void watch_install(void) {
     else LOG("write watch on %#llx + %#llx (host page %#llx)", (unsigned long long)g_wat, (unsigned long long)g_wlen, (unsigned long long)g_wpg);
 }
 
-#endif
 
 // DM_CTL atrace <hex address> <bytes> (hle_hid.c): the range made inaccessible; the first access to each page after that logs who made it (pc / lr as module offsets, read or write)
 // and opens the page again. Tells which code reads memory the GPU writes (PRAGMATA: the culling chain's results, read back by the game). Up to 64 ranges, 64 lines in all.
@@ -399,7 +395,6 @@ void probe_atrace(uint64_t lo, uint64_t n) {
     LOG("DM_CTL: atrace range %d %#llx + %#llx armed%s", i, (unsigned long long)lo, (unsigned long long)n, r ? " (mprotect failed)" : "");
 }
 void probe_install(void) {
-#if !TARGET_OS_IPHONE
     crash_set_trap_hook(probe_hit);
     const char *frames = getenv("DM_PROBE_FRAMES");
     if (frames) {
@@ -443,7 +438,6 @@ void probe_install(void) {
     }
     if (g_slots && !g_slots_sealed) { mprotect(g_slots, 0x4000, PROT_READ | PROT_EXEC); sys_icache_invalidate(g_slots, 0x4000); g_slots_sealed = 1; }
     watch_install();
-#endif
 }
 
 // ---- DM_CTL "peek" and "memdump" (hle_hid.c): guest memory read safely, whatever is mapped there ----

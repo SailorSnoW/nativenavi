@@ -72,8 +72,3 @@ void front_save_failed(int err);
 // front end keeps: a FATAL line and an abort. Called on Metal's feedback queue; the front end switches to the main thread itself and must not block
 void front_gpu_lost(void);
 
-// The program an oe::ExecuteProgram or oe::RequestToRelaunchApplication recorded starts at the app's next start (the iOS app, DM_EXEC_OUT, hle_oe.c): called on the guest thread after the record is
-// written and before the graceful exit. index = the program, name = its profile's name. The iOS front end names it on screen for about 1.5 s and schedules a local notification that opens the app
-// again, when the player allowed notifications (else it asks on screen to open the app again); it returns when the notification is scheduled. With no DM_EXEC_OUT (an app of one program, which asks to start itself again) it asks the player on
-// screen to open the app again. The default (hle_oe.c, weak) returns at once
-void front_program_handoff(int index, const char *name);

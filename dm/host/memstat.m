@@ -13,9 +13,6 @@
 #include <mach/mach.h>
 #include <mach/vm_statistics.h>
 #include <stdatomic.h>
-#if TARGET_OS_IPHONE
-#include <os/proc.h>
-#endif
 #include "dm.h"
 
 void svc_guest_range(uint8_t **base, size_t *size);
@@ -106,9 +103,6 @@ static void sample(FILE *f, double t, id<MTLDevice> dev) {
     task_vm_info_data_t vi; mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
     uint64_t fp = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &n) == KERN_SUCCESS ? vi.phys_footprint : 0;
     uint64_t avail = 0;
-#if TARGET_OS_IPHONE
-    avail = os_proc_available_memory();
-#endif
     uint64_t virt[NC] = {0}, res[NC] = {0}, bill[NC] = {0};
     static uint32_t seen[1 << 16]; static uint32_t gen; gen++; if (!gen) { memset(seen, 0, sizeof seen); gen = 1; }   // Objects already counted in this sample (open addressing)
     vm_address_t a = 0; vm_size_t sz; natural_t depth = 0; vm_size_t pg = vm_page_size;
@@ -154,9 +148,6 @@ static void memstat_start(void) {
     const char *p = getenv("DM_MEMSTAT");
     if (!p || !*p) return;
     char *path = strdup(p);
-#if TARGET_OS_IPHONE
-    if (*p != '/') { size_t n = strlen(getenv("HOME")) + strlen(p) + 16; path = malloc(n); snprintf(path, n, "%s/Documents/%s", getenv("HOME"), p); }   // Relative name → the container's Documents (the container path is not known before launch)
-#endif
     pthread_t th; pthread_create(&th, NULL, memstat_thread, path); pthread_detach(th);
 }
 
@@ -196,9 +187,6 @@ static void thrcpu_start(void) {
     const char *p = getenv("DM_THRCPU");
     if (!p || !*p) return;
     char *spec = strdup(p);
-#if TARGET_OS_IPHONE
-    if (*p != '/') { size_t n = strlen(getenv("HOME")) + strlen(p) + 16; spec = malloc(n); snprintf(spec, n, "%s/Documents/%s", getenv("HOME"), p); }
-#endif
     pthread_t th; pthread_create(&th, NULL, thrcpu_thread, spec); pthread_detach(th);
 }
 // DM_MEMSTAT and DM_THRCPU, started once by the host's loading (main.c host_preload), not by a constructor: on iOS a constructor runs before the app's main() sets what Documents/env.txt
@@ -209,7 +197,6 @@ void dm_diag_samplers_start(void) {
     memstat_start(); thrcpu_start();
 }
 
-#if TARGET_OS_OSX
 #include <IOKit/IOKitLib.h>
 // GPU time by process over the window since the last line (hle_nvn.c's power summary calls it): the accelerator's user clients each list their creator and, per command queue,
 // the GPU time it has run (AppUsage accumulatedGPUTime, ns). A game whose frame leaves the GPU little time to spare misses its frame rate when other apps draw, and nothing in
@@ -256,4 +243,3 @@ void dm_gpu_share_line(uint64_t frame, double frames) {
         memcpy(prev, u, sizeof u); pn = n; pt = t;
     } });
 }
-#endif

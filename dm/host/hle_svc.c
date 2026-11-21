@@ -15,9 +15,6 @@
 #include <mach/mach.h>
 #include <TargetConditionals.h>
 #include <CoreFoundation/CoreFoundation.h>   // the volume's free space with what the system can purge (guest_file_free_important)
-#if TARGET_OS_IPHONE
-#include <os/proc.h>   // os_proc_available_memory
-#endif
 
 #define SWITCH_ALIAS UINT64_C(0x1000000000)   // a Switch's alias region: 64 GB
 // Reserve one whole block of guest address space, partitioned the Horizon way (address values are the real addresses returned by the host's mmap).
@@ -218,34 +215,11 @@ static int guest_file_wanted(const char *e, uint64_t pool, uint64_t host, uint64
 static int guest_file_open(const char *path) {
     const int fl = O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC;
     for (int i = 0;; i++) {
-#if TARGET_OS_IPHONE
-        // Protection class C (PROTECTION_CLASS_C, which the SDK's headers do not name), whose key stays from the first unlock until the phone restarts; also the class an app's files get by default, hence the plain open
-        int fd = open_dprotected_np(path, fl, 3, 0, 0600);
-        if (fd < 0 && errno != EEXIST) fd = open(path, fl, 0600);
-#else
         int fd = open(path, fl, 0600);
-#endif
         if (fd >= 0 || errno != EEXIST || i) return fd;
         unlink(path);
     }
 }
-#if TARGET_OS_IPHONE
-// Class C or D, setting C while the file is empty when it has another one; 0 with the class in why otherwise
-static int guest_file_class(int fd, char *why, size_t nwhy) {
-    int was = fcntl(fd, F_GETPROTECTIONCLASS), cls = was, err = 0;
-    if (cls != 3 && cls != 4) {
-#ifdef F_SETPROTECTIONCLASS
-        err = fcntl(fd, F_SETPROTECTIONCLASS, 3) ? errno : 0;
-        cls = fcntl(fd, F_GETPROTECTIONCLASS);
-#else
-        err = ENOTSUP;   // an SDK without F_SETPROTECTIONCLASS
-#endif
-    }
-    if (cls == 3 || cls == 4) return 1;
-    snprintf(why, nwhy, "protection class %d, not C (3) or D (4), and %d after setting C (errno %d)", was, cls, err);
-    return 0;
-}
-#endif
 // The block in files of chunk bytes, the last one holding the rest: 1 with the files in g_gf_tab and mapped; 0 with why filled in, every file closed and the whole block anonymous PROT_NONE again, as reserved
 static int guest_files_map(const char *dir, size_t chunk, int n, struct statfs *fs, char *why, size_t nwhy) {
     const double G = 1073741824.0; char path[1100]; int made = 0, ok = 1;
@@ -255,17 +229,10 @@ static int guest_files_map(const char *dir, size_t chunk, int n, struct statfs *
         if ((g_gf_tab[k] = guest_file_open(path)) < 0) { snprintf(why, nwhy, "cannot create %s, errno %d", path, errno); ok = 0; break; }
         made++;
         if (unlink(path)) { snprintf(why, nwhy, "cannot unlink %s, errno %d", path, errno); ok = 0; break; }
-#if TARGET_OS_IPHONE
-        ok = guest_file_class(g_gf_tab[k], why, nwhy);
-#endif
     }
     if (ok && fstatfs(g_gf_tab[0], fs)) { snprintf(why, nwhy, "cannot read their disk's free space, errno %d", errno); ok = 0; }
     if (ok) {
-#if TARGET_OS_IPHONE
-        uint64_t want = g_gf_min_free;   // under it guest_file_thread would stop the game at once
-#else
         uint64_t want = g_gf_min_free + ((uint64_t)8 << 30);
-#endif
         double avail = (double)fs->f_bavail * fs->f_bsize, imp = avail < want ? guest_file_free_important() : -1;   // the purgeable space counts as in guest_file_thread
         if (avail < want && (imp < want || avail < g_gf_min_free / 2.0)) { snprintf(why, nwhy, "%.1f GB free on their disk (%.1f with what the system can purge), under %.1f", avail / G, imp / G, want / G); ok = 0; }
     }
@@ -281,14 +248,7 @@ static int guest_files_map(const char *dir, size_t chunk, int n, struct statfs *
 }
 static void guest_file_init(void) {
     const double G = 1073741824.0; const char *e = getenv("DM_GUEST_FILE"), *d = getenv("DM_GUEST_FILE_DIR"), *mf = getenv("DM_GUEST_FILE_MIN_FREE");
-#if TARGET_OS_IPHONE
-    uint64_t room = os_proc_available_memory(), host = guest_host_margin(DM_GAME_APP_POOL);
-    int want = guest_file_wanted(e, DM_GAME_APP_POOL, host, room);
-    LOG("[mem] guest memory: memory pool %.2f GB and the host's margin %.2f GB (%s), room to the memory limit %.2f GB, DM_GUEST_FILE %s: %s", DM_GAME_APP_POOL / G, host / G,
-        getenv("DM_GUEST_FILE_HOST") && *getenv("DM_GUEST_FILE_HOST") ? "DM_GUEST_FILE_HOST" : "half the pool", room / G, e && *e ? e : "unset", want ? "in files" : "anonymous");
-#else
     int want = guest_file_wanted(e, DM_GAME_APP_POOL, guest_host_margin(DM_GAME_APP_POOL), 0);   // no limit known: only the switch
-#endif
     if (!want) return;
     g_gf_min_free = mf && *mf ? env_size("DM_GUEST_FILE_MIN_FREE", 0, 0x100000) : (uint64_t)2 << 30;
     size_t chunk = env_size("DM_GUEST_FILE_CHUNK", (size_t)64 << 20, 0x100000); if (!chunk) chunk = (size_t)1 << 30;
@@ -323,11 +283,7 @@ static void mem_init_once(void) {
     // The alias region is the Switch's 64 GB on the Mac (or the profile's, when larger): games lay their regions out for that much, and what the profile can give an iPhone (one
     // reservation of at most 6 GB) crashed Trails in the Sky 1st Chapter at launch and Just Dance within a minute. It is address space, not memory: the application pool bounds
     // what is mapped. DM_ALIAS_SIZE=<bytes> sets another size, the heap and stacks as they are; the profile's value reproduces an iPhone's address space on the Mac (the NSP script's heap check)
-#if TARGET_OS_IPHONE
-    size_t alias = DM_GAME_MEM_ALIAS;
-#else
     size_t alias = DM_GAME_MEM_ALIAS > SWITCH_ALIAS ? DM_GAME_MEM_ALIAS : SWITCH_ALIAS;
-#endif
     const char *as = getenv("DM_ALIAS_SIZE");
     if (as && *as) { alias = (size_t)strtoull(as, NULL, 0); if (alias < 0x10000000 || (alias & (pg - 1))) die("DM_ALIAS_SIZE %s: at least 256 MB, in whole host pages", as); }
     g_reserve = RESERVE - DM_GAME_MEM_ALIAS + alias;

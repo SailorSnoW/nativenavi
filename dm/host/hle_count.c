@@ -8,7 +8,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <libkern/OSCacheControl.h>
-#if !TARGET_OS_IPHONE
 #define HC_MAX 8192
 static struct { const char *kind, *name; void *fn; _Atomic uint64_t n; } g_hc[HC_MAX];
 static unsigned g_nhc; static uint32_t *g_hcode; static int g_hon = -1, g_hsealed; static const char *g_hpath;
@@ -48,9 +47,3 @@ void hlecount_seal(void) {
 }
 void hlecount_svc(int num) { if (g_hon > 0 && num >= 0 && num < 256) atomic_fetch_add(&g_hsvc[num], 1); }
 void hlecount_flush(void) { if (hc_on() && g_hcode) hc_write(); }   // Also write a copy on the graceful exit path (SIGTERM / scene disconnect)
-#else
-void *hlecount_wrap(const char *kind, const char *name, void *fn) { (void)kind; (void)name; return fn; }
-void hlecount_seal(void) {}
-void hlecount_svc(int num) { (void)num; }
-void hlecount_flush(void) {}
-#endif

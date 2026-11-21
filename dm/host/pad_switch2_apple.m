@@ -3,9 +3,7 @@
 #import "pad_switch2_apple.h"
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <TargetConditionals.h>
-#if TARGET_OS_OSX
 #import <IOBluetooth/IOBluetooth.h>   // IOBluetoothHostController: this Mac's own Bluetooth address, which a bonded controller wakes toward
-#endif
 #include "dm.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -454,7 +452,6 @@ static void s2_session_closed(S2Session *s) { [s teardown]; [g_sessions removeOb
 }
 - (void)centralManagerDidUpdateState:(CBCentralManager *)c {
     if (c.state == CBManagerStatePoweredOn) {
-#if TARGET_OS_OSX
         static BOOL asked;
         if (!g_host_known && !asked) {   // this Mac's address, from the Bluetooth host controller once the app may use Bluetooth (off the main queue: the first call can take seconds); the scan starts after it
             asked = YES; __weak CBCentralManager *wc = c;
@@ -471,7 +468,6 @@ static void s2_session_closed(S2Session *s) { [s teardown]; [g_sessions removeOb
             });
             return;
         }
-#endif
         [self scan:c];
     } else if (c.state == CBManagerStateUnauthorized) LOG("[sw2] Bluetooth is not allowed for this app (System Settings > Privacy & Security > Bluetooth)");
     else if (c.state == CBManagerStatePoweredOff) LOG("[sw2] Bluetooth is off");

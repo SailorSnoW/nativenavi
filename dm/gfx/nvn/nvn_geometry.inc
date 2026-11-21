@@ -709,7 +709,7 @@ static id<MTLRenderPipelineState> mtk_pso(NvProg *raster) {
 static uint32_t *mesh_scratch(uint64_t *gpu) {
     static uint64_t addr; static uint32_t *head; static __strong id<MTLBuffer> buf; static dispatch_once_t once;
     dispatch_once(&once, ^{
-        unsigned cores = gpu_cores(), want = cores ? cores * 96 * 2 : TARGET_OS_OSX ? 8192 : 2048, n = 1024;
+        unsigned cores = gpu_cores(), want = cores ? cores * 96 * 2 : 8192, n = 1024;
         while (n < want && n < DMSH_MESH_SCRATCH_SLICES) n <<= 1;
         buf = [g_dev newBufferWithLength:DMSH_MESH_SCRATCH_HEAD + (size_t)n * DMSH_MESH_SCRATCH_STRIDE options:MTLResourceStorageModeShared];
         if (!buf) MDIE("failed to create the mesh scratch buffer (%u slices)", n);

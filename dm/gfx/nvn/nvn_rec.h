@@ -104,11 +104,7 @@ static int g_rec = -1;
 static inline int rec_on(void) {
     if (__builtin_expect(g_rec >= 0, 1)) return g_rec;
     const char *e = getenv("DM_NVN_ENC_THREAD");
-#if TARGET_OS_IPHONE
-    g_rec = !e || atoi(e) > 0;
-#else
     g_rec = e ? atoi(e) > 0 : DM_GAME_ENC_THREAD;   // the profile's enc_thread: Need for Speed: Hot Pursuit Remastered waits on its fence each frame, so encoding on its thread took its 60 fps frame from 18.1 to 16.7 ms
-#endif
     if (g_rec) MLOG("Metal encoding runs on its own thread (DM_NVN_ENC_THREAD=0 turns it off)");
     return g_rec;
 }

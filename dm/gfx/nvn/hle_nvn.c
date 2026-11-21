@@ -29,11 +29,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <errno.h>
-#if TARGET_OS_OSX
 #define DM_MEM_CAP_DEFAULT_GB 24
-#else
-#define DM_MEM_CAP_DEFAULT_GB 0
-#endif
 #include <pthread/qos.h>
 #include <sys/resource.h>
 #include <sys/sysctl.h>
@@ -2924,11 +2920,7 @@ static void vpool_taken(const pool_t *o) {
 }
 static uint8_t *vpool_reserve(pool_t *o) {   // → the reserved range, or NULL
     if (!(o->flags & 0x200)) return NULL;
-#if TARGET_OS_IPHONE   // 1 GB: Monster Hunter Rise's buffers stay under 0x20100000 through its opening, its textures (32 GB in) are read through the page table, and 4 GB guest + 1 GB stays near the 5 GB proven on a phone
-    uint64_t len = o->size < (1ull << 30) ? o->size : 1ull << 30;
-#else
     uint64_t len = o->size < (64ull << 30) ? o->size : 64ull << 30;
-#endif
     len = (len + (uint64_t)getpagesize() - 1) & ~((uint64_t)getpagesize() - 1);
     void *a = mmap(NULL, len, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (a == MAP_FAILED) { LOG("[RED] virtual pool %p: cannot reserve %#llx bytes of address space (errno %d)", (const void *)o, (unsigned long long)len, errno); return NULL; }

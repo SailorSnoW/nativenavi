@@ -3,14 +3,9 @@
 #import "haptics_apple.h"
 #import <CoreHaptics/CoreHaptics.h>
 #import <TargetConditionals.h>
-#if TARGET_OS_IPHONE
-#import <UIKit/UIKit.h>
-#import <AVFAudio/AVFAudio.h>
-#else
 #import <AppKit/AppKit.h>
 #import <IOKit/IOKitLib.h>
 #import <IOKit/hid/IOHIDDevice.h>
-#endif
 #include <math.h>
 #include <pthread.h>
 #include <time.h>
@@ -39,9 +34,6 @@
 static dispatch_queue_t queue;
 static NSMutableArray<DmRumbleChannel *> *channels[DM_PLAYERS];
 static GCController *controllers[DM_PLAYERS];
-#if TARGET_OS_IPHONE
-static BOOL phoneSupported;
-#endif
 static float gain = 1;
 static pthread_mutex_t routeLock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned errors;
@@ -254,7 +246,6 @@ static void report(NSError *e, NSString *target, const char *stage) {
 }
 @end
 
-#if !TARGET_OS_IPHONE
 // A DualShock 4, or a controller that presents itself as one (a GameSir Cyclone over Bluetooth: Sony 054C / 05C4, whose Core Haptics helper
 // failed on every locality on macOS 27.0.1), is driven through its own effects report, as SDL's hidapi driver does: 0x11 over Bluetooth
 // (78 bytes, CRC32 over 0xA2 and the first 74 bytes, rumble only, so the light bar is left alone), 0x05 over USB (32 bytes). Unlike the
@@ -335,7 +326,6 @@ static BOOL ds4_route(int p, GCController *controller) {
             ds4[p].bluetooth ? "Bluetooth" : "USB", [(__bridge NSNumber *)IOHIDDeviceGetProperty(ds4[p].dev, CFSTR(kIOHIDProductIDKey)) intValue]);
     return YES;
 }
-#endif
 
 static void (*sinks[DM_PLAYERS])(const dm_haptic_state *);   // a player's own output instead of engines (dm_haptics_apple_set_sink)
 static void sink_apply(dm_haptic_state s) {   // on the queue: Rumble strength and cutoff, as the engines get them
@@ -348,9 +338,7 @@ static void apply(dm_haptic_state s) {
         if (s.epoch != dm_haptics_epoch(s.player)) return;
         if (sinks[s.player]) { sink_apply(s); return; }   // the player is in range, as channels[] below assumes (hle_haptics.c)
         NSArray<DmRumbleChannel *> *out = channels[s.player];
-#if !TARGET_OS_IPHONE
         if ([out.firstObject isKindOfClass:DmDs4Channel.class]) { ds4_apply(s); return; }
-#endif
         for (NSUInteger i = 0; i < out.count; i++) {
             if (s.epoch != dm_haptics_epoch(s.player)) break;   // a failed channel may replace this route
             int m = out[i].motor;
@@ -374,10 +362,8 @@ static void configure(int p, GCController *controller) {
     for (DmRumbleChannel *c in channels[p]) [c stop];
     channels[p] = [NSMutableArray new];
     if (sinks[p]) { sink_silence(p); dm_haptics_route(p, 1); return; }
-#if !TARGET_OS_IPHONE
     ds4_release(p);
     if (controller && ds4_route(p, controller)) { dm_haptics_route(p, 1); return; }   // the report first, as SDL drives it
-#endif
     if (controller) {
         GCDeviceHaptics *h = controller.haptics;
         NSSet *localities = h.supportedLocalities;
@@ -417,12 +403,6 @@ static void configure(int p, GCController *controller) {
         fprintf(stderr, "haptics: player %d controller %s, localities %s, %lu channels\n", p + 1,
                 controller.vendorName.UTF8String ?: "unknown", [[localities.allObjects sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "].UTF8String ?: "none", (unsigned long)channels[p].count);
     }
-#if TARGET_OS_IPHONE
-    else if (!p && phoneSupported) {
-        // Do not initialize the phone's engine before the game's audio session is active.
-        add_engine(p, -1, @"phone", ^CHHapticEngine *(NSError **e) { return [[CHHapticEngine alloc] initWithAudioSession:AVAudioSession.sharedInstance error:e]; });
-    }
-#endif
     dm_haptics_route(p, channels[p].count != 0);
 }
 void dm_haptics_apple_set_sink(int p, void (*sink)(const dm_haptic_state *)) {
@@ -463,26 +443,11 @@ void dm_haptics_apple_init(void) {
         if (e) { float v = strtof(e, NULL); if (isfinite(v)) rumble_min = fmaxf(0, fminf(0.9f, v)); }
         e = getenv("DM_RUMBLE");
         dm_haptics_init(apply, !e || atoi(e) != 0);
-#if TARGET_OS_IPHONE
-        phoneSupported = CHHapticEngine.capabilitiesForHardware.supportsHaptics;
-#endif
         dispatch_sync(queue, ^{ configure(0, nil); });
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
-#if TARGET_OS_IPHONE
-        [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
-        [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, NO); }];
-        [nc addObserverForName:UIApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_haptics_apple_shutdown(); }];
-        [nc addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
-            suspend(DM_HAPTICS_INTERRUPTED, [n.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] == AVAudioSessionInterruptionTypeBegan);
-        }];
-        [nc addObserverForName:AVAudioSessionRouteChangeNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
-            (void)n; dm_haptics_clear(0);
-        }];
-#else
         [nc addObserverForName:NSApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
         [nc addObserverForName:NSApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, NO); }];
         [nc addObserverForName:NSApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_haptics_apple_shutdown(); }];
-#endif
         atexit(dm_haptics_apple_shutdown);
     });
 }

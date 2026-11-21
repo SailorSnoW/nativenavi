@@ -659,9 +659,7 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < 8; ++i) assert(!pthread_create(&threads[i], NULL, init_worker, &addresses[i]));
     for (unsigned i = 0; i < 8; ++i) { assert(!pthread_join(threads[i], NULL)); assert(addresses[i] == addresses[0]); }
     alias = addresses[0]; stack = info(I_StackAddr); heap = info(I_HeapAddr);
-#if !TARGET_OS_IPHONE
     if (!getenv("DM_ALIAS_SIZE")) assert(info(I_AliasSize) == SWITCH_ALIAS);   // the Mac's alias region is a Switch's, whatever the profile can give an iPhone; DM_ALIAS_SIZE=<mem_alias> runs these tests on an iPhone's
-#endif
     layout_order(); readonly_shared_memory(); transfer_memory_setup();
     lazy_commit(); alias_lifecycle(); device_shared_refused(); ownership(); module_sources(); module_back_patch(); failures(); release_fallback(); file_rule(); file_sweep(); heap_regrow(); concurrency(); fragmented_queries();
     guest_helper();

@@ -180,7 +180,7 @@ def sign(app, identity, codesign, nested=()):   # the new data bundles and the i
 # signs in about a second instead of reading every byte of the game again: on a USB SSD codesign read 38 GB at about 80 MB/s, 7-8 minutes a pack (M1 Pro, Ocarina of Time, PR #2673).
 # A bundle of the app being replaced is cloned with its signature when the last pack made it from the same inputs and its files are as that pack left them (both recorded in
 # <out.app>.key): the app's seal holds the bundle by its code hash only, so a file changed in it since would go into the new app unseen (codesign --verify --deep finds it, by reading it
-# all). Otherwise it is filled and signed anew. The other programs of a game of several programs have their RomFS in bundles of their own, their libraries in ShaderLibraries.
+# all). Otherwise it is filled and signed anew.
 # "As that pack left them" is each entry's mode, size and times. macOS moves the change time of the files of a bundle cloned from the app being replaced, a second to a minute after
 # the pack (seen on macOS 27.2, APFS, as Spotlight takes in the new app; not in a folder Spotlight skips), though not of those that are clones of the build folder's files (the RomFS
 # image, the pipeline archive). So a pack that reused a bundle left a record the next pack never matched, and every second pack signed all of the game again (Ocarina of Time, 36 GB:
@@ -192,7 +192,6 @@ DATA_FORMAT = 'nxnative data bundle 1'
 SEAL_READ = 1 << 20   # a data bundle's files that its signature does not name are read for their digest when the key is written, up to this size
 
 
-PROGRAM_ROMFS = 'romfs_programs'   # beside the RomFS: <index>.img of each other program of the application (pack_nup.PROGRAMS)
 
 
 def data_bundle(contents, name): return contents / 'PlugIns' / f'{name}.bundle'
@@ -398,16 +397,9 @@ def pack(a):
             if key_file.is_file(): os.replace(key_file, set_aside)
     try:
         a = argparse.Namespace(**vars(a))
-        for name in ('out', 'host', 'patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'pso_pairs', 'env_file', 'settings', 'icon', 'html', 'control_nacp'):
+        for name in ('out', 'host', 'patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'pso_pairs', 'env_file', 'settings', 'icon', 'control_nacp'):
             if getattr(a, name): setattr(a, name, str(Path(getattr(a, name)).resolve()))
         mods, msls, pso, tables, pairs, fonts, files = selected_inputs(a)
-        # --program: the other programs of a game of several programs (index, rewritten modules, RomFS, shader libraries, tables, offline pages; tab-separated), which go in beside the first's as one app
-        programs = []
-        for row in a.program or []:
-            n, patched, prom, pmsl, ptab, phtml = row.split('\t')
-            pa = argparse.Namespace(**{**vars(a), 'patched': patched, 'romfs': prom, 'msl': pmsl, 'tables': ptab, 'pso': None, 'pso_pairs': None, 'aoc': None, 'marker': None})
-            pmods, pmsls, _, ptables, _, _, pfiles = selected_inputs(pa)
-            programs.append((n, Path(prom), Path(pmsl), Path(phtml), pmods, pmsls, ptables)); files += pfiles
         clang = Path(run(['xcrun', '--find', 'clang']).strip()).resolve()
         swiftc = Path(run(['xcrun', '--find', 'swiftc']).strip())   # not resolved: the driver is a link to swift-frontend, which acts by its name
         sdk = Path(run(['xcrun', '--sdk', 'macosx', '--show-sdk-path']).strip()).resolve()
@@ -417,13 +409,13 @@ def pack(a):
         codesign = Path(codesign).resolve()
         minos = min_os(a.host)
         sources = [Path(__file__).resolve(), HERE / 'launcher.c', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py', HERE.parent / 'tools/nso_syms.py'] + swift_sources()
-        large = {*msls, *pso, *(p for x in programs for p in x[5])}   # the shader libraries and pipeline archives (13.5 GB for Ocarina of Time): by stat, as the RomFS trees below
+        large = {*msls, *pso}   # the shader libraries and pipeline archives (13.5 GB for Ocarina of Time): by stat, as the RomFS trees below
         def tree(p):   # a folder's entries; a RomFS image's one row as a large file's (as_packed)
             rows = inventory(Path(p))
             return [['.', *as_packed([p, *rows[0][1:]], last.get(p), moved)[1:]]] if Path(p).is_file() and len(rows) == 1 else rows
         romfs_rows = tree(a.romfs)
         inputs = {'options': vars(a), 'files': [as_packed(file_row(p, True), last.get(str(p)), moved) if p in large else file_row(p) for p in files + sources],
-                  'trees': [(p, romfs_rows if p == a.romfs else inventory(Path(p))) for p in (a.romfs, a.aoc, a.html, str(Path(a.romfs).parent / PROGRAM_ROMFS), *(str(x[1]) for x in programs), *(str(x[3]) for x in programs)) if p and Path(p).exists()],
+                  'trees': [(p, romfs_rows if p == a.romfs else inventory(Path(p))) for p in (a.romfs, a.aoc) if p and Path(p).exists()],
                   'tools': [[str(c), c.stat().st_mode, c.stat().st_size, c.stat().st_mtime_ns, c.stat().st_ctime_ns, run([c, '--version']).strip()] for c in (clang, swiftc)] + [
                             str(sdk), run(['xcrun', '--sdk', 'macosx', '--show-sdk-version']).strip(),
                             str(codesign), codesign.stat().st_mode, digest(codesign), minos]}
@@ -447,8 +439,7 @@ def pack(a):
     for d in (mac, dm / 'font'): d.mkdir(parents=True)
     romfs, msl, aoc = Path(a.romfs), Path(a.msl), Path(a.aoc) if a.aoc else None
     # each source is probed on its own, as they may lie on different volumes; cp -c copies what it cannot clone, so a probe decides only the free-space check and the step line
-    sib = romfs.parent / PROGRAM_ROMFS   # the RomFS of the application's other programs, beside this one's where the host mounts them by program index (hle_fs.c; scripts/pack_nup.py)
-    trees, lists = {'romfs': romfs, 'aoc': aoc, 'programs': sib if sib.is_dir() else None}, {'mods': mods, 'msl': msls, 'pso': pso}
+    trees, lists = {'romfs': romfs, 'aoc': aoc}, {'mods': mods, 'msl': msls, 'pso': pso}
     clone = {k: bool(d) and can_clone(d, res) for k, d in trees.items()} | {k: bool(ps) and can_clone(ps[0], res) for k, ps in lists.items()}
     if is_chain_library(msl): clone['msl'] = False   # copy_msl writes it, which the free-space check below counts
     need = sum(tree_bytes(d) for k, d in trees.items() if d and not clone[k]) + sum(p.stat().st_size for k, ps in lists.items() if not clone[k] for p in ps)
@@ -480,41 +471,22 @@ def pack(a):
         link.parent.mkdir(parents=True, exist_ok=True); link.symlink_to(os.path.relpath(b / 'Contents/Resources' / top, link.parent))
     image = msls[0] if is_chain_library(msl) and len(msls) == 1 and msls[0].suffix == '.img' else None   # an NVN game's library as one file: the app's is another file, cut from it
     read = {}   # its SHA-256, for the record (as_packed): read on a thread of its own while the app's file is written
-    def fill_msl(d):   # the libraries of every program: msl/<library>, msl/p<N>/<library>
+    def fill_msl(d):   # msl/<library>
         with concurrent.futures.ThreadPoolExecutor(1) as pool:
             whole = pool.submit(digest, image) if image else None
             d.mkdir(parents=True); copy_msl(msl, msls, d / msl_dst.name, clone['msl'])
             if whole: read[str(image)] = whole.result()
-        for n, _, pmsl, _, _, pmsls, _ in programs:
-            program_dir = d / f'p{n}'
-            program_dir.mkdir()
-            copy_msl(pmsl, pmsls, program_dir / shader_lib.name_of(pmsl), can_clone(pmsls[0], res))
     lib_code = [digest(Path(shader_lib.__file__)), digest(Path(rfs.__file__))]   # what writes a chain library's one file
-    program_lib_keys = [(n, shader_lib.name_of(pmsl), [took[str(p)] for p in pmsls]) for n, _, pmsl, _, _, pmsls, _ in programs]
-    place('ShaderLibraries', 'msl', 'shader libraries', [lib_code, msl_dst.name, [took[str(p)] for p in msls], program_lib_keys], fill_msl)
+    place('ShaderLibraries', 'msl', 'shader libraries', [lib_code, msl_dst.name, [took[str(p)] for p in msls]], fill_msl)
     if aoc: place('AddOnContent', 'aoc', 'add-on content', inventory(aoc), lambda d: copy([aoc], d, clone['aoc']))
     if pso: place('PipelineArchive', 'pso', 'pipeline archive', [took[str(p)] for p in pso], lambda d: (d.mkdir(parents=True), copy(pso, d, clone['pso'])))
     rtop = 'romfs.img' if romfs.is_file() else 'romfs'
     place('GameData', rtop, 'game files', romfs_rows, lambda d: copy([romfs], d, clone['romfs']))
-    if a.html and Path(a.html).is_dir(): copy([Path(a.html)], res / 'html', False)   # the offline pages, beside the RomFS where the host looks for them (hle_web.c)
-    if trees['programs']: place('GameDataPrograms', PROGRAM_ROMFS, 'other programs\' game files', inventory(sib), lambda d: copy([sib], d, clone['programs']))
-    # The other programs: p<N>/ (RomFS in the data bundle GameData<N>, offline pages), msl/p<N>/<library> (in ShaderLibraries), dm/p<N>/ (modules, tables), and the table of them all, which the
-    # launcher makes DM_PROGRAMS (launcher.c, hle_oe.c): @R@ Resources, @C@ Contents, @S@ the app's Application Support folder
-    if programs:
-        rows = ['# The programs of this game (dm/mac/pack_app.py; hle_oe.c DM_PROGRAMS)',
-                '\t'.join(['0', 'exe=@C@/MacOS/dmhost', 'arg=@R@/dm', 'cwd=@S@', f'DM_ROMFS=@R@/{rtop}', 'DM_MSL_DIR=@R@/msl'] + (['DM_NVN_SHMAP=@R@/dm/shader_map.tsv'] if (dm / 'shader_map.tsv').is_file() else []) + (['DM_PSO_BUNDLE=@R@/pso'] if pso else []))]
-        for n, prom, pmsl, phtml, pmods, _, ptables in programs:
-            pdm, ptop = dm / f'p{n}', f'p{n}/{"romfs.img" if prom.is_file() else "romfs"}'
-            pdm.mkdir(parents=True); copy(pmods, pdm, can_clone(pmods[0], res)); copy(ptables, pdm, False)
-            place(f'GameData{n}', ptop, f'program {n} game files', inventory(prom), lambda d, prom=prom: copy([prom], d, can_clone(prom, res)))
-            if phtml.is_dir(): copy([phtml], res / f'p{n}/html', False)
-            rows.append('\t'.join([n, 'exe=@C@/MacOS/dmhost', f'arg=@R@/dm/p{n}', 'cwd=@S@', f'DM_ROMFS=@R@/{ptop}', f'DM_MSL_DIR=@R@/msl/p{n}', f'DM_NVN_SHMAP=@R@/dm/p{n}/shader_map.tsv', f'DM_PROGRAM={n}']))
-        (dm / 'programs.tsv').write_text('\n'.join(rows) + '\n')
     icon = bool(a.icon)
     if icon: step('icon'); make_icns(a.icon, res / 'AppIcon.icns')
     info = info_plist(a, minos, icon)
     info['DMModuleFiles'] = [p.name for p in mods]
-    if nso_syms.audio_input_capable(mods + [module for program in programs for module in program[4]]):
+    if nso_syms.audio_input_capable(mods):
         info['NSMicrophoneUsageDescription'] = f'{a.name} uses the microphone for in-game audio input.'
     commit = source_commit()
     if commit: info['DMCommit'] = commit
@@ -556,8 +528,6 @@ def parse(argv):
     ap.add_argument('--aoc', help='the DLC RomFS images or folders by index')
     ap.add_argument('--pso', help='the pipeline archive made offline for this Mac (pso_offline.py --platform macos output: <arch>.mtl4a, prebuilt.tsv)')
     ap.add_argument('--pso-pairs', help='pso_pairs.tsv for a profile that has none (the shader split\'s copy)')
-    ap.add_argument('--html', help='the offline HTML pages (nx_extract --html), which go beside the RomFS')
-    ap.add_argument('--program', action='append', help='another program of a game of several programs: index, rewritten modules, RomFS, Mac shader libraries, tables, offline pages (tab-separated)')
     ap.add_argument('--control-nacp', help='the game\'s control data (control.nacp; Resources/control.nacp, beside the RomFS, where the host reads it: fs::GetCacheStorageMax)')
     ap.add_argument('--env-file', help='environment switches baked in (Resources/dm/env.txt)')
     ap.add_argument('--settings', help='the game\'s launcher settings (dm/games/settings.py output; Resources/dm/launcher.json, which the Mac front end reads)')

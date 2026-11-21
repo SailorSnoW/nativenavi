@@ -265,9 +265,6 @@ void dm_mods_init(void) {
     }
     if (overlay[0]) setenv("DM_ROMFS_OVERLAY", overlay, 1);
     LOG("mods: %s: %d on, %d off (order.txt)", base, g_nmods, off);
-#if TARGET_OS_IPHONE
-    if (g_npfiles) LOG("[RED] mods: %d exefs patch file(s) found, but an iOS app's code is signed and fixed: they are not applied", g_npfiles);
-#endif
 }
 
 const char *dm_mods_dir_path(void) { return g_base; }

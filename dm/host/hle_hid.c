@@ -214,13 +214,10 @@ void hid_keys_init(void) {
 //   saves a host texture's level 0 raw, every slice (a cube's six faces, a 3D texture's depth slices) (nvn_mtl.m dm_gfx_texraw), "addr <hex address>" logs what the host knows of a guest
 //   address (nvn_mtl.m dm_gfx_addr_note: its memory pool, a texture's storage, a recorded GPU write, the raw memory table, a sparse pool's page), "drag <x0> <y0> <x1> <y1> [seconds=0.3]" moves one finger in a straight line between the two normalized picture
 //   points over that time and lifts it (the touch screen's pans and swipes, hle_touch.c gesture_sample), "dump" logs what each guest thread waits on and the graphics wait points
-//   (crash_dump_now, as the iOS app's DM_LOG_PORT dump; scripts/regress.py asks for it before stopping a hung game), "program <n>" makes oe::ExecuteProgram(n) with no parameters (a multi-program application's way between its programs, headless), "#…" is ignored.
+//   (crash_dump_now, as the iOS app's DM_LOG_PORT dump; scripts/regress.py asks for it before stopping a hung game), "#…" is ignored.
 //   Look at a screen, decide, press, look again: menus whose timing moves from run to run (loading) need no blind timed script
 static void *ctl_main(void *arg) {
     const char *path = arg; long off = 0; char line[1100];
-    if (getenv("DM_PREV_PROGRAM") || getenv("DM_RELAUNCH")) {   // oe::ExecuteProgram or oe::RequestToRelaunchApplication started this program in the last one's place: that program acted on what the file holds
-        FILE *f0 = fopen(path, "r"); if (f0) { if (!fseek(f0, 0, SEEK_END)) off = ftell(f0); fclose(f0); }
-    }
     for (;;) {
         FILE *f = fopen(path, "r");
         if (f && !fseek(f, off, SEEK_SET)) {
@@ -238,7 +235,6 @@ static void *ctl_main(void *arg) {
                 if (!strcmp(line, "amiibo-remove")) { void dm_amiibo_remove(void); dm_amiibo_remove(); continue; }
                 if (!strcmp(line, "dump")) { crash_dump_now("DM_CTL dump"); continue; }
                 if (!strncmp(line, "atrace ", 7)) { void probe_atrace(uint64_t lo, uint64_t n); char *e2; uint64_t a = strtoull(line + 7, &e2, 16); probe_atrace(a, strtoull(e2, NULL, 0)); continue; }   // probe.c
-                if (!strncmp(line, "program ", 8)) { void dm_oe_execute(int index, const void *param, size_t n); LOG("DM_CTL: oe::ExecuteProgram(%d)", atoi(line + 8)); dm_oe_execute(atoi(line + 8), NULL, 0); continue; }
                 if (!strncmp(line, "shot ", 5)) { dm_gfx_shot_at(1, line + 5); LOG("DM_CTL: screenshot of the next frame → %s", line + 5); continue; }
                 if (!strncmp(line, "texlist ", 8)) { void dm_gfx_texlist(int target); dm_gfx_texlist(atoi(line + 8)); continue; }
                 if (!strcmp(line, "restop")) { void dm_gfx_restop(void); dm_gfx_restop(); continue; }   // what the residency set holds (nvn_mtl.m res_top)

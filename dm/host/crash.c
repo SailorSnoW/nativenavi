@@ -11,12 +11,10 @@
 #include <mach/mach.h>
 #include <stdatomic.h>
 #include <time.h>
-#if TARGET_OS_OSX
 #include <crt_externs.h>
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
-#endif
 
 static _Atomic uint64_t g_watch_last_ns;
 static _Atomic uint64_t g_watch_count;
@@ -45,7 +43,6 @@ void crash_watch_frame(void) { if (atomic_load(&g_watch_pregame)) crash_watch_pr
 void crash_watch_pregame_done(void) { atomic_store(&g_watch_pregame, 0); }
 void crash_watch_pregame_again(void) { atomic_store(&g_watch_pregame, 1); }   // Back from a run to the front end: count progress by presented frames again (diag.c)
 void crash_dump_now(const char *why);
-#if TARGET_OS_OSX
 // Keep the output path as one argument: shell quoting breaks apostrophes and can
 // execute path contents, and a command buffer can truncate a long path.
 static int watch_sample(const char *path) {
@@ -66,7 +63,6 @@ static int watch_sample(const char *path) {
     do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
     return waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
 }
-#endif
 static void *watchdog_main(void *arg) {
     (void)arg;
     for (;;) {
@@ -87,10 +83,8 @@ static void *watchdog_main(void *arg) {
                 atomic_load(&g_watch_tick), g_watch_stage[idx]);
             if (g_dump_hook) g_dump_hook();
             if (g_wait_dump) g_wait_dump();   // State of all blocking wait points on the graphics side (registered when nvn_mtl.m initializes)
-#if TARGET_OS_OSX
             { const char *d = getenv("DM_WATCH_SAMPLE");   // Mac diagnostics: when stuck, sample itself for 1 second and write the thread stacks to this path
               if (d) { if (watch_sample(d)) LOG("watchdog: sampling failed"); else LOG("watchdog: thread stacks written to %s", d); } }
-#endif
             _exit(128 + SIGALRM);
         }
     }

@@ -9,9 +9,6 @@
 #include <dispatch/dispatch.h>
 #include <stdatomic.h>
 #include <unistd.h>
-#if TARGET_OS_IPHONE
-int dm_ios_output_channels(void);   // front_ios.m: the audio session's output channel count
-#endif
 
 enum { FMT_PCM16 = 2, STATE_STARTED = 0, STATE_STOPPED = 1, RATE = 48000 };
 enum { BK_NONE, BK_AU, BK_NULL };   // what is consuming an output's queue right now (aout.backend)
@@ -203,7 +200,6 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
 static _Atomic int g_route_queued;
 static void route_check(void *unused) { (void)unused; atomic_store(&g_route_queued, 0); dm_audio_route_changed(); }
 static void route_queue(void) { if (!atomic_exchange(&g_route_queued, 1)) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), NULL, route_check); }
-#if !TARGET_OS_IPHONE
 // Mac DefaultOutput's default 512 device frames can exceed the PCM a game has queued, producing zero-filled gaps.
 // Request about 5 ms of device frames, as front_ios.m asks of the iOS audio session; reapply on device or output-rate changes within the supported range.
 // DM_DBG_AU_FRAMES=N asks N frames instead (1024 = the iOS default, which reproduces the crackling)
@@ -237,16 +233,12 @@ static void au_device_changed(void *ctx, AudioUnit au, AudioUnitPropertyID id, A
         route_queue();
     }
 }
-#endif
 static void au_dispose(AudioUnit au) {
-#if !TARGET_OS_IPHONE
     // Disposal clears CurrentDevice and notifies listeners. Remove them before the unit tears down its device.
     AudioUnitRemovePropertyListenerWithUserData(au, kAudioOutputUnitProperty_CurrentDevice, au_device_changed, NULL);
     AudioUnitRemovePropertyListenerWithUserData(au, kAudioUnitProperty_StreamFormat, au_device_changed, NULL);
-#endif
     AudioUnitUninitialize(au); AudioComponentInstanceDispose(au);
 }
-#if !TARGET_OS_IPHONE
 // The Mac's output device. DM_AUDIO_DEVICE=<part of a device name> plays on that device instead of the system default output (a virtual device such as BlackHole 16ch
 // for tests); the unit then stays on it. Returns kAudioObjectUnknown when the variable is unset or matches nothing (the default output stands)
 static AudioDeviceID env_out_device(void) {
@@ -290,13 +282,11 @@ static int device_out_channels(AudioDeviceID d, char *name, size_t namesz) {
     if (AudioObjectGetPropertyData(d, &pa, 0, NULL, &sz, &f)) return 0;
     return (int)f.mChannelsPerFrame;
 }
-#endif
 // The route cache is updated by opens, resume and device listeners, including when no AudioUnit is open.
 // HLE entries already run on the host stack; a separate thread just to read Core Audio is unnecessary.
 static _Atomic int g_route;
 static pthread_mutex_t g_route_mu = PTHREAD_MUTEX_INITIALIZER;
 static void route_notify(void *unused) { (void)unused; dm_audio_device_changed(); }
-#if !TARGET_OS_IPHONE
 static AudioDeviceID g_route_device;
 static OSStatus route_device_changed(AudioObjectID id, UInt32 n, const AudioObjectPropertyAddress *pa, void *ctx) {
     (void)id; (void)n; (void)pa; (void)ctx; route_queue(); return noErr;
@@ -306,13 +296,9 @@ static void route_listen(void) {
     OSStatus st = AudioObjectAddPropertyListener(kAudioObjectSystemObject, &pa, route_device_changed, NULL);
     if (st) LOG("[RED] audio: cannot listen for the default output device (status %d)", (int)st);
 }
-#endif
 int dm_audio_output_channels(void) {
     pthread_mutex_lock(&g_route_mu);
     int device_changed = 0;
-#if TARGET_OS_IPHONE
-    int ch = dm_ios_output_channels() >= 6 ? 6 : 2;
-#else
     static pthread_once_t listener = PTHREAD_ONCE_INIT; pthread_once(&listener, route_listen);
     AudioDeviceID device = out_device();
     AudioObjectPropertyAddress pa = {kAudioDevicePropertyStreamFormat, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain};
@@ -326,11 +312,8 @@ int dm_audio_output_channels(void) {
     }
     char name[256]; int n = device_out_channels(device, name, sizeof name);
     int ch = n >= 6 ? 6 : 2;
-#endif
     int old = atomic_exchange(&g_route, ch);
-#if !TARGET_OS_IPHONE
     if (ch != old || device_changed) LOG("audio output route: \"%s\" has %d channels, the host plays %s", name, n, ch == 6 ? "six (5.1)" : "stereo");
-#endif
     // Signaling a kernel event takes the guest scheduler lock. Do it off the AudioUnit/registry locks,
     // after the cache is published, so a woken game reads the new count without a lock-order cycle.
     if (old && (old != ch || device_changed)) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), NULL, route_notify);
@@ -348,11 +331,7 @@ static OSStatus au_set_layout6(AudioUnit au) {
 }
 static OSStatus au_create(aout *a, int route) {   // route: dm_audio_output_channels, read by the caller
     AudioComponentDescription d = {.componentType = kAudioUnitType_Output,
-#if TARGET_OS_IPHONE
-                                   .componentSubType = kAudioUnitSubType_RemoteIO,
-#else
                                    .componentSubType = kAudioUnitSubType_DefaultOutput,
-#endif
                                    .componentManufacturer = kAudioUnitManufacturer_Apple};
     AudioComponent c = AudioComponentFindNext(NULL, &d);
     a->au = NULL; if (!c || AudioComponentInstanceNew(c, &a->au)) { a->au = NULL; return -1; }
@@ -363,7 +342,6 @@ static OSStatus au_create(aout *a, int route) {   // route: dm_audio_output_chan
                                      .mBytesPerPacket = 2u * ch, .mFramesPerPacket = 1, .mBytesPerFrame = 2u * ch,
                                      .mChannelsPerFrame = ch, .mBitsPerChannel = 16};
     AURenderCallbackStruct cb = {au_render, a};
-#if !TARGET_OS_IPHONE
     AudioDeviceID pinned = env_out_device();
     if (pinned != kAudioObjectUnknown) {
         OSStatus st = AudioUnitSetProperty(a->au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &pinned, sizeof pinned);
@@ -375,7 +353,6 @@ static OSStatus au_create(aout *a, int route) {   // route: dm_audio_output_chan
         if (st) LOG("[RED] audio: cannot listen for output property %u (status %d)", (unsigned)props[i], (int)st);
     }
     au_buffer(a->au, NULL);
-#endif
     OSStatus st = AudioUnitSetProperty(a->au, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &f, sizeof f);
     if (!st && ch == 6) {
         OSStatus ls = au_set_layout6(a->au);   // the unit maps the six onto the device's own speaker layout; a failure leaves its default mapping
@@ -418,7 +395,7 @@ static void au_halt(aout *a) {
     }
     a->stalled = 0; a->retry_ms = 0; a->retry_at = 0;
 }
-static int real_audio(void) { const char *e = getenv("DM_AUDIO"); return e ? atoi(e) != 0 : TARGET_OS_IPHONE; }
+static int real_audio(void) { const char *e = getenv("DM_AUDIO"); return e ? atoi(e) != 0 : 0; }
 static void au_retry(aout *a, uint64_t now) {
     a->stalled = 1;
     a->retry_ms = a->retry_ms ? (a->retry_ms < 8000 ? a->retry_ms * 2 : 8000) : 1000;
