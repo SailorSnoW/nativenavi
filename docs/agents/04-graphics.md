@@ -4,7 +4,7 @@ The graphics layer records NVN commands into its own command format (`dm/gfx/nvn
 
 ## 1. The shader containers
 
-`dm/gfx/tools/shader_split.py <RomFS> <ExeFS main> <pkg dir> <map out> <facts out> [<pairs out> [<pipeline pairs out>]]` scans **every** RomFS file and `main`, whatever the files are called, and writes the shader package `dmsh_build.py` reads and the profile's shader tables. The packing script runs it as its shader split. It reads only the containers this game ships ([Shader containers](../reference/shaders.md#shader-containers)):
+`dm/gfx/tools/shader_split.py <RomFS> <ExeFS main> <pkg dir> <map out> <facts out> [<pairs out> [<pipeline pairs out>]]` scans **every** RomFS file and `main`, whatever the files are called, and writes the shader package `dmsh_build.py` reads and the profile's shader tables. The packing script runs it as its shader split. It reads only the containers this game ships ([Shader containers](../reference/shaders.md#shader-containers)), and only NVN2 shaders of the five stages the game has (vertex, pixel, compute, task, mesh): any other stops it ([A shader the chain does not translate stops the split and the build](../reference/shaders.md#a-shader-the-chain-does-not-translate-stops-the-split-and-the-build)):
 
 | Container | Where | Notes |
 |---|---|---|
@@ -20,7 +20,7 @@ Check the coverage at run time: a program the map lacks prints `[RED] shader <ke
 
 ## 2. Key shaders by control section + code
 
-The key is the first 16 hex digits of the SHA-256 of the control section's key bytes followed by the code area (`skey` in `shader_split.py`, `keys_hash` in `hle_nvn.c`; the two must change together). For an NVN2 control section the key bytes are its first 0x48 bytes with the length word at +0x30 as zeros (`ctl_len`, `key_ctl`); an older NVN section gives its first 0x880 bytes, or its own length when that is shorter. The control section alone is not enough: many shaders share a control section and differ in code.
+The key is the first 16 hex digits of the SHA-256 of the control section's key bytes followed by the code area (`skey` in `shader_split.py`, `keys_hash` in `hle_nvn.c`; the two must change together). The key bytes are the NVN2 control section's first 0x48 bytes with the length word at +0x30 as zeros (`key_ctl`, `NVN2_KEY_CTL`). A section of another form (NVN1's) has no key: the split stops at one and the host refuses it ([A shader the chain does not translate stops the split and the build](../reference/shaders.md#a-shader-the-chain-does-not-translate-stops-the-split-and-the-build)). The control section alone is not enough: many shaders share a control section and differ in code.
 
 ## 3. The binding layout
 
@@ -73,7 +73,6 @@ What was found beyond sections 1–5 is filed by mechanism: textures, passes and
 | `DM_NVN_HILITE=fskey,…` | Replace those fragment shaders with solid colours: tells "geometry is wrong" from "shading is wrong" |
 | `DM_NVN_DEPTHOVR=fskey,…` | Those fragment shaders' draws compare depth with `ALWAYS`: with `HILITE`, tells "the depth test rejects every fragment" from "nothing rasterizes". With `PASSDUMP`, the `D` line shows the depth range (`dr=`) and logic op (`lo=`), and `c` lines each recorded clear (slot, serial, mask, scissor; depth / stencil values) |
 | `DM_NVN_SHDUMP=dir` | Control + code of programs missing from the shader map |
-| `DM_NVN_VSDUMP=<file>` / `DM_NVN_VSDUMP_KEY=<vertex key>` | One native post-vertex capture: a u32 header (first vertex, count, stride in words, base instance), then the 144-word geometry records. Refuses shaders with writes. With key `*`, saves position-only files by draw/key; `DM_NVN_VSDUMP_FROM` selects the first frame, `DM_NVN_VSDUMP_MAX` limits captures (default 256). These diagnostics drain GPU work |
 | `DM_NVN_ALLOCPROF=1` | Metal allocation growth per replayed op type and per function, command allocator sizes, new textures |
 | `DM_NVN_CBDUMP_KEY=vskey` (with `CBDUMP` and `PASSDUMP_ALL`) | Only that vertex shader's draws: uniform buffers plus vertex streams and index buffer (`F<frame>_p<pass>_vb<stream>_<addr>.bin`, `_ib<type>_<addr>.bin`) |
 | `DM_NVN_TEXINFO=WxH` | Storage and description (pool, offset, flags, packaged or not, storage size and how many of its bytes in guest memory are non-zero, i.e. written by the CPU) of every texture of that size on first use, each pool registration of one (`TEXINFO register`: builder channel mapping, view and view mapping), and each one as it is initialized (`TEXINFO init`, render targets included, the first 200: serial, pool and offset, target, format, flags, storage size) |
