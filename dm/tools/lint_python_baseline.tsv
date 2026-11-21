@@ -26,18 +26,11 @@ pyright	dm/gfx/tools/shader_split.py	reportOptionalMemberAccess	2	"read" is not 
 pyright	dm/gfx/tools/shader_split.py	reportOptionalMemberAccess	2	"write" is not a known attribute of "None"
 pyright	dm/gfx/tools/shader_split.py	reportOptionalSubscript	1	Object of type "None" is not subscriptable
 pyright	dm/gfx/tools/shader_split.py	reportSelfClsParameterName	5	Instance methods should take a "self" parameter
-pyright	dm/tools/check_thread_cuts.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/check_thread_cuts.py	reportMissingImports	1	Import "unicorn" could not be resolved
-pyright	dm/tools/check_thread_cuts.py	reportMissingImports	1	Import "unicorn.arm64_const" could not be resolved
-pyright	dm/tools/check_thread_cuts.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/check_thread_cuts.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
 pyright	dm/tools/docs_symptoms.py	reportOptionalMemberAccess	1	"group" is not a known attribute of "None"
 pyright	dm/tools/gpuprof.py	reportArgumentType	1	Argument of type "Unknown | None" cannot be assigned to parameter "value" of type "int" in function "__setitem__" Type "Unknown | None" is not assignable to type "int" "None" is not assignable to "int"
 pyright	dm/tools/gpuprof.py	reportOptionalMemberAccess	1	"split" is not a known attribute of "None"
 pyright	dm/tools/make_ext_font.py	reportOptionalSubscript	1	Object of type "None" is not subscriptable
 pyright	dm/tools/nso_fnmap.py	reportMissingImports	1	Import "numpy" could not be resolved
-pyright	dm/tools/nvn_slots_got.py	reportOperatorIssue	1	Operator "+=" not supported for types "int | None" and "int" Operator "+" not supported for types "None" and "int"
-pyright	dm/tools/nvn_slots_got.py	reportOptionalOperand	2	Operator "+" not supported for "None"
 pyright	dm/tools/patch_nso.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
 pyright	dm/tools/patch_nso.py	reportArgumentType	1	Argument of type "set[Unknown] | list[Unknown]" cannot be assigned to parameter "a" of type "SupportsLenAndGetItem[SupportsRichComparisonT@bisect_right]" in function "bisect_right" Type "set[Unknown] | list[Unknown]" is not assignable to type "SupportsLenAndGetItem[Unknown]" "set[Unknown]" is incompatible with protocol "SupportsLenAndGetItem[Unknown]" "__getitem__" is not present
 pyright	dm/tools/patch_nso.py	reportArgumentType	2	Argument of type "str | None" cannot be assigned to parameter "string" of type "str" in function "fullmatch" Type "str | None" is not assignable to type "str" "None" is not assignable to "str"

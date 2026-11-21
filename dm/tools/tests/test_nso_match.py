@@ -279,7 +279,7 @@ class Matching(unittest.TestCase):
         end = next(i for i, n in enumerate(tree.body[start:], start) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'KEYS')
         code = compile(ast.Module(body=tree.body[start:end], type_ignores=[]), str(source), 'exec')
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); (root / 'tools').mkdir(); (root / 'tools/sdk_patches.py').write_text(''); (root / 'tools/engine_patches.py').write_text('')
+            root = Path(tmp); (root / 'tools').mkdir(); (root / 'tools/sdk_patches.py').write_text('')
             for gid in ('0100000000000001', '0100000000000002'):
                 p = root / 'games' / gid / 'patches.py'; p.parent.mkdir(parents=True)
                 rule = copy.deepcopy(self.rule)
@@ -314,7 +314,7 @@ class Matching(unittest.TestCase):
         code = compile(ast.Module(body=tree.body[start:end], type_ignores=[]), str(source), 'exec')
         gid, known = '0100000000000001', 'ab' * 16
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); (root / 'tools').mkdir(); (root / 'tools/sdk_patches.py').write_text(''); (root / 'tools/engine_patches.py').write_text('')
+            root = Path(tmp); (root / 'tools').mkdir(); (root / 'tools/sdk_patches.py').write_text('')
             g = root / 'games' / gid; g.mkdir(parents=True)
             (g / 'patches.py').write_text("CUTS = {'" + known + "': [(0x108, 'e00317aa', '1f2003d5', 'a'), (0x10c, '1f2003d5', '1f2003d5', 'b')]}\n")
             (g / 'game.tsv').write_text(f'build\tv65536\t1.0.1\tmain={known}\tsdk={"cd" * 16}\n')
@@ -341,7 +341,6 @@ class Matching(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); (root / 'tools').mkdir()
             (root / 'tools/sdk_patches.py').write_text(f'CUTS = {{{kept!r}: []}}\nMATCH_CUTS = {{"sdk": [{self.rule!r}]}}\n')
-            (root / 'tools/engine_patches.py').write_text('')
             g = root / 'games' / gid; g.mkdir(parents=True)
             (g / 'game.tsv').write_text(f'build\tv0\t1.0.0\tmain={"ab" * 16}\tsdk={own}\n')
             for name, bid, gamed, expected in (('sdk', '00' * 16, gid, ADD), ('sdk', own, gid, ADD), ('sdk', own, '0100000000000002', ADD), ('sdk', kept, gid, MOV),

@@ -107,16 +107,6 @@ class Registry(unittest.TestCase):
                 self.assertTrue(rules)
                 for rule in rules: validate(rule)
 
-    def test_engine_rules(self):
-        # engine-wide rules (engine_patches.py): function-matched cuts of a game's own modules, never of Nintendo's sdk, whatever the profile
-        from nso_match import validate
-        m = runpy.run_path(str(REPO / 'dm/tools/engine_patches.py'))
-        self.assertTrue(m['MATCH_CUTS'])
-        self.assertFalse({k for k in m if k.isupper()} - {'MATCH_CUTS'}, 'engine_patches.py holds only MATCH_CUTS: no build-keyed tables')
-        for module, rules in m['MATCH_CUTS'].items():
-            self.assertNotEqual(module, 'sdk', "Nintendo's SDK fixes belong in sdk_patches.py")
-            for rule in rules: validate(rule)
-
     def test_function_matched_frame_steps(self):
         # one frame step per main, in a game's own patches.py; its stub writes only inside the function it was matched by and the other functions it names (docs_patches.frame_step_sites
         # with that base), and writes no site in another function it could not find (ctx.others[label] None)
@@ -217,7 +207,6 @@ class ExternalRegistry(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.tmp)
         self.tools = self.tmp / 'repo/tools'; self.tools.mkdir(parents=True)
         (self.tools / 'sdk_patches.py').write_text('')
-        (self.tools / 'engine_patches.py').write_text('')
         self.gid = '0100000000000000'
         self.external = self.tmp / 'profiles'
 
@@ -238,15 +227,14 @@ class ExternalRegistry(unittest.TestCase):
         for kind in ('CUTS', 'OBS', 'FRAME_STEP'):
             self.assertIn(bid, tables[kind]); self.assertEqual(Path(where[kind, bid]), p)
 
-    def test_shared_rules_merge_by_module(self):
-        (self.tools / 'sdk_patches.py').write_text("MATCH_CUTS = {'sdk': ['sdk rule']}\n")
-        (self.tools / 'engine_patches.py').write_text("MATCH_CUTS = {'main': ['engine rule'], 'sdk': ['engine sdk rule']}\n")
+    def test_shared_rules_are_keyed_by_module(self):
+        (self.tools / 'sdk_patches.py').write_text("MATCH_CUTS = {'sdk': ['sdk rule'], 'subsdk0': ['subsdk rule']}\n")
         tables, _ = self.registry()
-        self.assertEqual(tables['SDK_MATCH_CUTS'], {'sdk': ['sdk rule', 'engine sdk rule'], 'main': ['engine rule']})
+        self.assertEqual(tables['SDK_MATCH_CUTS'], {'sdk': ['sdk rule'], 'subsdk0': ['subsdk rule']})
 
     def test_repository_patches_under_bracketed_directory(self):
         tools = self.tmp / 'game [0400486024DEC000][v131072]' / 'dm/tools'; tools.mkdir(parents=True)
-        for f in ('sdk_patches.py', 'engine_patches.py'): (tools / f).write_text('')
+        (tools / 'sdk_patches.py').write_text('')
         bid = '6a' * 16
         patch = self.patch_file(tools.parent / 'games', f"FRAME_STEP = {{'{bid}': lambda ctx: None}}\n")
         with mock.patch.object(self, 'tools', tools):
@@ -315,7 +303,7 @@ class RewriteKey(unittest.TestCase):
         gid = '0400486024DEC000'   # Ocarina of Time: function-matched rules in its own patches.py, which names no build
         for bid, m in builds_of(gid).items():
             if m in ('main', 'sdk'): (tmp / m).write_bytes(b'NSO0' + bytes(0x3c) + bytes.fromhex(bid))
-        sdk_wide = [REPO / 'dm/tools/sdk_patches.py', REPO / 'dm/tools/engine_patches.py']   # their SDK-wide and engine-wide MATCH_CUTS apply to any build, so they always count
+        sdk_wide = [REPO / 'dm/tools/sdk_patches.py']   # its SDK-wide MATCH_CUTS apply to any build, so it always counts
         self.assertEqual(nsp.patch_files(REPO, tmp, ['main', 'sdk']), sdk_wide)   # no game selected: a patch file counts only when it names a module's build
         self.assertEqual(nsp.patch_files(REPO, tmp, ['main', 'sdk'], gid), sdk_wide + [REPO / 'dm/games' / gid / 'patches.py'])   # the selected game's file counts for any build
         (tmp / 'main').write_bytes(b'NSO0' + bytes(0x3c) + bytes(16)); (tmp / 'sdk').write_bytes(b'NSO0' + bytes(0x3c) + bytes(16))
@@ -333,7 +321,7 @@ class RewriteKey(unittest.TestCase):
         mine, other = tmp / 'profiles/0100000000000000/patches.py', tmp / 'profiles/0100000000000001/patches.py'
         for f, text in ((mine, f"CUTS = {{'{bid}': []}}\n"), (other, "CUTS = {'" + '6f' * 16 + "': []}\n")):
             f.parent.mkdir(parents=True); f.write_text(text)
-        sdk_wide = [REPO / 'dm/tools/sdk_patches.py', REPO / 'dm/tools/engine_patches.py']
+        sdk_wide = [REPO / 'dm/tools/sdk_patches.py']
         with mock.patch.dict(os.environ, {'DM_GAMES_DIR': str(tmp / 'profiles')}):
             self.assertEqual(nsp.patch_files(REPO, tmp / 'exe', ['main']), sdk_wide + [mine])   # of the games' files, only the one that names the module's build
             self.assertEqual(nsp.patch_files(REPO, tmp / 'exe', ['main'], '0100000000000001'), sdk_wide + [mine, other])   # the selected game's file counts for any build

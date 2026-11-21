@@ -101,11 +101,10 @@ else:
 #     which the NSP script reports with the build (what an unregistered build lost)
 #   sdk_patches.py's MATCH_CUTS are SDK-wide: every game's module of that name whose build has no CUTS, whatever the profile (a build that must keep Nintendo's code registers an
 #     empty CUTS list). They are fixes of Nintendo's code that hold for any game on a platform with a small address space; a build without a reviewed implementation of one keeps
-#     the original code, logged but not red (games without virtual address memory never reach it). engine_patches.py's MATCH_CUTS are engine-wide in the same way: fixes of
-#     middleware code (Unity, Unreal, ...) for every game's module that ships it, logged but not red where nothing matches
+#     the original code, logged but not red (games without virtual address memory never reach it)
 #   CAPABILITIES = {build ID: (name,...)}: verified main-build features exposed by fixups metadata to the launcher
 #   BINDING = [{what, now, goal, purpose, why[, blocked or kept][, checked]}]: not read here; each patch's binding now and the loosest it could have (dm/tools/docs_patches.py "Binding", docs/agents/game-patches.md)
-SHARED = ('sdk_patches.py', 'engine_patches.py')   # rules for every game's module of a kind: Nintendo's SDK, and engine code (their MATCH_CUTS, keyed by module name)
+SHARED = ('sdk_patches.py',)   # rules for every module of a kind: Nintendo's SDK (its MATCH_CUTS, keyed by module name)
 PATCH_FILES = [os.path.join(os.path.dirname(os.path.abspath(__file__)), f) for f in SHARED] + sorted(glob.glob(os.path.join(glob.escape(os.path.dirname(os.path.abspath(__file__))), '../games/*/patches.py')))
 # Every folder given to glob is escaped: brackets in a parent folder (`Game [0400486024DEC000][v131072]`) are a character class to glob, and the search would find nothing
 # Profiles outside the repository (DM_GAMES_DIR, folders separated by os.pathsep, which is ':' as in dm/games/game.py: the NSP script's provisional profile of a game being brought up) may have a
@@ -217,91 +216,6 @@ for off, ob, nb, why in cuts:
 # Key page indices are fixed; the key page content is written by the loader as "actual key number × 8".
 KEYS = {'K18': 508, 'KTLS': 509, 'KTLR': 510, 'KGATE': 511}
 KEY_INDEX = {k: i for i, k in enumerate(('K18', 'KTLS', 'KTLR', 'KGATE'))}
-
-# ---- Unreal console variables in main (dm/tools/ue_cvar.py finds them by their registered names, without a build ID) ----
-# The fixups table names each one's TAutoConsoleVariable (UE_CVAR:<name>); the host writes those the profile decides on (hle_fpslock.c, hle_uecvar.c)
-import ue_cvar
-UE_CVARS, ue_cvar_why = ue_cvar.find_all(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF) if NAME == 'main' else ({}, [])
-if UE_CVARS: print(f'{NAME}: Unreal console variables (ue_cvar.py): ' + ', '.join(f'{n} at {o:#x}' for n, o in UE_CVARS.items()))
-for w in ue_cvar_why:
-    if w.startswith('[RED] '): print(f'[RED] {NAME}: Unreal console variable {w[6:]}: the host cannot write it')
-
-# ---- A target frame rate the game steps by (main: dm/tools/fps_target.py finds it by the code that reads and sets it, without a build ID) ----
-# The fixups table names the global pointer and the field (FPS_TARGET_PTR, FPS_TARGET_FIELD); the host writes the profile's fps_target there (hle_fpslock.c)
-import fps_target
-FPS_TARGET_PTR, FPS_TARGET_FIELD, fps_target_why = fps_target.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF) if NAME == 'main' else (None, None, '')
-if FPS_TARGET_PTR is not None: print(f'{NAME}: {fps_target_why} (fps_target.py)')
-elif fps_target_why.startswith('[RED] '): print(f'[RED] {NAME}: {fps_target_why[6:]}: the host cannot write it')
-
-# ---- Monolith's native interval (the wait and simulation step share it; no game/build offsets) ----
-import monolith_fps
-MONOLITH_INTERVAL, monolith_why = monolith_fps.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF) if NAME == 'main' else (None, '')
-if MONOLITH_INTERVAL is not None: print(f'{NAME}: {monolith_why} (monolith_fps.py)')
-elif monolith_why.startswith('[RED] '): print(f'[RED] {NAME}: {monolith_why[6:]}: the host cannot write it')
-
-# ---- Unreal's fixed frame rate (main: dm/tools/ue_fixed_rate.py finds UEngine::FixedFrameRate and bUseFixedFrameRate by their reflection entries and GEngine where the engine is made, without a build ID) ----
-# The fixups table names GEngine's offset, the property's and the flag's (UE_FIXED_RATE_PTR, UE_FIXED_RATE_FIELD, UE_FIXED_RATE_FLAG); the host writes the profile's fps_target there while the flag is set (hle_fpslock.c)
-import ue_fixed_rate
-UE_FIXED_PTR, UE_FIXED_FIELD, UE_FIXED_FLAG, ue_fixed_why = ue_fixed_rate.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF) if NAME == 'main' and UE_CVARS else (None, None, None, '')
-if UE_FIXED_PTR is not None: print(f'{NAME}: {ue_fixed_why} (ue_fixed_rate.py)')
-elif ue_fixed_why.startswith('[RED] '): print(f'[RED] {NAME}: {ue_fixed_why[6:]}: the host cannot write it')
-
-# ---- Unity's frame rate (main: dm/tools/unity_fps.py finds Application.targetFrameRate and QualitySettings' vSyncCount through the engine's internal-call table, without a build ID) ----
-# The fixups table names their places (UNITY_TARGET_FPS; UNITY_QS_PTR, _IDX, _ARR, _SIZE, _VSYNC); the host writes the profile's fps_target there (hle_fpslock.c)
-import unity_fps
-UNITY_FPS, unity_why = unity_fps.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF) if NAME == 'main' else ({}, '')
-if UNITY_FPS: print(f'{NAME}: {unity_why} (unity_fps.py)')
-if '[RED] ' in unity_why: print(f'[RED] {NAME}: {unity_why}: the host cannot write what is not read')
-
-# ---- Unreal's FMallocBinned3 (any module: dm/tools/ue_malloc.py finds it by the engine's own name string, getter and vtable, without a build ID) ----
-# Its constructor reserves 37 GB of address space for its pools. Its calls are cut, and observation gate OBS_UE_MALLOC goes on each (below), where x0 holds the object: the host gives
-# the object its own allocator's vtable there (dm/host/hle_uemalloc.c), whose place and slot layout the fixups table names (UE_MALLOC_VT, UE_MALLOC_SLOT)
-import ue_malloc
-UE_CALLS, UE_VT, UE_SLOT, ue_why = ue_malloc.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF)
-for _c in UE_CALLS or ():
-    cuts.append((_c, bytes(IMG[_c:_c + 4]).hex(), struct.pack('<I', NOP).hex(), f'{ue_why}: the constructor call → nop, gate OBS_UE_MALLOC on it (ue_malloc.py)'))
-    struct.pack_into('<I', IMG, _c, NOP)
-if UE_CALLS: print(f'{NAME}: {ue_why}')
-elif ue_why.startswith('[RED] '): print(f'[RED] {NAME}: {ue_why[6:]}: Unreal\'s own allocator runs')
-
-# ---- Unity's ALLOC_BUCKET BucketAllocator (main: dm/tools/unity_bucket.py finds its construction by the allocator's name, without a build ID) ----
-# Unity 2019 reserves (255 + 1) x 4 MB for it at once; its block limit is cut to what 256 MB holds (a platform limit: an iPhone's alias region is 4.375 GB)
-import unity_bucket
-UB_CUT, ub_why = unity_bucket.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF) if NAME == 'main' else (None, '')
-if UB_CUT:
-    cuts.append(UB_CUT); IMG[UB_CUT[0]:UB_CUT[0] + 4] = bytes.fromhex(UB_CUT[2])
-    print(f'{NAME}: {ub_why}')
-elif ub_why.startswith('[RED] '): print(f'[RED] {NAME}: {ub_why[6:]}: its whole reservation stays')
-
-# ---- Snowdrop's three-pool page allocator (main: dm/tools/snowdrop_pools.py finds its constructor by its structure, without a build ID) ----
-# Its 12 GB of address ranges become the sizes the profile decides on (snowdrop_pools, measured against the game's regions)
-import snowdrop_pools
-sd_sites, sd_why = snowdrop_pools.find(bytes(IMG), TEXT_END) if NAME == 'main' else (None, '')
-if sd_sites is not None:
-    sd_sizes, sd_from = snowdrop_pools.profile_sizes()
-    for off, ob, nb, why in snowdrop_pools.cuts(IMG, sd_sites, sd_sizes):
-        cuts.append((off, ob, nb, why))
-        IMG[off:off + 4] = bytes.fromhex(nb)
-    print(f'{NAME}: {sd_why}: large {sd_sizes[0]} MB, 512 KB pages {sd_sizes[1]} MB, 64 KB pages {sd_sizes[2]} MB ({sd_from})')
-elif sd_why.startswith('[RED] '): print(f'[RED] {NAME}: {sd_why[6:]}: its 12 GB reservation stays and fails on an iPhone')
-
-# ---- Unreal's engine address region (main: dm/tools/ue_region.py finds the store of its size right before nninitStartup reserves it, without a build ID) ----
-# Observation gate OBS_UE_REGION goes on that store (below), the size register in the gate number's upper bits: the host gives the region what the alias region has room for there
-# (dm/host/hle_svc.c "Unreal's engine region"), where the engine would ask for 62 GB (16 GB in Unreal Engine 4.18)
-import ue_region
-UE_REGION, UE_REGION_REG, UE_REGION_X1, ue_region_why = ue_region.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF) if NAME == 'main' else (None, None, None, '')
-if UE_REGION is not None: print(f'{NAME}: {ue_region_why}')
-elif ue_region_why.startswith('[RED] '): print(f'[RED] {NAME}: {ue_region_why[6:]}: the engine asks for its whole default region')
-
-# ---- Unreal's NVN dynamic buffers (main: dm/tools/ue_ring.py finds the load of their copy count, without a build ID) ----
-# Each write lock moves to the next copy with no fence, and a ring of 3 can come round to a copy that queued draws still read: one more copy widens the margin (a workaround: GitHub issue #1040)
-import ue_ring
-UE_RING, UE_RING_OLD, UE_RING_NEW, ue_ring_why = ue_ring.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF) if NAME == 'main' else (None, None, None, '')
-if UE_RING is not None:
-    cuts.append((UE_RING, struct.pack('<I', UE_RING_OLD).hex(), struct.pack('<I', UE_RING_NEW).hex(), f'{ue_ring_why} (ue_ring.py)'))
-    struct.pack_into('<I', IMG, UE_RING, UE_RING_NEW)
-    print(f'{NAME}: {ue_ring_why}')
-elif ue_ring_why.startswith('[RED] '): print(f'[RED] {NAME}: {ue_ring_why[6:]}: its dynamic buffers keep 3 copies')
 
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM); md.detail = True
 patch = bytearray(); fix = []; gates = []; stats = {}
@@ -632,7 +546,7 @@ def site_gate(ins, kind, arg):
 def site_obs(off, oid, word):
     """Observation gate: original entry instruction → enter the host gate (arg = observation number) → restore x29/x30 → execute the original instruction → jump back to off+4.
         The first half of the gate block is word-for-word isomorphic with site_gate; dm_gate saves x0–x28 and the flags in its frame and restores them, so a register keeps its value unless the callback writes it
-        (OBS_STDALLOC_INIT's x2, OBS_UE_REGION's size). Any instruction that can be relocated takes one"""
+        (OBS_STDALLOC_INIT's x2). Any instruction that can be relocated takes one"""
     ins = dis(word, off)
     assert ins.mnemonic not in ('adr', 'adrp', 'b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz') and not ins.mnemonic.startswith('b.') \
         and not (ins.mnemonic.startswith('ldr') and '[' not in ins.op_str) and not has18(ins), f'observation gate original instruction cannot be relocated {off:#x} {ins.mnemonic} {ins.op_str}'
@@ -1434,7 +1348,7 @@ for off, oid, ow, why in obs:
 # who asked for it and how much of it is used. They only read registers. VammManager::AllocateAddressRegion(this, uintptr_t *out, size_t size): at its entry the size (x2) and the caller's
 # frames; at the one store of the region's address through out (copied from x1 in its prologue: str xA, [xB]) the address, A passed in the gate number's upper bits;
 # VammManager::FreeAddressRegion(this, address): at its entry. A build where one of them is not found that way gets none of them (logged); the host then has no region table
-OBS_UE_MALLOC, OBS_REGION_ASK, OBS_REGION_GOT, OBS_REGION_FREE, OBS_STDALLOC_INIT, OBS_UE_REGION = 21, 22, 23, 24, 25, 26   # dm/host/dm.h
+OBS_REGION_ASK, OBS_REGION_GOT, OBS_REGION_FREE, OBS_STDALLOC_INIT = 22, 23, 24, 25   # dm/host/dm.h
 def region_gates():
     from nso_syms import defined
     sym = defined(IMG)
@@ -1467,19 +1381,6 @@ def stdalloc_gates():
         out.append((off, OBS_STDALLOC_INIT, f'{struct.unpack_from("<I", IMG, off)[0]:08x}', f'StandardAllocator::Initialize(void *, size_t{", bool" if name.endswith("b") else ""}) entry: the size in x2, capped when the address in x1 is null'))
     return out
 region_obs += stdalloc_gates()
-# Unreal's FMallocBinned3 (above): the gate on each cut constructor call, a nop now; x0 is the object (the gate number's upper bits name the register, 0)
-for _c in UE_CALLS or ():
-    assert _c not in kinds and not any(lo <= _c < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'FMallocBinned3 gate conflicts with a rewrite site {_c:#x}'
-    region_obs.append((_c, OBS_UE_MALLOC, f'{NOP:08x}', 'FMallocBinned3 constructor call (cut): the object in x0; the host puts its allocator\'s vtable in (hle_uemalloc.c)'))
-# Unreal's engine region (above): the gate on the store of its size, which the callback changes in that register and x1, the size the call asks for
-if UE_REGION is not None:
-    assert UE_REGION_REG is not None, 'engine region gate has no size register'
-    assert UE_REGION not in kinds and not any(lo <= UE_REGION < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'engine region gate conflicts with a rewrite site {UE_REGION:#x}'
-    region_obs.append((UE_REGION, OBS_UE_REGION | UE_REGION_REG << 8, f'{struct.unpack_from("<I", IMG, UE_REGION)[0]:08x}',
-                       f'Unreal\'s engine region: its size in x{UE_REGION_REG}, stored before nninitStartup reserves it; the host gives what the alias region has room for (hle_svc.c)'))
-    if UE_REGION_X1 is not None:   # the request's size set again after the store (TRIANGLE STRATEGY): mov x1, xS, so it takes what the gate gave S
-        assert UE_REGION_X1 not in kinds and not any(lo <= UE_REGION_X1 < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'engine region size conflicts with a rewrite site {UE_REGION_X1:#x}'
-        struct.pack_into('<I', IMG, UE_REGION_X1, 0xAA0003E1 | UE_REGION_REG << 16)
 for off, oid, ow, why in region_obs: use_area(off); put_branch(off, site_obs(off, oid, int(ow, 16))); stat('obs')
 obs += region_obs
 
@@ -1925,22 +1826,15 @@ def movie_native_color_keys():
     return RO_OFF <= target < DATA_OFF and IMG[target:target + len(key)] == key
 
 with open(os.path.join(outdir, 'build_src.sha256'), 'w') as f:   # the same for every module: the rewriter and every patch file, by path from dm/tools
-    for src_ in (os.path.abspath(__file__), nso.__file__, nso_code.__file__, nso_asm.__file__, nso_syms.__file__, ue_cvar.__file__, ue_malloc.__file__, fps_target.__file__, monolith_fps.__file__, ue_fixed_rate.__file__, unity_fps.__file__, unity_bucket.__file__, ue_region.__file__, ue_ring.__file__, snowdrop_pools.__file__, os.path.join(os.path.dirname(ue_malloc.__file__), 'loader_census.py'), *PATCH_FILES): f.write(hashlib.sha256(open(src_, 'rb').read()).hexdigest() + f'  {os.path.relpath(os.path.abspath(src_), os.path.dirname(os.path.abspath(__file__)))}\n')
+    for src_ in (os.path.abspath(__file__), nso.__file__, nso_code.__file__, nso_asm.__file__, nso_syms.__file__, *PATCH_FILES): f.write(hashlib.sha256(open(src_, 'rb').read()).hexdigest() + f'  {os.path.relpath(os.path.abspath(src_), os.path.dirname(os.path.abspath(__file__)))}\n')
 with open(P('fixups.tsv'), 'w') as f:
     f.write(f'# PATCH_OFF\t{PATCH_OFF:#x}\n# KEY_PAGE_OFF\t{KEY_PAGE_OFF:#x}\n# KEY_PAGE_SIZE\t0x4000\n# TEXT_END\t{TEXT_END:#x}\n# RO_OFF\t{RO_OFF:#x}\n# DATA_OFF\t{DATA_OFF:#x}\n')
     if FAR: f.write(f'# IMAGE_SIZE\t{IMAGE_SIZE:#x}\n# FILE_IMAGE_LEN\t{FILE_IMAGE_LEN:#x}\n')   # patch area before the base (negative PATCH_OFF): whole image size, length of the image part of the file
     if TWO: f.write(f'# BACK_OFF\t{BACK_OFF:#x}\n# BACK_LEN\t{BACK_LEN:#x}\n')   # the back patch area (TWO): its offset in the image, and its length, the last bytes of the file
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
     if FS_STATE_OFF: f.write(f'# FPS_STATE_OFF\t{FS_STATE_OFF:#x}\n')   # frame step state page (FRAME_STEP): the loader writes the target fps there
-    if UE_CALLS: f.write(f'# UE_MALLOC_VT\t{UE_VT:#x}\n# UE_MALLOC_SLOT\t{UE_SLOT:#x}\n')   # Unreal's FMallocBinned3 (ue_malloc.py): its vtable and the slot of its name getter, which names the slot layout
-    if FPS_TARGET_PTR is not None: f.write(f'# FPS_TARGET_PTR\t{FPS_TARGET_PTR:#x}\n# FPS_TARGET_FIELD\t{FPS_TARGET_FIELD:#x}\n')   # a target frame rate the game steps by (fps_target.py)
-    if MONOLITH_INTERVAL is not None: f.write(f'# MONOLITH_INTERVAL\t{MONOLITH_INTERVAL:#x}\n')   # native wait and simulation interval (monolith_fps.py)
     if NATIVE_FPS_BLOCKED: f.write('# NATIVE_FPS_BLOCKED\t0x1\n')   # a required matched timing correction was not installed
-    if UE_FIXED_PTR is not None: f.write(f'# UE_FIXED_RATE_PTR\t{UE_FIXED_PTR:#x}\n# UE_FIXED_RATE_FIELD\t{UE_FIXED_FIELD:#x}\n# UE_FIXED_RATE_FLAG\t{UE_FIXED_FLAG:#x}\n')   # Unreal's GEngine, UEngine::FixedFrameRate and bUseFixedFrameRate (ue_fixed_rate.py)
-    if 'target' in UNITY_FPS: f.write(f"# UNITY_TARGET_FPS\t{UNITY_FPS['target']:#x}\n")   # Unity's Application.targetFrameRate (unity_fps.py)
-    if 'qs' in UNITY_FPS: f.write(''.join(f'# UNITY_QS_{k}\t{v:#x}\n' for k, v in zip(('PTR', 'IDX', 'ARR', 'SIZE', 'VSYNC'), UNITY_FPS['qs'])))   # its QualitySettings' vSyncCount (unity_fps.py)
     if movie_native_color_keys(): f.write('# MOVIE_NATIVE_COLOR_KEYS\t0x1\n')
-    for n, o in UE_CVARS.items(): f.write(f'# UE_CVAR:{n}\t{o:#x}\n')   # Unreal console variables (ue_cvar.py): the TAutoConsoleVariable registered under each name
     if RENDER_SCALE:   # a render-scale stub reads state +0x10, up to this scale (the loader holds DM_RENDER_SCALE to it; dm/games/settings.py offers the setting up to it)
         assert isinstance(RENDER_SCALE, int) and 1 <= RENDER_SCALE <= 9, f'render scale stub: ctx.render_scale is a whole largest scale, 1 to 9: {RENDER_SCALE!r}'
         f.write(f'# RENDER_SCALE\t{RENDER_SCALE}\n')

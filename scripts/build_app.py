@@ -476,8 +476,7 @@ def vnum(ver):   # 'v655360' → 655360
 
 
 # ---- The build folder and the profile folders ----
-REWRITER_FILES = ('patch_nso.py', 'jump_solver.py', 'nso.py', 'nso_code.py', 'nso_asm.py', 'nso_syms.py', 'nso_match.py', 'ue_cvar.py', 'ue_malloc.py', 'ue_region.py', 'ue_ring.py', 'snowdrop_pools.py',   # the rewriter and the modules it imports: inputs of the rewrite's key
-                  'loader_census.py', 'fps_target.py', 'monolith_fps.py', 'ue_fixed_rate.py', 'unity_fps.py', 'unity_bucket.py')
+REWRITER_FILES = ('patch_nso.py', 'jump_solver.py', 'nso.py', 'nso_code.py', 'nso_asm.py', 'nso_syms.py', 'nso_match.py')   # the rewriter and the modules it imports: inputs of the rewrite's key
 
 
 EMPTY_TABLES = {   # a derived profile's shader tables before the shader split fills them: the profile inputs' digest (dmsh_chain.py --inputs) and the host's build read them
@@ -892,11 +891,11 @@ def build_mismatch(d, name, g):   # the modules of an extraction whose build ID 
 def patch_files(repo, exe_dir, mods, game_id=None):
     """The patch files that name one of the modules' builds (dm/tools/sdk_patches.py, dm/games/*/patches.py): patch_nso.py loads them all but applies only those of a module's
     build ID. The selected game's file also counts for unknown builds: it may supply MATCH_CUTS. sdk_patches.py always counts: its MATCH_CUTS are SDK-wide and apply to builds it does
-    not name, as engine_patches.py's (engine-wide) do. The patches.py of profiles in DM_GAMES_DIR (a derived profile's link) count too, as patch_nso.py loads them"""
+    not name. The patches.py of profiles in DM_GAMES_DIR (a derived profile's link) count too, as patch_nso.py loads them"""
     ids = {build_id(exe_dir / m) for m in mods}
     selected = Path(game_id).name if game_id else None
     extra = [p for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d for p in sorted(Path(d).glob('*/patches.py'))]
-    shared = [repo / 'dm/tools/sdk_patches.py', repo / 'dm/tools/engine_patches.py']   # their MATCH_CUTS apply to every game's module of a kind
+    shared = [repo / 'dm/tools/sdk_patches.py']   # its MATCH_CUTS apply to every sdk module
     files = {}
     for p in shared + sorted((repo / 'dm/games').glob('*/patches.py')) + extra: files.setdefault(p.resolve(), p)
     return [p for p in files.values()
@@ -915,8 +914,8 @@ def rewrite(py, repo, exe_dir, out, env, logs, g):
     mods = g.modules_in(exe_dir)   # a version may lack a module of the profile another version has (game.py build_modules)
     src = {m: exe_dir / m for m in mods}
     kf = out.with_name(out.name + '.key')
-    # the repository profile's build rows decide which builds the rewriter treats as the game's own (SDK-wide function patches skip those), and its snowdrop_pools the sizes of those cuts, so they are inputs too
-    try: own = [l for l in (repo / 'dm/games' / Path(env.get('DM_GAME') or '-').name / 'game.tsv').read_text(encoding='utf-8').splitlines() if l.startswith(('build\t', 'snowdrop_pools\t'))]
+    # the repository profile's build rows decide which builds the rewriter treats as the game's own (SDK-wide function patches skip those), so they are inputs too
+    try: own = [l for l in (repo / 'dm/games' / Path(env.get('DM_GAME') or '-').name / 'game.tsv').read_text(encoding='utf-8').splitlines() if l.startswith('build\t')]
     except OSError: own = []
     key = fingerprint(('files', [repo / 'dm/tools' / f for f in REWRITER_FILES] + patch_files(repo, exe_dir, mods, env.get('DM_GAME')) + list(src.values())), mods, capstone.__version__,
                       {k: env.get(k) for k in ('DM_PATCH_FRONT', 'DM_GAME')}, own)
