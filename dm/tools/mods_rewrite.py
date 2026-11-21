@@ -22,7 +22,7 @@ def host_check(host, modules, env):
     """The host's verdict on every patch file of the mods that are on (DM_MODS_CHECK, hle_mods.c), in the order it applies them: the lowest priority first."""
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / 'check.tsv'
-        run_env = {k: v for k, v in env.items() if k not in ('DM_WINDOW', 'DM_CTL', 'DM_CHEATS_WINDOW', 'DM_KEYS', 'DM_REC')} | {'DM_MODS_CHECK': str(out)}
+        run_env = {k: v for k, v in env.items() if k not in ('DM_WINDOW', 'DM_CTL', 'DM_KEYS', 'DM_REC')} | {'DM_MODS_CHECK': str(out)}
         run = subprocess.run([str(host), str(modules)], env=run_env, cwd=tmp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=CHECK_SECS, text=True, errors='replace')
         if run.returncode or not out.is_file():
             raise RuntimeError(f'the host did not answer DM_MODS_CHECK (exit {run.returncode}): ' + ' | '.join(run.stdout.splitlines()[-3:]))

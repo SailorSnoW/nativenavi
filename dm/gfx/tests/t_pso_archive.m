@@ -31,7 +31,7 @@ module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t *g_mod; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
-void hlecount_flush(void) {} void dm_rec_finish(void) {} void dm_cheats_exit(void) {} void dm_audio_suspend(int on) { (void)on; }   // what the graceful exit (hle_lifecycle.c) calls besides graphics
+void hlecount_flush(void) {} void dm_rec_finish(void) {} void dm_audio_suspend(int on) { (void)on; }   // what the graceful exit (hle_lifecycle.c) calls besides graphics
 static int checks, failed;
 // The next program of a test hand-over (--exec-seed): it starts only after the archive's write, so the folder holds the file; it says so in exec.txt (the test reads it)
 static void exec_then(void *dir) {

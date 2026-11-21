@@ -33,7 +33,7 @@ static uint8_t *g_heap; static _Atomic size_t g_heap_cur; static size_t g_heap_c
 static size_t g_heap_seen;        // the largest heap opened so far: with the guest in files, SetHeapSize zeroes a heap that grows back below it
 // The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (used where guest memory is read every tick, such as diag.c tk_rd)
 int dm_guest_heap_readable(uint64_t a, size_t n) { uint64_t b = (uint64_t)(uintptr_t)g_heap; size_t cur = g_heap_cur; return g_heap && a >= b && n <= cur && a - b <= cur - n; }
-// The opened heap span for callers that address guest memory by region (hle_cheats.c region 1, like dmnt's heap extents): the
+// The opened heap span for callers that address guest memory by region (probe.c), like dmnt's heap extents: the
 // reservation's base (guest address) and the length the game has actually opened with SetHeapSize right now, which grows and
 // shrinks with it; both 0 until the game's first SetHeapSize. There is no lock: the caller uses the pair only to bounds-check and
 // restarts the check on each access, so a concurrent resize can at worst give it an answer about the span a moment ago
@@ -421,24 +421,6 @@ static void guest_file_sweep(void) {
         g_alias_aged[w] = g_alias_rel[w];
     }
     pthread_mutex_unlock(&g_map_lock);
-}
-// A hole-free read / write of guest heap bytes for the cheat VM (hle_cheats.c): under g_map_lock no concurrent SetHeapSize
-// can mprotect the span away between the bounds check and the copy (both hold this same lock), so a live heap address cannot
-// turn into a fault while the cheat VM touches it. Both return 0 when every byte was inside the currently opened (readable
-// and writable) span, 1 otherwise. The address is the guest heap address the cheat VM computed (heap base + rel + offset register)
-int dm_guest_heap_write(uint64_t addr, const void *src, size_t len) {
-    pthread_mutex_lock(&g_map_lock);
-    int out = !dm_guest_heap_readable(addr, len);
-    if (!out) { dm_guest_write_prepare((void *)(uintptr_t)addr, len); memcpy((void *)(uintptr_t)addr, src, len); }
-    pthread_mutex_unlock(&g_map_lock);
-    return out;
-}
-int dm_guest_heap_read(uint64_t addr, void *out, size_t len) {
-    pthread_mutex_lock(&g_map_lock);
-    int bad = !dm_guest_heap_readable(addr, len);
-    if (!bad) memcpy(out, (void *)(uintptr_t)addr, len);
-    pthread_mutex_unlock(&g_map_lock);
-    return bad;
 }
 static int map_find(uint64_t a, uint64_t n) {       // returns a 1-based index, 0 = no overlap; caller holds g_map_lock
     for (int i = 0; i < g_nmap; i++) if (a < g_map[i].base + g_map[i].size && g_map[i].base < a + n) return i + 1;

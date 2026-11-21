@@ -1,4 +1,4 @@
-// Mods folder (DM_MODS, default <DM_ROOT>/mods): emulator-style mods, one folder each, feeding the RomFS overlay, the cheat engine and load-time exefs patches (docs/development.md "Mods")
+// Mods folder (DM_MODS, default <DM_ROOT>/mods): emulator-style mods, one folder each, feeding the RomFS overlay and load-time exefs patches (docs/development.md "Mods")
 #include "dm.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <ctype.h>
@@ -20,7 +20,6 @@ typedef struct { const module_t *m; uint64_t off, len; int mod; } applied_t;
 typedef struct { char path[1536], sha[65], why[400]; int refused, seen; } baked_t;
 
 static mod_t g_mods[MOD_MAX]; static int g_nmods;
-static char g_cheat_dirs[MOD_MAX][1024]; static int g_cheat_mod[MOD_MAX], g_ncheat_dirs;
 static pfile_t g_pfiles[PFILE_MAX]; static int g_npfiles;
 static applied_t *g_applied; static int g_napplied, g_applied_cap;
 static struct { char name[256]; char romfs[1300]; int on, at_start; } g_all[MOD_MAX * 4]; static int g_nall, g_edited;
@@ -133,8 +132,7 @@ static void list_mod(const char *base, const char *name, const char *tid, int on
     snprintf(dir, sizeof dir, "%s/%s", base, name); mod_root(dir, tid, root, sizeof root);
     snprintf(p, sizeof p, "%s/romfs", root);
     if (is_dir(p) && !strchr(p, ':')) strlcpy(g_all[g_nall].romfs, p, sizeof g_all[0].romfs);
-    const char *start[] = {"%s/exefs", "%s/cheats"};
-    for (size_t i = 0; i < 2; i++) { snprintf(p, sizeof p, start[i], root); if (is_dir(p)) g_all[g_nall].at_start = 1; }
+    snprintf(p, sizeof p, "%s/exefs", root); if (is_dir(p)) g_all[g_nall].at_start = 1;
     snprintf(p, sizeof p, "%s/atmosphere/exefs_patches", dir); if (is_dir(p)) g_all[g_nall].at_start = 1;
     snprintf(p, sizeof p, "%s/exefs_patches", dir); if (is_dir(p)) g_all[g_nall].at_start = 1;
     g_nall++;
@@ -147,7 +145,7 @@ static void add_mod(const char *base, const char *name, const char *tid, char *o
     snprintf(m->name, sizeof m->name, "%s", name);
     snprintf(m->dir, sizeof m->dir, "%s/%s", base, name);
     mod_root(m->dir, tid, m->root, sizeof m->root);
-    char p[1280]; int romfs = 0, cheats = 0, before = g_npfiles;
+    char p[1280]; int romfs = 0, before = g_npfiles;
     snprintf(p, sizeof p, "%s/romfs", m->root);
     if (is_dir(p)) {
         size_t used = strlen(overlay);
@@ -155,19 +153,17 @@ static void add_mod(const char *base, const char *name, const char *tid, char *o
         else if (used + strlen(p) + 2 > overlay_n) LOG("[RED] mods: %s: the RomFS overlay list is full (%zu bytes): its romfs folder is not used", name, overlay_n);
         else { if (used) strlcat(overlay, ":", overlay_n); strlcat(overlay, p, overlay_n); romfs = 1; }
     }
-    snprintf(p, sizeof p, "%s/cheats", m->root);
-    if (is_dir(p)) { g_cheat_mod[g_ncheat_dirs] = idx; snprintf(g_cheat_dirs[g_ncheat_dirs++], sizeof g_cheat_dirs[0], "%s", p); cheats = 1; }
     snprintf(p, sizeof p, "%s/exefs", m->root); scan_patch_dir(p, idx);
     snprintf(p, sizeof p, "%s/atmosphere/exefs_patches", m->dir); scan_patch_sets(p, idx);
     snprintf(p, sizeof p, "%s/exefs_patches", m->dir); scan_patch_sets(p, idx);
-    LOG("mods: %d %s:%s%s %d exefs patch file(s)%s", idx + 1, name, romfs ? " romfs," : "", cheats ? " cheats," : "", g_npfiles - before,
-        !romfs && !cheats && g_npfiles == before ? " (nothing this host loads: expected romfs/, cheats/ or exefs/ in it, or an atmosphere/contents/<title ID>/ tree)" : "");
+    LOG("mods: %d %s:%s %d exefs patch file(s)%s", idx + 1, name, romfs ? " romfs," : "", g_npfiles - before,
+        !romfs && g_npfiles == before ? " (nothing this host loads: expected romfs/ or exefs/ in it, or an atmosphere/contents/<title ID>/ tree)" : "");
 }
 
 static int by_name(const void *a, const void *b) { return strcasecmp(a, b); }
 
 static int has_content(const char *dir, const char *tid) {
-    const char *roots[] = {"%s", "%s/atmosphere/contents/%s", "%s/contents/%s", "%s/%s"}, *kinds[] = {"romfs", "exefs", "cheats"};
+    const char *roots[] = {"%s", "%s/atmosphere/contents/%s", "%s/contents/%s", "%s/%s"}, *kinds[] = {"romfs", "exefs"};
     char root[1280], p[1400];
     for (size_t r = 0; r < sizeof roots / sizeof *roots; r++) {
         snprintf(root, sizeof root, roots[r], dir, tid);
@@ -281,7 +277,7 @@ int dm_mods_on(int i) { return i >= 0 && i < g_nall && g_all[i].on; }
 int dm_mods_edited(void) { return g_edited; }
 
 // The romfs folders follow at once: files the game opens from now on come from the new set (what it has loaded stays until it loads it again).
-// Code patches and cheat folders are read at the start only. The choice is written to order.txt either way
+// Code patches are read at the start only. The choice is written to order.txt either way
 void dm_mods_set(int i, int on) {
     if (i < 0 || i >= g_nall) return;
     for (int k = 0; on && k < g_nall; k++) if (g_all[k].on && alternatives(i, k)) { g_all[k].on = 0; if (g_all[k].at_start) g_edited = 1; }
@@ -297,14 +293,9 @@ void dm_mods_set(int i, int on) {
     if (!f) { LOG("[RED] mods: cannot write %s: %s", tmp, strerror(errno)); return; }
     for (int k = 0; k < g_nall; k++) fprintf(f, "%s%s\n", g_all[k].on ? "" : "# ", g_all[k].name);
     if (fclose(f) || rename(tmp, p)) LOG("[RED] mods: cannot write %s: %s", p, strerror(errno));
-    else LOG("mods: %s turned %s%s", g_all[i].name, on ? "on" : "off", g_all[i].at_start ? " (its code patches and cheats follow at the next start)" : "");
+    else LOG("mods: %s turned %s%s", g_all[i].name, on ? "on" : "off", g_all[i].at_start ? " (its code patches follow at the next start)" : "");
 }
 
-const char *dm_mods_cheat_dir(int i, const char **mod) {
-    if (i < 0 || i >= g_ncheat_dirs) return NULL;
-    if (mod) *mod = g_mods[g_cheat_mod[i]].name;
-    return g_cheat_dirs[i];
-}
 
 static void rec_add(recs_t *rs, uint64_t off, uint32_t len, const uint8_t *data, int fill) {
     if (!len) return;

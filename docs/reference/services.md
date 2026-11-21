@@ -1112,7 +1112,7 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Symptom:** `CRASH sig=11` at `main+0x5b64f8`, `lr=main+0x3f1b8cc` (`nn.account.AsyncContext$$Finalize`), on an IL2CPP thread-pool worker a few seconds after the player confirms a name and birthday (Pokémon Friends 1.1.5). The object's first word, its vtable, holds stray bytes (`0xffffd256` in one run, `0x15600000128` in another). The game had started `account::EnsureNetworkServiceAccountIdTokenCacheAsync`.
 - **Cause:** `nn::account::AsyncContext` is polymorphic. The SDK's constructor (SDK 19.3.11: `sdk+0x1ad6c8`) writes the class's vtable and nulls the three words after it, the IPC object pointer at +0x18 among them, and sends nothing. The host took the constructor over with one that wrote no memory, so the vtable word kept what the allocator left there. The game's C# binding deletes the native context from the managed finalizer through the virtual deleting destructor, inlined in main (`main+0x5b64f0`: `if (p) p->vtable[1](p)`), which the host's `AsyncContextD1Ev` takeover never sees, and jumped through those bytes.
 - **Fix:** the constructor is no longer taken over (`hle_account.c`): the SDK's own runs. No host interface sets the IPC pointer, so the SDK's destructor, reached through the vtable, finds no session to close and frees the object. `friends::AsyncContext` and `account::NintendoAccountAuthorizationRequestContext` have no vtable (their SDK constructors write none), so their takeovers stay.
-- **Found on:** Pokémon Friends (`010008C01E742000`, update 1.1.5, SDK 19.3.11; no profile in the repository yet). The managed names come from Il2CppDumper's table ([IL2CPP method lookup](../development.md#il2cpp-method-lookup)).
+- **Found on:** Pokémon Friends (`010008C01E742000`, update 1.1.5, SDK 19.3.11; no profile in the repository yet). The managed names come from Il2CppDumper's table.
 
 ### Friends presence is accepted offline
 
@@ -1737,11 +1737,10 @@ Most service calls can be found before they crash, before the first boot or the 
 
 ### Mods made for emulators do nothing, or only half of them does
 
-- **Symptom:** a mod folder as Ryujinx, the yuzu family or Atmosphère take it (`romfs/`, `exefs/`, `cheats/`) had no place to go: only `DM_ROMFS_OVERLAY` replaced RomFS files, by hand, and only one cheat file per build was read. With the mods folder: `[RED] mods: … is not applied` for a code patch, `mods: warning: … differ only in case` for a file a Switch would not have matched.
+- **Symptom:** a mod folder as Ryujinx, the yuzu family or Atmosphère take it (`romfs/`, `exefs/`) had no place to go: only `DM_ROMFS_OVERLAY` replaced RomFS files, by hand. With the mods folder: `[RED] mods: … is not applied` for a code patch, `mods: warning: … differ only in case` for a file a Switch would not have matched.
 - **Cause:** the host had no notion of a mod: no folder, no order, no way to turn one off, and no patching of a module after the rewriter.
 - **Fix:** `dm/host/hle_mods.c` reads a mods folder (`DM_MODS`, default `<DM_ROOT>/mods`), one folder per mod in any of the layouts mods ship in, ordered and switched by `order.txt` ([Mods](../development.md#mods)):
   - `romfs/` folders join the RomFS overlay and follow the Mods menu while the game runs; a `<name>.dm-delete` marker hides a game file or directory, and a name that differs from the game's only in case is taken with a warning;
-  - every `cheats/<build ID>.txt` joins the cheats folder's own as one list ([Cheat files from several places](../development.md#cheat-files-from-several-places));
   - `.pchtxt` and `.ips` patches are written into a module as it is mapped, before its code is sealed, each file whole or not at all, and never over what the rewriter changed ([the launch-time rewrite](rewriter.md#mod-code-patches-the-host-cannot-make-at-load-time) takes those).
 - **Open:** code modules of a mod (ExLaunch, Skyline) are not loaded ([what one would need](../development.md#what-an-exlaunch-mod-would-need-open)); no exefs patch on iOS.
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), with two RomFS mods (a controller UI, a pack of tunic recolours) and synthetic patches and cheat files.

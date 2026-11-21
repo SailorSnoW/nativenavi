@@ -1,4 +1,4 @@
-// Mods folder unit test (hle_mods.c): discovery and order.txt, the RomFS overlay list, the cheat folders, .pchtxt and IPS32 parsing with the
+// Mods folder unit test (hle_mods.c): discovery and order.txt, the RomFS overlay list, .pchtxt and IPS32 parsing with the
 // NSO header shift, build ID matching, and the refusals that keep the rewriter's work intact. Expectations are written by hand.
 #include "../hle_mods.c"
 #include <unistd.h>
@@ -60,7 +60,7 @@ int main(void) {
     char tid[17]; snprintf(tid, sizeof tid, "%016llX", (unsigned long long)DM_GAME_PROGRAM_ID);
 
     snprintf(p, sizeof p, "%s/mods/Alpha/romfs/a.bin", base); puts_file(p, "a");
-    snprintf(p, sizeof p, "%s/mods/Alpha/cheats/x.txt", base); puts_file(p, "");
+    snprintf(p, sizeof p, "%s/mods/Alpha/exefs/x.txt", base); puts_file(p, "");
     snprintf(p, sizeof p, "%s/mods/Beta/atmosphere/contents/%s/romfs/b.bin", base, tid); puts_file(p, "b");
     snprintf(p, sizeof p, "%s/mods/Gamma/romfs/c.bin", base); puts_file(p, "c");
     snprintf(p, sizeof p, "%s/mods/Off/romfs/d.bin", base); puts_file(p, "d");
@@ -103,9 +103,6 @@ int main(void) {
     }
     char want[4096]; snprintf(want, sizeof want, "/explicit:%s/mods/Gamma/romfs:%s/mods/Tunics/Pink/romfs:%s/mods/Alpha/romfs:%s/mods/Beta/atmosphere/contents/%s/romfs:%s/mods/Bundle/Hud/romfs:%s/mods/Bundle/Music/romfs:%s/mods/Pack/Blue/romfs", base, base, base, base, tid, base, base, base);
     CHECK(!strcmp(getenv("DM_ROMFS_OVERLAY"), want), "overlay list: the explicit folder, then the mods in order");
-    snprintf(want, sizeof want, "%s/mods/Alpha/cheats", base);
-    const char *owner = "";
-    CHECK(dm_mods_cheat_dir(0, &owner) && !strcmp(dm_mods_cheat_dir(0, NULL), want) && !dm_mods_cheat_dir(1, NULL) && !strcmp(owner, "Alpha"), "cheat folders, each with its mod's name");
     CHECK(g_npfiles == 5, "five patch files found");
 
     module_t *m = &mods[0];
@@ -168,7 +165,7 @@ int main(void) {
     snprintf(want, sizeof want, "/explicit:%s/mods/Gamma/romfs:%s/mods/Tunics/Green/romfs:%s/mods/Alpha/romfs:%s/mods/Beta/atmosphere/contents/%s/romfs:%s/mods/Bundle/Hud/romfs:%s/mods/Bundle/Music/romfs:%s/mods/Pack/Blue/romfs", base, base, base, base, tid, base, base, base);
     CHECK(!strcmp(live_overlay, want), "the running game's overlay list follows the choice, in order");
     for (int i = 0; i < dm_mods_count(); i++) if (!strcmp(dm_mods_name(i), "Alpha")) dm_mods_set(i, 0);
-    CHECK(dm_mods_edited() && !strstr(live_overlay, "Alpha"), "a mod with code patches or cheats: its romfs goes at once, the rest waits for a restart");
+    CHECK(dm_mods_edited() && !strstr(live_overlay, "Alpha"), "a mod with an exefs folder: its romfs goes at once, the rest waits for a restart");
     snprintf(p, sizeof p, "%s/mods/order.txt", base);
     size_t on; char *text = (char *)read_file(p, &on);
     CHECK(text && strstr(text, "\n# Tunics/Pink\nTunics/Green\n") && strstr(text, "\n# Pack/Red\n"), "order.txt is rewritten with the choice");

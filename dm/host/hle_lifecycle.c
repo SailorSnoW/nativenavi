@@ -1,6 +1,6 @@
 // Host lifecycle: the graceful exit, for SIGTERM (a harness or `kill` ending a run) and oe::ExecuteProgram's hand-over to the next program (hle_oe.c). A player's quit (⌘Q, closing
 // the window, exit()) is atexit's, and the iOS app has no termination callback: an iPhone ends the process only through the hand-over or without a word.
-// In order: stop the background threads that write state (hlecount, DM_REC, cheats), pause audio, stop the pipeline prewarm and start the archive's write, drain graphics (at most
+// In order: stop the background threads that write state (hlecount, DM_REC), pause audio, stop the pipeline prewarm and start the archive's write, drain graphics (at most
 // EXIT_DRAIN_MS), wait for the archive's write within DM_QUIT_ARCH_MS of the start, the same time a quit gives it, then the continuation (then: execve of the next program) or _exit(0).
 // The default action also exits in about 0.08 s (exit code 143); the value of this function is that order, exit code 0, the pipelines the run compiled kept, and the next program.
 #include "hle.h"
@@ -28,7 +28,6 @@ void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg) {
         LOG("[RED] graceful exit not done in %.1f seconds, exiting at once", (DM_QUIT_ARCH_MS + EXIT_LATE_MS) / 1e3); exit_end(then, arg); });
     hlecount_flush();                               // DM_HLECOUNT: _exit does not run atexit, write a copy here
     dm_rec_finish();                                // DM_REC: the held state and the buffered steps (hle_hid.c)
-    dm_cheats_exit();                               // a clean exit: no safe mode for the cheats at the next launch (atexit does not run either)
     dm_audio_suspend(1);
     dm_gfx_quit_begin();                            // no more prewarm compiles; what the pipeline archive holds starts writing now, beside the drain
     dispatch_semaphore_t drained = dispatch_semaphore_create(0);

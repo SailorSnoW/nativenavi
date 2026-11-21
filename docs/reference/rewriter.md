@@ -70,20 +70,6 @@ To enroll a cut for any game's own module:
 - **Found on:** Hades II: its render size stub, the first state page of a main without a frame step, on v0 (issue [#772](https://github.com/seedds/nxnative/issues/772); padsiwono reported the assertion on update 1.0.131248).
 - **Check:** v0 and 1.0.141667 mains rewritten (2026-11-10): v0's patch area at `0x5920000`, its state page at `0x5910000`; 1.0.141667's layout unchanged (patch area `0x5b10000`, state page `0x5b08000`); both ran through the opening into Erebus with the render size stub at 1.5 (v0) and 0.5 to 3.0 (1.0.141667).
 
-### Cheats carried across game updates
-
-- **Symptom:** after a game update, the Cheats menu lists only `Cheats for build … (another version of the game)`, and nothing runs. Or a cheat file converted to the new build by hand writes into the wrong place: a table instead of a variable, or code that moved.
-- **Cause:** Atmosphère cheats name fixed offsets into the main NSO, valid for the one build the file is named after. An update moves code and data by different amounts in different parts of the image; a single shift is a guess.
-- **Fix:** `scripts/cheat_anchor.py` anchors each address to the game's code and compiles the cheats for any build ([Cheats that survive game updates](../development.md#cheats-that-survive-game-updates)):
-  - data through the adrp pairs (and relocated `.data` slots) that reference the nearest address at or below it;
-  - code sites through `nso_match.py`'s function fingerprints, then the tool's own fallbacks (the body digest, then a unique masked window), with a code site's original words always checked;
-  - ASM code caves through the padding before the read-only data.
-
-  The result is plain Atmosphère text, so it runs on any engine.
-- **Found on:**
-  - FINAL FANTASY CRYSTAL CHRONICLES Remastered Edition: the 1.0.1 cheatslips file, anchored on the cartridge's `main`, compiles to exactly the hand-verified +0x43680 on 1.0.3 (12 of 12 cheats, 4 of 4 references each). The 1.0.3 file (5 ASM cheats with a code cave, 7 stat cheats, Mog's fatigue) compiles back to identical writes on 1.0.3 and to all 18 entries on the cartridge's build (code sites: 4 exact, 3 by body digest, 2 by window).
-  - 13 Sentinels: Aegis Rim: a 1.10 Ryujinx list compiles back to identical writes and to 1.00, where every site lies 0x330 lower and the hook site was found by its body digest.
-
 ## Thread registers
 
 ### System register accesses through x18
