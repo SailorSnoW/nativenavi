@@ -17,7 +17,7 @@ static int cases, failed;
 static void run_case(int format) {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 262144)) abort(); memset(mem, 0, 262144);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=262144, .flags=0x24}; mtl_pool_add(mem, 262144);
-    NVNtextureBuilder tb; NVNtexture tex; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
+    NVNtextureBuilder tb = {0}; NVNtexture tex; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
     h_nvnTextureBuilderSetHeight(&tb, 90); h_nvnTextureBuilderSetFormat(&tb, format);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR); h_nvnTextureBuilderSetStride(&tb, 640);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 65536); EXPECT("linear texture init", 1, h_nvnTextureInitialize(&tex, &tb));
@@ -45,7 +45,7 @@ static void run_case(int format) {
 static void render_target_stride_case(void) {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 65536)) abort(); memset(mem, 0, 65536);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=65536, .flags=0x24}; mtl_pool_add(mem, 65536);
-    NVNtextureBuilder tb; NVNtexture tex; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tex; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 16); h_nvnTextureBuilderSetHeight(&tb, 16);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET);
@@ -71,7 +71,7 @@ static void render_target_stride_case(void) {
 static void scaled_copy_case(void) {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 262144)) abort(); memset(mem, 0, 262144);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=262144, .flags=0x24}; mtl_pool_add(mem, 262144);
-    NVNtextureBuilder tb; NVNtexture dst; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
+    NVNtextureBuilder tb = {0}; NVNtexture dst; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
     h_nvnTextureBuilderSetHeight(&tb, 90); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8_SRGB);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR); h_nvnTextureBuilderSetStride(&tb, 640);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 65536); EXPECT("scaled copy destination init", 1, h_nvnTextureInitialize(&dst, &tb));
@@ -94,7 +94,7 @@ static void scaled_copy_case(void) {
     EXPECT("scaled destination keeps pool backing",1,tex_mtl((const tex_t *)&dst).buffer!=nil);
     h_nvnTextureFinalize(&dst); mtl_tex_release(&src); mtl_pool_del(mem); free(mem);
 }
-// Linear textures whose rows the device cannot view on the pool's buffer (DM_TBUF_ALIGN=64, as iOS asks; Axiom Verge's 8x8 RGBA8 textures have 32-byte rows). 6x6 RGBA8: 24 bytes of
+// Linear textures whose rows the device cannot view on the pool's buffer (DM_TBUF_ALIGN=64, as iOS asked; Axiom Verge's 8x8 RGBA8 textures have 32-byte rows). 6x6 RGBA8: 24 bytes of
 // pixels in each row, the rest of the row filled so that a wrong stride shows.
 //   0: LINEAR, 32-byte rows: uploaded from its storage at its stride, and ReadTexels reads its pixels; then an NVN copy into it, a CPU write, reads on another thread and an upload
 //   1: LINEAR, 64-byte rows: stays a view
@@ -132,7 +132,7 @@ static void unaligned_upload_case(void) {   // a pool made through NVN, so that 
     for (int i = 0; i < N; i++) {
         uint64_t at = 65536 + (uint64_t)i * 4096; stored[i] = mem + at;
         for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) { uint8_t *p = mem + at + y * stride[i] + x * 4; p[0] = (uint8_t)(x * 40 + i); p[1] = (uint8_t)(y * 40); p[2] = 0x5a; p[3] = 0xff; }
-        NVNtextureBuilder tb; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 6); h_nvnTextureBuilderSetHeight(&tb, 6);
+        NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 6); h_nvnTextureBuilderSetHeight(&tb, 6);
         h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, flags[i]); h_nvnTextureBuilderSetStride(&tb, stride[i]);
         h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, (ptrdiff_t)at);
         EXPECT("unaligned case: texture init", 1, h_nvnTextureInitialize(&tex[i], &tb));
@@ -202,7 +202,7 @@ static void nonlinear_image_readback_case(void) {
     memset(mem, 0, len);
     NVNmemoryPool pool; pool_builder_t pb = {.mem = mem, .size = len, .flags = NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     EXPECT("nonlinear image pool init", 1, h_nvnMemoryPoolInitialize(&pool, (const NVNmemoryPoolBuilder *)&pb));
-    NVNtextureBuilder tb; NVNtexture tex;
+    NVNtextureBuilder tb = {0}; NVNtexture tex;
     h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 6); h_nvnTextureBuilderSetHeight(&tb, 6);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE);
     h_nvnTextureBuilderSetStorage(&tb, &pool, 65536);

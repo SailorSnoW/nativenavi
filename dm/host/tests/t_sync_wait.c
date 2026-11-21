@@ -8,7 +8,6 @@
 module_t *g_mod;
 int g_nmod;
 void *module_sym(module_t *m, const char *name) { (void)m; (void)name; return NULL; }
-int dm_sdk_ounce(void) { return 1; }
 void crash_watch_frame(void) {}
 
 typedef struct { uint32_t write, read; } ends_t;

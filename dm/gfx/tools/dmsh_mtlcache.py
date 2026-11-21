@@ -20,7 +20,7 @@ _clonefile = getattr(ctypes.CDLL(None, use_errno=True), 'clonefile', None)   # A
 
 
 def cut_from_unit(stem, names):
-    """A side library can indicate that the base was cut from another source. Check vertex reflection too, since iOS packing can omit the pulling library."""
+    """A side library can indicate that the base was cut from another source. Check vertex reflection too, since a package can omit the pulling library (as iOS packing could)."""
     return any(stem + c + '.metallib' in names for c in 'xfpv')
 
 

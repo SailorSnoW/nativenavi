@@ -10,6 +10,7 @@ module_t *g_mod; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
 static int checks, failed;
+enum { OUT_SLOT = 8 };   // the vertex table slot the test shaders write their result through (buffer(8))
 #define EXPECT(name, want, got) do { uint64_t w = (want), g = (got); checks++; if (w != g) { fprintf(stderr, "%s: expected %llu, got %llu\n", name, (unsigned long long)w, (unsigned long long)g); failed++; } } while (0)
 
 static id<MTLRenderPipelineState> pipeline(NSString *fn) {   // v: the first word of streams 0, 14, 15 and the zero buffer; w: words 0, 3, 6 and 8 of stream 0 (vertices 0-2 of 12 bytes)
@@ -35,7 +36,7 @@ static id<MTL4RenderCommandEncoder> encoder_prepared(id<MTLRenderPipelineState> 
 }
 static id<MTL4RenderCommandEncoder> encoder(id<MTLRenderPipelineState> ps) { vbuf_prepare(NULL, NULL, NULL); return encoder_prepared(ps); }
 static void capture(id<MTL4RenderCommandEncoder> en, id<MTLBuffer> out, unsigned row) {
-    enc_r_vbuf(en, TF_SLOT, out.gpuAddress + row * 16); enc_r_draw(en, MTLPrimitiveTypePoint, 0, 1);
+    enc_r_vbuf(en, OUT_SLOT, out.gpuAddress + row * 16); enc_r_draw(en, MTLPrimitiveTypePoint, 0, 1);
 }
 static void finish(void) {
     EXPECT("submission completed", 1, mtl_wait(mtl_sub_commit(), 5000000000ull));
@@ -131,7 +132,7 @@ int main(void) { @autoreleasepool {
     // A real vertex shader writes the source; storage writes are tracked separately from copy/update/fill ranges.
     S.vbuf[0].address = (uint64_t)(mem + 3); S.vbuf[0].size = 4;
     uint64_t ubgpu; mtl_gpu_addr((uint64_t)ub, 16, &mb, &off, &ubgpu);
-    mtl_sub_begin(); en = encoder(ps); bind_vbufs(en, NULL); enc_r_vbuf(en, TF_SLOT, ubgpu); enc_r_draw(en, MTLPrimitiveTypePoint, 0, 1); enc_r_end(en);
+    mtl_sub_begin(); en = encoder(ps); bind_vbufs(en, NULL); enc_r_vbuf(en, OUT_SLOT, ubgpu); enc_r_draw(en, MTLPrimitiveTypePoint, 0, 1); enc_r_end(en);
     sbw_note((uint64_t)ub, 16, SBW_GPU);
     S.vbuf[0].address = (uint64_t)(ub + 2); S.vbuf[0].size = 6;
     en = encoder(ps); bind_vbufs(en, NULL); capture(en, out, 19); enc_r_end(en); finish();

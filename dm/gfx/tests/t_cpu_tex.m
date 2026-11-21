@@ -58,7 +58,7 @@ static void finalized_upload(int write_after_record) {
     if (mem == MAP_FAILED) abort();
     pool_t pool = {0}; pool_builder_t pb = {.mem=mem, .size=len, .flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool *)&pool, (const NVNmemoryPoolBuilder *)&pb), "CPU-cached pool initialized");
-    NVNtextureBuilder tb; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 4); h_nvnTextureBuilderSetHeight(&tb, 4); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, 65536);
     CHECK(h_nvnTextureInitialize(&tex, &tb), "texture without packaged layout initialized");
@@ -113,7 +113,7 @@ static void finalize_during_walk(void) {
     if (mem == MAP_FAILED) abort();
     pool_t pool = {0}; pool_builder_t pb = {.mem=mem, .size=len, .flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool *)&pool, (const NVNmemoryPoolBuilder *)&pb), "CPU-cached pool initialized");
-    NVNtextureBuilder tb; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 4); h_nvnTextureBuilderSetHeight(&tb, 4); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, 65536);
     CHECK(h_nvnTextureInitialize(&tex, &tb), "texture initialized");
@@ -149,7 +149,7 @@ static void poll_asks_again(void) {
     if (mem == MAP_FAILED) abort();
     pool_t pool = {0}; pool_builder_t pb = {.mem=mem, .size=len, .flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool *)&pool, (const NVNmemoryPoolBuilder *)&pb), "CPU-cached pool initialized");
-    NVNtextureBuilder tb; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 256); h_nvnTextureBuilderSetHeight(&tb, 256); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, 65536);
     CHECK(h_nvnTextureInitialize(&tex, &tb), "texture initialized");
@@ -174,7 +174,7 @@ static void poll_beside(void) {
     if (mem == MAP_FAILED) abort();
     pool_t pool = {0}; pool_builder_t pb = {.mem=mem, .size=len, .flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool *)&pool, (const NVNmemoryPoolBuilder *)&pb), "CPU-cached pool initialized");
-    NVNtextureBuilder tb; NVNtexture a = {0}, b = {0}; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture a = {0}, b = {0}; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 256); h_nvnTextureBuilderSetHeight(&tb, 256); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, (ptrdiff_t)off);
     CHECK(h_nvnTextureInitialize(&a, &tb), "texture a initialized");
@@ -234,7 +234,7 @@ static void handover_holders(void) {
     memset(mem + 65536, 0x5a, 4096);   // what the CPU wrote before the first use
     pool_t pool = {0}; pool_builder_t pb = {.mem=mem, .size=len, .flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool *)&pool, (const NVNmemoryPoolBuilder *)&pb), "hand-over: pool initialized");
-    NVNtextureBuilder tb; NVNtexture a = {0}, b = {0}; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture a = {0}, b = {0}; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 4); h_nvnTextureBuilderSetHeight(&tb, 4); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, 65536);
     CHECK(h_nvnTextureInitialize(&a, &tb) && h_nvnTextureInitialize(&b, &tb), "hand-over: two texture objects over the same storage");
@@ -348,7 +348,8 @@ static void flushed_buffer_upload(int flush_kind) {
     uint8_t pixels[64], zeros[64] = {0}; for (int i=0;i<64;i++) pixels[i]=(uint8_t)(i+32);
     // Fill before registration so a dirty-upload profile cannot infer publication
     // from a later write. TextureWriteTexels would bypass the flush path as well.
-    CHECK(nvn_swizzle(&((const tex_builder_t *)&tb)->d, 0, 0, pixels, 16, mem + buffer_off + flush_off) == 0, "CPU pixels swizzled into buffer storage");
+    nvn_texdesc stored = ((const tex_builder_t *)&tb)->d; stored.gob_order = 1;   // the block order the texture takes at TextureInitialize: NVN2's, as its builder names no device with X1 order
+    CHECK(nvn_swizzle(&stored, 0, 0, pixels, 16, mem + buffer_off + flush_off) == 0, "CPU pixels swizzled into buffer storage");
     CHECK(h_nvnTextureInitialize(&tex, &tb), "flush test texture initialized without packaged layout");
     const tex_t *t = (const tex_t *)&tex;
     if (flush_kind == 1) h_nvnMemoryPoolFlushMappedRange(&pool, buffer_off + flush_off, t->L.size);

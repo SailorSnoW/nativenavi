@@ -43,7 +43,6 @@ static _Atomic int g_nr;
 static uintptr_t g_pg, g_shift;
 static _Atomic uint64_t g_now = 1;
 static _Atomic uint64_t g_faults, g_preps;
-static _Atomic uint64_t g_adds_total;
 static _Atomic int g_live, g_live_peak;   // number of registered pools and peak (for the memory readout line)
 void nvn_dirty_stat(int *live, int *peak, int *cap) { *live = atomic_load(&g_live); *peak = atomic_load(&g_live_peak); *cap = MAX_RANGE; }
 static _Atomic int g_overflow_logged;
@@ -284,7 +283,6 @@ __attribute__((constructor)) static void dirty_init(void) {
 }
 
 void nvn_dirty_add_range(const void *mem, size_t size) {
-    atomic_fetch_add(&g_adds_total, 1);
     pthread_mutex_lock(&g_slot_mu);
     int n = atomic_load(&g_nr);
     int slot = -1;
@@ -539,11 +537,6 @@ void nvn_dirty_describe(const void *addr, const void *span, char *out, size_t n)
         else snprintf(out + o, n - o, "; kernel: %s%s%s%s", bi.protection & VM_PROT_READ ? "r" : "-", bi.protection & VM_PROT_WRITE ? "w" : "-", bi.shared ? " shared" : "",
                       bi.reserved ? " reserved" : "");
     }
-}
-void nvn_dirty_slot_stats(int *live, int *used_slots, uint64_t *adds_total) {
-    int n = atomic_load(&g_nr), active = 0;
-    for (int i = 0; i < n; i++) active += live_at(i) != 0;
-    *live = active; *used_slots = n; *adds_total = atomic_load(&g_adds_total);
 }
 void nvn_dirty_stats(uint64_t *faults, uint64_t *preps) { *faults = atomic_load(&g_faults); *preps = atomic_load(&g_preps); }
 void nvn_dirty_mp_stats(uint64_t *calls, uint64_t *pages, uint64_t *ns) {

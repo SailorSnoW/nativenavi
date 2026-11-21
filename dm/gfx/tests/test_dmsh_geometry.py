@@ -189,14 +189,6 @@ class GeometryOutputLayout(unittest.TestCase):
             with self.subTest(code=code, topology=t), self.assertRaises(ValueError):
                 dmsh_geometry.output_layout(code, t)
 
-    @unittest.skipUnless(os.environ.get('DM_TEST_GEOMETRY'), 'set DM_TEST_GEOMETRY to the native t_geometry executable')
-    def test_native_passthrough_canaries_and_compaction(self):
-        layouts = [dmsh_geometry.output_layout(geometry_header(), t) for t in range(5)]
-        with tempfile.TemporaryDirectory(prefix='geometry_bounds_') as d:
-            path = Path(d) / 'layouts.json'; path.write_text(json.dumps(layouts))
-            r = subprocess.run([os.environ['DM_TEST_GEOMETRY'], '--passthrough-layouts', str(path)], capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
 
 @unittest.skipUnless(os.environ.get('DMSH_TEST_XLATE'), 'set DMSH_TEST_XLATE to the offline translator')
 class PassthroughCompiler(unittest.TestCase):
@@ -284,9 +276,6 @@ class PassthroughCompiler(unittest.TestCase):
                                             '-c', str(metal), '-o', str(air)], capture_output=True, text=True)
                         self.assertEqual(r.returncode, 0, r.stderr)
                         subprocess.run(['xcrun', '-sdk', sdk, 'metallib', str(air), '-o', str(work / f'pass{t}.{sdk}.metallib')], check=True, capture_output=True)
-            if os.environ.get('DM_TEST_GEOMETRY'):
-                r = subprocess.run([os.environ['DM_TEST_GEOMETRY'], '--passthrough-kernels', d], capture_output=True, text=True)
-                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 
@@ -594,37 +583,13 @@ vertex main0_out main0(uint v [[vertex_id]], uint i [[instance_id]])
 }
 """
             path = work / 'vertex.metal'; path.write_text(vertex + dmsh_geometry.capture(vertex)); sources.append(path)
-            for path in sources if os.environ.get('DMSH_TEST_METAL') == '1' or os.environ.get('DMSH_TEST_GPU') == '1' else []:
+            for path in sources if os.environ.get('DMSH_TEST_METAL') == '1' else []:
                 for sdk in ('macosx',):
                     air = path.with_suffix('.' + sdk + '.air')
                     result = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fmodules-cache-path=' + directory + '/modules', str(path), '-o', str(air)], capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr[-3000:])
                     if sdk == 'macosx':
                         subprocess.run(['xcrun', '-sdk', sdk, 'metallib', str(air), '-o', str(path.with_suffix('.metallib'))], check=True, capture_output=True)
-            if os.environ.get('DMSH_TEST_GPU') == '1':
-                binary = os.environ.get('DM_TEST_GEOMETRY_PRIMITIVE_ID')
-                self.assertTrue(binary, 'set DM_TEST_GEOMETRY_PRIMITIVE_ID to the native replay test')
-                result = subprocess.run([binary, directory], capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                print(result.stdout.strip())
-
-
-# t_geometry_mesh.m's shaders: a pulling vertex shader whose depth is its uniform's z, the test lean kernel (its storage counter
-# and its viewport mask from vertex t's position x bit 0), and their mesh library (dm_mesh, dm_mesh_run) under the keys the test uses
-MESH_RUN_VS = MESH_VS.replace('out.gl_Position = in.m_0 * spvDescriptorSet0.c[0];', 'out.gl_Position = float4(in.m_0.xy, spvDescriptorSet0.c[0].z, 1.0);') \
-                     .replace('    out.gl_Position = in.m_0;\n', '    out.gl_Position = float4(in.m_0.xy, spvDescriptorSet0.c[0].z, 1.0);\n')
-
-
-def mesh_fixture(out):
-    lean, reads = dmsh_geometry.lean(LEAN_KERNEL, 134)
-    keep = '\nfragment void depth_keep(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0)]])\n{\n    if (spvDescriptorSet0.c[0].x > 0.5) discard_fragment();\n}\n'   # a fragment shader with a resource: its uniform discards
-    files = {'vertex': MESH_RUN_VS + '\nfragment void depth_only() {}\n' + keep, 'lean': MESH_HEAD + '\n' + lean,
-             '7e57000000000a00_7e57000000000b00_m3': dmsh_mesh.compose(MESH_RUN_VS, MESH_HEAD + '\n' + lean, reads)}
-    for name, src in files.items():
-        path = Path(out, name + '.metal'); path.write_text(src)
-        subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', '-w', '-fmodules-cache-path=' + out + '/modules', str(path), '-o', str(path.with_suffix('.air'))], check=True)
-        subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', str(path.with_suffix('.air')), '-o', str(path.with_suffix('.metallib'))], check=True)
-    Path(out, 'reads.json').write_text(json.dumps(reads))
 
 
 class PointSize(unittest.TestCase):
@@ -645,5 +610,4 @@ class PointSize(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 3 and sys.argv[1] == '--fixture': mesh_fixture(sys.argv[2]); sys.exit(0)
     unittest.main()

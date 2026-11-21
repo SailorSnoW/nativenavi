@@ -163,7 +163,7 @@ static void latency(void) {   // Only variable-refresh fullscreen needs the late
 static void thirty(void) {   // A 30 fps target runs the link at 30 Hz, except in fullscreen on a fixed-rate screen, where it stays at 60 Hz and the present interval paces the 30.
     reset(); test_fullscreen = 0; test_variable_refresh = 0; test_game_fps = 30;
     SilentDisplayLink *link = [SilentDisplayLink new]; g_link = link; g_link_started = 1;
-    g_link_drain_on = 0;   // standing frames not drained (DM_PRESENT_DRAIN=0, iOS): a window keeps the 30 Hz link
+    g_link_drain_on = 0;   // standing frames not drained (DM_PRESENT_DRAIN=0): a window keeps the 30 Hz link
     link_sync(); CHECK("a window at 30 fps takes the 30 Hz link", g_link_mode == 3 && link.preferredFrameRateRange.preferred == 30 && mtl_link_rate() == 30);
     test_fullscreen = 1; link_sync(); CHECK("fullscreen on a fixed-rate screen at 30 fps keeps the 60 Hz link", g_link_mode == 1 && link.preferredFrameRateRange.preferred == 60 && mtl_link_rate() == 60);
     test_variable_refresh = 1; link_sync(); CHECK("fullscreen on a variable-refresh screen at 30 fps takes the 30 Hz link", g_link_mode == 3 && link.preferredFrameRateRange.preferred == 30);

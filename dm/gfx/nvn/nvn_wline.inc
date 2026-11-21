@@ -6,21 +6,50 @@
 // shader for both, clips the segment in front of the eye (and the near plane with depth clipping on: zclip) and moves its position by half the width. The fragment shader,
 // blending, depth and stencil are the draw's own; culling is off (a line has no faces), so a blended line is as heavy as one stroke; the polygon offset is the one enabled for
 // lines. A deferred pass (defer_take) copies the draw and the state, and its replay comes back here; a merged pass's attachment map and fragment function reach wl_pso.
-// Indirect arguments are read on the CPU, as the geometry and tessellation paths read theirs (geo_indirect_args). A restart index drops the segments it touches: a strip breaks
+// Indirect arguments are read on the CPU (wl_indirect_args). A restart index drops the segments it touches: a strip breaks
 // there, as OpenGL's; a line list keeps its pairs (OpenGL starts a new pair after it), and an indexed loop with restart on stays 1 pixel wide, its runs' closing segments unknown.
 // Drawn 1 pixel wide instead, as before, with a [RED] line naming the reason: a vertex shader without a wide-line entry (no pulling library: no vertex inputs, or a parameter
-// the entry cannot pass on), an indexed loop with restart. Programs with a geometry or tessellation stage, transform feedback and adjacency are left to their own paths
-// (1 pixel). DM_NVN_LINE_WIDTH=0 draws every line 1 pixel wide. Tested on the GPU by t_wline.m.
+// the entry cannot pass on), an indexed loop with restart. Programs with task or mesh shaders are left to their own path. DM_NVN_LINE_WIDTH=0 draws every line 1 pixel wide. Tested on the GPU by t_wline.m.
 typedef struct { uint64_t ib; float vp[2]; float width; uint32_t prim, count; int32_t base; uint32_t isz, restart, ri, zclip, rect, pad; } wl_block;   // dmsh_pull.py dm_wline
 _Static_assert(sizeof(wl_block) == 56, "wl_block: dmsh_pull.py dm_wline's layout");
 typedef struct { int on, miss, rect; uint64_t block; wl_block *cpu; uint32_t count, instances; } wl_state;   // count: the vertices of the quads; rect: set at encode (wl_encode)
 static wl_state g_wl;
+// A CPU read needs the GPU work that may write its range to be done. Unknown or overflowing write sets always retain the conservative drain.
+static int wl_cpu_hazard(uint64_t lo, uint64_t n) {
+    if (!n) return 0;
+    if (!lo || n > UINT64_MAX - lo) return 1;
+    if (drw_valid()) return drw_hits(lo, n) || nvn_sparse_alias(lo, lo + n);   // drained in this submission: only later writes count
+    if (g_sbw_over) return 1;
+    return pend_hits(lo, n) || sbw_hits(lo, lo + n) || gw_live(lo, lo + n);
+}
+static int wl_sync_cpu(int *drained) {
+    if (*drained) return 1;
+    mdi_wait();
+    if (g_read_ev.signaledValue < g_read_v) return 0;
+    memset(g_vconv, 0, sizeof g_vconv); *drained = 1;
+    return 1;
+}
+// An indirect draw's arguments, read on the CPU once the GPU work that may write them is done (wl_sync_cpu), into the draw's copy: the count, the instances, the
+// first vertex (an indexed draw: its first index, moved into the index address, and its base vertex) and the base instance; the copy is a direct draw afterwards.
+// 1: read; 0: nothing to draw; -1: not readable or out of range (logged, as what)
+static int wl_indirect_args(p_draw *dw, p_draw_idx *di, int *drained, const char *what) {
+    uint64_t ind = dw ? dw->ind : di->ind; size_t n = dw ? 16 : 20;
+    if (wl_cpu_hazard(ind, n) && !wl_sync_cpu(drained)) return -1;
+    uint32_t a[5] = {0};
+    if (!nvn_host_readable(ind, n)) { MLOG("[RED] %s indirect arguments are not readable", what); return -1; }
+    memcpy(a, (void *)(uintptr_t)ind, n);
+    if (!a[0] || !a[1]) return 0;
+    if (a[0] > INT32_MAX || a[1] > INT32_MAX) { MLOG("[RED] %s indirect draw exceeds the host count range", what); return -1; }
+    if (dw) { dw->count = (int32_t)a[0]; dw->instances = (int32_t)a[1]; dw->first = (int32_t)a[2]; dw->base_instance = (int32_t)a[3]; dw->ind = 0; dw->mdi_cnt = 0; }
+    else { di->count = (int32_t)a[0]; di->instances = (int32_t)a[1]; di->ibuf += (uint64_t)a[2] << di->itype; di->base_vertex = (int32_t)a[3]; di->base_instance = (int32_t)a[4]; di->ind = 0; di->mdi_cnt = 0; }
+    return 1;
+}
 static nvn_hmap g_pso_wl = {.klen = sizeof(pso_key)}, g_pso_wl_fail = {.klen = sizeof(pso_key)};   // wide-line pipelines by key, and the keys that failed (submit thread)
 static uint64_t g_wl_draws, g_wl_segments;
 static int wl_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_LINE_WIDTH"); v = !(e && !strcmp(e, "0")); } return v; }
 static int wl_wanted(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
     int prim = dw ? dw->prim : di->prim;
-    return (prim == 1 || prim == 2 || prim == 3) && pr && pr->sh[0] && !pr->sh[2] && !pr->sh[3] && !pr->sh[4] && roundf(S.line_width) >= 2.0f && !S.rast_discard && !S.tf_on && wl_on();
+    return (prim == 1 || prim == 2 || prim == 3) && pr && pr->sh[0] && !pr->sh[3] && !pr->sh[4] && roundf(S.line_width) >= 2.0f && !S.rast_discard && wl_on();
 }
 // The draw's pipeline with the vertex shader's wide-line entry and no vertex descriptor (as a pulling pipeline: pso_desc_pull), and the fragment function and attachment map a merged
 // pass gives it (g_pso_lmap, g_pso_fsfn, as pso_get); built on first need, then kept
@@ -50,7 +79,7 @@ static int wl_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     const p_draw *dw = dw0 ? &dwl : NULL; const p_draw_idx *di = di0 ? &dil : NULL;
     if (di && (di->itype < 0 || di->itype > 2)) WL_NO("index type");
     if (dw ? dw->ind : di->ind) {
-        int drained = 0, r = geo_indirect_args(dw ? &dwl : NULL, di ? &dil : NULL, &drained, "wide line");
+        int drained = 0, r = wl_indirect_args(dw ? &dwl : NULL, di ? &dil : NULL, &drained, "wide line");
         if (r < 0) WL_NO("indirect arguments");
         if (!r) return 1;
     }

@@ -92,7 +92,7 @@ static void host_load(int argc, char **argv) {
     // The guest C library's localtime / mktime stay UTC, as on a Switch. Only deterministic comparison (DM_FIXED_TIME) pins the host to UTC: the same replay must convert to the same
     // calendar time on this machine (UTC+8) and on the second Mac (UTC+9)
     if (getenv("DM_FIXED_TIME")) setenv("TZ", "UTC", 1);
-    // Open file limit: the soft limit starts at 256 on iOS (and in a default macOS shell), while the game's file handles, the RomFS archives, save transactions and Metal caches share it. Raise it to 4096 (as far as the hard limit allows)
+    // Open file limit: the soft limit starts at 256 in a default macOS shell, while the game's file handles, the RomFS archives, save transactions and Metal caches share it. Raise it to 4096 (as far as the hard limit allows)
     struct rlimit rl; if (!getrlimit(RLIMIT_NOFILE, &rl) && rl.rlim_cur < 4096) {
         rlim_t was = rl.rlim_cur; rl.rlim_cur = rl.rlim_max < 4096 ? rl.rlim_max : 4096;
         if (setrlimit(RLIMIT_NOFILE, &rl)) LOG("open file limit %llu could not be raised", (unsigned long long)was);
@@ -117,7 +117,7 @@ static void host_load(int argc, char **argv) {
     int i = 2;
     for (; i < argc && strcmp(argv[i], "--"); i++) names[n++] = argv[i];
     if (i < argc && !strcmp(argv[i], "--")) for (i++; i < argc && g_argc < 63; i++) g_argv[g_argc++] = argv[i];
-    else if (*DM_GAME_ARGS) {   // no "--" on the command line (the iOS app, the NSP script's Mac runs): the game profile's game_args, split at spaces
+    else if (*DM_GAME_ARGS) {   // no "--" on the command line (the Mac app, the packing script's runs): the game profile's game_args, split at spaces
         char *s = strdup(DM_GAME_ARGS);
         for (char *t = strtok(s, " "); t && g_argc < 63; t = strtok(NULL, " ")) g_argv[g_argc++] = t;
         LOG("game arguments from the game profile: %s", DM_GAME_ARGS);
@@ -127,7 +127,8 @@ static void host_load(int argc, char **argv) {
     load_modules(argv[1], names, n);
     dm_mods_report_unmatched();
     dm_mods_check_done();
-    dm_sdk_major();   // logs the SDK version, which SDK-dependent behaviour follows (loader.c)
+    dm_sdk_major();   // logs the SDK version (loader.c)
+    if (!dm_sdk_ounce()) LOG("[RED] sdk: the sdk module was not built for the Switch 2 (no \"spec: Ounce\"): this host has only the Switch 2's side (NVN2's API and counter reports, the 31.25 MHz system counter)");
     uint64_t ta = now_ns();
     probe_install();   // DM_PROBE probes (for diagnostics)
     hid_keys_init();   // DM_KEYS scripted input

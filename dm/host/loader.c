@@ -123,7 +123,7 @@ int dm_game_imports(const char *prefix) {
 
 // SDK major version, from the version string the SDK's libraries keep in the sdk module's read-only data ("NintendoSDK_nnSdk-10_4_0"; SDK 12 spells it NintendoSdk_;
 // Switch 2 SDKs name a variant first: "NintendoSdk_nnSdk-Generic_20_5_19", Donkey Kong Bananza).
-// Behaviour that follows the SDK version is decided by it (the NVN API version, the shared-font layout), not by the game profile. 0 = no sdk module or no version string
+// 0 = no sdk module or no version string
 int dm_sdk_major(void) {
     static int major = -1;
     if (major >= 0) return major;
@@ -138,12 +138,12 @@ int dm_sdk_major(void) {
             if (v < e && *v >= '0' && *v <= '9') { major = atoi(v); LOG("sdk: NintendoSDK nnSdk-%.20s (major %d)", p + 7, major); break; }
         }
     }
-    if (!major) LOG("[RED] sdk: no SDK version string in the sdk module; SDK-dependent behaviour takes the newer SDKs' side");
+    if (!major) LOG("[RED] sdk: no SDK version string in the sdk module");
     return major;
 }
 
 // Whether the sdk module was built for the Switch 2 ("Ounce"): its file system access log line names the build spec ("FS_ACCESS: { sdk_version: 20.5.19, spec: Ounce }";
-// Switch 1 SDKs say "spec: NX"). The Switch 2's NVN (NVN2) reports another API version (hle_nvn.c nvn_api)
+// Switch 1 SDKs say "spec: NX"). The host has only the Switch 2's side: main.c reports an sdk that is not
 int dm_sdk_ounce(void) {
     static int ounce = -1;
     if (ounce >= 0) return ounce;
@@ -186,7 +186,7 @@ int dm_sdk_nvn2_item(unsigned item, int *out) {
                 table = tb; cases = adr; last = (unsigned)lim; found = 1;
             }
         }
-        if (dm_sdk_ounce() && !found) LOG("[RED] sdk: NVN2's nvnDeviceGetInteger switch not found; the device answers the newest versions known");
+        if (!found) LOG("[RED] sdk: NVN2's nvnDeviceGetInteger switch not found; the device answers the newest versions known");
     }
     if (!found || item > last) return 0;
     const uint32_t *c = cases + table[item];
@@ -256,7 +256,6 @@ static void read_layout(module_t *m, const char *dir) {
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
         else if (!strcmp(key, "FPS_STATE_OFF")) m->fps_state_off = v;
-        else if (!strcmp(key, "STEP_MAX")) m->step_max = (uint32_t)v;
         else if (!strcmp(key, "BUILD_ID")) sscanf(line, "# %*s %32s", m->build_id);
         else for (int k = 0; k < KEY_N; k++) {
             size_t n = strlen(kn[k]);
@@ -279,11 +278,10 @@ static void read_layout(module_t *m, const char *dir) {
 // target, 0 = the game's own interval logic. The profile's fps_target, overridden by DM_FPS_TARGET (0, 30 or 60); the graphics layer decides the steps and paces presents
 // (hle_nvn.c fstep_tick)
 uint8_t *dm_fps_state;
-int dm_fps_step_max;   // the largest step the stubs give the game (STEP_MAX in its fixups table; 0 = FSTEP_MAX): the frame step holds frames and pays back within it (hle_nvn.c)
 static const char *g_fps_mod;   // the module holding the state page (for the log)
 static void install_fps_state(module_t *m) {
     if (m->fps_state_off + 0x40 > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
-    dm_fps_state = m->base + m->fps_state_off; g_fps_mod = m->name; dm_fps_step_max = (int)m->step_max;
+    dm_fps_state = m->base + m->fps_state_off; g_fps_mod = m->name;
 }
 // The settings in the state page, written when the game starts (main.c, after host loading): nothing reads the page before the game runs
 void dm_fps_state_apply(void) {

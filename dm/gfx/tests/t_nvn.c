@@ -22,14 +22,12 @@ static int g_fail, g_n;
 #define P(name) ((NVNT_##name)proc(#name))
 static PFNNVNDEVICEGETPROCADDRESSPROC gpa; static NVNdevice dev;
 static void *proc(const char *n) { void *p = (void *)gpa(&dev, n); if (!p) { printf("address lookup failed %s\n", n); exit(1); } return p; }
-extern int dm_test_sdk_ounce;   // the strong SDK-target test hook in t_host_stubs.c
 static void texture_gob_orders(void) {
     static uint8_t storage[4 * 65536] __attribute__((aligned(16384)));
     uint8_t linear[16 * 8 * 4], back[sizeof linear];
     NVNcopyRegion all = {0, 0, 0, 16, 8, 1}, pixel = {4, 0, 0, 1, 1, 1};
     const uint8_t marker[4] = {0xa1, 0xb2, 0xc3, 0xd4};
-    for (int ounce = 0; ounce < 2; ounce++) {
-        dm_test_sdk_ounce = ounce;
+    {
         NVNdevice owner[2], later; NVNdeviceBuilder db;
         P(nvnDeviceBuilderSetDefaults)(&db);
         for (int mode = 0; mode < 2; mode++) {
@@ -41,14 +39,14 @@ static void texture_gob_orders(void) {
         P(nvnMemoryPoolInitialize)(&pool, &pb);
         NVNtexture tex[4] = {0};
         for (int mode = 0; mode < 2; mode++) for (int image = 0; image < 2; image++) {
-            int k = mode * 2 + image, order = ounce && !mode;
+            int k = mode * 2 + image, order = !mode;   // device flag bit 16 selects the X1 order
             NVNtextureBuilder b = {0};
             P(nvnTextureBuilderSetDefaults)(&b); P(nvnTextureBuilderSetDevice)(&b, &owner[mode]);
             P(nvnTextureBuilderSetSize2D)(&b, 16, 8); P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGBA8);
             P(nvnTextureBuilderSetFlags)(&b, image ? NVN_TEXTURE_FLAGS_IMAGE : 0);
             P(nvnTextureBuilderSetStorage)(&b, &pool, k * 65536);
             P(nvnTextureInitialize)(&tex[k], &b);
-            EXPECT("texture order comes from its own SDK/device flags", order, nvn_gob_order(&((tex_t *)&tex[k])->d));
+            EXPECT("texture order comes from its own device's flags", order, nvn_gob_order(&((tex_t *)&tex[k])->d));
             EXPECT("capturing order leaves guest texture flags unchanged", image ? NVN_TEXTURE_FLAGS_IMAGE : 0, P(nvnTextureGetFlags)(&tex[k]));
             for (size_t i = 0; i < sizeof linear; i++) linear[i] = (uint8_t)(i * 17u + i / 23u);
             P(nvnTextureWriteTexels)(&tex[k], NULL, &all, linear);
@@ -67,13 +65,12 @@ static void texture_gob_orders(void) {
         NVNtextureBuilder unbound = {0};
         P(nvnTextureBuilderSetDefaults)(&unbound);
         P(nvnTextureInitialize)(&tex[0], &unbound);
-        EXPECT("a builder with no device retains the SDK default order", ounce, nvn_gob_order(&((tex_t *)&tex[0])->d));
+        EXPECT("a builder with no device takes NVN2's order", 1, nvn_gob_order(&((tex_t *)&tex[0])->d));
         P(nvnTextureFinalize)(&tex[0]);
         P(nvnMemoryPoolFinalize)(&pool);
         for (int k = 0; k < 2; k++) P(nvnDeviceFinalize)(&owner[k]);
         P(nvnDeviceFinalize)(&later);
     }
-    dm_test_sdk_ounce = 0;
     NVNdeviceBuilder db; P(nvnDeviceBuilderSetDefaults)(&db); P(nvnDeviceInitialize)(&dev, &db);
 }
 // CRC-16 with the reflected polynomial 0xA001, from 0: the hash Super Mario Odyssey's sampler cache takes of a sampler's bytes 8 on (main+0x96e400)
@@ -315,7 +312,7 @@ static void pool_access(void) {
 }
 
 int main(void) {
-    // An empty DM_NVN_TSV (set but empty, as an `env NAME=` line or iOS's env.txt can leave it) must count as off: no
+    // An empty DM_NVN_TSV (set but empty, as an `env NAME=` line or an env.txt line can leave it) must count as off: no
     // counting trampolines. nvn_counting caches its answer at the first call, so read it in a child forked before this
     // process's first address lookup; this process's own first call must still see DM_NVN_COUNT=1 for the checks below.
     { pid_t p = fork();
@@ -419,21 +416,21 @@ int main(void) {
     EXPECT("uniform buffer alignment (256 measured on X1)", 256, v);
     P(nvnDeviceGetInteger)(&dev, NVN_DEVICE_INFO_TEXTURE_DESCRIPTOR_SIZE, &v); EXPECT("texture descriptor size (32)", 32, v);
     P(nvnDeviceGetInteger)(&dev, NVN_DEVICE_INFO_QUEUE_COMMAND_MEMORY_MIN_SIZE, &v); EXPECT("queue command memory minimum (65536)", 65536, v);
-    // Precompiled shaders need not match the linked SDK: ASTRAL CHAIN (SDK 6.4)
-    // ships GPU code 1.15. Advertise the translator's supported range even with no SDK.
-    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x2E, &v); EXPECT("newest GPU code major", 1, v);
-    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x30, &v); EXPECT("newest GPU code minor", 16, v);
-    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x2F, &v); EXPECT("oldest GPU code major", 1, v);
-    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x31, &v); EXPECT("oldest GPU code minor", 5, v);
-    // The X1 driver's own constants past the measured table (SDK 19.3's sdk): Frostpunk sizes a 32-slot binding table per stage to min(separate textures, separate samplers) and clears that
-    // many slots every frame, so 4096 samplers ran it past its end; the rest answered 0 with a red line before
-    P(nvnDeviceGetInteger)(&dev, NVN_DEVICE_INFO_SEPARATE_TEXTURE_BINDINGS_PER_STAGE, &v); EXPECT("separate texture bindings per stage (128 measured on X1)", 128, v);
-    P(nvnDeviceGetInteger)(&dev, NVN_DEVICE_INFO_SEPARATE_SAMPLER_BINDINGS_PER_STAGE, &v); EXPECT("separate sampler bindings per stage (32, the driver's)", 32, v);
-    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x60, &v); EXPECT("X1 item 0x60 (65535, the driver's)", 65535, v);
-    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x67, &v); EXPECT("X1 item 0x67, shader code alignment (256)", 256, v);
-    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x68, &v); EXPECT("X1 item 0x68 (16383, the driver's last)", 16383, v);
-    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x62, &v); EXPECT("X1 item 0x62 (32: the driver's table, the device's value read at init)", 32, v);
-    v = -1; P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x69, &v); EXPECT("X1 items past 0x68 answer 0", 0, v);
+    // NVN2's own constants (g_devinfo2): the GPU code range of its shaders' control sections
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x2E, &v); EXPECT("newest GPU code major", 201, v);
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x30, &v); EXPECT("newest GPU code minor", 20, v);
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x2F, &v); EXPECT("oldest GPU code major", 201, v);
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x31, &v); EXPECT("oldest GPU code minor", 0, v);
+    P(nvnDeviceGetInteger)(&dev, NVN_DEVICE_INFO_SEPARATE_TEXTURE_BINDINGS_PER_STAGE, &v); EXPECT("separate texture bindings per stage (128)", 128, v);
+    P(nvnDeviceGetInteger)(&dev, NVN_DEVICE_INFO_SEPARATE_SAMPLER_BINDINGS_PER_STAGE, &v); EXPECT("separate sampler bindings per stage (32)", 32, v);
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x60, &v); EXPECT("item 0x60 (65535)", 65535, v);
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x67, &v); EXPECT("item 0x67, shader code alignment (256)", 256, v);
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x68, &v); EXPECT("item 0x68 (1; the X1's driver answered 16383)", 1, v);
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x86, &v); EXPECT("item 0x86 (16383)", 16383, v);
+    // An item NVN2 reads from the GPU at run time takes the X1's value where its table has one, and otherwise answers 0 (with a red line), as an unknown item does
+    P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x62, &v); EXPECT("run-time item 0x62 takes the X1's 32", 32, v);
+    v = -1; P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x7D, &v); EXPECT("run-time item 0x7D, past the X1's table, answers 0", 0, v);
+    v = -1; P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0xAA, &v); EXPECT("items past 0xA9 answer 0", 0, v);
     native_defaults(); builder_queries(); pool_access();
     // The Switch 2 table (NVN2's own constants: the newest seen, SDK 21.4.4's, as an older sdk's own switch answers its older versions through dm_sdk_nvn2_item): its GPU code range and Ampere's limits, the host's 16 vertex slots, and the run-time items
     EXPECT("NVN2: API 231.39", 231 * 100 + 39, g_devinfo2[0] * 100 + g_devinfo2[1]);
@@ -1209,7 +1206,7 @@ int main(void) {
         #define CB_ &ce
         EQ(P(nvnCommandBufferDrawArrays)(CB_, NVN_DRAW_PRIMITIVE_TRIANGLES, 3, 36));
         EQ(P(nvnCommandBufferDrawArraysInstanced)(CB_, NVN_DRAW_PRIMITIVE_TRIANGLE_STRIP, 0, 4, 3, 2));
-        EQ(P(nvnCommandBufferDrawArraysInstanced)(CB_, NVN_DRAW_PRIMITIVE_POINTS, 1, 4, 0, 0));
+        EQ(P(nvnCommandBufferDrawArraysInstanced)(CB_, NVN_DRAW_PRIMITIVE_POINTS, 1, 4, 0, 2));
         EQ(P(nvnCommandBufferDrawArraysIndirect)(CB_, NVN_DRAW_PRIMITIVE_LINES, 0x30000));
         EQ(h_nvnCommandBufferDrawMeshTasks(CB_, 2, 9));
         EQ(h_nvnCommandBufferDrawMeshTasksIndirect(CB_, 0x30040));
@@ -1260,7 +1257,7 @@ int main(void) {
         // A range a stage's table does not hold records nothing, either way (SetViewports with first -1 wrote S.vp[-1] at replay; a first near INT_MAX overflowed first + n)
         size_t ln0; { P(nvnCommandBufferAddCommandMemory)(&ce, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&ce); free(nvn_rec_linear(P(nvnCommandBufferEndRecording)(&ce), &ln0)); }
         #define NONE(...) do { for (int k = 0; k < 2; k++) { size_t ln; g_rec_compact = !k; P(nvnCommandBufferAddCommandMemory)(&ce, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&ce); __VA_ARGS__; \
-                free(nvn_rec_linear(P(nvnCommandBufferEndRecording)(&ce), &ln)); if (ln != ln0) { bad++; printf("out-of-range bind recorded at line %d (%s): %zu bytes\n", __LINE__, k ? "canonical" : "compact", ln); } } \
+                free(nvn_rec_linear(P(nvnCommandBufferEndRecording)(&ce), &ln)); if (ln != ln0) { bad++; printf("a call that records nothing recorded at line %d (%s): %zu bytes\n", __LINE__, k ? "canonical" : "compact", ln); } } \
             g_rec_compact = 1; } while (0)
         NVNviewportSwizzle sw4[4] = {0};
         NONE(P(nvnCommandBufferSetViewports)(CB_, -1, 1, vp)); NONE(P(nvnCommandBufferSetViewports)(CB_, 0x7fffffff, 1, vp)); NONE(P(nvnCommandBufferSetViewportSwizzles)(CB_, -1, 1, sw4));
@@ -1270,6 +1267,9 @@ int main(void) {
         NONE(h_nvnCommandBufferBindTexturesDeferred(CB_, NVN_SHADER_STAGE_FRAGMENT, -1, 1, th)); NONE(P(nvnCommandBufferBindTextures)(CB_, (NVNshaderStage)-1, 0, 1, th));
         NONE(P(nvnCommandBufferBindUniformBuffer)(CB_, NVN_SHADER_STAGE_VERTEX, -1, 0x20000, 0x100)); NONE(P(nvnCommandBufferBindUniformBuffers)(CB_, (NVNshaderStage)-1, 0, 2, r3));
         NONE(P(nvnCommandBufferBindStorageBuffer)(CB_, NVN_SHADER_STAGE_COMPUTE, 16, 0x40000, 0x1000)); NONE(P(nvnCommandBufferBindStorageBuffers)(CB_, NVN_SHADER_STAGE_COMPUTE, -1, 2, r3));
+        // an instanced draw of no instance draws nothing: a record's 0 instances would count as one
+        NONE(P(nvnCommandBufferDrawArraysInstanced)(CB_, NVN_DRAW_PRIMITIVE_POINTS, 1, 4, 0, 0));
+        NONE(P(nvnCommandBufferDrawElementsInstanced)(CB_, NVN_DRAW_PRIMITIVE_TRIANGLES, NVN_INDEX_TYPE_UNSIGNED_SHORT, 6, 0x10000, 5, 1, 0));
         #undef NONE
         #undef EQ
         #undef CB_
@@ -1833,6 +1833,30 @@ int main(void) {
     EXPECT("unimplemented function counted 256 times", 256, nvn_slot[ui].cnt - before);
     EXPECT("unimplemented function stays reported past 256 calls", 1, g_unimpl_seen[ui]);
     nvn_slot[ui].fn = saved_fn;
+    // The entries of what no shader of the game can ask for (transform feedback, tessellation patches, ray tracing: no such stage or layout in its library) have no implementation:
+    // their names still resolve, to the reporting stub, so a call is a red line and not a jump to nowhere
+    {
+        static const char *const gone[] = {
+            "nvnCommandBufferBeginTransformFeedback", "nvnCommandBufferEndTransformFeedback", "nvnCommandBufferPauseTransformFeedback", "nvnCommandBufferResumeTransformFeedback",
+            "nvnCommandBufferDrawTransformFeedback", "nvnCommandBufferBindTransformFeedbackBuffer", "nvnCommandBufferBindTransformFeedbackBuffers", "nvnCommandBufferSetPatchSize",
+            "nvnCommandBufferBindAccelerationStructure", "nvnCommandBufferBindAccelerationStructures", "nvnCommandBufferBuildAccelerationStructures",
+            "nvnCommandBufferCompactAccelerationStructure", "nvnCommandBufferCopyAccelerationStructure", "nvnCommandBufferDispatchRays", "nvnCommandBufferDispatchRaysIndirect",
+            "nvnDeviceCalculateAccelerationStructureMemoryRequirements", "nvnProgramGetShaderGroupHandle",
+        };
+        int resolved = 0, stubbed = 0;
+        for (unsigned k = 0; k < sizeof gone / sizeof *gone; k++) {
+            unsigned i = 0; while (i < NVN_NFUNC && strcmp(nvn_names[i], gone[k])) i++;
+            if (i == NVN_NFUNC) { printf("no NVN name %s\n", gone[k]); continue; }
+            if (gpa(&dev, gone[k])) resolved++; else printf("%s does not resolve\n", gone[k]);
+            if (nvn_slot[i].fn == (void *)nvn_unimpl_entry) stubbed++; else printf("%s has an implementation\n", gone[k]);
+        }
+        EXPECT("the removed entries still resolve", 17, resolved);
+        EXPECT("the removed entries go to the reporting stub", 17, stubbed);
+        unsigned bi = 0; while (strcmp(nvn_names[bi], "nvnCommandBufferSetPatchSize")) bi++;
+        uint64_t calls = nvn_slot[bi].cnt;
+        ((void (*)(NVNcommandBuffer *, int))gpa(&dev, "nvnCommandBufferSetPatchSize"))(NULL, 3);
+        EXPECT("a call of a removed entry is counted and reported ([RED])", 1, nvn_slot[bi].cnt - calls == 1 && g_unimpl_seen[bi] > 0);
+    }
 
     // 8. A texture buffer as 2D rows for wrapped 1D fetches (x & 0x3FFF, x >> 14; nvn_mtl.m tbuf_as_2d): full rows back to back, one short row rounded to the alignment
     {

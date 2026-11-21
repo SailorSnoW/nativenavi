@@ -1,5 +1,5 @@
 """The rewriter's per-build patch files (dm/tools/sdk_patches.py, dm/games/<id>/patches.py, loaded by dm/tools/patch_nso.py): no build ID is claimed twice, every entry has
-the form patch_nso.py expects, a game's file names only builds of its own profile's non-sdk modules, sdk_patches.py only sdk modules some profile ships; and the NSP script's
+the form patch_nso.py expects, a game's file names only builds of its own profile's non-sdk modules, sdk_patches.py only sdk modules some profile ships; and the packing script's
 rewrite step keys its reuse on the patch files of the game's builds only. No game files needed (temporary files only in a temporary folder)."""
 import ast
 import glob
@@ -130,7 +130,7 @@ class Registry(unittest.TestCase):
                     if rule.get('others'):   # none found: the stub leaves those parts out
                         rest = []
                         ctx = docs_patches.types.SimpleNamespace(here=lambda: 0x8000000, emit=lambda w: None, site=lambda off, orig: None, put=lambda off, words, why, rest=rest: rest.append(off),
-                                                                 state=0x9000000, step_max=0, base=0x100000, others={label: None for label in rule['others']}, capabilities=set())
+                                                                 state=0x9000000, base=0x100000, others={label: None for label in rule['others']}, capabilities=set())
                         rule['stub'](ctx)
                         self.assertTrue(all(0x100000 <= off < 0x100000 + rule['size'] for off in rest), f'{p}: {rule["name"]} writes outside its function without its others')
 

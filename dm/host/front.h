@@ -13,16 +13,13 @@ static inline void front_hud_env(void) {
 void front_run(void (*guest)(void));
 // The CAMetalLayer the graphics backend presents frames to (NULL when there is no window)
 void *front_metal_layer(void);
-// The highest refresh rate of the screen the game is shown on in Hz, 0 = not known (front_mac.m: the window's screen; front_ios.m: the game view's screen, 60 in Low Power Mode). Any thread
+// The highest refresh rate of the screen the game is shown on in Hz, 0 = not known (front_mac.m: the window's screen). Any thread
 int front_screen_max_fps(void);
-// Whether the window's current screen mode supports variable refresh (Mac front_mac.m; none on iOS). Any thread
+// Whether the window's current screen mode supports variable refresh (front_mac.m). Any thread
 int front_screen_variable_refresh(void);
 // The frame rate the display link paces the game at (60, 30, 120; nvn_mtl.m link_sync): in fullscreen, a screen whose refresh rate is not a multiple of it is switched, while the game runs,
-// to a mode of the same size whose rate is, and back when the window leaves fullscreen or that screen (front_mac.m; none on iOS). Called from the present thread
+// to a mode of the same size whose rate is, and back when the window leaves fullscreen or that screen (front_mac.m). Called from the present thread
 void front_screen_match(int fps);
-// The shape of the picture the game presents (nvn_mtl.m present_now, present_shape: the layer's, not the crop's, w x h), called when its width / height changes: the front end
-// lays the picture out in that shape instead of 16:9. Before the first call the picture is 16:9. Called from the present thread; the front end switches to its main thread and does not block
-void front_picture_shape(int w, int h);
 // Progress screen of the first-start prepare step (nvn_mtl.m warm_prepare: "Preparing shaders" while the pipelines of the prewarm lists are built before the game's first frame):
 // title and done of total shown over the game's view (a dark screen, the title, a bar and a count), updated on each call; title NULL hides it. Any thread; the front end switches to its main
 // thread and does not block. Nothing is shown without a window
@@ -38,14 +35,14 @@ extern void (*front_progress_hook)(const char *title, long done, long total);
 // 0: closed (B, Escape); -1 with no window: nothing shown, the caller answers as the player closing it
 int front_ctrl_support(int min, int max);
 
-// Save not written (called by the host's hle_fs.c; the iOS front end provides a strong implementation of the same name that shows the native prompt "Not enough storage. Progress was not saved"; the default weak implementation only logs).
+// Save not written (called by the host's hle_fs.c; a front end may provide a strong implementation of the same name that tells the player, as nxnative's iOS front end did; the Mac front end has none, and the default weak implementation only logs).
 // Timing: when a save write fails (disk full etc.) within one of the game's save transactions (between two Commits), so that this Commit is refused and the previously committed save is unchanged, it is called once per refused transaction;
 // the next transaction that succeeds commits as usual, and the front end need not do any recovery. err = the first failing errno (ENOSPC = 28 means out of space). Called on the game thread; the front end switches to the main thread itself and must not block
 void front_save_failed(int err);
 
 // GPU lost (called by the graphics backend's nvn_mtl.m gpu_lost_check, once): the first command buffer came back MTL4CommandQueueErrorAccessRevoked, so macOS runs none of the process's GPU work
 // any more and nothing is drawn again. By then presents have stopped and the game's waits for the GPU are released, so the game runs on with nothing on screen until the front end ends it.
-// The Mac front end leaves full screen, says why in an alert and quits with exit status 70; without a window it ends the run as the default weak implementation (nvn_mtl.m) does, which the iOS
-// front end keeps: a FATAL line and an abort. Called on Metal's feedback queue; the front end switches to the main thread itself and must not block
+// The Mac front end leaves full screen, says why in an alert and quits with exit status 70; without a window it ends the run as the default weak implementation (nvn_mtl.m) does:
+// a FATAL line and an abort. Called on Metal's feedback queue; the front end switches to the main thread itself and must not block
 void front_gpu_lost(void);
 

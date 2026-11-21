@@ -93,7 +93,7 @@ static void specialization_cases(void) {
         if (!lib) return;
         MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new]; uint32_t prior = deferred == 2 ? 13 : 23;
         [cv setConstantValue:&prior type:MTLDataTypeUInt atIndex:0];
-        id<MTLFunction> f = deferred == 2 ? geo_mesh_entry(lib, @"probe") : deferred ? fn_spec(lib, @"probe", cv, &error) : fn_lib_spec(lib, @"probe", cv, &error);
+        id<MTLFunction> f = deferred == 2 ? fn_spec(lib, @"probe", [MTLFunctionConstantValues new], NULL) : deferred ? fn_spec(lib, @"probe", cv, &error) : fn_lib_spec(lib, @"probe", cv, &error);
         CHECK(f != nil, "original specialization exists (%d)", deferred); if (!f) continue;
         id<MTLFunction> off = fn_dev_b(f, 1);   // the variant is no function object of its own (fn_off): a descriptor and a device function beside f's
         CHECK(fn_off(f) && fn4_of_b(f, 1) != fn4_of(f) && fn4_of_b(f, 1) == fn4_of_b(f, 1) && fn4_of_b(f, 0) == fn4_of(f), "border specialization has a descriptor of its own, cached (%d)", deferred);
@@ -160,7 +160,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     if (argc > 1) {   // the rewritten shader
         NSError *error = nil; NSString *src = [NSString stringWithContentsOfFile:@(argv[1]) encoding:NSUTF8StringEncoding error:&error];
         id<MTLLibrary> lib = src ? [g_dev newLibraryWithSource:src options:nil error:&error] : nil;
-        // as shader_load and dispatch take a compute shader: specialized with the empty set (the corrections), and without them (cps_new_b), each through cps_new
+        // as shader_load and dispatch take a compute shader: specialized with the empty set (the corrections), and without them, each through cps_new_b
         NvShader *cs = [NvShader new]; cs->fn = lib ? fn_spec(lib, @"main0", [MTLFunctionConstantValues new], &error) : nil;
         id<MTLComputePipelineState> p = cs->fn ? cps_new_b(cs->fn, 0, &error) : nil, p_off = cs->fn ? cps_new_b(cs->fn, 1, &error) : nil;
         CHECK(p != nil && p_off != nil, "the rewritten shader compiles: %s", error.localizedDescription.UTF8String);

@@ -96,7 +96,7 @@ static void sparse_reads(const NVNcopyRegion *region, const uint8_t expected[4])
     EXPECT("sparse mapping", 1, h_nvnMemoryPoolMapVirtual((NVNmemoryPool *)&sparse, 1, (const NVNmappingRequest *)&map));
     EXPECT("pool reads through its page table", 1, nvn_sparse_pool(&sparse));
     for (size_t i = 0; i < len / 4; i++) memcpy(phys + i * 4, expected, 4);   // every texel the same, whatever the block-linear order
-    NVNtextureBuilder tb; NVNtexture mapped, unmapped; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 8);
+    NVNtextureBuilder tb = {0}; NVNtexture mapped, unmapped; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 8);
     h_nvnTextureBuilderSetHeight(&tb, 4); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&sparse, 0); EXPECT("mapped sparse texture init", 1, h_nvnTextureInitialize(&mapped, &tb));
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&sparse, 2 * len); EXPECT("unmapped sparse texture init", 1, h_nvnTextureInitialize(&unmapped, &tb));
@@ -130,7 +130,7 @@ static void packed_copies(int format, int tid) {
     uint16_t red = rgba4 ? 0x800f : a1 ? 0x801f : 0x001f, blue = rgba4 ? 0x0f00 : b565 ? 0xf800 : 0x7c00, guest[2] = {red, blue};   // RGBA4: red with alpha 8/15, so that no word reads the same reversed
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 262144)) abort(); memset(mem, 0, 262144);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=262144}; mtl_pool_add(mem, 262144); nvn_dirty_add_range(mem, 262144);
-    NVNtextureBuilder tb; NVNtexture copied, cleared; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 2);
+    NVNtextureBuilder tb = {0}; NVNtexture copied, cleared; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 2);
     h_nvnTextureBuilderSetHeight(&tb, 1); h_nvnTextureBuilderSetFormat(&tb, format);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 65536); EXPECT("packed texture init", 1, h_nvnTextureInitialize(&copied, &tb));
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 98304); EXPECT("packed texture 2 init", 1, h_nvnTextureInitialize(&cleared, &tb));
@@ -184,7 +184,7 @@ static void store_completion(void) {
     readback_feedback_idle();
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 262144)) abort(); memset(mem, 0, 262144);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=262144}; mtl_pool_add(mem, 262144); nvn_dirty_add_range(mem, 262144);
-    NVNtextureBuilder tb; NVNtexture source, packaged; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture source, packaged; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 8); h_nvnTextureBuilderSetHeight(&tb, 4); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 131072);
     EXPECT("completion source texture init", 1, h_nvnTextureInitialize(&source, &tb));
@@ -260,7 +260,7 @@ static void stale_pools(void) {
     NVNmemoryPool *mp = calloc(1, sizeof *mp), *sp = calloc(1, sizeof *sp), *mp2 = calloc(1, sizeof *mp2);   // the game's objects, on its heap
     pool_builder_t pb = {.mem=phys, .size=len, .flags=0x24}, vb = {.size=DM_GAME_APP_POOL + 4 * len, .flags=NVN_MEMORY_POOL_FLAGS_VIRTUAL};
     EXPECT("stale: physical pool init", 1, h_nvnMemoryPoolInitialize(mp, (const NVNmemoryPoolBuilder *)&pb));
-    NVNpackagedTextureLayout lay = {{1, 0, 0, 0, 7, 0, 1, 0}}; NVNtextureBuilder tb; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 8);
+    NVNpackagedTextureLayout lay = {{1, 0, 0, 0, 7, 0, 1, 0}}; NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 8);
     h_nvnTextureBuilderSetHeight(&tb, 4); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetPackagedTextureLayout(&tb, &lay);
     h_nvnTextureBuilderSetStorage(&tb, mp, 0);
 
@@ -300,7 +300,7 @@ static void stale_pools(void) {
     EXPECT("stale: physical pool init 3", 1, h_nvnMemoryPoolInitialize(mp2, (const NVNmemoryPoolBuilder *)&pb));
     EXPECT("stale: sparse pool init", 1, h_nvnMemoryPoolInitialize(sp, (const NVNmemoryPoolBuilder *)&vb));
     map_req map = {.phys=mp2, .size=len}; EXPECT("stale: sparse mapping", 1, h_nvnMemoryPoolMapVirtual(sp, 1, (const NVNmappingRequest *)&map));
-    NVNtextureBuilder sb; NVNtexture st; h_nvnTextureBuilderSetDefaults(&sb); h_nvnTextureBuilderSetWidth(&sb, 8); h_nvnTextureBuilderSetHeight(&sb, 4);
+    NVNtextureBuilder sb = {0}; NVNtexture st; h_nvnTextureBuilderSetDefaults(&sb); h_nvnTextureBuilderSetWidth(&sb, 8); h_nvnTextureBuilderSetHeight(&sb, 4);
     h_nvnTextureBuilderSetFormat(&sb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetStorage(&sb, sp, 0); EXPECT("stale: sparse texture init", 1, h_nvnTextureInitialize(&st, &sb));
     mtl_reg_tex(604, (const tex_t *)&st, NULL);
     id<MTLTexture> smade = by_id(604); EXPECT("stale: sparse texture resolves", 1, smade != nil);
@@ -322,7 +322,7 @@ static void copy_stream(void) { @autoreleasepool {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), POOL)) abort(); memset(mem, 0, POOL);
     uint8_t *m = mem;
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=POOL}; mtl_pool_add(mem, POOL); nvn_dirty_add_range(mem, POOL);
-    NVNtextureBuilder tb; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D_ARRAY);
+    NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D_ARRAY);
     h_nvnTextureBuilderSetWidth(&tb, W); h_nvnTextureBuilderSetHeight(&tb, W); h_nvnTextureBuilderSetDepth(&tb, LAYERS); h_nvnTextureBuilderSetLevels(&tb, LEVELS);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     NVNpackagedTextureLayout lay = {{1, 0, 0, 0, 7, 0, 1, 0}}; h_nvnTextureBuilderSetPackagedTextureLayout(&tb, &lay);
@@ -436,7 +436,7 @@ static void copy_stream_alias(NVNformat fb) { @autoreleasepool {
     uint8_t *m = mem;
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=POOL};
     mtl_pool_add(mem, POOL); nvn_dirty_add_range(mem, POOL);
-    NVNtextureBuilder tb; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D_ARRAY);
+    NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D_ARRAY);
     h_nvnTextureBuilderSetWidth(&tb, W); h_nvnTextureBuilderSetHeight(&tb, W);
     h_nvnTextureBuilderSetDepth(&tb, LAYERS); h_nvnTextureBuilderSetLevels(&tb, LEVELS);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
@@ -510,7 +510,7 @@ static void copy_stream_3d(void) { @autoreleasepool {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), POOL)) abort(); memset(mem, 0, POOL);
     uint8_t *m = mem;
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=POOL}; mtl_pool_add(mem, POOL); nvn_dirty_add_range(mem, POOL);
-    NVNtextureBuilder tb; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_3D);
+    NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_3D);
     h_nvnTextureBuilderSetWidth(&tb, W); h_nvnTextureBuilderSetHeight(&tb, W); h_nvnTextureBuilderSetDepth(&tb, D); h_nvnTextureBuilderSetLevels(&tb, 2);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     NVNpackagedTextureLayout lay = {{1, 0, 0, 0, 7, 0, 1, 0}}; h_nvnTextureBuilderSetPackagedTextureLayout(&tb, &lay);
@@ -557,7 +557,7 @@ static void gpu_storage(void) {
     enum { N = 1 << 20, W = 128 };
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), N)) abort(); memset(mem, 0, N);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=N, .flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED}; mtl_pool_add(mem, N); nvn_dirty_add_range(mem, N);
-    NVNtextureBuilder tb; NVNtexture drawn, copied, cleared, moved, pkc; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, W); h_nvnTextureBuilderSetHeight(&tb, W);
+    NVNtextureBuilder tb = {0}; NVNtexture drawn, copied, cleared, moved, pkc; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, W); h_nvnTextureBuilderSetHeight(&tb, W);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 0x40000); EXPECT("GPU texture init", 1, h_nvnTextureInitialize(&drawn, &tb));
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 0x60000); EXPECT("GPU texture 2 init", 1, h_nvnTextureInitialize(&copied, &tb));
@@ -614,7 +614,7 @@ static void store_kinds(void) { @autoreleasepool {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), POOL)) abort(); memset(mem, 0, POOL); uint8_t *m = mem;
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=POOL}; mtl_pool_add(mem, POOL); nvn_dirty_add_range(mem, POOL);
     NVNpackagedTextureLayout lay = {{1, 0, 0, 0, 7, 0, 1, 0}};
-    NVNtextureBuilder tb; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetPackagedTextureLayout(&tb, &lay);
+    NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetPackagedTextureLayout(&tb, &lay);
     h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D_ARRAY); h_nvnTextureBuilderSetSize3D(&tb, 64, 64, 2); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA_DXT1);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, BC); NVNtexture bc; EXPECT("packaged BC1 array init", 1, h_nvnTextureInitialize(&bc, &tb));
     EXPECT("BC1 array fits", 1, BC + TX(&bc)->L.size <= RGB);
@@ -674,7 +674,7 @@ int main(void) { @autoreleasepool {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 524288)) abort(); memset(mem, 0, 524288);
     // Registered with the dirty tracker as nvnMemoryPoolInitialize does: a packaged texture in an untracked pool is re-uploaded from its storage at every use, which would discard what the GPU wrote into it
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=524288}; mtl_pool_add(mem, 524288); nvn_dirty_add_range(mem, 524288);
-    NVNtextureBuilder tb; NVNtexture tex; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 8);
+    NVNtextureBuilder tb = {0}; NVNtexture tex; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 8);
     h_nvnTextureBuilderSetHeight(&tb, 4); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 131072); EXPECT("texture init", 1, h_nvnTextureInitialize(&tex, &tb));
     NVNcommandBuffer cmd; EXPECT("command init", 1, h_nvnCommandBufferInitialize(&cmd, NULL));

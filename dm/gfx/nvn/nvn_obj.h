@@ -7,8 +7,6 @@
 #include "nvn.h"
 #include "nvn_tex.h"
 #include "dmsh_abi.h"   // the shader library ABI shared with the shader build (DMSH_SEPTEX_SLOT0)
-#include "nvn_accel.h"
-#include "nvn_raytrace.h"
 
 #define MAGIC(a, b, c, d) ((uint32_t)(a) | (uint32_t)(b) << 8 | (uint32_t)(c) << 16 | (uint32_t)(d) << 24)
 #define FITS(T, H) _Static_assert(sizeof(T) <= sizeof(H), #T " exceeds the reserved size of " #H)
@@ -173,18 +171,10 @@ enum {
     OP_BIND_PROGRAM, OP_BIND_STATE, OP_BIND_VATTR, OP_BIND_VSTREAM, OP_BIND_VBUF,
     OP_BIND_UBO, OP_BIND_SSBO, OP_BIND_TEX, OP_BIND_SAMP,
     OP_STENCIL, OP_POLY_OFFSET, OP_DRAW, OP_DRAW_IDX, OP_DISPATCH, OP_BARRIER,
-    OP_SET_TEX_POOL, OP_SET_SAMP_POOL, OP_COPY_B2T, OP_COPY_STRIDE, OP_BLEND_COLOR, OP_COPY_T2B, OP_BIND_IMG, OP_COPY_T2T, OP_RESET_COUNTER, OP_CLEAR_TEX, OP_CLEAR_BUF, OP_DEPTH_CLAMP, OP_RENDER_COND, OP_FENCE_SYNC, OP_TF_BIND, OP_TF_STATE, OP_RAST_DISCARD, OP_VP_SWIZZLE, OP_BIND_TEX1, OP_PRIM_RESTART, OP_BIND_UBO_SMALL, OP_BIND_VBUF1, OP_DRAW_TEX, OP_ALPHA_REF, OP_PUSH_CONST, OP_DLSS, OP_MULTI_DRAW, OP_WAIT_EVENT, OP_WAIT_SYNC, OP_PATCH_SIZE, OP_LINE_WIDTH,
-    OP_AS_BUILD, OP_AS_COPY, OP_BIND_AS, OP_RT_DISPATCH, OP_COUNT_
+    OP_SET_TEX_POOL, OP_SET_SAMP_POOL, OP_COPY_B2T, OP_COPY_STRIDE, OP_BLEND_COLOR, OP_COPY_T2B, OP_BIND_IMG, OP_COPY_T2T, OP_RESET_COUNTER, OP_CLEAR_TEX, OP_CLEAR_BUF, OP_DEPTH_CLAMP, OP_RENDER_COND, OP_FENCE_SYNC, OP_TF_BIND_RETIRED, OP_TF_STATE_RETIRED, OP_RAST_DISCARD, OP_VP_SWIZZLE, OP_BIND_TEX1, OP_PRIM_RESTART, OP_BIND_UBO_SMALL, OP_BIND_VBUF1, OP_DRAW_TEX, OP_ALPHA_REF, OP_PUSH_CONST, OP_DLSS, OP_MULTI_DRAW, OP_WAIT_EVENT, OP_WAIT_SYNC, OP_PATCH_SIZE_RETIRED, OP_LINE_WIDTH,
+    OP_COUNT_
 };
 // Payload (immediately follows op_hdr)
-typedef struct {
-    uint64_t raygen;
-    nvn_rt_table miss, hit, callable; // CPU descriptions snapshotted at recording.
-    uint32_t width, height, depth, _pad;
-} p_rt_dispatch;
-_Static_assert(sizeof(p_rt_dispatch) == 96 && offsetof(p_rt_dispatch, miss) == 8 &&
-               offsetof(p_rt_dispatch, hit) == 32 && offsetof(p_rt_dispatch, callable) == 56 &&
-               offsetof(p_rt_dispatch, width) == 80, "RT dispatch record layout");
 typedef struct {
     uint64_t ind, cnt, ibuf;
     int64_t stride;
@@ -205,7 +195,6 @@ typedef struct {
 typedef struct { int32_t x, y, w, h; } p_scissor;
 typedef struct { float n, f; } p_depth_range;
 typedef struct { uint32_t on, index; } p_prim_restart;
-typedef struct { int32_t n; } p_patch_size;   // SetPatchSize: control points per patch of a primitive type 14 draw (nvn_tess.inc)
 typedef struct { float w; } p_line_width;   // SetLineWidth: lines wider than a pixel are drawn as quads (nvn_wline.inc)
 typedef struct { int32_t on; } p_depth_clamp;   // SetDepthClamp: depth outside [near, far] is clamped instead of clipped (Metal's depth clip mode)
 typedef struct { int32_t first, n; uint8_t sw[16][4]; } p_vp_swizzle;   // SetViewportSwizzles: per viewport the source of clip x, y, z, w (NVNviewportSwizzle) XOR the identity (0, 2, 4, 6), so 0 = unchanged
@@ -250,13 +239,13 @@ static inline const p_bind_handles *bind_rec(uint32_t op, const void *a, p_bind_
 // Texture slots of a stage: 0-127 nvnCommandBufferBindTexture's (combined handles), 128-255 the separate texture binds. The driver keeps the two in tables of their own (c2 DMSH_C2_TEX + 8 r and
 // DMSH_C2_SEPTEX + 8 r, dmsh_abi.h), which the shaders' reflection names as these slots, so a game may bind both kinds in the same frame (Monster Hunter Rise: BindTexture slot 0 beside separate slots 0-4)
 #define NVN_SEPTEX_SLOT0 DMSH_SEPTEX_SLOT0
-// Resource bindings have their own ray-tracing table. Raster/compute programs
-// still have six shader slots; NVN2 task/mesh resources share hull/domain.
-enum { NVN_RESOURCE_STAGES = 7, NVN_RT_RESOURCE_STAGE = 6 };
+// The stages that have resource bindings: vertex 0, fragment 1, geometry 2 (no shader of the game has that stage), task 3, mesh 4 (NVN2's 6 and 7, hle_nvn.c st_host), compute 5.
+// NVN2's ray tracing stage (8) has no table here: a bind for it is refused in red (hle_nvn.c slots_bound)
+enum { NVN_RESOURCE_STAGES = 6 };
 typedef struct { int32_t face, value_mask, mask, ref, which; } p_stencil;  // which: 0 value mask 1 write mask 2 reference value
 typedef struct { float factor, units, clamp; } p_poly_offset;
 enum { DM_PRIM_MESH_TASKS = 0x40 };   // p_draw.prim of nvnCommandBufferDrawMeshTasks (first task or mesh workgroup, count): no NVN primitive has this value
-typedef struct { int32_t prim, first, count, instances, base_instance; uint64_t ind; uint64_t mdi_cnt; int32_t mdi_i, pad; } p_draw;   // instances 0 counts as 1; ind != 0: DrawArraysIndirect, the arguments are read by the GPU from that address; mdi_cnt != 0: draw mdi_i of an indirect-count multi-draw (drawn only while mdi_i < the u32 at mdi_cnt)
+typedef struct { int32_t prim, first, count, instances, base_instance; uint64_t ind; uint64_t mdi_cnt; int32_t mdi_i, pad; } p_draw;   // instances 0 counts as 1 (a record built without it; the game's instanced draw of no instance is not recorded, hle_nvn.c); ind != 0: DrawArraysIndirect, the arguments are read by the GPU from that address; mdi_cnt != 0: draw mdi_i of an indirect-count multi-draw (drawn only while mdi_i < the u32 at mdi_cnt)
 typedef struct { int32_t prim, itype, count, base_vertex, base_instance, instances; uint64_t ibuf, ind; uint64_t mdi_cnt; int32_t mdi_i, pad; } p_draw_idx;   // ind != 0: DrawElementsIndirect, {count, instances, first index, base vertex, base instance} read by the GPU from that address; mdi_cnt: as in p_draw
 // A draw record stops before ind unless it is an indirect draw or a multi-draw (hle_nvn.c rec_draw); read it with draw_rec / draw_idx_rec, which give the missing fields as 0.
 // Games size command memory by what nvnCommandBufferGetCommandMemoryUsed reports, so a plain draw must not take more of it than the real driver's commands do. Breath of the Wild
@@ -291,8 +280,6 @@ typedef struct { uint64_t addr, size; uint32_t value, _pad; } p_clear_buf;   // 
 typedef struct { float rgba[4]; } p_blend_color;
 typedef struct { float ref; } p_alpha_ref;
 typedef struct { uint16_t compute, offset; uint32_t size; uint8_t data[]; } p_push_const;   // NVN2 push constants: the bytes at offset in the graphics or compute group's c[24] (block b at b * DMSH_PUSH_SIZE)   // SetAlphaRef: the reference of the alpha test (ColorStateSetAlphaTest; nvn_mtl.m at_bind)
-typedef struct { int32_t index, pad; uint64_t addr, size; } p_tf_bind;   // BindTransformFeedbackBuffer(s): one record per buffer (index 0-3)
-typedef struct { int32_t what, pad; uint64_t ctl; } p_tf_state;          // what: 0 begin, 1 end, 2 pause, 3 resume; ctl = the game's 32-byte control buffer
 typedef struct { int32_t on; } p_rast_discard;
 
 // Entry point of the Metal replay layer (nvn_mtl.m): replays a set of command handles into the current submission
@@ -308,7 +295,7 @@ void mtl_present_test_stall(uint64_t ns);                  // Unit test: extra p
 int mtl_display_hz(void);                                   // Maximum refresh rate of the screen (Hz) when there is a window, 0 without a window
 void mtl_set_tex_pool_n(int n);                            // Texture descriptor pool capacity: texture IDs outside the pool are treated as 'empty slots' (read 0)
 void mtl_set_samp_pool_n(int n);                           // Sampler descriptor pool capacity: sampler IDs outside the pool are treated as empty slots too
-// Timing instrumentation (shared by Mac / iOS): submissions are tagged with the frame number; GPU time = sum of GPUEnd−GPUStart over all of that frame's command buffers, readable only after all complete (otherwise −1)
+// Timing instrumentation: submissions are tagged with the frame number; GPU time = sum of GPUEnd−GPUStart over all of that frame's command buffers, readable only after all complete (otherwise −1)
 void mtl_set_frame(uint64_t f);
 void mtl_ub_present(double iv_ms);   // Same-process alternating measurement (DM_NVN_UB): the present thread reports the actual present interval every frame
 double mtl_gpu_ms(uint64_t f);
@@ -323,7 +310,6 @@ void mtl_bw(uint64_t *load, uint64_t *store, uint64_t *full_rw_passes);   // Cum
 uint64_t mtl_udc_saved_bytes(void);                                      // Write-back bytes actually saved by DM_NVN_UNWRITTEN_DC
 int mtl_has_window(void);
 int mtl_fps_target(void);                                   // target frame rate 30 / 60 / 120 (power-saving mode, DM_FPS, the game itself asking for 30, the 120 fps setting)
-int mtl_warm_wait(int timeout_ms);
 int mtl_link_active(void);
 int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns);   // vsyncs = the game's present interval
 int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns);   // the same in the display link's own ticks
@@ -367,7 +353,6 @@ int nvn_tex_level_range(const tex_t *t, unsigned level, unsigned layer, uint64_t
 // a stage whose code area was not yet in any memory pool then is computed the first time it is asked for, from the host's copy of its control section. The keys belong to
 // the program's serial, so a copy of the NVNprogram the game made after SetShaders finds them. Returns 0 = no such stage
 int prog_key(const prog_t *p, unsigned stage, uint8_t key[8]);
-int nvn_shader_key(const NVNshaderData *shader, uint8_t key[8]);   // standard content key, synchronous readable input (also used for RT module snapshots)
 void nvn_ctl_lens(const void *control, uint32_t *nctl, uint32_t *ncode);   // a control section's bytes in the shader key and its code area's length (NVN or NVN2), hle_nvn.c
 void mtl_reg_samp(int id, const samp_par *p);
 void mtl_prog_release(prog_t *p);

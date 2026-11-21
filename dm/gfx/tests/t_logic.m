@@ -20,7 +20,7 @@ static NvProg *prog(NSString *dir, prog_t *program, NvShader **out) {
     if (!lib) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); abort(); }
     NvProg *pr = [NvProg new];
     pr->sh[0] = [NvShader new]; pr->sh[0]->fn = [lib newFunctionWithName:@"vertex_main"]; pr->sh[0]->stage = 0; snprintf(pr->sh[0]->key, sizeof pr->sh[0]->key, "vl_b");
-    NvShader *ps = shader_load(key, 1, 0); pr->sh[1] = ps; *out = ps;
+    NvShader *ps = shader_load(key, 1); pr->sh[1] = ps; *out = ps;
     if (!ps) abort();
     CHECK(ps->u_logic && ps->u_side && !ps->has_logic);   // actual generated reflection: main0_u holds the operation, with no legacy main0_l dictionary
     CHECK(ps->rf.nb == 1 && ps->rf.b[0].kind == NVN_RB_CBUF && ps->rf.b[0].reg == 0);

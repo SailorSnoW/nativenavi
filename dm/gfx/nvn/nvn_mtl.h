@@ -10,7 +10,6 @@ void mtl_vbuf_stats(uint64_t *resolve, uint64_t *reuse, uint64_t *set, uint64_t 
 void mtl_set_depth_zero(int on);          // NVN depth mode: 1 = near is 0 (D3D / Metal), 0 = near is -w (GL, NVN's default); picks the vertex shaders' entry point (see shader_load in nvn_mtl.m)
 void mtl_set_origin_lower_left(int on);   // NVN window origin: 1 = lower left (GL, NVN's default), 0 = upper left (D3D / Metal); see nvn_mtl.m
 void mtl_set_queue_origin_lower_left(int on); // Raster flip captured at NVN queue creation; selected under the submit lock.
-void bf_want_note(const char *key);
 
 // Memory pool: [mem, mem+size) is expanded outward to page boundaries to build a zero-copy buffer; look up the buffer and offset by GPU address (= CPU address)
 void mtl_pool_add(const void *mem, uint64_t size);
@@ -55,7 +54,5 @@ void mtl_drain(void);                                // Wait for all commands on
 void mtl_arch_save(int wait_ms, int ending);         // The pipeline archive's unwritten captures, written now even during the prewarm (going to the background, quitting); ending: the process ends after waiting up to wait_ms
 enum { MTL_QUIT_ARCH_MS = 10000 };   // what quitting gives the archive's write (atexit; the graceful exit: dm.h DM_QUIT_ARCH_MS, the same): a file of 900 bases took 1.8-4 s on Macs
 void mtl_warm_stop(void);   // the process is ending: the pipeline prewarm takes no more lines, and what it has not built is left to the next start (no compiles beside the archive's write)
-void *mtl_device(void);   // the Metal device, initialized on first use
-void mtl_present_layer(uint32_t w, uint32_t h);   // a sized vi layer (hle_vi.c): the picture's shape instead of the display's 16:9
 void mtl_present_wait(uint64_t ticket);   // as in nvn_obj.h: wait until that present has been handed to the GPU
 void mtl_present_wait_texture(uint64_t ticket, uint64_t copy);   // the next acquire of a presented texture, or a queue finish: with a snapshot (copy, from mtl_present) its copy has run on the GPU, else as mtl_present_wait

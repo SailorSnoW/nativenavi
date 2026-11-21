@@ -158,7 +158,7 @@ static int run_kernel(id<MTLComputePipelineState> ps) {
     const uint32_t *o = b.contents; for (uint32_t i = 0; i < 64; i++) if (o[i] != i * 3 + 1) return 0;
     return 1;
 }
-// Compute pipelines (cps_new) beside the bases: one the bundle does not hold is built through the MTLDevice and compiled into the flush period in the background, written to a
+// Compute pipelines (cps_new_b) beside the bases: one the bundle does not hold is built through the MTLDevice and compiled into the flush period in the background, written to a
 // plain file (never a p<seq> one), and a later start takes it from that file without building it; compaction captures it again; a function without a Metal 4 descriptor
 // (constants, the embedded kernels) is built through the MTLDevice, not captured and never looked up
 static void compute_pipelines(void) {
@@ -169,7 +169,7 @@ static void compute_pipelines(void) {
     id<MTLLibrary> kl = [g_dev newLibraryWithSource:src options:nil error:&err], ul = [g_dev newLibraryWithSource:[src stringByAppendingString:@"// unregistered\n"] options:nil error:&err];
     id<MTLFunction> kf = fn4_note([kl newFunctionWithName:@"k"], kl, @"k", nil), uf = [ul newFunctionWithName:@"k"];
     uint64_t built = g_cps_built, run = g_cps_run, arch = g_cps_arch; int pending = g_arch_new;
-    id<MTLComputePipelineState> kp = cps_new(kf, &err);
+    id<MTLComputePipelineState> kp = cps_new_b(kf, 0, &err);
     EXPECT("compute: a pipeline", 1, kp != nil);
     EXPECT("compute: built", built + 1, g_cps_built);
     dispatch_sync(arch_harvest_q(), ^{});   // its capture, in the background
@@ -186,7 +186,7 @@ static void compute_pipelines(void) {
     la->archive = [g_dev newArchiveWithURL:[NSURL fileURLWithPath:path] error:&err];
     g_arch4 = @[(id<MTL4Archive>)la];   // as a new start with that file
     built = g_cps_built; pending = g_arch_new;
-    id<MTLComputePipelineState> kp2 = cps_new(kf, &err);
+    id<MTLComputePipelineState> kp2 = cps_new_b(kf, 0, &err);
     EXPECT("compute again: from this device's archive", run + 1, g_cps_run);
     EXPECT("compute again: not built", built, g_cps_built);
     EXPECT("compute again: not from a bundle", arch, g_cps_arch);
@@ -194,12 +194,12 @@ static void compute_pipelines(void) {
     EXPECT("compute again: its dispatch writes", 1, run_kernel(kp2));
     // compaction during the prewarm: captured again from its function, for the file that replaces the old ones
     g_compact_enabled = 1; g_compacted = 0; atomic_store(&g_warm_running, 1);
-    EXPECT("compute, compaction: a pipeline", 1, cps_new(kf, &err) != nil);
+    EXPECT("compute, compaction: a pipeline", 1, cps_new_b(kf, 0, &err) != nil);
     EXPECT("compute, compaction: from the archive", run + 2, g_cps_run);
     dispatch_sync(arch_harvest_q(), ^{});
     EXPECT("compute, compaction: captured again", 1, g_compacted);
     g_compact_state = calloc(g_arch4.count + 1, 1); g_compacted = 0;   // a pick that leaves the file it is in: not captured again
-    EXPECT("compute, compaction of other files: a pipeline", 1, cps_new(kf, &err) != nil);
+    EXPECT("compute, compaction of other files: a pipeline", 1, cps_new_b(kf, 0, &err) != nil);
     dispatch_sync(arch_harvest_q(), ^{});
     EXPECT("compute, compaction of other files: not captured again", 0, g_compacted);
     g_compact_state = NULL;
@@ -209,7 +209,7 @@ static void compute_pipelines(void) {
     // a recapture still queued when the prewarm ends (the harvest queue held 300 ms): the flush after the prewarm leaves the compaction open, and the recapture's own flush closes it
     g_compact_enabled = 1; g_compacted = 0; g_compact_closed = 0; g_compact_periods = 0; atomic_store(&g_warm_running, 1);
     dispatch_async(arch_harvest_q(), ^{ usleep(300000); });
-    EXPECT("compute, queued recapture: a pipeline", 1, cps_new(kf, &err) != nil);
+    EXPECT("compute, queued recapture: a pipeline", 1, cps_new_b(kf, 0, &err) != nil);
     atomic_store(&g_warm_running, 0); arch_flush();   // as warm_finish
     EXPECT("compute, queued recapture: the compaction stays open", 0, g_compact_closed);
     arch_harvest_wait(DISPATCH_TIME_FOREVER);
@@ -224,7 +224,7 @@ static void compute_pipelines(void) {
     g_compact_enabled = 0; g_compacted = 0; g_compact_closed = 0; g_compact_periods = 0;
     // no Metal 4 descriptor: built through the MTLDevice, no lookup, nothing captured
     int looked = la->lookups; built = g_cps_built; pending = g_arch_new;
-    id<MTLComputePipelineState> up = cps_new(uf, &err);
+    id<MTLComputePipelineState> up = cps_new_b(uf, 0, &err);
     EXPECT("compute without a descriptor: a pipeline", 1, up != nil);
     EXPECT("compute without a descriptor: never looked up", looked, la->lookups);
     EXPECT("compute without a descriptor: built", built + 1, g_cps_built);
@@ -238,7 +238,7 @@ static void compute_pipelines(void) {
         id<MTLFunction> f2 = fn4_note([l2 newFunctionWithName:kn], l2, kn, nil);
         NSUInteger files = archive_files(@(kdir)).count; built = g_cps_built;
         dispatch_async(arch_harvest_q(), ^{ usleep(300000); });
-        EXPECT(quit ? "queued capture, quit: a pipeline" : "queued capture, flush: a pipeline", 1, cps_new(f2, &err) != nil && g_cps_built == built + 1);
+        EXPECT(quit ? "queued capture, quit: a pipeline" : "queued capture, flush: a pipeline", 1, cps_new_b(f2, 0, &err) != nil && g_cps_built == built + 1);
         if (quit) mtl_arch_save(MTL_QUIT_ARCH_MS, 0); else arch_flush_wait();
         EXPECT(quit ? "queued capture, quit: written" : "queued capture, flush: written", files + 1, archive_files(@(kdir)).count);
         EXPECT(quit ? "queued capture, quit: nothing left" : "queued capture, flush: nothing left", 0, g_arch_new);
@@ -631,7 +631,7 @@ static void compiler_death_notifications(void) {
         d.vertexDescriptor.layouts[16].stride = 4832 + kind * 16;
         EXPECT("notify device: a captured base", 1, pso_build(d, 0, &err) != nil && atomic_load(&g_ep->n) == 1);
         ep = g_ep; g_dev = (id<MTLDevice>)device; id result;
-        if (kind == 0) result = cps_new([g_lib2 newFunctionWithName:@"vs"], NULL);   // unregistered: directly through the MTLDevice
+        if (kind == 0) result = cps_new_b([g_lib2 newFunctionWithName:@"vs"], 0, NULL);   // unregistered: directly through the MTLDevice
         else if (kind == 1) result = pso_build_dev(d, 0, NULL);
         else if (kind == 2) result = dev_mps([MTLMeshRenderPipelineDescriptor new], NULL);
         else result = dev_lib(@"fragment void fixture() {}", NULL);
@@ -672,7 +672,7 @@ static void capture_preserves_foreign_folder(void) {
         EXPECT("foreign capture: test-owned fixture removed", 1, [NSFileManager.defaultManager removeItemAtPath:proxy->fixture error:nil]);
 }
 // Stand-ins for a base pipeline's newRenderPipelineDescriptorForSpecialization: one returns the descriptor retained, as its name promises (macOS 27.0), the other autoreleased,
-// as iOS 26.0's driver does. Plain functions, so ARC's naming convention does not decide what they return
+// as iOS 26.0's driver did. Plain functions, so ARC's naming convention does not decide what they return
 static __weak MTL4RenderPipelineDescriptor *g_spec_made;
 static void *spec_retained(id self, SEL cmd) { (void)self; (void)cmd; MTL4RenderPipelineDescriptor *d = [MTL4RenderPipelineDescriptor new]; g_spec_made = d; return (void *)CFBridgingRetain(d); }
 static void *spec_autoreleased(id self, SEL cmd) { (void)self; (void)cmd; MTL4RenderPipelineDescriptor *d = [MTL4RenderPipelineDescriptor new]; g_spec_made = d; return (void *)CFAutorelease(CFBridgingRetain(d)); }

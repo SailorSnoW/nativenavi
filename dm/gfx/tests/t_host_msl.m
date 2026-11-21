@@ -19,7 +19,7 @@ int main(void) { @autoreleasepool {
     g_old = method_setImplementation(m, (IMP)src_hook);
     id<MTL4Compiler> comp = [dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:nil];
     int n = (int)(sizeof k_host_msl / sizeof *k_host_msl);
-    CHECK(n >= 12, "%d host libraries", n);
+    CHECK(n >= 11, "%d host libraries", n);
     for (int i = 0; i < n; i++) {
         CHECK(k_host_msl[i].lib_len > 0, "%s: no metallib in the build (Metal toolchain?)", k_host_msl[i].name);
         NSError *e = nil; id<MTLLibrary> a = host_msl_lib(dev, comp, k_host_msl[i].name, &e), b = host_msl_lib(dev, nil, k_host_msl[i].name, &e);

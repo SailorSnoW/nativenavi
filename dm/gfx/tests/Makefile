@@ -44,9 +44,8 @@ check_t_rt_unbind: t_rt_unbind
 # The run list: every t_*.c and t_*.m but those in NOT_RUN. `make run` builds them all (in parallel with -j), then runs them one after another, each through its check_
 # target: ./t_x by default, with the environment its RUN_ENV gives it (check_t_x: RUN_ENV = MTL_DEBUG_LAYER=1, beside its build rule), or a check_t_x recipe of its own when it
 # runs several ways. A new test needs its source and its build rule; no list to add it to. NOT_RUN: helpers linked into other tests (t_host_stubs, t_present_rescue_focus, t_gpu_lost_front),
-# fixtures test_image_atomic_bounds.py and test_global_memory.py build themselves (t_atomic_return, t_global_memory), t_geometry_primitive_id (the GPU half of test_dmsh_geometry.py, which gives it the directory of
-# its translated fixtures), t_compute_loops (test_dmsh_compute_loops.py supplies its rewritten fixtures), t_gpuprof, which CI's CPU subset runs (.github/workflows/tests.yml), and t_gpu_fault_kinds, whose cases fault the GPU on purpose
-NOT_RUN = t_host_stubs t_present_rescue_focus t_gpu_lost_front t_atomic_return t_global_memory t_geometry_primitive_id t_compute_loops t_gpuprof t_gpu_fault_kinds
+# fixtures test_image_atomic_bounds.py and test_global_memory.py build themselves (t_atomic_return, t_global_memory), t_compute_loops (test_dmsh_compute_loops.py supplies its rewritten fixtures), t_gpuprof, which CI's CPU subset runs (.github/workflows/tests.yml), and t_gpu_fault_kinds, whose cases fault the GPU on purpose
+NOT_RUN = t_host_stubs t_present_rescue_focus t_gpu_lost_front t_atomic_return t_global_memory t_compute_loops t_gpuprof t_gpu_fault_kinds
 RUN_TESTS = $(filter-out $(NOT_RUN),$(basename $(sort $(wildcard t_*.c t_*.m))))
 check_t_%: t_%
 	$(RUN_ENV) ./$<
@@ -61,11 +60,6 @@ check_test_dmsh_ast_optimizer:
 	DMSH_TEST_GPU=1 python3 test_dmsh_ast_optimizer.py
 check_test_dmsh_native_functions:
 	DMSH_TEST_GPU=1 python3 test_dmsh_native_functions.py
-t_transform_feedback: t_transform_feedback.m $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_transform_feedback.m $(MTL_T_SRC) $(FW)
-.PHONY: check_t_transform_feedback
-check_t_transform_feedback: t_transform_feedback
-	DM_TEST_TRANSFORM_FEEDBACK="$(CURDIR)/t_transform_feedback" MTL_DEBUG_LAYER=1 python3 -m unittest test_transform_feedback.py
 # Per-frame arena blocks: shared between submissions, released above the keep count once idle, never while a pending submission holds them (t_arena_trim.m)
 t_arena_trim: t_arena_trim.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_arena_trim.m $(MTL_T_SRC) $(FW)
@@ -83,19 +77,13 @@ t_mtl_init: t_mtl_init.m $(MTL_T_DEP)
 check_t_mtl_init: t_mtl_init
 	./t_mtl_init
 t_nvn: t_nvn.c ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -DDM_TEST_NVN_SDK -fobjc-arc -o $@ t_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(FW)
-t_nvn_accel: t_nvn_accel.m $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn_accel.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
-check_t_nvn_accel: RUN_ENV = MTL_DEBUG_LAYER=1
-t_nvn_accel_sbt: t_nvn_accel_sbt.m t_nvn_accel.m $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn_accel_sbt.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
-check_t_nvn_accel_sbt: RUN_ENV = MTL_DEBUG_LAYER=1
+	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(FW)
 t_nvn_resource_stages: t_nvn_resource_stages.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn_resource_stages.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 check_t_nvn_resource_stages: RUN_ENV = MTL_DEBUG_LAYER=1
-t_nvn_rt_state: t_nvn_rt_state.m $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn_rt_state.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
-check_t_nvn_rt_state: RUN_ENV = MTL_DEBUG_LAYER=1
+t_nvn_prog_state: t_nvn_prog_state.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn_prog_state.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+check_t_nvn_prog_state: RUN_ENV = MTL_DEBUG_LAYER=1
 t_rt_comp: t_rt_comp.c ../nvn/hle_nvn.c ../nvn/nvn_rt.h ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_comp.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(FW)
 t_dirty_slots: t_dirty_slots.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h $(GAME_H)
@@ -120,8 +108,6 @@ t_dirty_retire_race: t_dirty_retire_race.c ../nvn/nvn_dirty.c ../../host/crash.c
 	clang $(CFLAGS) -o $@ t_dirty_retire_race.c ../../host/crash.c
 t_host_msl: t_host_msl.m ../nvn/host_msl.m ../nvn/host_msl.h $(MSL_H)
 	clang -O1 -g -Wall -I$(dir $(MSL_H)) -fobjc-arc -o $@ t_host_msl.m ../nvn/host_msl.m -framework Metal -framework Foundation
-t_builtin: t_builtin.m ../nvn/nvn_builtin.h ../nvn/host_msl.m $(MSL_H)
-	clang -O1 -g -Wall -I$(dir $(MSL_H)) -fobjc-arc -o $@ t_builtin.m ../nvn/host_msl.m -framework Metal -framework Foundation
 t_vin: t_vin.m
 	clang -O1 -g -Wall -fobjc-arc -o $@ t_vin.m -framework Metal -framework Foundation
 t_tbuf2d: t_tbuf2d.m ../nvn/nvn_tex.c ../nvn/nvn_tex.h
@@ -364,9 +350,6 @@ t_vbuf: t_vbuf.m $(MTL_T_DEP)
 check_t_vbuf: t_vbuf
 	MTL_DEBUG_LAYER=1 ./t_vbuf
 	DM_NVN_VBUF_CACHE=0 MTL_DEBUG_LAYER=1 ./t_vbuf
-t_geometry: t_geometry.m $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_geometry.m $(MTL_T_SRC) $(FW)
-check_t_geometry: RUN_ENV = MTL_DEBUG_LAYER=1
 t_feedback: t_feedback.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_feedback.m $(MTL_T_SRC) $(FW)
 t_rast_discard: t_rast_discard.m $(MTL_T_DEP)
@@ -423,24 +406,6 @@ t_direct_upload: t_direct_upload.m $(MTL_T_DEP)
 check_t_direct_upload: t_direct_upload
 	MTL_DEBUG_LAYER=1 ./t_direct_upload
 	DM_TEST_UP_LOST=13 MTL_DEBUG_LAYER=1 ./t_direct_upload
-t_geometry_hazards: t_geometry_hazards.m t_geometry.m $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_geometry_hazards.m $(MTL_T_SRC) $(FW)
-.PHONY: check_t_geometry_hazards
-check_t_geometry_hazards: t_geometry_hazards
-	DM_NVN_CUT=1 MTL_DEBUG_LAYER=1 ./t_geometry_hazards
-	DM_NVN_CUT=0 MTL_DEBUG_LAYER=1 ./t_geometry_hazards
-	DM_NVN_CUT=1 DM_NVN_GEOMETRY_CUT=0 MTL_DEBUG_LAYER=1 ./t_geometry_hazards
-t_geometry_feedback: t_geometry_feedback.m t_geometry.m $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_geometry_feedback.m $(MTL_T_SRC) $(FW)
-check_t_geometry_feedback: RUN_ENV = MTL_DEBUG_LAYER=1
-t_geometry_primitive_id: t_geometry_primitive_id.m t_geometry.m $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_geometry_primitive_id.m $(MTL_T_SRC) $(FW)
-# Mesh draws and their runs through mtl_exec (nvn_geometry.inc geo_mesh_take), with the shaders test_dmsh_geometry.py writes: in runs, single, and in runs on the encoding thread (iOS's default)
-t_geometry_mesh: t_geometry_mesh.m t_geometry.m ../tools/dmsh_mesh.py $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_geometry_mesh.m $(MTL_T_SRC) $(FW)
-.PHONY: check_t_geometry_mesh
-check_t_geometry_mesh: t_geometry_mesh
-	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 test_dmsh_geometry.py --fixture "$$work"; MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"; DM_NVN_GEO_MESH_RUN=0 MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"; DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"
 .PHONY: check_t_feedback
 check_t_feedback: t_feedback
 	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 test_dmsh_fetch.py --fixture "$$work"; MTL_DEBUG_LAYER=1 ./t_feedback "$$work"; DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_feedback "$$work"; DM_NVN_ENC_THREAD=1 DM_NVN_SUB_IDLE_FB=1 MTL_DEBUG_LAYER=1 ./t_feedback "$$work"
@@ -536,12 +501,6 @@ t_pso_skey: t_pso_skey.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
 t_view_swizzle: t_view_swizzle.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_view_swizzle.m $(MTL_T_SRC) $(FW)
 check_t_view_swizzle: RUN_ENV = MTL_DEBUG_LAYER=1
-# Tessellation's layout and expansion kernel on the GPU (nvn_tess.inc, dmsh_tess.py), from the shipped MSL test_dmsh_tess.py writes
-t_tess: t_tess.m
-	clang $(CFLAGS) -fobjc-arc -o $@ t_tess.m -framework Metal -framework Foundation
-.PHONY: check_t_tess
-check_t_tess: t_tess
-	DM_TEST_TESS="$(CURDIR)/t_tess" MTL_DEBUG_LAYER=1 python3 -m unittest test_dmsh_tess.py
 t_view_reuse: t_view_reuse.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_view_reuse.m $(MTL_T_SRC) $(FW)
 check_t_view_reuse: RUN_ENV = MTL_DEBUG_LAYER=1

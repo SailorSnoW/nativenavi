@@ -1,24 +1,12 @@
-// Public command recording and real queue/program ownership. The marker is
-// deliberately not an RT implementation; no pipeline or trace is submitted.
+// Public command recording and real queue/program ownership: the graphics and compute program bindings, a queue's own copies of them, finalization, and the push constant scopes.
+// A program bind NVN2 would take as a ray tracing program (no stages, mask 0x100) binds nothing: the host has no ray tracing
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
-static int test_rt_program_set(prog_t *,int,const NVNshaderData *,uint32_t,uint32_t,uint32_t);
-static void test_rt_group_handle(const prog_t *,const int32_t[3],void *);
-#define mtl_rt_program_set test_rt_program_set
-#define mtl_rt_group_handle test_rt_group_handle
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft
-#undef mtl_rt_group_handle
-#undef mtl_rt_program_set
 
-// These APIs are outside the state test. Any accidental call is a test failure,
-// rather than a successful substitute for production backend initialization.
-static int test_rt_program_set(prog_t *p,int n,const NVNshaderData *s,uint32_t t,uint32_t c,uint32_t f) {
-    (void)p;(void)n;(void)s;(void)t;(void)c;(void)f; abort();
-}
-static void test_rt_group_handle(const prog_t *p,const int32_t i[3],void *o) { (void)p;(void)i;(void)o; abort(); }
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t *g_mod; int g_nmod;
@@ -27,16 +15,17 @@ uint64_t now_ns(void) { return bp_now(); }
 static int checks,failed;
 static _Atomic int markers_released;
 #define CHECK(c, label) do { checks++; if (!(c)) { failed++; fprintf(stderr,"FAIL: %s\n",label); } } while (0)
-@interface RtStateMarker : NSObject @end
-@implementation RtStateMarker
+@interface ProgStateMarker : NSObject @end
+@implementation ProgStateMarker
 - (void)dealloc { atomic_fetch_add(&markers_released,1); }
 @end
 static NVNcommandBuffer commands;
 
-static prog_t program(int rt) {
-    prog_t p={.magic=MAGIC('P','R','O','G'),.nstage=rt?0:1,.serial=nvn_new_serial()};
+static const void *marker_key=&marker_key;
+static prog_t program(int marked) {   // marked: an object that counts its release rides on the program's host object
+    prog_t p={.magic=MAGIC('P','R','O','G'),.nstage=1,.serial=nvn_new_serial()};
     NvProg *object=[NvProg new];
-    if(rt) object->raytracing=(NvRayProgram *)[RtStateMarker new];
+    if(marked) objc_setAssociatedObject(object,marker_key,[ProgStateMarker new],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     serial_put(p.serial,object); return p;
 }
 static unsigned apply(NVNcommandHandle handle) {
@@ -60,70 +49,58 @@ static void bind(const prog_t *p,int mask) {
 }
 static void binding(void) {
     mtl_queue_activate(780101);
-    prog_t graphics=program(0),compute=program(0),rt=program(1),other=program(1);
+    prog_t graphics=program(0),compute=program(0),bare=program(0);bare.nstage=0;
     bind(&graphics,3);bind(&compute,0x20);
-    CHECK(S.prog==&graphics&&S.cprog==&compute&&!S.rprog,"graphics and compute have separate initial bindings");
+    CHECK(S.prog==&graphics&&S.cprog==&compute,"graphics and compute have separate bindings");
     for(unsigned i=0;i<NVN_RESOURCE_STAGES;i++)g_args_wrote[i]=g_args_seq;
     uint64_t graphics_gen=g_args_gen[0],compute_gen=g_args_gen[5];
-    bind(&rt,0x100);
-    CHECK(S.rprog==&rt&&S.prog==&graphics&&S.cprog==&compute,"RT stage identity binds only ray tracing");
-    CHECK(g_args_gen[0]==graphics_gen&&g_args_gen[5]==compute_gen,"RT bind leaves raster/compute argument generations alone");
-    uint64_t rt_gen=g_args_gen[6];bind(&rt,0x100);
-    CHECK(g_args_gen[6]==rt_gen,"same RT bind does not dirty arguments again");
-    for(unsigned i=0;i<3;i++) {
-        int mask=(int[]){0x20,3,0x1ff}[i];
-        bind(&other,mask);
-        CHECK(S.rprog==&other&&S.cprog==&compute&&S.prog==&graphics,"nonnull RT identity wins before caller stage-mask intersection");
-        bind(&rt,0x100);
-    }
-    bind(&other,0);bind(NULL,0x100);
-    CHECK(S.rprog==&rt&&S.cprog==&compute&&S.prog==&graphics,"zero mask and null RT mask leave RT state unchanged");
-    prog_t missing={.serial=nvn_new_serial()},uninitialized={0},wrong=other;wrong.nstage=1;
-    bind(&missing,0x100);bind(&uninitialized,0x100);bind(&wrong,0x100);
-    CHECK(S.rprog==&rt,"missing serial or ordinary stage metadata cannot become RT identity");
+    bind(&bare,0x100);bind(NULL,0x100);bind(&bare,0);
+    CHECK(S.prog==&graphics&&S.cprog==&compute,"a bind with only NVN2's ray tracing bit, or no bit, changes neither binding");
+    CHECK(g_args_gen[0]==graphics_gen&&g_args_gen[5]==compute_gen,"and leaves the argument generations alone");
     bind(&graphics,3);bind(&compute,0x20);
-    CHECK(S.rprog==&rt,"ordinary program binding preserves the RT program");
+    CHECK(g_args_gen[0]==graphics_gen&&g_args_gen[5]==compute_gen,"binding the same programs again dirties nothing");
     mtl_queue_forget(780101);
-    for(unsigned i=0;i<4;i++)mtl_prog_release(&(prog_t[]){graphics,compute,rt,other}[i]);
+    for(unsigned i=0;i<3;i++)mtl_prog_release(&(prog_t[]){graphics,compute,bare}[i]);
 }
 static void ownership(void) {
     mtl_queue_activate(780102);
-    prog_t p[7];uint64_t serial[7];
-    for(int i=0;i<7;i++) {p[i]=program(i==6);serial[i]=p[i].serial;}
-    for(int i=0;i<5;i++)S.bst[i]=&p[i];S.cprog=&p[5];S.rprog=&p[6];
+    prog_t p[6];uint64_t serial[6];
+    for(int i=0;i<6;i++) {p[i]=program(i>=4);serial[i]=p[i].serial;}
+    for(int i=0;i<5;i++)S.bst[i]=&p[i];S.cprog=&p[5];
     queue_program_preserve();queue_state *first=g_active_queue;
-    CHECK(S.rprog!=&p[6]&&S.rprog->serial==serial[6],"queue owns an immutable RT descriptor after replay");
-    CHECK(S.cprog->serial==serial[5],"seventh program slot does not displace compute");
-    for(int i=0;i<7;i++) {
-        CHECK(first->programs[i].serial==serial[i],"all seven distinct bound program serials are preserved");
+    CHECK(S.cprog!=&p[5]&&S.cprog->serial==serial[5],"queue owns an immutable compute descriptor after replay");
+    CHECK(S.bst[4]!=&p[4]&&S.bst[4]->serial==serial[4],"and one of each graphics stage's program");
+    for(int i=0;i<6;i++) {
+        CHECK(first->programs[i].serial==serial[i],"all six distinct bound program serials are preserved");
         mtl_prog_release(&p[i]);memset(&p[i],0xa5,sizeof p[i]);
         CHECK(serial_get(serial[i])!=nil,"queue pin survives guest finalization and descriptor reuse");
     }
-    prog_t second_rt=*S.rprog;
+    prog_t second=*S.cprog;
     queue_program_preserve(); // Already-owned descriptors must not add pins.
     mtl_queue_activate(780103);
-    CHECK(!S.rprog&&!S.cprog&&!S.prog,"new queue starts with no RT/compute/raster program");
-    bind(&second_rt,0x100);queue_program_preserve();
-    CHECK(S.rprog!=&second_rt&&S.rprog->serial==serial[6],"second queue independently owns the same RT serial");
+    CHECK(!S.cprog&&!S.prog,"new queue starts with no compute or raster program");
+    bind(&second,0x20);queue_program_preserve();
+    CHECK(S.cprog!=&second&&S.cprog->serial==serial[5],"second queue independently owns the same compute serial");
     mtl_queue_activate(780102);
-    CHECK(S.rprog->serial==serial[6]&&S.cprog->serial==serial[5],"queue restore keeps RT and compute bindings distinct");
+    CHECK(S.cprog->serial==serial[5]&&S.bst[4]->serial==serial[4],"queue restore keeps its bindings");
     mtl_queue_forget(780102);
-    for(int i=0;i<6;i++)CHECK(serial_get(serial[i])==nil,"queue destruction releases every retired raster/compute pin");
-    CHECK(serial_get(serial[6])!=nil,"other queue still pins retired RT program");
+    for(int i=0;i<5;i++)CHECK(serial_get(serial[i])==nil,"queue destruction releases every retired raster pin");
+    CHECK(serial_get(serial[5])!=nil,"other queue still pins the retired compute program");
     mtl_queue_activate(780103);
-    CHECK(S.rprog&&S.rprog->serial==serial[6],"remaining queue's RT snapshot survives original descriptor reuse");
+    CHECK(S.cprog&&S.cprog->serial==serial[5],"remaining queue's snapshot survives original descriptor reuse");
     mtl_queue_forget(780103);
-    CHECK(!S.rprog&&serial_get(serial[6])==nil,"last queue destruction releases the retired RT program");
+    CHECK(!S.cprog&&serial_get(serial[5])==nil,"last queue destruction releases the retired compute program");
 }
 static void forgotten(void) {
-    prog_t rt=program(1),graphics=program(0),compute=program(0);
-    mtl_queue_activate(780104);bind(&graphics,3);bind(&compute,0x20);bind(&rt,0x100);
-    mtl_queue_activate(780105);bind(&graphics,3);bind(&compute,0x20);bind(&rt,0x100);
-    h_nvnProgramFinalize((NVNprogram *)&rt);
-    CHECK(!rt.magic,"public finalization invalidates the guest RT descriptor");
-    CHECK(!S.rprog&&S.prog==&graphics&&S.cprog==&compute,"finalize forgets active RT binding without changing other scopes");
+    prog_t extra=program(0),graphics=program(0),compute=program(0);
+    mtl_queue_activate(780104);bind(&graphics,3);bind(&extra,0x20);
+    mtl_queue_activate(780105);bind(&graphics,3);bind(&extra,0x20);
+    h_nvnProgramFinalize((NVNprogram *)&extra);
+    CHECK(!extra.magic,"public finalization invalidates the guest descriptor");
+    CHECK(!S.cprog&&S.prog==&graphics,"finalize forgets the active queue's binding of it without changing the other scope");
     mtl_queue_activate(780104);
-    CHECK(!S.rprog&&S.prog==&graphics&&S.cprog==&compute,"finalize also forgets inactive queues' raw RT binding");
+    CHECK(!S.cprog&&S.prog==&graphics,"finalize also forgets inactive queues' raw binding");
+    bind(&compute,0x20);CHECK(S.cprog==&compute,"and the scope binds again");
     mtl_queue_forget(780104);mtl_queue_forget(780105);
     mtl_prog_release(&graphics);mtl_prog_release(&compute);
 }
@@ -172,10 +149,10 @@ int main(void) { @autoreleasepool {
     // marker destruction, so this checks queue/owner references alone.
     @autoreleasepool {prog_t plain=program(0);prog_get(&plain);mtl_prog_release(&plain);}
     // Production retirement also holds objects until a real submission fence.
-    // No draw, dispatch or ray query is needed to complete that ownership path.
+    // No draw or dispatch is needed to complete that ownership path.
     mtl_sub_begin();uint64_t fence=mtl_sub_commit();
     CHECK(mtl_wait(fence,5000000000ull)&&!mtl_last_commit_error(),"retirement fence completes");mtl_drain();
-    CHECK(atomic_load(&markers_released)==4,"RT marker objects die after the last owner releases their serial");
+    CHECK(atomic_load(&markers_released)==2,"marked program objects die after the last owner releases their serial");
     h_nvnCommandBufferFinalize(&commands);
-    printf("t_nvn_rt_state: %d checks, %d failed\n",checks,failed);return failed!=0;
+    printf("t_nvn_prog_state: %d checks, %d failed\n",checks,failed);return failed!=0;
 } }

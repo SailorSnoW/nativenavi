@@ -113,7 +113,7 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
         if (g->ret == ret_addr) switch (g->kind) {
             case G_CNTPCT: case G_CNTVCT: {
                 guest_clock_read_wait();
-                uint64_t t = guest_ticks();    // the system counter (19.2 / 31.25 MHz); original instruction mrs xN, cntpct_el0, arg = N
+                uint64_t t = guest_ticks();    // the system counter (31.25 MHz); original instruction mrs xN, cntpct_el0, arg = N
                 // dm_gate does not restore x18 (the Apple platform register): the guest's x18 is the thread slot K18, which every rewritten x18 site reads
                 if (g->arg == 18) pthread_setspecific(g_key18, (void *)(uintptr_t)t); else regs[g->arg] = t;
                 return t;

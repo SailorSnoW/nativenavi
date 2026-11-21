@@ -1,6 +1,5 @@
-"""Decode interleaved feedback declarations and compile their generated entries."""
+"""Decode interleaved feedback declarations and compile their generated entries (dmsh_build.py tf_layout, vs_tf; the host replays no transform feedback)."""
 import ast
-import os
 from pathlib import Path
 import re
 import shutil
@@ -35,18 +34,6 @@ def fixture(geometry=False):
 
 
 class FeedbackTests(unittest.TestCase):
-    @unittest.skipUnless(os.environ.get('DM_TEST_TRANSFORM_FEEDBACK'), 'set DM_TEST_TRANSFORM_FEEDBACK to the native t_transform_feedback executable')
-    def test_native_gpu_replay(self):
-        with tempfile.TemporaryDirectory(prefix='feedback_') as directory:
-            source = Path(directory) / 'feedback.metal'
-            source.write_text(fixture())
-            Path(str(source) + '.geo').write_text(fixture(True))
-            Path(str(source) + '.split').write_text(SOURCE + scope['vs_tf'](SOURCE, SPLIT_LAYOUT))
-            result = subprocess.run([os.environ['DM_TEST_TRANSFORM_FEEDBACK'], str(source)], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            # the same replay with every capture through tf_prepare in a pass of its own
-            result = subprocess.run([os.environ['DM_TEST_TRANSFORM_FEEDBACK'], str(source)], capture_output=True, text=True, env=dict(os.environ, DM_NVN_TF_CPU='0'))
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
     def test_component_counts_are_bytes_and_stream_order_is_preserved(self):
         control = bytearray(0x880)
         struct.pack_into('<H', control, 0x6dc, 20)

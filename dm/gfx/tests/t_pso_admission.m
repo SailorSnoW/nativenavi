@@ -96,7 +96,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     EXPECT("fallback skips prebuild", -1, pso_prebuild(1, 1, QOS_CLASS_USER_INITIATED));
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     EXPECT("render through the device", 1, pso_build(d, 1, NULL) == dev->pipeline);
-    EXPECT("compute through the device", 1, cps_new(nil, NULL) == dev->pipeline);
+    EXPECT("compute through the device", 1, cps_new_b(nil, 0, NULL) == dev->pipeline);
     EXPECT("render device call", 1, dev->renders); EXPECT("compute device call", 1, dev->computes);
     if (!empty) for (NSString *p in paths) EXPECT("valid archive preserved", 1, [NSFileManager.defaultManager fileExistsAtPath:p]);
     EXPECT("prebuild stamp preserved", 1, [[NSString stringWithContentsOfFile:stamp encoding:NSUTF8StringEncoding error:nil] isEqualToString:@"keep this stamp\n"]);

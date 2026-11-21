@@ -19,7 +19,7 @@ static pool_t g_phys, g_sparse;
 static NVNtexture g_tx[4];
 // A 256x256 RGBA8 sparse texture of 5 levels at voff in the sparse pool; the first map bytes of it mapped to the same offset of the physical pool (0: all of it)
 static const tex_t *tex_at(int k, uint64_t voff, uint64_t map) {
-    NVNtextureBuilder tb; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 256); h_nvnTextureBuilderSetHeight(&tb, 256);
+    NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 256); h_nvnTextureBuilderSetHeight(&tb, 256);
     h_nvnTextureBuilderSetLevels(&tb, 5); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&g_sparse, (int64_t)voff);
     CHECK("texture", h_nvnTextureInitialize(&g_tx[k], &tb));
     const tex_t *T = (const tex_t *)&g_tx[k];

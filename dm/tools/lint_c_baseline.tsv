@@ -12,7 +12,6 @@ dm/gfx/nvn/nvn_capture.c	clang-analyzer-unix.StdCLibraryFunctions	1
 dm/gfx/nvn/nvn_capture.inc	bugprone-command-processor	1
 dm/gfx/nvn/nvn_capture.inc	bugprone-suspicious-memory-comparison	2
 dm/gfx/nvn/nvn_capture.inc	bugprone-suspicious-realloc-usage	7
-dm/gfx/nvn/nvn_geometry.inc	clang-analyzer-unix.Malloc	1
 dm/gfx/nvn/nvn_hmap.h	clang-analyzer-unix.cstring.UninitializedRead	2
 dm/gfx/nvn/nvn_mtl.m	bugprone-misplaced-widening-cast	1
 dm/gfx/nvn/nvn_mtl.m	bugprone-signed-char-misuse	1
@@ -30,10 +29,6 @@ dm/gfx/tests/t_border.m	clang-analyzer-security.ArrayBound	2
 dm/gfx/tests/t_capture.c	bugprone-misplaced-pointer-arithmetic-in-alloc	1
 dm/gfx/tests/t_clear_ds.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/tests/t_float_pad.m	bugprone-suspicious-memory-comparison	1
-dm/gfx/tests/t_geometry.m	clang-analyzer-nullability.NullablePassedToNonnull	8
-dm/gfx/tests/t_geometry.m	clang-analyzer-security.ArrayBound	1
-dm/gfx/tests/t_geometry_feedback.m	clang-analyzer-nullability.NullablePassedToNonnull	1
-dm/gfx/tests/t_geometry_primitive_id.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/tests/t_image_alias.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/tests/t_initial_uncached.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/tests/t_missing_src1.m	bugprone-suspicious-memory-comparison	2
@@ -58,8 +53,6 @@ dm/gfx/tests/t_stencil_view.m	clang-analyzer-nullability.NullablePassedToNonnull
 dm/gfx/tests/t_tbuf2d.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/tests/t_tbuf_align.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/tests/t_tex_fit_root.m	clang-analyzer-nullability.NullablePassedToNonnull	1
-dm/gfx/tests/t_transform_feedback.m	bugprone-suspicious-memory-comparison	4
-dm/gfx/tests/t_transform_feedback.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/tests/t_unwritten_store.m	bugprone-suspicious-memory-comparison	1
 dm/gfx/tests/t_upload_budget.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/tests/t_view_swizzle.m	clang-analyzer-nullability.NullablePassedToNonnull	2

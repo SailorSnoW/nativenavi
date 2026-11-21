@@ -62,7 +62,6 @@ typedef struct {
     size_t size;
     uint64_t text_end, ro_off, data_off, key_page_off, key_page_size;   // From the rewriter fixups header
     uint64_t fps_state_off;    // frame step state page (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3 and Breath of the Wild 1.9.0 main); 0 = none
-    uint32_t step_max;         // the largest step the frame step stubs give the game (the fixups table's STEP_MAX, patch_nso.py ctx.step_max); 0 = FSTEP_MAX
     int64_t patch_off;         // patch area relative to the base; negative = before the base (image too large, see patch_nso.py FAR), and size does not include it
     uint64_t image_size, file_image_len, patch_len;   // only with the patch area before the base: whole image (with bss and key page), length of the image part of the file, patch area length
     uint64_t back_off, back_len;   // a second patch area after the image (patch_nso.py TWO: a text longer than a B reaches), inside size; 0 = none
@@ -89,9 +88,8 @@ void dm_ctl_peek(uint64_t a, int n); void dm_ctl_memdump(uint64_t a, uint64_t n,
 void dm_device_share(const void *p, uint64_t size, int share);   // guest memory a device maps (share 1) or no longer maps (0): Horizon's DeviceShared attribute, which refuses unmapping it (hle_svc.c)
 void *module_sym(module_t *m, const char *name);
 int dm_sdk_major(void);   // SDK major version from the sdk module's version string (loader.c); 0 = unknown
-int dm_sdk_ounce(void);   // 1 when the sdk module was built for the Switch 2 (its spec string "spec: Ounce", loader.c)
+int dm_sdk_ounce(void);   // 1 when the sdk module was built for the Switch 2 (its spec string "spec: Ounce", loader.c): the only kind this host runs; main.c reports another in red
 int dm_sdk_nvn2_item(unsigned item, int *out);   // a constant NVN2's own nvnDeviceGetInteger answers for item, read from the sdk module (loader.c); 0 when it has none
-#define DM_SDK_OLD(major) ((major) > 0 && (major) <= 10)   // SDK 10 and older: NVN API 53, the shared-font address points at the TTF itself
 int dm_game_imports(const char *prefix);   // main imports a symbol whose name starts with prefix (loader.c)
 void *guest_sym(const char *name);
 module_t *module_of(const void *p);
@@ -106,18 +104,16 @@ enum { OBS_REGION_ASK = 22, OBS_REGION_GOT = 23, OBS_REGION_FREE = 24,   // the 
 // effect when the gate returns (entry.S restores them from the frame), which OBS_STDALLOC_INIT does
 void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));
 uint64_t now_ns(void);
-uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while frozen, guest_clock_freeze)
+uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while frozen, guest_clock_freeze_for)
 uint64_t guest_ns_at_host_time(uint64_t host_ns);  // Host Mach-absolute ns projected into the current guest clock
 int guest_clock_pinned(void);  // the guest clock is frozen or DM_DETCLOCK's: guest_ns_at_host_time maps every host time to one
-uint64_t guest_ticks(void);           // The guest's system counter on that clock: 19.2 MHz, or 31.25 MHz for the Switch 2 (hle_os.c)
+uint64_t guest_ticks(void);           // The guest's system counter on that clock: the Switch 2's 31.25 MHz (hle_os.c)
 int dm_detclock_enabled(void);
-void guest_clock_freeze(int on);
 void guest_clock_freeze_for(int reason, int on);   // Freeze by reason (1 background, 2 system keyboard); see hle_os.c
 void guest_clock_read_wait(void);     // A guest read of the system counter: counts it in dm_clock_reads and waits while the app is in the background (hle_os.c)
 extern __thread uint64_t dm_clock_reads;   // the calling thread's guest reads of the system counter (hle_os.c; thr_yield tells clock waits by them)
 void dm_guest_frame_tick(void);        // Called on every present (hle_nvn.c): when DM_DETCLOCK is on, advances the guest clock by one fixed step
 uint64_t dm_nvn_frame_count(void);
-uint64_t dm_nvn_sub_cpu_ns(void);     // Cumulative CPU nanoseconds of submit (excluding present)
 void dm_backtrace(uint64_t fp);
 void crash_watch_frame(void);
 void crash_dump_now(const char *why);   // Dump state on demand (threads + graphics wait points), without exiting

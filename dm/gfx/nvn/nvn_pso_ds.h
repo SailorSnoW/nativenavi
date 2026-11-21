@@ -4,7 +4,7 @@
 // Metal pixel formats, also used by the Foundation-only serialized-key tests.
 enum { PSO_D16 = 250, PSO_D32 = 252, PSO_S8 = 253, PSO_D32S8 = 260, PSO_X32S8 = 261 };
 
-// iOS rejects a combined stencil format with no matching depth format (#702).
+// iOS rejected a combined stencil format with no matching depth format (#702).
 // The pass attaches both planes of combined storage, even when lookahead uses
 // only one. Match that in live, predicted and historical prewarm keys. Never
 // replace a nonzero, conflicting format or invent storage for an empty pass.

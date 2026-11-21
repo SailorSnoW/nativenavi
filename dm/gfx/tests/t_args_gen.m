@@ -1,6 +1,7 @@
 // Argument blocks are valid by binding generation (g_args_gen / g_args_ugen, encode_args_), not by a stage flag the latest encode clears: after a binding change and another shader's
 // encode on the same stage, the first shader writes its block again (PR #2249's sequence); with no change, shaders that take turns on a stage keep their blocks; a uniform-only change
-// patches each block once. bind_stages never hands back the slot of the bound combined program for a new combination, so OP_BIND_PROGRAM sees the change.
+// patches each block once. The shaders are vertex shaders that write storage, drawn one point each in a production render pass: only the draw stages keep a block (a compute
+// stage's block is written at every dispatch). bind_stages never hands back the slot of the bound combined program for a new combination, so OP_BIND_PROGRAM sees the change.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -12,7 +13,7 @@ static int checks, failed;
 
 static NvShader *shader(id<MTLLibrary> lib, NSString *name) {
     static uint64_t identity = 0x7200000000000000ull;
-    NvShader *s = [NvShader new]; s->stage = 2; s->fn = [lib newFunctionWithName:name]; s->rf.nb = 2;
+    NvShader *s = [NvShader new]; s->stage = 0; s->fn = [lib newFunctionWithName:name]; s->rf.nb = 2;
     snprintf(s->key, sizeof s->key, "%016llx_b", (unsigned long long)identity++);
     s->ae = [s->fn newArgumentEncoderWithBufferIndex:0]; s->arg_len = s->ae.encodedLength;
     s->rf.b[0] = (nvn_rbind){.kind = NVN_RB_SBUFP, .rw = 1, .reg = 0, .aid = 0};
@@ -22,8 +23,33 @@ static NvShader *shader(id<MTLLibrary> lib, NSString *name) {
 static uint64_t enc_n(void) { uint64_t e, r, p; mtl_args_stats(&e, &r, &p); return e; }
 static uint64_t reuse_n(void) { uint64_t e, r, p; mtl_args_stats(&e, &r, &p); return r; }
 static uint64_t patch_n(void) { uint64_t e, r, p; mtl_args_stats(&e, &r, &p); return p; }
-static void bind_ssbo(void *addr) { p_bind_buf b = {.stage = 2, .index = 0, .addr = (uint64_t)addr, .size = 64}; state_op(OP_BIND_SSBO, &b); }
-static void bind_ubo(void *addr) { p_bind_buf b = {.stage = 2, .index = 0, .addr = (uint64_t)addr, .size = 16}; state_op(OP_BIND_UBO, &b); }
+static void bind_ssbo(void *addr) { p_bind_buf b = {.stage = 0, .index = 0, .addr = (uint64_t)addr, .size = 64}; state_op(OP_BIND_SSBO, &b); }
+static void bind_ubo(void *addr) { p_bind_buf b = {.stage = 0, .index = 0, .addr = (uint64_t)addr, .size = 16}; state_op(OP_BIND_UBO, &b); }
+// A 4x4 colour target and the production pass on it; a pipeline of one of the vertex shaders with a fragment shader that writes nothing the test reads
+static tex_t g_target;
+static void target_make(void) {
+    g_target = (tex_t){.magic = MAGIC('T','E','X',0), .serial = 99800};
+    g_target.d = (nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .width = 4, .height = 4, .depth = 1, .levels = 1, .samples = 1};
+    MTLTextureDescriptor *d = tex_desc(&g_target, 0); id<MTLTexture> texture = [g_dev newTextureWithDescriptor:d];
+    CHECK(texture != nil, "render target created");
+    res_add(texture); mtl_tex_init(&g_target); serial_put(g_target.serial, texture);
+}
+static id<MTL4RenderCommandEncoder> pass_open(void) {
+    memset(&R, 0, sizeof R); R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &g_target; R.clear_c[0] = 1; R.cc[0] = MTLClearColorMake(0, 0, 0, 1);
+    id<MTL4RenderCommandEncoder> en = rp_begin(); CHECK(en != nil, "production render pass opens");
+    if (en) enc_r_viewport(en, (MTLViewport){0, 0, 4, 4, 0, 1});
+    return en;
+}
+static id<MTLRenderPipelineState> pipeline(id<MTLLibrary> lib, NvShader *vs) {
+    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new]; d.vertexFunction = vs->fn; d.fragmentFunction = [lib newFunctionWithName:@"fs"];
+    d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm; d.inputPrimitiveTopology = MTLPrimitiveTopologyClassPoint;
+    NSError *e = nil; id<MTLRenderPipelineState> p = [g_dev newRenderPipelineStateWithDescriptor:d error:&e];
+    if (!p) fprintf(stderr, "pipeline: %s\n", e.localizedDescription.UTF8String);
+    return p;
+}
+// One point: the vertex shader runs once, after the draw before it (the barrier makes its storage writes visible to the next draw's vertex stage)
+#define DRAW(en, sh, ps) do { CHECK(encode_args((id<MTLCommandEncoder>)en, sh, 0, 1), #sh " encoded"); enc_r_pso(en, ps); enc_r_draw(en, MTLPrimitiveTypePoint, 0, 1); \
+                              [en barrierAfterEncoderStages:MTLStageVertex beforeEncoderStages:MTLStageVertex visibilityOptions:MTL4VisibilityOptionDevice]; } while (0)
 
 static void composite_slots(void) {
     // NCMP + 1 vertex programs and one fragment program: every vertex program with the fragment one is a combination of its own
@@ -49,8 +75,10 @@ int main(void) { @autoreleasepool {
     NSError *error = nil;
     id<MTLLibrary> lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
         "struct Args { device uint *p [[id(0)]]; constant uint *c [[id(1)]]; };\n"
-        "kernel void va(constant Args &a [[buffer(0)]]) { a.p[0] += a.c[0]; }\n"
-        "kernel void vb(constant Args &a [[buffer(0)]]) { a.p[1] = 0xb; }\n" options:nil error:&error];
+        "struct V { float4 pos [[position]]; float size [[point_size]]; };\n"
+        "fragment float4 fs() { return float4(1); }\n"
+        "vertex V va(constant Args &a [[buffer(0)]]) { a.p[0] += a.c[0]; return V{float4(0, 0, 0, 1), 1}; }\n"
+        "vertex V vb(constant Args &a [[buffer(0)]]) { a.p[1] = 0xb; return V{float4(0, 0, 0, 1), 1}; }\n" options:nil error:&error];
     CHECK(lib != nil, "synthetic shaders compile"); if (!lib) return 1;
     NvShader *a = shader(lib, @"va"), *b = shader(lib, @"vb");
     uint8_t *data; if (posix_memalign((void **)&data, getpagesize(), 32768)) return 1;
@@ -58,12 +86,13 @@ int main(void) { @autoreleasepool {
     uint32_t *x = (uint32_t *)data, *y = (uint32_t *)(data + 4096), *u1 = (uint32_t *)(data + 8192), *u2 = (uint32_t *)(data + 12288), *u3 = (uint32_t *)(data + 16384);
     u1[0] = 1; u2[0] = 16;
     NSError *e = nil;
-    id<MTLComputePipelineState> pa = [g_dev newComputePipelineStateWithFunction:a->fn error:&e], pb = [g_dev newComputePipelineStateWithFunction:b->fn error:&e];
-    CHECK(pa && pb, "pipelines");
+    target_make();
+    id<MTLRenderPipelineState> pa = pipeline(lib, a), pb = pipeline(lib, b);
+    CHECK(pa && pb, "pipelines"); if (!pa || !pb) return 1;
     mtl_sub_begin(); state_reset();
-    id<MTL4ComputeCommandEncoder> en = enc_c_begin(NULL); args_dirty_all();
-    #define RUN(sh, ps) do { CHECK(encode_args((id<MTLCommandEncoder>)en, sh, 2, 0), #sh " encoded"); enc_c_pso(en, ps); enc_c_dispatch(en, MTLSizeMake(1,1,1), MTLSizeMake(1,1,1)); \
-                             [en barrierAfterEncoderStages:MTLStageDispatch beforeEncoderStages:MTLStageDispatch visibilityOptions:MTL4VisibilityOptionDevice]; } while (0)
+    id<MTL4RenderCommandEncoder> en = pass_open(); if (!en) return 1;
+    args_dirty_all();
+    #define RUN(sh, ps) DRAW(en, sh, ps)
     bind_ssbo(x); bind_ubo(u1);
     uint64_t e0 = enc_n(), r0 = reuse_n();
     RUN(a, pa);   // x[0] += 1
@@ -72,9 +101,9 @@ int main(void) { @autoreleasepool {
     CHECK(enc_n() == e0 + 1 && reuse_n() == r0 + 1, "the same shader with nothing changed reuses its block");
     // the sequence of PR #2249: a binding change, another shader of the stage writes its block, then the first shader again
     bind_ssbo(y);
-    CHECK(args_changed(2), "a storage binding changes the stage's generation");
+    CHECK(args_changed(0), "a storage binding changes the stage's generation");
     RUN(b, pb);   // y[1] = 0xb
-    CHECK(!args_changed(2), "the other shader's block is written at the new generation");
+    CHECK(!args_changed(0), "the other shader's block is written at the new generation");
     uint64_t e1 = enc_n(), r1 = reuse_n();
     RUN(a, pa);   // y[0] += 1
     CHECK(enc_n() == e1 + 1 && reuse_n() == r1, "the first shader writes its block again after another shader's encode");
@@ -89,7 +118,7 @@ int main(void) { @autoreleasepool {
     RUN(b, pb);
     RUN(a, pa);   // y[0] += 16
     CHECK(enc_n() == e3 && patch_n() == p3 + 2 && reuse_n() == r3 + 1, "a uniform change patches each shader's block once");
-    enc_c_end(en);
+    rp_end();
     CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "submission completed"); mtl_drain();
     CHECK(x[0] == 2, "the first two dispatches wrote the first storage binding");
     CHECK(y[0] == 34 && y[1] == 0xb, "after the change every dispatch wrote the new binding, with the uniform buffer bound at the time");
@@ -99,23 +128,25 @@ int main(void) { @autoreleasepool {
     {
         id<MTLLibrary> lib2 = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
             "struct Args2 { device uint *p [[id(0)]]; constant uint *c [[id(1)]]; constant uint *sz [[id(2)]]; };\n"
-            "kernel void vc(constant Args2 &a [[buffer(0)]]) { a.p[0] += a.c[0] + (a.sz[0] > 0 ? 1u : 0u); }\n" options:nil error:&error];
+            "struct V { float4 pos [[position]]; float size [[point_size]]; };\n"
+            "fragment float4 fs() { return float4(1); }\n"
+            "vertex V vc(constant Args2 &a [[buffer(0)]]) { a.p[0] += a.c[0] + (a.sz[0] > 0 ? 1u : 0u); return V{float4(0, 0, 0, 1), 1}; }\n" options:nil error:&error];
         CHECK(lib2 != nil, "synthetic cbsize shader compiles");
-        NvShader *vc = [NvShader new]; vc->stage = 2; vc->fn = [lib2 newFunctionWithName:@"vc"]; vc->rf.nb = 3;
+        NvShader *vc = [NvShader new]; vc->stage = 0; vc->fn = [lib2 newFunctionWithName:@"vc"]; vc->rf.nb = 3;
         snprintf(vc->key, sizeof vc->key, "72000000000000ff_c");
         vc->ae = [vc->fn newArgumentEncoderWithBufferIndex:0]; vc->arg_len = vc->ae.encodedLength;
         vc->rf.b[0] = (nvn_rbind){.kind = NVN_RB_SBUFP, .rw = 1, .reg = 0, .aid = 0};
         vc->rf.b[1] = (nvn_rbind){.kind = NVN_RB_CBUF, .reg = 0, .aid = 1};
         vc->rf.b[2] = (nvn_rbind){.kind = NVN_RB_CBSIZE, .reg = 0, .aid = 2};
-        id<MTLComputePipelineState> pvc = [g_dev newComputePipelineStateWithFunction:vc->fn error:&e];
-        CHECK(pvc != nil, "cbsize pipeline");
+        id<MTLRenderPipelineState> pvc = lib2 ? pipeline(lib2, vc) : nil;
+        CHECK(pvc != nil, "cbsize pipeline"); if (!pvc) return 1;
 
         x[0] = 0;
         mtl_sub_begin(); state_reset();
-        id<MTL4ComputeCommandEncoder> en2 = enc_c_begin(NULL); args_dirty_all();
+        id<MTL4RenderCommandEncoder> en2 = pass_open(); if (!en2) return 1;
+        args_dirty_all();
         bind_ssbo(x); bind_ubo(u1);
-        #define RUN2(sh, ps) do { CHECK(encode_args((id<MTLCommandEncoder>)en2, sh, 2, 0), #sh " encoded"); enc_c_pso(en2, ps); enc_c_dispatch(en2, MTLSizeMake(1,1,1), MTLSizeMake(1,1,1)); \
-                                  [en2 barrierAfterEncoderStages:MTLStageDispatch beforeEncoderStages:MTLStageDispatch visibilityOptions:MTL4VisibilityOptionDevice]; } while (0)
+        #define RUN2(sh, ps) DRAW(en2, sh, ps)
         RUN2(vc, pvc);   // full encode: x[0] += u1[0] + 1 (= 2)
 
         bind_ubo(u2);
@@ -134,7 +165,7 @@ int main(void) { @autoreleasepool {
         CHECK(g_cur_arena != old_arena, "cbsize_table inside patch rolled over to a new arena");
         CHECK(vc->ab_buf == old_arena->buf && vc->ab_off == expected_off, "patched block stayed in the old arena at the expected offset");
         CHECK(vc->ab_gpu == expected_gpu, "patched block GPU address matches its own arena, not the rolled-over arena");
-        enc_c_end(en2);
+        rp_end();
         CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "rollover submission completed"); mtl_drain();
         CHECK(x[0] == 19, "GPU read the patched argument block from the old arena");
         #undef RUN2
@@ -145,7 +176,7 @@ int main(void) { @autoreleasepool {
             "struct Args3 { device uint *p [[id(0)]]; constant uint *c [[id(1)]]; };\n"
             "kernel void vd(constant Args3 &a [[buffer(0)]]) { a.p[0] = a.c[0] + a.c[1] + a.c[79]; }\n" options:nil error:&error];
         CHECK(lib3 != nil, "synthetic ub_padded shader compiles");
-        NvShader *vd = [NvShader new]; vd->stage = 2; vd->fn = [lib3 newFunctionWithName:@"vd"]; vd->rf.nb = 2;
+        NvShader *vd = [NvShader new]; vd->stage = 5; vd->fn = [lib3 newFunctionWithName:@"vd"]; vd->rf.nb = 2;
         snprintf(vd->key, sizeof vd->key, "72000000000000fe_d");
         vd->ae = [vd->fn newArgumentEncoderWithBufferIndex:0]; vd->arg_len = vd->ae.encodedLength;
         vd->rf.b[0] = (nvn_rbind){.kind = NVN_RB_SBUFP, .rw = 1, .reg = 0, .aid = 0};
@@ -156,8 +187,8 @@ int main(void) { @autoreleasepool {
         x[0] = 0; u3[0] = 7; u3[1] = 0;
         mtl_sub_begin(); state_reset();
         id<MTL4ComputeCommandEncoder> en3 = enc_c_begin(NULL); args_dirty_all();
-        bind_ssbo(x);
-        p_bind_buf b3 = {.stage = 2, .index = 0, .addr = (uint64_t)u3, .size = 16};
+        p_bind_buf s3 = {.stage = 5, .index = 0, .addr = (uint64_t)x, .size = 64}; state_op(OP_BIND_SSBO, &s3);
+        p_bind_buf b3 = {.stage = 5, .index = 0, .addr = (uint64_t)u3, .size = 16};
         state_op(OP_BIND_UBO, &b3);
         uint32_t patch_val = 42;
         mtl_sub_update(&patch_val, (uint64_t)u3 + 4, 4);   // partial deferred update inside [u3, u3+16) -> ub_padded calls ubp_get
@@ -169,7 +200,7 @@ int main(void) { @autoreleasepool {
         g_cur_arena->used = g_cur_arena->len - pad_step;
         NvArena *old_arena = g_cur_arena;
 
-        CHECK(encode_args((id<MTLCommandEncoder>)en3, vd, 2, 0), "vd encoded");
+        CHECK(encode_args((id<MTLCommandEncoder>)en3, vd, 5, 0), "vd encoded");
         CHECK(g_cur_arena != old_arena, "ubp_get inside ub_padded rolled over to a new arena");
         enc_c_pso(en3, pvd); enc_c_dispatch(en3, MTLSizeMake(1,1,1), MTLSizeMake(1,1,1));
         enc_c_end(en3);

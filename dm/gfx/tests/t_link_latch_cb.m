@@ -95,7 +95,7 @@ int main(void) { @autoreleasepool {
     setenv("DM_PRESENT_SNAP", "0", 1);   // a profile with present_snap on (Breath of the Wild) would turn the latch and the drain off (mtl_snap_on)
     mtl_init();
     g_test_layer = offscreen_layer(); g_layers = [NSMutableArray new];
-    mtl_present_layer(8, 8);
+    g_present_shape[0] = g_present_shape[1] = 8;   // the drawables' shape (t_present_alloc)
     {   // the source texture every present shows
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
         d.storageMode = MTLStorageModeShared; d.usage = MTLTextureUsageShaderRead;

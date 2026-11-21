@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <compression.h>
-__asm__(".linker_option \"-lcompression\"");   // libcompression (LZFSE) links itself: the host, the iOS app and the tests that compile this file need no link flag
+__asm__(".linker_option \"-lcompression\"");   // libcompression (LZFSE) links itself: the host and the tests that compile this file need no link flag
 
 // The walk below names every pointer field of every payload by its offset. A change to a payload struct in nvn_obj.h must come here too: these asserts stop the build
 // instead of letting a capture carry a host pointer or relocate the wrong bytes. The numbers are the layout the walk was written against.
@@ -29,13 +29,11 @@ CAP_SIZE(p_copy_b2t, 64); CAP_OFF(p_copy_b2t, src, 0); CAP_OFF(p_copy_b2t, tex, 
 CAP_SIZE(p_copy_t2t, 104); CAP_OFF(p_copy_t2t, src, 0); CAP_OFF(p_copy_t2t, dst, 8);
 CAP_SIZE(p_clear_tex, 72); CAP_OFF(p_clear_tex, tex, 0);
 CAP_SIZE(p_clear_buf, 24); CAP_OFF(p_clear_buf, addr, 0); CAP_OFF(p_clear_buf, size, 8);
-CAP_SIZE(p_tf_bind, 24); CAP_OFF(p_tf_bind, addr, 8); CAP_OFF(p_tf_bind, size, 16);
-CAP_SIZE(p_tf_state, 16); CAP_OFF(p_tf_state, ctl, 8);
 CAP_SIZE(p_render_cond, 16); CAP_OFF(p_render_cond, mode, 0); CAP_OFF(p_render_cond, addr, 8);
 CAP_SIZE(p_multi_draw, 48); CAP_OFF(p_multi_draw, ind, 0); CAP_OFF(p_multi_draw, cnt, 8); CAP_OFF(p_multi_draw, ibuf, 16);
 CAP_OFF(p_multi_draw, stride, 24); CAP_OFF(p_multi_draw, max, 32); CAP_OFF(p_multi_draw, prim, 36); CAP_OFF(p_multi_draw, itype, 40);
 _Static_assert(OP_MULTI_DRAW == 55, "keep existing capture op numbers stable");
-_Static_assert(OP_COUNT_ == 64, "nvn_capture.c: a record op was added or removed: give it a case in cap_rec_fields");
+_Static_assert(OP_COUNT_ == 60, "nvn_capture.c: a record op was added or removed: give it a case in cap_rec_fields");
 
 #define MULTI_DRAW_LAYOUT "op 55 p_multi_draw 48 ind 0 cnt 8 ibuf 16 stride 24 max 32 prim 36 itype 40\n"
 // Copy strides travel after a copy's texture snapshot (p_copy_strides) instead of as OP_COPY_STRIDE records; the replay still takes OP_COPY_STRIDE from older captures
@@ -44,7 +42,8 @@ _Static_assert(sizeof(p_copy_strides) == 16 && COPY_STRIDES_OFF == 192, "nvn_cap
 #define VIEWPORT_ORIGIN_LAYOUT "p_viewports 392 v 8 stride 24 origin 24 bias 1\n"
 #define TEXTURE_GOB_LAYOUT "nvn_texdesc 40 pkg_layout u16 36 gob_order u16 38\n"
 const char *cap_layout(void) {
-    // sizes and pointer offsets as the walk knows them (the asserts above hold them to nvn_obj.h); bump this text with any change to the walk
+    // sizes and pointer offsets as the walk knows them (the asserts above hold them to nvn_obj.h); bump this text with any change to the walk.
+    // p_tf_bind and p_tf_state name records nothing writes any more (transform feedback, which the host no longer has): the two words stay so that captures made before still match
     return "format 2 relative descriptor handles\nops 54\n"
            "tex_t 128 mem 88 pool 96 serial 120\npool_t 40\ndpool_t 24\nprog_t 112\nsync_t 16\nsamp_par 40\nview_t 16\n"
            "p_set_rt 240 color 8 depth 208\np_bind_program 16\np_bind_vbuf 264 r 8\np_bind_vbuf1 16 addr 8\np_bind_buf 24 addr 8\np_bind_ubo_small 16 addr 8\n"
@@ -65,8 +64,6 @@ int cap_layout_matches(const char *layout, size_t n) {
 }
 
 const char *cap_record_unsupported(uint32_t op) {
-    if (op == OP_RT_DISPATCH) return "capture cannot retain RT catalogs and immutable acceleration-structure bindings";
-    if (op == OP_AS_BUILD || op == OP_AS_COPY || op == OP_BIND_AS) return "format 1 cannot capture acceleration-structure objects and deferred build inputs";
     if (op == OP_WAIT_EVENT) return "format 1 cannot replay event waits";
     if (op == OP_WAIT_SYNC) return "format 1 cannot replay sync receipt waits";
     return NULL;
@@ -101,15 +98,9 @@ int cap_tex_fields(tex_t *t, const cap_ops *ops, void *ctx) {
 int cap_rec_fields(uint32_t op, uint8_t *payload, uint32_t size, const cap_ops *ops, void *ctx) {
     uint64_t plen = size >= 8 ? size - 8 : 0; int ok = 1;
     switch (op) {
-        // The scheduler snapshots these CPU descriptions separately at submission.
-        // Capture rejects them explicitly before writing any pointer-bearing data.
-        case OP_AS_BUILD: return plen >= sizeof(p_as_build);
-        case OP_AS_COPY: return plen >= sizeof(p_as_copy);
-        case OP_BIND_AS: return plen >= sizeof(p_bind_as);
-        case OP_RT_DISPATCH: return plen >= sizeof(p_rt_dispatch);
         case OP_END: case OP_BEGIN: case OP_CLEAR_COLOR: case OP_CLEAR_DS: case OP_VIEWPORTS: case OP_SCISSOR: case OP_DEPTH_RANGE: case OP_BIND_STATE: case OP_BIND_VATTR:
         case OP_BIND_VSTREAM: case OP_BIND_TEX1: case OP_STENCIL: case OP_POLY_OFFSET: case OP_BARRIER: case OP_COPY_STRIDE: case OP_BLEND_COLOR: case OP_RESET_COUNTER:
-        case OP_DEPTH_CLAMP: case OP_PATCH_SIZE: case OP_LINE_WIDTH: case OP_RAST_DISCARD: case OP_VP_SWIZZLE: case OP_PRIM_RESTART: case OP_ALPHA_REF: case OP_PUSH_CONST: case OP_DRAW_TEX:   // OP_DRAW_TEX: a texture handle, read through the pools at replay
+        case OP_DEPTH_CLAMP: case OP_LINE_WIDTH: case OP_RAST_DISCARD: case OP_VP_SWIZZLE: case OP_PRIM_RESTART: case OP_ALPHA_REF: case OP_PUSH_CONST: case OP_DRAW_TEX:   // OP_DRAW_TEX: a texture handle, read through the pools at replay
             return 1;
         case OP_JUMP: case OP_CALL: return HAS(0) && ops->obj(ctx, CAP_K_SEG, F(0), payload, (uint32_t)plen);
         case OP_SIGNAL_EVENT: return HAS(0) && ops->addr(ctx, F(0), 4, 1);   // volatile uint32_t *val, mode, value
@@ -168,8 +159,6 @@ int cap_rec_fields(uint32_t op, uint8_t *payload, uint32_t size, const cap_ops *
         case OP_CLEAR_TEX: return HAS(0) && ops->obj(ctx, CAP_K_TEX, F(0), payload, (uint32_t)plen);
         case OP_DLSS: if (!HAS(offsetof(p_dlss, net))) return 0; for (int k = 0; k < DLSS_TEXTURES; k++) ok &= ops->obj(ctx, CAP_K_TEX, F(offsetof(p_dlss, tex) + 8 * (size_t)k), payload, (uint32_t)plen); return ok;
         case OP_CLEAR_BUF: return HAS(8) && ops->addr(ctx, F(0), u64_at(payload + 8), 1);
-        case OP_TF_BIND: return HAS(16) && ops->addr(ctx, F(8), u64_at(payload + 16), 1);
-        case OP_TF_STATE: return HAS(8) && ops->addr(ctx, F(8), 32, 1);
         case OP_RENDER_COND: if (!HAS(8)) return 0; return i32_at(payload) >= 2 || ops->addr(ctx, F(8), 32, 0);
     }
     return 0;

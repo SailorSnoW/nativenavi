@@ -184,15 +184,18 @@ static void singleflight(NSString *dir) {
     warm_claim();
     NvShader *vs = g_shcache[@"warm-vs"];
     EXPECT("S and R publish one shader identity", 1, vs == published);
-    // Missing geometry reflection returns nil quietly. Warm callers share its negative result;
-    // a later demand caller still retries, and succeeds once real reflection appears.
-    EXPECT("failed warm load", 1, warm_shader(@"retry-gs", 2) == nil);
-    NSDictionary *reflection = @{@"chain": @DMSH_CHAIN, @"gs_slice": @{@"loc": @0, @"comp": @"x"}};
-    NSString *path = [dir stringByAppendingPathComponent:@"retry-gs.json"];
-    EXPECT("retry reflection written", 1, [[NSJSONSerialization dataWithJSONObject:reflection options:0 error:nil] writeToFile:path atomically:YES]);
-    EXPECT("failure stays cached for this warm phase", 1, warm_shader(@"retry-gs", 2) == nil);
-    EXPECT("demand loading still retries failed warm key", 1, shader_get(@"retry-gs", 2) != nil);
-    EXPECT("retry fixture removed", 1, [NSFileManager.defaultManager removeItemAtPath:path error:nil]);
+    // A shader whose files are missing fails to load (in red). Warm callers share its negative result;
+    // a later demand caller still retries, and succeeds once the files appear.
+    EXPECT("failed warm load", 1, warm_shader(@"retry-fs", 1) == nil);
+    int copied = 1;
+    for (NSString *extension in @[@"json", @"metallib"])
+        copied &= [NSFileManager.defaultManager copyItemAtPath:[dir stringByAppendingPathComponent:[@"warm-fs." stringByAppendingString:extension]]
+                                                        toPath:[dir stringByAppendingPathComponent:[@"retry-fs." stringByAppendingString:extension]] error:nil];
+    EXPECT("retry files written", 1, copied);
+    EXPECT("failure stays cached for this warm phase", 1, warm_shader(@"retry-fs", 1) == nil);
+    EXPECT("demand loading still retries failed warm key", 1, shader_get(@"retry-fs", 1) != nil);
+    for (NSString *extension in @[@"json", @"metallib"])
+        EXPECT("retry fixture removed", 1, [NSFileManager.defaultManager removeItemAtPath:[dir stringByAppendingPathComponent:[@"retry-fs." stringByAppendingString:extension]] error:nil]);
     g_warm_t0 = bp_now(); warm_finish();
     g_shcache = nil; nvn_hm_clear(&g_pso, hm_rel);
 }
@@ -245,7 +248,7 @@ static void native_mesh(NSString *dir) {
     S.chmask.mask = 15;
     memset(g_pass.cfmt, 0, sizeof g_pass.cfmt);
     g_pass.cfmt[0] = MTLPixelFormatRGBA8Unorm; g_pass.dfmt = g_pass.sfmt = 0; g_pass.samples = 1;
-    NvShader *live = shader_load(@"warm-ms", 4, 0), *fragment = shader_load(@"warm-fs", 1, 0);
+    NvShader *live = shader_load(@"warm-ms", 4), *fragment = shader_load(@"warm-fs", 1);
     EXPECT("native mesh fixture loaded", 1, live != nil && fragment != nil);
     if (!live || !fragment) return;
 
@@ -297,7 +300,7 @@ static void native_mesh(NSString *dir) {
     }
     // A different depth entry must still miss: this fixture's ms_z emits no geometry.
     atomic_store(&g_depth_zero, 1);
-    NvShader *other_depth = shader_load(@"warm-ms", 4, 0);
+    NvShader *other_depth = shader_load(@"warm-ms", 4);
     EXPECT("different depth entry loaded", 1, other_depth && ![other_depth->ventry isEqualToString:live->ventry]);
     if (other_depth) {
         g_shcache[@"warm-ms"] = other_depth;

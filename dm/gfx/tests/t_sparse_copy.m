@@ -58,7 +58,7 @@ static void run(int gpu, pool_t *virt, pool_t *phys, uint8_t *pmem, pool_t *cpoo
     const char *how = gpu ? "GPU gather" : "CPU gather";
     char n[200];
     g_nvn_deswz_gpu = gpu;
-    NVNtextureBuilder tb; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 256); h_nvnTextureBuilderSetHeight(&tb, 256); h_nvnTextureBuilderSetLevels(&tb, 2);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)virt, VO);
@@ -106,7 +106,7 @@ static void gather_only(int gpu, pool_t *virt, pool_t *gphys, uint8_t *gmem, uin
     const char *how = gpu ? "GPU gather" : "CPU gather";
     char n[200];
     g_nvn_deswz_gpu = gpu;
-    NVNtextureBuilder tb; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 128); h_nvnTextureBuilderSetHeight(&tb, 128); h_nvnTextureBuilderSetLevels(&tb, 1);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)virt, VO);
@@ -129,7 +129,7 @@ static void buffer_alias(pool_t *virt, pool_t *phys, uint8_t *pmem, uint8_t *cme
     tex_t physical = {.magic = MAGIC('T', 'E', 'X', 0), .serial = nvn_new_serial(), .pool = phys, .mem = pmem + po, .off = po, .has_layout = 1};
     physical.d = (nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .width = 128, .height = 128, .depth = 1, .levels = 1, .samples = 1};
     nvn_tex_layout(&physical.d, &physical.L);
-    NVNtextureBuilder tb; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 128); h_nvnTextureBuilderSetHeight(&tb, 128);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)virt, vo);

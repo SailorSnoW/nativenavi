@@ -15,7 +15,7 @@
 #     game's <key>_bp main0_z, from a library of its own (needs_cut). It cannot lower a function unspecialized ("cannot lower module
 #     with unresolved function constants"), and failed with "cannot find private metadata" on a side library (<key>_bx), which no base uses. A pair whose functions declare any other
 #     constant is left to the device (rest_pairs.tsv), as before (HOST_CONSTANTS)
-# And a compute pipeline per compute shader, which depends on its function alone (the host makes it from the function, cps_new in nvn_mtl.m; the threadgroup size is the dispatch's):
+# And a compute pipeline per compute shader, which depends on its function alone (the host makes it from the function, cps_new_b in nvn_mtl.m; the threadgroup size is the dispatch's):
 # the C rows of the profile's prewarm list (pso_manifest.tsv, recorded, in order), then every compute shader of its shader map (shader_map.tsv, stage compute), so those the list
 # does not name have one too; per shader <key>_b, entry `entry`. Left out as the host would not find them: a reflection of another chain version or none, a
 # missing library or entry point, a function with a function constant other than HOST_CONSTANTS (the host builds that pipeline through the MTLDevice). One with the border corrections'
@@ -171,7 +171,7 @@ def plan(lib_dir, chain, pairs, zero):
     for vk, fk in pairs:
         vj, fj = refl(vk), refl(fk)
         if not vj or not fj or vj.get('chain') != chain or fj.get('chain') != chain: left['reflection'] += 1; continue
-        if vj.get('mesh_stage'): left['mesh'] += 1; continue   # a mesh shader's pair (shader_split.py var_pairs, for its padding): its pipelines are mesh pipelines, built at the draw (nvn_geometry.inc mtk_pso)
+        if vj.get('mesh_stage'): left['mesh'] += 1; continue   # a mesh shader's pair (shader_split.py var_pairs, for its padding): its pipelines are mesh pipelines, built at the draw (nvn_mesh.inc mtk_pso)
         ventry = vertex_entry(vj, zero); fentry = fj.get('entry') or 'main0'
         pull = isinstance(vj.get('pull'), dict)
         if not pull and vj.get('vertex_inputs'): left['stage inputs'] += 1; continue
@@ -199,7 +199,7 @@ def plan_compute(lib_dir, chain, shaders):
         try: fs = constants(lib_dir / f'{pc}.metallib')
         except (OSError, ValueError): left['library'] += 1; continue
         if entry not in fs: left['entry'] += 1; continue
-        if any(c not in HOST_CONSTANTS for c in fs[entry]): left['constants'] += 1; continue   # script specializes HOST_CONSTANTS, as cps_new looks the pipeline up
+        if any(c not in HOST_CONSTANTS for c in fs[entry]): left['constants'] += 1; continue   # script specializes HOST_CONSTANTS, as cps_new_b looks the pipeline up
         if (pc, entry) not in seen: seen.add((pc, entry)); pipes.append((pc, entry))
     return pipes, left
 

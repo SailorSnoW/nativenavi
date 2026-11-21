@@ -139,11 +139,11 @@ int main(void) {
         check_idle_gaps(device, heap);
         check_timeline();
 
-        guest_clock_freeze(1);
+        guest_clock_freeze_for(0, 1);
         uint64_t frozen = guest_ns();
         CHECK("projection keeps the frozen guest time", guest_ns_at_host_time(1) == frozen);
         usleep(1000);
-        guest_clock_freeze(0);
+        guest_clock_freeze_for(0, 0);
         uint64_t host = now_ns(), guest = guest_ns_at_host_time(host);
         CHECK("projection subtracts the time spent frozen", guest < host && guest >= frozen);
         CHECK("a host sample older than the pause offset cannot underflow", guest_ns_at_host_time(1) == 0);

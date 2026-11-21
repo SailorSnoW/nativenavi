@@ -1,5 +1,6 @@
 // Real public recording, compact expansion, queue replay and Metal argument
-// encoding. Ray-tracing resource stage8 must stay apart from compute5/task6.
+// encoding. NVN2's task6 and mesh7 keep their resources in host stages 3 and 4, apart from compute5;
+// its ray tracing stage8 has no table (the host has no ray tracing): a bind for it binds nothing, in red.
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
@@ -16,7 +17,7 @@ static int checks, failed;
 #define CHECK(c, label) do { checks++; if (!(c)) { failed++; fprintf(stderr,"FAIL: %s\n",label); } } while (0)
 
 static NVNcommandBuffer commands;
-static const int public_stages[] = {8, 5, 6, 7}, host_stages[] = {6, 5, 3, 4};
+static const int public_stages[] = {5, 6, 7}, host_stages[] = {5, 3, 4};
 static uint8_t *memory;
 static uint64_t address(int stage, int slot) { return (uint64_t)(uintptr_t)(memory + stage * 4096 + slot * 256); }
 static uint64_t handle(int stage, int slot) { return (uint64_t)(17 + stage * 11 + slot) | (uint64_t)(3 + stage) << 20; }
@@ -86,73 +87,83 @@ static void recording(int compact) {
     mtl_queue_activate(780001);
     h_nvnCommandBufferBeginRecording(&commands);
     for (unsigned i=0;i<sizeof public_stages/sizeof *public_stages;i++) bind_all(public_stages[i]);
-    uint64_t deferred=handle(8,10);
-    h_nvnCommandBufferBindTexturesDeferred(&commands,(NVNshaderStage)8,10,1,&deferred);
+    uint64_t deferred=handle(7,10);
+    h_nvnCommandBufferBindTexturesDeferred(&commands,(NVNshaderStage)7,10,1,&deferred);
     NVNcommandHandle list=h_nvnCommandBufferEndRecording(&commands);
-    deferred=handle(8,11);
+    deferred=handle(7,11);
     apply(list); verify_all();
-    CHECK(S.tex[6][10]==deferred, "deferred ray-tracing texture reads the execution-time handle");
-    uint64_t rt= S.ubo[6][0].addr, cs=S.ubo[5][0].addr, task=S.ubo[3][0].addr;
+    CHECK(S.tex[4][10]==deferred, "deferred mesh texture reads the execution-time handle");
+    uint64_t mesh= S.ubo[4][0].addr, cs=S.ubo[5][0].addr, task=S.ubo[3][0].addr;
     mtl_queue_activate(780002);
-    CHECK(!S.ubo[6][0].addr && !S.ubo[5][0].addr && !S.tex[6][0] && !S.img[6][0], "fresh queue has empty resource tables including ray tracing");
+    CHECK(!S.ubo[4][0].addr && !S.ubo[5][0].addr && !S.tex[4][0] && !S.img[4][0], "fresh queue has empty resource tables");
     h_nvnCommandBufferBeginRecording(&commands);
-    h_nvnCommandBufferBindUniformBuffer(&commands,(NVNshaderStage)8,0,address(8,12),16);
-    h_nvnCommandBufferBindTexture(&commands,(NVNshaderStage)8,0,handle(8,12));
-    h_nvnCommandBufferBindImage(&commands,(NVNshaderStage)8,0,handle(8,13));
-    h_nvnCommandBufferBindSeparateSampler(&commands,(NVNshaderStage)8,0,(NVNseparateSamplerHandle){handle(8,14)});
+    h_nvnCommandBufferBindUniformBuffer(&commands,(NVNshaderStage)7,0,address(7,12),16);
+    h_nvnCommandBufferBindTexture(&commands,(NVNshaderStage)7,0,handle(7,12));
+    h_nvnCommandBufferBindImage(&commands,(NVNshaderStage)7,0,handle(7,13));
+    h_nvnCommandBufferBindSeparateSampler(&commands,(NVNshaderStage)7,0,(NVNseparateSamplerHandle){handle(7,14)});
     apply(h_nvnCommandBufferEndRecording(&commands));
-    CHECK(S.ubo[6][0].addr==address(8,12) && !S.ubo[5][0].addr && !S.ubo[3][0].addr, "second queue ray-tracing writes do not populate compute or task");
+    CHECK(S.ubo[4][0].addr==address(7,12) && !S.ubo[5][0].addr && !S.ubo[3][0].addr, "second queue mesh writes do not populate compute or task");
+    typeof(S) before=S;   // NVN2's ray tracing stage: every bind is refused and records nothing
+    h_nvnCommandBufferBeginRecording(&commands);
+    bind_all(8);
+    apply(h_nvnCommandBufferEndRecording(&commands));
+    CHECK(!memcmp(&before,&S,sizeof S), "binds for the ray tracing stage (8) change no resource table");
     mtl_queue_activate(780001);
-    CHECK(S.ubo[6][0].addr==rt && S.ubo[5][0].addr==cs && S.ubo[3][0].addr==task, "queue restore preserves distinct RT/compute/task uniforms");
+    CHECK(S.ubo[4][0].addr==mesh && S.ubo[5][0].addr==cs && S.ubo[3][0].addr==task, "queue restore preserves distinct mesh/compute/task uniforms");
     verify_all();
     mtl_queue_activate(780002);
-    CHECK(S.ubo[6][0].addr==address(8,12) && S.tex[6][0]==handle(8,12) && S.img[6][0]==handle(8,13) && S.samp[6][0]==handle(8,14),
-          "second queue restores its own RT buffers/images/textures/samplers");
+    CHECK(S.ubo[4][0].addr==address(7,12) && S.tex[4][0]==handle(7,12) && S.img[4][0]==handle(7,13) && S.samp[4][0]==handle(7,14),
+          "second queue restores its own mesh buffers/images/textures/samplers");
     mtl_queue_forget(780001); mtl_queue_forget(780002);
 }
 
 static void generations(void) {
     state_reset();
     for (int stage=0;stage<NVN_RESOURCE_STAGES;stage++) g_args_wrote[stage]=g_args_seq;
-    uint64_t cs=g_args_ugen[5], task=g_args_ugen[3], rt=g_args_ugen[6];
-    p_bind_buf b={6,0,address(8,0),32}; state_op(OP_BIND_UBO,&b);
-    CHECK(g_args_ugen[6]>rt && g_args_ugen[5]==cs && g_args_ugen[3]==task, "RT uniform dirtiness has a separate generation");
+    uint64_t cs=g_args_ugen[5], task=g_args_ugen[3], mesh=g_args_ugen[4];
+    p_bind_buf b={4,0,address(7,0),32}; state_op(OP_BIND_UBO,&b);
+    CHECK(g_args_ugen[4]>mesh && g_args_ugen[5]==cs && g_args_ugen[3]==task, "mesh uniform dirtiness has a separate generation");
     for (int stage=0;stage<NVN_RESOURCE_STAGES;stage++) g_args_wrote[stage]=g_args_seq;
-    cs=g_args_ugen[5]; task=g_args_ugen[3]; rt=g_args_ugen[6];
-    ubd_dirty(address(8,0),address(8,0)+16);
-    CHECK(g_args_ugen[6]>rt && g_args_ugen[5]==cs && g_args_ugen[3]==task, "deferred inline uniform writes invalidate RT arguments");
+    cs=g_args_ugen[5]; task=g_args_ugen[3]; mesh=g_args_ugen[4];
+    ubd_dirty(address(7,0),address(7,0)+16);
+    CHECK(g_args_ugen[4]>mesh && g_args_ugen[5]==cs && g_args_ugen[3]==task, "deferred inline uniform writes invalidate the mesh stage's arguments");
     for (int stage=0;stage<NVN_RESOURCE_STAGES;stage++) g_args_wrote[stage]=g_args_seq;
     args_dirty_all();
-    for (int stage=0;stage<NVN_RESOURCE_STAGES;stage++) CHECK(args_changed(stage), "pool/queue invalidation includes all seven resource stages");
-    CHECK(stage_of(@"raytracing")==6 && stage_of(@"compute")==5 && stage_of(@"task")==3 && stage_of(@"mesh")==4, "stage parser distinguishes resource stage from raster shader slots");
+    for (int stage=0;stage<NVN_RESOURCE_STAGES;stage++) CHECK(args_changed(stage), "pool/queue invalidation includes all six resource stages");
+    CHECK(stage_of(@"raytracing")==-1 && stage_of(@"compute")==5 && stage_of(@"task")==3 && stage_of(@"mesh")==4, "stage parser: task and mesh in their slots, no ray tracing stage");
 }
 
 static void gpu_arguments(void) {
-    // A normal synthetic compute kernel isolates the host's resource ABI. This
-    // is not an RT implementation or a ray-query rendering test.
+    // A synthetic compute kernel isolates the host's resource ABI: encoded for the compute stage it reads that stage's uniform and storage bindings, not the mesh stage's
+    // (which name the other pair of buffers), and the compute stage's new bindings at the second dispatch
     state_reset();
     uint32_t *rtin=(uint32_t *)(memory+65536), *rtout=rtin+1024, *csin=rtout+1024, *csout=csin+1024;
     rtin[0]=17; csin[0]=29; rtout[0]=csout[0]=0;
-    p_bind_buf binds[]={{6,0,(uint64_t)rtin,16},{5,0,(uint64_t)csin,16}};
-    for (int i=0;i<2;i++) state_op(OP_BIND_UBO,&binds[i]);
-    binds[0].addr=(uint64_t)rtout; binds[1].addr=(uint64_t)csout;
-    for (int i=0;i<2;i++) state_op(OP_BIND_SSBO,&binds[i]);
+    p_bind_buf mesh_in={4,0,(uint64_t)rtin,16}, mesh_out={4,0,(uint64_t)rtout,16};
+    state_op(OP_BIND_UBO,&mesh_in); state_op(OP_BIND_SSBO,&mesh_out);
+    p_bind_buf ins[]={{5,0,(uint64_t)csin,16},{5,0,(uint64_t)rtin,16}}, outs[]={{5,0,(uint64_t)csout,16},{5,0,(uint64_t)rtout,16}};
     NSError *error=nil;
     id<MTLLibrary> lib=[g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal; struct A { device uint*out [[id(0)]]; constant uint*in [[id(1)]]; }; kernel void probe(constant A&a [[buffer(0)]]) { a.out[0]=a.in[0]; }" options:nil error:&error];
     CHECK(lib!=nil,"resource ABI probe compiles"); if (!lib) return;
-    NvShader *shader=[NvShader new]; shader->stage=NVN_RT_RESOURCE_STAGE; strcpy(shader->key,"0123456789abcdef_b"); shader->fn=[lib newFunctionWithName:@"probe"];
+    NvShader *shader=[NvShader new]; shader->stage=5; strcpy(shader->key,"0123456789abcdef_b"); shader->fn=[lib newFunctionWithName:@"probe"];
     shader->ae=[shader->fn newArgumentEncoderWithBufferIndex:0]; shader->arg_len=shader->ae.encodedLength; shader->rf.nb=2;
     shader->rf.b[0]=(nvn_rbind){.kind=NVN_RB_SBUFP,.rw=1,.reg=0,.aid=0}; shader->rf.b[1]=(nvn_rbind){.kind=NVN_RB_CBUF,.reg=0,.aid=1};
     id<MTLComputePipelineState> pipeline=[g_dev newComputePipelineStateWithFunction:shader->fn error:&error];
     CHECK(pipeline!=nil,"resource ABI pipeline compiles"); if (!pipeline) return;
     mtl_sub_begin(); id<MTL4ComputeCommandEncoder> en=enc_c_begin(NULL);
-    for (int i=0;i<2;i++) {
-        CHECK(encode_args((id<MTLCommandEncoder>)en,shader,i?5:6,0),"RT and compute resource argument blocks encode through production helpers");
-        enc_c_pso(en,pipeline); enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));
-    }
+    state_op(OP_BIND_UBO,&ins[0]); state_op(OP_BIND_SSBO,&outs[0]);
+    CHECK(encode_args((id<MTLCommandEncoder>)en,shader,5,0),"the compute stage's argument block encodes through production helpers");
+    enc_c_pso(en,pipeline); enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));
     enc_c_end(en);
-    CHECK(mtl_wait(mtl_sub_commit(),5000000000ull) && !mtl_last_commit_error(),"resource ABI GPU dispatches complete"); mtl_drain();
-    CHECK(rtout[0]==17 && csout[0]==29,"actual GPU reads/writes separate RT and compute UBO/SSBO tables");
+    CHECK(mtl_wait(mtl_sub_commit(),5000000000ull) && !mtl_last_commit_error(),"resource ABI GPU dispatch completes"); mtl_drain();
+    CHECK(csout[0]==29 && rtout[0]==0,"the GPU reads and writes the compute stage's UBO/SSBO, not the mesh stage's");
+    mtl_sub_begin(); en=enc_c_begin(NULL);
+    state_op(OP_BIND_UBO,&ins[1]); state_op(OP_BIND_SSBO,&outs[1]);
+    CHECK(encode_args((id<MTLCommandEncoder>)en,shader,5,0),"and again with the stage bound anew");
+    enc_c_pso(en,pipeline); enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));
+    enc_c_end(en);
+    CHECK(mtl_wait(mtl_sub_commit(),5000000000ull) && !mtl_last_commit_error(),"second resource ABI GPU dispatch completes"); mtl_drain();
+    CHECK(rtout[0]==17,"the second dispatch reads and writes the new bindings");
 }
 
 int main(void) { @autoreleasepool {

@@ -3,7 +3,7 @@
 # so a translator or host change is checked only on the games its author owns; on another game the first sign was a crash at run time (GitHub issue #272: c3a0880 broke the image
 # atomics of SHIN MEGAMI TENSEI V and Yoshi's Crafted World). This compares <library dir>/b-<V>/_b_build.json (default: the current chain, dmsh_chain.py) with the newest other
 # b-*/_b_build.json in the same folder, skipping one stamped with another game. It reads only the build reports dmsh_build.py writes, so it is not part of the chain.
-# The NSP script runs it after each shader build and stops on a regression unless told to go on (ALLOW_SHADER_REGRESSIONS / --allow-shader-regressions).
+# The packing script runs it after each shader build and stops on a regression unless told to go on (ALLOW_SHADER_REGRESSIONS / --allow-shader-regressions).
 # It also holds what counts as a loss: a shader that built, but lost part of what it does (losses). dmsh_build.py prints them and scripts/regress.py compares them; nothing here decides an output.
 # Exit status: 0 = none, or no earlier build to compare with; 1 = regressions, one [RED] line each; 2 = no report for this chain.
 import collections

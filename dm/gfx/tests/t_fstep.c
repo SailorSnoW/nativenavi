@@ -62,7 +62,7 @@ int main(void) {
         // Each counted FSTEP_SHORT_MAX (2) of the 30 frames' limit of 3, so the next three late frames stepped to 30 for 30 presents, 60 once (the probe's run before it
         // had not lasted 8 s). The step pays a stall back (game time = real time either way): one long frame is not a rate, so hold 1 throughout
         static const struct { int at; double ms; } st[] = {{1913, 67.7}, {10267, 57.7}, {10286, 43.1}, {10454, 54.9}, {11396, 65.4}};
-        nvn_fstep s = {0}; s.smax = 2; int next = 1, at2 = 0; double real = 0, game = 0;
+        nvn_fstep s = {0}; int next = 1, at2 = 0; double real = 0, game = 0;
         for (int p = 0; p < 12000; p++) {
             int k = s.k ? s.k : 1; double shown = k == 1 && p % 20 >= 5 && p % 20 < 8 ? 1.3 : k;
             for (unsigned i = 0; i < sizeof st / sizeof *st; i++) if (p == st[i].at) shown = st[i].ms / (1000.0 / 60);
@@ -79,15 +79,6 @@ int main(void) {
         run(&m, 1, 3.0, 1, 3, 0);
         snprintf(b, sizeof b, "  a 3-vsync frame then: hold 2, not 3 (k %d)", m.s.k);
         check(m.s.k == 2 && m.s.ups == 1, b);
-    }
-    {   // a game whose stub takes steps up to 2 (Mario Kart World's STEP_MAX): frames of 2.6 vsyncs stop at hold 2, and no step above 2 is handed out
-        sim m = {0}; m.s.smax = 2; int over = 0;
-        run(&m, 120, 0.5, 1, 3, 0);
-        for (int i = 0; i < 600; i++) { run(&m, 1, i < 300 ? 2.6 : 1.3, 1, 3, 0); over += m.next > 2; }
-        snprintf(b, sizeof b, "step cap 2: frames of 2.6 then 1.3 vsyncs hold 2 at most, steps at most 2 (k %d, steps over 2: %d)", m.s.k, over);
-        check(m.s.k == 2 && over == 0, b);
-        sim f = {0}; f.s.smax = 2; run(&f, 10, 0.5, 1, 3, 3);
-        check(f.s.k == 2 && f.next == 2, "  a step the game fixes at 3 is held at the cap");
     }
     {   // 120 fps (no payback: the game steps by its target, so a late frame is slow motion): three late frames step down to 60 whatever the average
         sim m = {0}; m.s.per_vsync = 2; m.s.no_payback = 1; run(&m, 120, 0.7, 1, 2, 0); run(&m, 3, 1.25, 1, 2, 0);
@@ -458,7 +449,7 @@ int main(void) {
         snprintf(b, sizeof b, "  a hitch 1 s after a movie: the cost that held hold 1 starts a probe (k %d, at hold 1 %d of the last 600)", m.s.k, at1);
         check(held > 0.85 && m.s.k == 1 && at1 == 600, b);
     }
-    // The iOS thermal cap (hle_nvn.c thermal_capped): 30 fps from frame 600 for 30 s. Breath of the Wild on an iPhone, GPU-bound: 0.86 vsyncs (14.4 ms) at hold 1, 1.5 (25 ms)
+    // The thermal cap (hle_nvn.c thermal_capped; from the iOS port): 30 fps from frame 600 for 30 s. Breath of the Wild on an iPhone, GPU-bound: 0.86 vsyncs (14.4 ms) at hold 1, 1.5 (25 ms)
     // at hold 2, where the clock follows the hold. After the cap and after each run at hold 2, the first 10 frames at hold 1 take 1.5 until the clock rises again; c = 1: the
     // first 60 frames after the cap (a clock slower to come back), so the probe at the cap's end fails; c = 2: hold 1 takes 1.3 for good after the cap (a heavier scene)
     for (int c = 0; c < 3; c++) {

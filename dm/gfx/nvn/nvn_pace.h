@@ -1,4 +1,4 @@
-// Present pacer (pure function, shared by Mac / iOS; unit test tests/t_pace.c).
+// Present pacer (pure function; unit test tests/t_pace.c).
 // Semantics as vsync: present slot = previous present slot + period. Early → wait until the present slot; late by less than one period → present immediately and keep the original phase;
 // behind by one period or more (stutter) → restart the cadence from the current time, no burst of presents to catch up. Period 0 = no wait (the present slot follows the current time).
 #pragma once

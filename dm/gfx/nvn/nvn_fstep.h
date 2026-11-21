@@ -1,4 +1,4 @@
-// Frame step in whole vsyncs (pure function, shared by Mac / iOS; unit test tests/t_fstep.c). The rewriter's frame-step stubs (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3,
+// Frame step in whole vsyncs (pure function; unit test tests/t_fstep.c). The rewriter's frame-step stubs (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3,
 // Breath of the Wild 1.9.0) step the game by the vsyncs (1/60 s) the host hands them each frame, and the host keeps each frame on screen for k vsyncs (hle_nvn.c present_itv).
 // At a steady rate the step is the time on screen: even motion, and only steps the games' own interval logic uses (60 / 30 / 20 fps). Real time the game falls behind (a late
 // frame, a hitch) is a debt paid back one extra vsync per frame, so over time game time = real time. k follows the frames' cost: three late frames in a row step up to the cost
@@ -13,18 +13,16 @@
 // frame is slow motion) three late frames still raise the hold. The step goes to the cheapest of the three late frames' cost: a hitch as the third no longer meant 20 fps.
 // The average leaves out the window's longest frame: a lone stall (43-68 ms of texture streaming or a pipeline built in play) among those near-misses filled two thirds of
 // the limit and stepped to 30 for a second: four of the five rises in a few races (issue #1823, after the fix above). Two stalls in 30 frames still count one.
-// A game takes steps up to its stub's largest (smax; Mario Kart World's interval logic stops at 2): k and the paid-back step stay within it, or the frames held longer than the
-// game steps play in slow motion and the debt counted as paid is lost.
 // A probe is a trial back to kmin that the cost does not justify: while the caller reports the CPU slowed for reasons other than heat (an iPhone's performance controller
-// parks a game that waits out a long hold on the efficiency cores at half the clock, where its cost never fits k − 1 again), the hold-off alone starts one. Its first
+// parked a game that waited out a long hold on the efficiency cores at half the clock, where its cost never fit k − 1 again), the hold-off alone starts one. Its first
 // FSTEP_GRACE frames may be late without failing it, the time the controller needs to raise the clock for the shorter deadline; after them it is judged like a trial.
 // A probe that holds leaves the hold-off as it is, and the run at kmin it starts must last FSTEP_HOLD_MAX (8 s) before the hold-off returns to 1 s: a shorter one counts as
 // a failed probe, so a CPU that really cannot hold kmin is not probed every second.
 // A step up after a run at kmin of FSTEP_HOLD_MAX keeps the cost that held there, and a cost at the longer hold of at most FSTEP_SAME times it starts a probe too: the scene
 // costs what it did, so the step up came from a hitch (Breath of the Wild on an iPhone: pipeline compiles after a cutscene). The fit trial alone does not bring such a game
-// back: an iPhone lowers its GPU clock until the work fills most of the frame, so a GPU-bound game's cost sits near FSTEP_FIT at either hold (BotW: GPU 12.8–15.2 ms at hold
+// back: an iPhone lowered its GPU clock until the work filled most of the frame, so a GPU-bound game's cost sits near FSTEP_FIT at either hold (BotW: GPU 12.8–15.2 ms at hold
 // 2, p50, where hold 1 had held for minutes; the same 4,900 draws took 5.8 ms after a trip to the background and 13.5 ms half a minute later).
-// A cap that falls and rises again (a movie, hle_movie.c dm_movie_hz; the iOS thermal cap in hle_nvn.c) keeps what was learned at each kmin: the cost that held it
+// A cap that falls and rises again (a movie, hle_movie.c dm_movie_hz; the thermal cap in hle_nvn.c) keeps what was learned at each kmin: the cost that held it
 // (cref) and the GPU reference (nvn_fgpu below); and the frames after the cap rises are a probe with its grace, as the clocks are still set for the longer hold. Before, the
 // rise set k to kmin with no grace, so three frames late while the clock rose stepped up again, with cref dropped at the cap change and a GPU reference taken at the 30 fps
 // cap: neither the fit trial (a GPU-bound cost near FSTEP_FIT) nor a probe brought kmin back (t_fstep: the movie and thermal cap cases). A cref kept from before the cap
@@ -88,7 +86,6 @@ typedef struct {
     double cref_at[FSTEP_MAX + 1];   // cref of each kmin, kept while another kmin is in force
     double over[FSTEP_RUN], over_sum; int over_i, over_k;   // the last FSTEP_RUN frames at the hold over_k: shown − k of each (clamped), their sum; the next slot
     double last_cost[3];      // the last three frames' costs, oldest first
-    int smax;                 // set by the caller: the largest step the game takes (its stub's STEP_MAX; 0 = FSTEP_MAX)
     int no_payback;           // set by the caller: 1 = the game does not take the step (120 fps: it steps by its target), so three late frames raise the hold whatever the average
     uint64_t late, paid, ups, downs, failed, probes; double dropped;   // statistics for the log
 } nvn_fstep;
@@ -116,13 +113,12 @@ static inline int nvn_fstep_same(const nvn_fstep *s) { return s->cref > 0 && s->
 static inline int nvn_fstep_next(nvn_fstep *s, double shown, double cost, int kmin, int kmax, int fixed, int slow) {
     const double hold0 = FSTEP_HOLD0 * (s->per_vsync ? s->per_vsync : 1), hold_max = FSTEP_HOLD_MAX * (s->per_vsync ? s->per_vsync : 1);
     if (kmin < 1) kmin = 1;
-    const int smax = s->smax > 0 && s->smax < FSTEP_MAX ? s->smax : FSTEP_MAX;
-    if (kmax > smax) kmax = smax;
-    if (kmin > smax) kmin = smax;
+    if (kmax > FSTEP_MAX) kmax = FSTEP_MAX;
+    if (kmin > FSTEP_MAX) kmin = FSTEP_MAX;
     if (kmax < kmin) kmax = kmin;
     if (!s->hold) s->hold = hold0;
     if (fixed > 0) {   // the game's own step: speed is right by construction, nothing to pay back
-        s->k = s->step = fixed < smax ? fixed : smax;
+        s->k = s->step = fixed < FSTEP_MAX ? fixed : FSTEP_MAX;
         s->debt = 0; s->late_run = s->fit_run = s->trial = s->probe = s->grace = s->tpend = 0; s->run = 0;
         s->kmin = FSTEP_MAX + 1;   // when it ends, k starts again from kmin
         return s->step;
@@ -193,7 +189,7 @@ static inline int nvn_fstep_next(nvn_fstep *s, double shown, double cost, int km
     else if ((slow || nvn_fstep_same(s)) && s->k > kmin && s->since >= s->hold && !s->trial) {   // probe: straight to kmin, so the controller sees the whole deadline
         s->k = kmin; s->downs++; s->probes++; s->trial = FSTEP_RUN; s->probe = 1; s->grace = FSTEP_GRACE; s->fit_run = s->late_run = 0; s->pa = s->pb = 0; s->plate = s->ptotal = 0;
     }
-    s->step = s->k + (s->debt >= 1 && s->k < smax);
+    s->step = s->k + (s->debt >= 1 && s->k < FSTEP_MAX);
     s->paid += s->step > s->k;
     return s->step;
 }

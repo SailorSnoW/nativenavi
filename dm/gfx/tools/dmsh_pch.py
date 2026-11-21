@@ -28,7 +28,7 @@ _lock, _headers = threading.Lock(), {}
 
 def make(metal):
     """The header for a compile convention (the metal command up to its source, with -c), checked on PROBE. Returns its path, or (None, why it is not used)"""
-    d = tempfile.mkdtemp(prefix='pch_', dir=os.environ.get('WORK'))   # not dmsh_*: that is the build's own temporary folder, which the NSP script's progress looks for
+    d = tempfile.mkdtemp(prefix='pch_', dir=os.environ.get('WORK'))   # not dmsh_*: that is the build's own temporary folder, which the packing script's progress looks for
     atexit.register(shutil.rmtree, d, ignore_errors=True)
     h, pch, src = os.path.join(d, 'prefix.h'), os.path.join(d, 'prefix.pch'), os.path.join(d, 'probe.metal')
     with open(h, 'w') as f: f.write(HEADER)

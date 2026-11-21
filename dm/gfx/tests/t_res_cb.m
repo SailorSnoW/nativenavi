@@ -115,7 +115,7 @@ int main(void) { @autoreleasepool {
     expect("a submission with a cut and an upload batch", 1, 3);
 
     // A present through the display link, with present snapshots: the snapshot's copy, then the present of the snapshot to a drawable
-    g_test_layer = offscreen_layer(); mtl_present_layer(8, 8);
+    g_test_layer = offscreen_layer(); g_present_shape[0] = g_present_shape[1] = 8;   // the drawables' shape (t_present_alloc)
     g_dm_present_link = 1; g_link_started = 1; g_link_owns_layer = 1;   // display-link mode without a link thread (t_present_alloc)
     NvMetalDisplayLinkDelegate *link = [NvMetalDisplayLinkDelegate new];
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];

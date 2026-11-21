@@ -63,7 +63,7 @@ static NSString *slurp(NSString *p) { return [NSString stringWithContentsOfFile:
 
 // --open <root>: the app's side. The bundle holds the tool's bases (offsets 0 and 16 to 28) in 3 files (the last one without its index) and one file that is no archive, the device's archive holds offset 4
 static int open_run(NSString *root) {
-    NvShader *vs = shader_load(@"warm-vs", 0, 0), *fs = shader_load(@"warm-fs", 1, 0);
+    NvShader *vs = shader_load(@"warm-vs", 0), *fs = shader_load(@"warm-fs", 1);
     EXPECT("open: shaders loaded", 1, vs && fs);
     if (!vs || !fs) return 1;
     pso4_init();
@@ -118,7 +118,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     setenv("DM_PSO_ARCHIVE", "off", 1); setenv("DM_MSL_DIR", [root stringByAppendingPathComponent:@"msl"].UTF8String, 1); setenv("DM_NVN_SHMAP", [tables stringByAppendingPathComponent:@"shader_map.tsv"].UTF8String, 1); setenv("DM_PSO_MANIFEST", "off", 1);
     mtl_init(); shmap_load();
     NSString *gpu = g_dev.architecture.name;
-    NvShader *vs = shader_load(@"warm-vs", 0, 0), *fs = shader_load(@"warm-fs", 1, 0);
+    NvShader *vs = shader_load(@"warm-vs", 0), *fs = shader_load(@"warm-fs", 1);
     EXPECT("fixture shaders loaded", 1, vs && fs);
     if (!vs || !fs) return 1;
     // skey -> descriptor: the row a run records (pso_skey_from of the draw's key), parsed as warm_parse does, gives the draw's own descriptor and base key

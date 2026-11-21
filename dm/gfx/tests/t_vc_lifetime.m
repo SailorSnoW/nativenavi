@@ -33,7 +33,7 @@ int main(void) { @autoreleasepool {
     if (mem == MAP_FAILED) abort();
     pool_t pool = {0}; pool_builder_t pb = {.mem=mem, .size=len, .flags=NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool *)&pool, (const NVNmemoryPoolBuilder *)&pb), "pool initialized");
-    NVNtextureBuilder tb; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 4); h_nvnTextureBuilderSetHeight(&tb, 4); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, 65536);
     CHECK(h_nvnTextureInitialize(&tex, &tb), "texture initialized");
@@ -70,7 +70,7 @@ int main(void) { @autoreleasepool {
     {   uint8_t *bm = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); if (bm == MAP_FAILED) abort();
         pool_t bpool = {0}; pool_builder_t bpb = {.mem=bm, .size=len, .flags=NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
         CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool *)&bpool, (const NVNmemoryPoolBuilder *)&bpb), "buffer pool initialized");
-        NVNtextureBuilder bb; NVNtexture btex = {0}; h_nvnTextureBuilderSetDefaults(&bb);
+        NVNtextureBuilder bb = {0}; NVNtexture btex = {0}; h_nvnTextureBuilderSetDefaults(&bb);
         h_nvnTextureBuilderSetTarget(&bb, NVN_TEXTURE_TARGET_BUFFER); h_nvnTextureBuilderSetWidth(&bb, 1024); h_nvnTextureBuilderSetFormat(&bb, NVN_FORMAT_R32F);
         h_nvnTextureBuilderSetStorage(&bb, (NVNmemoryPool *)&bpool, 0);
         CHECK(h_nvnTextureInitialize(&btex, &bb), "buffer texture initialized");

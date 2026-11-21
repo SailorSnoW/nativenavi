@@ -62,7 +62,7 @@ int main(void) { @autoreleasepool {
 
     // A texture made first: its storage pointer stays valid
     pool_t vc; vpool_init(&vc);
-    NVNtextureBuilder tb; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 32); h_nvnTextureBuilderSetHeight(&tb, 32);
     h_nvnTextureBuilderSetLevels(&tb, 1); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&vc, 0x1000);
     NVNtexture tx; CHECK("texture initialize", h_nvnTextureInitialize(&tx, &tb));

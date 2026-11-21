@@ -3,7 +3,7 @@
 // bases without a vertex layout; with a matching stamp the prebuild builds only the pairs left to the device (a function with constants) and takes nothing from the compiler otherwise,
 // and a draw of a covered pair takes its base from the bundle and captures nothing for the device's own archive;
 // a stamp of another depth mode or other pairs runs the device's prebuild, which still takes the bundled bases it finds; an archive whose bases the probe does not find is not trusted;
-// a folder without this GPU's file and a file that is no archive leave no archive; the compute shaders of the shader map have their pipelines in the archive (cps_new: nothing
+// a folder without this GPU's file and a file that is no archive leave no archive; the compute shaders of the shader map have their pipelines in the archive (cps_new_b: nothing
 // built), and a shader with function constants or not in the map is built as before; a pulling and a shadow-input library whose entry points the reflection names otherwise than
 // the shader's own are loaded by those names (shader_load, pull_load, vin_fn), and the archive holds the base pre_desc makes of them.
 // Without metal-tt (no Metal toolchain) it says so and passes
@@ -120,15 +120,15 @@ int main(void) { @autoreleasepool {
     EXPECT("bundle: first among the files without a vertex layout", 1, g_arch4p.count && g_arch4p[0] == g_arch_bundle);
     // compute pipelines: the shader map's compute shaders come from the bundle; a shader with function constants and one the map does not have are built
     @autoreleasepool {
-        NvShader *c1 = shader_load(@"c1_b", 5, 0), *c2 = shader_load(@"c2_b", 5, 0), *c3 = shader_load(@"c3_b", 5, 0), *cc = shader_load(@"cc_b", 5, 0); NSError *err = nil;
+        NvShader *c1 = shader_load(@"c1_b", 5), *c2 = shader_load(@"c2_b", 5), *c3 = shader_load(@"c3_b", 5), *cc = shader_load(@"cc_b", 5); NSError *err = nil;
         EXPECT("compute: shaders loaded", 1, c1 && c2 && c3 && cc);
         uint64_t a0 = g_cps_arch, b0 = g_cps_built; int n0 = g_arch_new;
-        EXPECT("compute: a pipeline", 1, c1 && cps_new(c1->fn, &err) != nil);
-        EXPECT("compute: a second pipeline", 1, c2 && cps_new(c2->fn, &err) != nil);
+        EXPECT("compute: a pipeline", 1, c1 && cps_new_b(c1->fn, 0, &err) != nil);
+        EXPECT("compute: a second pipeline", 1, c2 && cps_new_b(c2->fn, 0, &err) != nil);
         EXPECT("compute: both from the bundle", a0 + 2, g_cps_arch);
         EXPECT("compute: nothing built", b0, g_cps_built);
-        EXPECT("compute with constants: a pipeline", 1, cc && cps_new(cc->fn, &err) != nil);
-        EXPECT("compute not in the map: a pipeline", 1, c3 && cps_new(c3->fn, &err) != nil);
+        EXPECT("compute with constants: a pipeline", 1, cc && cps_new_b(cc->fn, 0, &err) != nil);
+        EXPECT("compute not in the map: a pipeline", 1, c3 && cps_new_b(c3->fn, 0, &err) != nil);
         EXPECT("compute with constants, not in the map: built", b0 + 2, g_cps_built);
         EXPECT("compute with constants, not in the map: not from the bundle", a0 + 2, g_cps_arch);
         dispatch_sync(arch_harvest_q(), ^{});
@@ -271,7 +271,7 @@ int main(void) { @autoreleasepool {
             put([msl stringByAppendingPathComponent:@"vo_b.json"], [NSString stringWithFormat:refl, DMSH_CHAIN, @"", @""]);   // names none
             for (int z = 0; z < 2; z++) {
                 atomic_store(&g_depth_zero, z);
-                NvShader *vn = shader_load(@"vn_b", 0, 0), *vo = shader_load(@"vo_b", 0, 0);
+                NvShader *vn = shader_load(@"vn_b", 0), *vo = shader_load(@"vo_b", 0);
                 EXPECT("entry names: shaders loaded", 1, vn && vn->fn && vo && vo->fn);
                 if (!vn || !vo) continue;
                 EXPECT("named: the shader's own entry", 1, [vn->fn.name isEqualToString:z ? @"main0_z" : @"main0"]);

@@ -50,7 +50,7 @@ uint64_t now_ns(void) {
     return mach_absolute_time() * tb.numer / tb.denom;
 }
 // Guest clock: the system counters the guest can read (mrs cntpct gate, svc GetSystemTick) all go through here. Default = now_ns().
-// Freeze (only for the test driver DM_TICK_HOLD): while frozen the guest clock does not advance ⇒ the game's next tick never comes due; after unfreezing the frozen duration is subtracted, the guest clock is continuous with no jump
+// Freeze (guest_clock_freeze_for): while frozen the guest clock does not advance ⇒ the game's next tick never comes due; after unfreezing the frozen duration is subtracted, the guest clock is continuous with no jump
 // DM_DETCLOCK=<step ns> (for replay / test runs; product runs do not set it = wall clock): from the first present on the guest clock becomes "advance a fixed step per present", not following the wall clock --
 // the client's per-frame dt and the server tick catch-up snapshots are both determined by the present count, so frame N in a run is byte-for-byte comparable between two passes of the same replay (the foundation of byte-for-byte picture proof).
 // Before the first frame the wall clock is still used (the boot period has waits that poll by time, freezing would hang them); at the switch it continues from the guest clock value at that time, no jump. It does not advance while frozen.
@@ -69,10 +69,10 @@ uint64_t guest_ns_at_host_time(uint64_t host_ns) {
     uint64_t lag = atomic_load(&g_glag);
     return host_ns >= lag ? host_ns - lag : 0;
 }
-// The system counter on that clock: 19.2 MHz on the Switch, 31.25 MHz (32 ns a tick) on the Switch 2, whose SDK reads cntpct_el0 and converts with that rate
-// (nn::os::GetSystemTickFrequency answers 0x1dcd650, sdk 20.5.19 Ounce). Read at 19.2 MHz, every tick span a Switch 2 game measured came out 1.63 times too short, and the
-// same clock's GPU timestamps 1.63 times too late: Donkey Kong Bananza's frame-rate controller took its frame for seconds long and held it at 20 fps (present interval 3)
-uint64_t guest_ticks(void) { return dm_sdk_ounce() ? guest_ns() / 32 : guest_ns() * 12 / 625; }
+// The system counter on that clock: 31.25 MHz (32 ns a tick) on the Switch 2, whose SDK reads cntpct_el0 and converts with that rate (nn::os::GetSystemTickFrequency answers
+// 0x1dcd650, sdk 20.5.19 Ounce). Read at the Switch's 19.2 MHz, every tick span a Switch 2 game measured came out 1.63 times too short, and the same clock's GPU timestamps
+// 1.63 times too late: Donkey Kong Bananza's frame-rate controller took its frame for seconds long and held it at 20 fps (present interval 3)
+uint64_t guest_ticks(void) { return guest_ns() / 32; }
 int dm_detclock_enabled(void) { return detclock_cfg() && atomic_load(&g_gdet_on); }
 void dm_guest_frame_tick(void) {
     crash_watch_frame();
@@ -91,7 +91,7 @@ static void guest_clock_freeze_apply(int on) {
 // Freezing has several unrelated reasons (0 freeze tick for testing / loading screen, 1 App in background, 2 system keyboard up): freeze if any holds, release only when all are lifted --
 // otherwise "switch to background and back while the keyboard is up" would be released early by the unfreeze on returning to foreground
 static pthread_mutex_t g_gfz_mu = PTHREAD_MUTEX_INITIALIZER; static unsigned g_gfz_reasons;
-// A suspended application does not run: Horizon suspends the whole process out of focus, iOS suspends a background app. The host freezes the guest clock in the background but its
+// A suspended application does not run: Horizon suspends the whole process out of focus (as iOS suspended nxnative's app in the background). The host freezes the guest clock in the background but its
 // guest threads go on until they block, so a guest reading the clock twice there saw no time pass. Super Mario Galaxy 2's frame pacing (main+0x5926a8) took the interval between two
 // frames as its period, got 0, and the next frame's loop that steps by it (main+0x9abd0) never ended. Guest reads of the system counter (the cntpct gate, svc GetSystemTick) wait while
 // the app is in the background (reason 1); host work (dm_host_work: inside a submit or present, which the graphics suspend waits for) reads the frozen clock, as do the other reasons
@@ -113,7 +113,6 @@ void guest_clock_freeze_for(int reason, int on) {
     if (!(g_gfz_reasons & 2u)) pthread_cond_broadcast(&g_gfz_cv);   // after the clock is running again: a released read sees it continue
     pthread_mutex_unlock(&g_gfz_mu);
 }
-void guest_clock_freeze(int on) { guest_clock_freeze_for(0, on); }
 // Entropy source: true random by default (arc4random); with DM_DETCLOCK on it becomes a fixed-seed splitmix64 stream (so that replay pictures are byte-for-byte comparable, the camp blue fire particles differed between two passes).
 // The two outlets (libc getentropy, svc GetInfo RandomEntropy) share one stream; the call count is reported in the log (first call and every 1000 calls)
 static _Atomic uint64_t g_detrng = 0x5357444554524e47ull; static _Atomic uint64_t g_detrng_n;
@@ -139,7 +138,7 @@ HLE_FORCE("_ZN2nn6crypto36GenerateCryptographicallyRandomBytesEPvm", "csrng serv
 // ---------- getenv: the game profile's game_env ----------
 // Horizon gives a program no environment, and the SDK's C library starts with an empty environ. Runtimes that take their settings from the environment then run on defaults sized for the
 // Switch's 64 GB alias region: Absolum's .NET GC (NativeAOT) reserves 5 × its heap limit as its region range, 3.75 GB, unless DOTNET_GCRegionRange says otherwise.
-// The profile's game_env (KEY=VALUE, separated by spaces; DM_GAME_ENV overrides it, also from Documents/env.txt) answers getenv for those names; any other name goes to the SDK's own getenv
+// The profile's game_env (KEY=VALUE, separated by spaces; DM_GAME_ENV overrides it, also from the Mac app's env.txt) answers getenv for those names; any other name goes to the SDK's own getenv
 static const char **g_env_kv;   // "KEY=VALUE" strings, NULL-terminated
 static void game_env_init(void) {
     const char *e = getenv("DM_GAME_ENV"); if (!e) e = DM_GAME_ENV;

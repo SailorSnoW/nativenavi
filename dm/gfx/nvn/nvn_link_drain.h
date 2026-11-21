@@ -1,4 +1,4 @@
-// Draining frames that stand in the present queue (pure function, shared by Mac / iOS; unit test tests/t_link_drain.c).
+// Draining frames that stand in the present queue (pure function; unit test tests/t_link_drain.c).
 // The display-link callback (nvn_mtl.m NvMetalDisplayLinkDelegate) wakes the game's acquire and then takes a frame from the present queue, so a frame the game presents
 // right after a tick waits for the next one. That wait is under one link tick. After a late frame the acquire returns at once to catch up (mtl_link_wait_ticks), two frames
 // reach the queue before one tick, the callback shows them in order (one per tick), and from then on every frame waits one tick more than it needs: a standing frame, 33.3 ms

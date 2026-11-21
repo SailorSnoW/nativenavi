@@ -21,9 +21,7 @@ uint64_t now_ns(void) { return bp_now(); }
 static int failed, cases;
 #define EXPECT(n, w, v) do { int a=(w),b=(v); cases++; printf("%s expected %d → got %d %s\n",n,a,b,a==b?"✓":"✗");failed+=a!=b; } while(0)
 static const uint8_t colors[4][4]={{255,0,0,255},{0,255,0,255},{0,0,255,255},{255,255,0,255}};
-#ifndef CROP_LEGACY_HEADER
-extern int g_shape_w,g_shape_h;   // t_host_stubs.c: the last shape the present reported to the front end
-#endif
+static void present_progress(uint64_t *queued, uint64_t *done) { pthread_mutex_lock(&g_pq_mu); *queued = g_pq_in; *done = g_pq_done; pthread_mutex_unlock(&g_pq_mu); }   // the display queue's counters
 
 #ifndef CROP_LEGACY_HEADER
 // Exercise the persistent scaler used by real presents, completing each command buffer before its allocator and output leave scope.
@@ -68,7 +66,7 @@ static uint64_t display_ticket(uint64_t receipt, uint64_t before) {
     EXPECT("present returned a logical receipt",1,receipt!=0);
     if (!receipt) return 0;
     nvn_queue_present_wait(receipt);
-    uint64_t queued, done; mtl_present_progress(&queued,&done);
+    uint64_t queued, done; present_progress(&queued,&done);
     EXPECT("one frame reached the display queue",1,queued==before+1);
     if (queued!=before+1) return 0;
     mtl_present_wait(queued);
@@ -78,7 +76,7 @@ static uint64_t display_ticket(uint64_t receipt, uint64_t before) {
 int main(int argc, char **argv) { @autoreleasepool {
     mtl_init();
 #ifndef CROP_LEGACY_HEADER
-    mtl_present_layer(1,1);   // square fixtures: a sized square layer, so the checks below see the crop's texels and the bars of that shape; the display's own shape is checked at the end
+    g_present_shape[0]=g_present_shape[1]=1;   // square fixtures: a square picture, so the checks below see the crop's texels and the bars of that shape; the display's own shape is checked at the end
 #endif
     MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];d.storageMode=MTLStorageModeShared;d.usage=MTLTextureUsageShaderRead;
     id<MTLTexture> src=[g_dev newTextureWithDescriptor:d];uint8_t px[8*8*4];
@@ -255,12 +253,12 @@ int main(int argc, char **argv) { @autoreleasepool {
     uint64_t before, done;
     tex_t tex={.magic=MAGIC('T', 'E', 'X', 0), .serial =10001};tex.d.width=tex.d.height=8;tex.d.depth=tex.d.levels=1;tex.d.format=NVN_FORMAT_RGBA8;tex.d.target=NVN_TEXTURE_TARGET_2D;serial_put(tex.serial,src);
     win_t win={.ntex=1};win.tex[0]=(NVNtexture *)&tex;set((NVNwindow *)&win,4,4,4,4);
-    mtl_present_progress(&before,&done);
+    present_progress(&before,&done);
     // Replay is held until the window changes: QueuePresent must take this frame's crop when it queues the frame, not when replay presents it
     nvn_queue_test_hold(1);
     present(&queue,(NVNwindow *)&win,0);set((NVNwindow *)&win,0,0,8,8);
     {   // without a working hold the crop check below would pass whenever replay ran first
-        uint64_t held; usleep(20000); mtl_present_progress(&held,&done);
+        uint64_t held; usleep(20000); present_progress(&held,&done);
         EXPECT("the held replay queues no frame for the display",1,held==before);
     }
     nvn_queue_test_hold(0);
@@ -280,8 +278,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         const int crop54[4]={0,0,40,32};   // 5:4 in the top-left corner: red inside, green outside
         for(int y=0;y<TH;y++)for(int x=0;x<TW;x++)memcpy(sp+4*(y*TW+x),colors[x>=crop54[2]||y>=crop54[3]],4);
         [sw replaceRegion:MTLRegionMake2D(0,0,TW,TH) mipmapLevel:0 withBytes:sp bytesPerRow:TW*4];free(sp);res_add(sw);res_commit();
-        double sa,sb;
-        mtl_present_layer(0,0);present_shape(sw,&sa,&sb);EXPECT("no sized layer: the display's width",1920,(int)sa);EXPECT("no sized layer: the display's height",1080,(int)sb);
+        g_present_shape[0]=1920;g_present_shape[1]=1080;   // the display's shape, as the host has it
         for(int m4=0;m4<2;m4++) {
             int outH[2]={H,40};   // 16:9 fills; a 16:10 canvas keeps the bars above and below
             for(int k=0;k<2;k++) {
@@ -295,14 +292,6 @@ int main(int argc, char **argv) { @autoreleasepool {
                 EXPECT(k?"5:4 crop on a 16:10 canvas: 16:9 of red, black above and below":"5:4 crop on a 16:9 canvas: all red, no side bars",0,bad);free(o);res_remove(ot);
             }
         }
-        mtl_present_layer(4,3);present_shape(sw,&sa,&sb);EXPECT("a sized layer gives its own shape",4*(int)sb,3*(int)sa);mtl_present_layer(0,0);
-        // The front end's layout and the mouse follow the same shape, not the crop's (front_picture_shape): a real present of the 5:4 crop
-        tex_t st={.magic=MAGIC('T', 'E', 'X', 0), .serial =10002};st.d.width=TW;st.d.height=TH;st.d.depth=st.d.levels=1;st.d.format=NVN_FORMAT_RGBA8;st.d.target=NVN_TEXTURE_TARGET_2D;serial_put(st.serial,sw);
-        win_t w3={.ntex=1};w3.tex[0]=(NVNtexture *)&st;set((NVNwindow *)&w3,crop54[0],crop54[1],crop54[2],crop54[3]);
-        mtl_present_progress(&before,&done);
-        present(&queue,(NVNwindow *)&w3,0);display_ticket(w3.ticket[0],before);
-        h_nvnWindowFinalize((NVNwindow *)&w3);
-        EXPECT("the shape reported to the front end is the layer's, width",1920,g_shape_w);EXPECT("the shape reported to the front end is the layer's, height",1080,g_shape_h);
         res_remove(sw);
     }
 #endif

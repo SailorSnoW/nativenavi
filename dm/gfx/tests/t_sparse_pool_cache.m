@@ -56,7 +56,7 @@ int main(void) { @autoreleasepool {
     CHECK(map(&virt, &phys, 0, 0, 0x4000), "first mapping");
     CHECK(nvn_sparse_pool(&virt), "the pool reads through its page table");
     // A 32x32 RGBA8 texture: one 4 KB page at the pool's start
-    NVNtextureBuilder tb; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 32); h_nvnTextureBuilderSetHeight(&tb, 32);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE);
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&virt, 0);

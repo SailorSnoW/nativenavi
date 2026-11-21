@@ -47,7 +47,7 @@ static int scan_addr(void *ctx, uint64_t *field, uint64_t len, int writable) {
 }
 static int scan_obj(void *ctx, int kind, uint64_t *field, uint8_t *payload, uint32_t size) { (void)ctx; (void)kind; (void)field; (void)payload; (void)size; return 1; }
 
-// --writes: pool ranges the GPU writes in a submission (copies, fills, storage buffers, transform feedback) and the later records of the same submission that read
+// --writes: pool ranges the GPU writes in a submission (copies, fills, storage buffers) and the later records of the same submission that read
 // them, by op: what a replay layer reading pool memory on the CPU while it encodes would see differently depending on how far the GPU has got
 typedef struct { uint64_t r, lo, hi; uint32_t op; } raw_w; static raw_w *g_rw; static size_t g_nrw, g_rwcap; static int g_raw_write; static uint32_t g_raw_op;
 static uint64_t g_raw_hits[OP_COUNT_][OP_COUNT_];

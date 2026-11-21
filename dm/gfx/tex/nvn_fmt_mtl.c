@@ -1,6 +1,6 @@
 // NVNformat (nvn.h 0x01–0x9C) → Metal. The table is written entry by entry in NVN enum order; unlisted formats (including 0 and out of range) return 0.
 // Component remapping: "no alpha" formats such as RGBX / RGB_DXT1 read a as 1; RGB-family 16-bit packed formats swap r/b; RGBA4 reverses all four; all others are identity.
-// BC1–7 need GPU BC support (MTLDevice.supportsBCTextureCompression: Apple silicon Macs, A17 Pro and later, M1 iPads); the table does not check it, mtl_init (nvn_mtl.m) and the iOS front end (main.m) refuse a device without it.
+// BC1–7 need GPU BC support (MTLDevice.supportsBCTextureCompression: every Apple silicon Mac); the table does not check it, mtl_init (nvn_mtl.m) refuses a device without it.
 #include "nvn_fmt_mtl.h"
 
 enum {   // MTLPixelFormat
@@ -41,7 +41,7 @@ static const ent T[0x9D] = {
     [0x29] = E(RGBA16Float), E(RGBA16Unorm), E(RGBA16Snorm), E(RGBA16Uint), E(RGBA16Sint),
     [0x2E] = E(RGBA32Float), E(RGBA32Uint), E(RGBA32Sint),
     [0x31] = E(Stencil8), E(Depth16Unorm),
-    // DEPTH24: Apple GPUs have no Depth24 (Depth24Unorm_Stencil8 is unavailable on iOS) → Depth32Float: as a render target this is a precision upgrade with equivalent behavior;
+    // DEPTH24: Apple GPUs have no Depth24 (MTLDevice.depth24Stencil8PixelFormatSupported is false on Apple silicon) → Depth32Float: as a render target this is a precision upgrade with equivalent behavior;
     // marked substitute only because uploading existing 24-bit depth data requires conversion to float (render targets are not affected)
     [0x33] = S(Depth32Float), E(Depth32Float),
     // DEPTH24_STENCIL8 → Depth32Float_Stencil8 (as above: precision upgrade as a render target, equivalent behavior; marked substitute because uploaded data needs conversion); DEPTH32F_STENCIL8 is exact

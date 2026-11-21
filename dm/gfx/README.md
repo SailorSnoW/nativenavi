@@ -71,7 +71,6 @@ The whole chain is driven by `tools/dmsh_build.py`; `scripts/build_app.py` runs 
 - **`dm/games/<id>/shader_pairs.tsv` and `pso_pairs.tsv`**: the (vertex key, pixel key) of every BNSH variation and agl BAHS program variation, written by `tools/shader_split.py`. Metal only builds a pipeline when every pixel shader input is a vertex shader output, while Maxwell gives an unwritten attribute a default; `dmsh_build.py` therefore adds the outputs a vertex shader's partners read but it doesn't write, set to (0, 0, 0, 1) (`vs_pad`). The profile tables are part of its inputs digest and the per-shader cache keys. A profile without `pso_pairs.tsv` takes the generated table beside the shader package.
 - **Several game versions**: `shader_split.py` takes comma-separated RomFS and `main` lists (base game first) and writes the union (the profile's `shader_versions`).
 - **`dm/games/<id>/pso_manifest.tsv`**: the warm-up seed manifest bundled with the app: shaders (`S`), render pipelines (`R`, the hex of `pso_skey` in `nvn/nvn_pso_skey.h`) and compute pipelines (`C`) to pre-build at startup. The row order is the pre-build order (first use); do not sort it. Its companion is `pso_user.tsv`, which the host appends next to the save directory whenever it has to build something on the spot, and which is pre-built after the seed at the next launch. Both name shaders by key and describe pipeline settings only, so a list recorded on one Mac works on any other; lines a build cannot use are skipped. Recorded lines can be appended to the seed below its header.
-- **Shaders embedded in a program itself**: `nvn/nvn_builtin.h` (kernels in `msl/builtin.metal`) holds 4 compute shaders that a game's main program embeds outside its shader package, hand-written as MSL from the disassembly; the replay layer looks a compute shader up there when the shader map does not have it.
 
 Binding conventions followed during translation (the NVN driver's layout: `tools/dmsh_build.py`, filled at run time by `nvn/nvn_mtl.m`):
 
@@ -93,7 +92,6 @@ Binding conventions followed during translation (the NVN driver's layout: `tools
 | `nvn/nvn_dirty.c`, `nvn/nvn_dirty.h` | Tracks dirty pages of game memory with write protection, to decide whether texture contents have changed and need re-uploading |
 | `nvn/nvn_refl.m`, `nvn/nvn_refl.h` | Converts shader reflection json into fixed-length C arrays, so that drawing only walks arrays |
 | `nvn/nvn_hmap.h`, `nvn/nvn_pace.h`, `nvn/nvn_pso_skey.h`, `nvn/nvn_primitive.h` | Hash table, presentation pacer, pipeline manifest key, indexed triangle fans and quads as triangle lists (primitive restart kept) |
-| `nvn/nvn_builtin.h`, `msl/builtin.metal` | Hand-written MSL for 4 compute shaders embedded in a main program |
 | `nvn/include/nvn.h` | NVN interface declarations (third party; for the license see the file header) |
 | `nvn/names.txt` | The NVN API name list. The per-game tables described above live in the game profile `dm/games/<id>/` (named after the base game's title ID; tools pick it with `DM_GAME`, make with `GAME`; Ocarina of Time's by default) |
 | `tex/` | Texture format mapping, deswizzling, BC decompression, see [tex/README.md](tex/README.md) |
@@ -139,7 +137,6 @@ The tests in `dm/gfx/tests` compile the production code in directly and need a M
 | Test | What it checks |
 |---|---|
 | `t_nvn` | Interface layer: fetches addresses from `nvnBootstrapLoader` the way the game does, all the way through to presentation |
-| `t_builtin` | The 4 embedded compute shaders |
 | `t_refl`, `t_hmap`, `t_pace`, `t_pso_skey`, `t_dirty_slots` | Reflection parsing, hash table, pacer, pipeline manifest key, dirty page tracking |
 | `t_pso_warm` | Historical manifest normalization and deduplication, draw-time cache reuse and GPU pixels for normal and merged passes, and one preparation per shader key across concurrent warm tasks with unrelated keys left free, through MTLDevice and Metal 4 |
 | `t_deswz_gpu` | GPU deswizzling |

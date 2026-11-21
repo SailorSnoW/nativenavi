@@ -89,9 +89,8 @@ enum {
     RO_BAR_QUEUE, RO_BAR_AFTER_STAGES, RO_BAR_ENCODER,
     RO_R_TABLE, RO_R_PSO, RO_R_DSS, RO_R_VIEWPORT, RO_R_SCISSOR, RO_R_CULL, RO_R_WINDING, RO_R_FILL, RO_R_BIAS, RO_R_CLIP, RO_R_SREF, RO_R_BLEND, RO_R_VIS, RO_R_AMP, RO_R_CMAP,
     RO_R_DRAW, RO_R_DRAW_INST, RO_R_DRAW_IND, RO_R_DRAW_IDX, RO_R_DRAW_IDX_IND, RO_R_MESH, RO_R_MESH_IND, RO_R_STORE_C, RO_R_STORE_D, RO_R_STORE_S,
-    RO_C_TABLE, RO_C_PSO, RO_C_DISPATCH, RO_C_DISPATCH_IND, RO_C_COPY_BB, RO_C_COPY_BT, RO_C_COPY_BT_OPT, RO_C_COPY_TB, RO_C_COPY_TB_OPT, RO_C_COPY_TT, RO_C_FILL, RO_C_TGMEM,
+    RO_C_TABLE, RO_C_PSO, RO_C_DISPATCH, RO_C_DISPATCH_IND, RO_C_COPY_BB, RO_C_COPY_BT, RO_C_COPY_BT_OPT, RO_C_COPY_TB, RO_C_COPY_TB_OPT, RO_C_COPY_TT, RO_C_FILL,
     RO_T_ADDR, RO_T_TEX, RO_T_SAMP, RO_T_RESOURCE,
-    RO_C_AS_BUILD, RO_C_AS_REFIT, RO_C_AS_COPY, RO_C_AS_SIZE,
     RO_LABEL, RO_R_TS, RO_C_TS,   // diagnostics: DM_NVN_ENC_LABEL, DM_NVN_GPUPROF
     RO_NOTE,   // a[0] an _Atomic uint64_t, a[1] a value: the encode thread has made every call before this one (rec_note_wait)
 };
@@ -99,7 +98,7 @@ typedef struct { uint32_t op, nobj; uint64_t a[15]; } rec_t;   // the first nobj
 enum { REC_BLK = 256 };
 typedef struct rec_blk { struct rec_blk *next; int n; rec_t r[REC_BLK]; } rec_blk;
 
-// On by default on iOS: Breath of the Wild on an iPhone 17 Pro Max (handheld, the Great Plateau) took about 8 ms of submit thread per frame without it and 3.3–4.5 ms with it
+// On by the profile's enc_thread or DM_NVN_ENC_THREAD=1: Breath of the Wild on an iPhone 17 Pro Max (handheld, the Great Plateau) took about 8 ms of submit thread per frame without it and 3.3–4.5 ms with it
 static int g_rec = -1;
 static inline int rec_on(void) {
     if (__builtin_expect(g_rec >= 0, 1)) return g_rec;
@@ -320,7 +319,7 @@ static void rec_exec(const rec_t *r) {
     case RO_R_DRAW_IDX: [(id<MTL4RenderCommandEncoder>)e drawIndexedPrimitives:a[0] indexCount:a[1] indexType:a[2] indexBuffer:a[3] indexBufferLength:a[4] instanceCount:a[5] baseVertex:(NSInteger)a[6] baseInstance:a[7]]; break;
     case RO_R_DRAW_IDX_IND: [(id<MTL4RenderCommandEncoder>)e drawIndexedPrimitives:a[0] indexType:a[1] indexBuffer:a[2] indexBufferLength:a[3] indirectBuffer:a[4]]; break;
     case RO_R_MESH: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroups:MTLSizeMake(a[0], 1, 1) threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;
-    case RO_R_MESH_IND: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroupsWithIndirectBuffer:a[0] threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;   // PR #1312's indirect task / mesh draws: the encode thread (iOS) aborted on the selector
+    case RO_R_MESH_IND: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroupsWithIndirectBuffer:a[0] threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;   // PR #1312's indirect task / mesh draws: the encode thread (then iOS's default) aborted on the selector
     case RO_R_STORE_C: [(id<MTL4RenderCommandEncoder>)e setColorStoreAction:a[0] atIndex:a[1]]; break;
     case RO_R_STORE_D: [(id<MTL4RenderCommandEncoder>)e setDepthStoreAction:a[0]]; break;
     case RO_R_STORE_S: [(id<MTL4RenderCommandEncoder>)e setStencilStoreAction:a[0]]; break;
@@ -340,11 +339,6 @@ static void rec_exec(const rec_t *r) {
     case RO_C_COPY_TT: [(id<MTL4ComputeCommandEncoder>)e copyFromTexture:rec_id(a[0]) sourceSlice:a[2] sourceLevel:a[3] sourceOrigin:MTLOriginMake(a[4], a[5], a[6]) sourceSize:MTLSizeMake(a[7], a[8], a[9])
                            toTexture:rec_id(a[1]) destinationSlice:a[10] destinationLevel:a[11] destinationOrigin:MTLOriginMake(a[12], a[13], a[14])]; break;
     case RO_C_FILL: [(id<MTL4ComputeCommandEncoder>)e fillBuffer:rec_id(a[0]) range:NSMakeRange(a[1], a[2]) value:(uint8_t)a[3]]; break;
-    case RO_C_TGMEM: [(id<MTL4ComputeCommandEncoder>)e setThreadgroupMemoryLength:a[0] atIndex:a[1]]; break;
-    case RO_C_AS_BUILD: [(id<MTL4ComputeCommandEncoder>)e buildAccelerationStructure:rec_id(a[0]) descriptor:rec_id(a[1]) scratchBuffer:(MTL4BufferRange){a[2],a[3]}]; break;
-    case RO_C_AS_REFIT: [(id<MTL4ComputeCommandEncoder>)e refitAccelerationStructure:rec_id(a[0]) descriptor:rec_id(a[1]) destination:rec_id(a[2]) scratchBuffer:(MTL4BufferRange){a[3],a[4]}]; break;
-    case RO_C_AS_COPY: if(a[2])[(id<MTL4ComputeCommandEncoder>)e copyAndCompactAccelerationStructure:rec_id(a[0]) toAccelerationStructure:rec_id(a[1])];else[(id<MTL4ComputeCommandEncoder>)e copyAccelerationStructure:rec_id(a[0]) toAccelerationStructure:rec_id(a[1])]; break;
-    case RO_C_AS_SIZE: [(id<MTL4ComputeCommandEncoder>)e writeCompactedAccelerationStructureSize:rec_id(a[0]) toBuffer:(MTL4BufferRange){a[1],a[2]}]; break;
     case RO_T_ADDR: [(id<MTL4ArgumentTable>)rec_id(a[0]) setAddress:a[1] atIndex:a[2]]; break;
     case RO_T_TEX: [(id<MTL4ArgumentTable>)rec_id(a[0]) setTexture:(MTLResourceID){a[1]} atIndex:a[2]]; break;
     case RO_T_SAMP: [(id<MTL4ArgumentTable>)rec_id(a[0]) setSamplerState:(MTLResourceID){a[1]} atIndex:a[2]]; break;
@@ -522,11 +516,6 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
 // Compute and copies (Metal 4 copies are on the compute encoder)
 - (void)setArgumentTable:(id)t { id x = rec_table_real(t); int keep = x != t; rec_t *r = rec_put(RO_C_TABLE, !keep); r->a[0] = keep ? (uint64_t)(uintptr_t)(__bridge void *)x : rec_obj(x); }
 - (void)setComputePipelineState:(id)p { rec_t *r = rec_put(RO_C_PSO, 1); r->a[0] = rec_obj(p); }
-- (void)buildAccelerationStructure:(id)a descriptor:(id)d scratchBuffer:(MTL4BufferRange)s { rec_t *r=rec_put(RO_C_AS_BUILD,2);r->a[0]=rec_obj(a);r->a[1]=rec_obj(d);r->a[2]=s.bufferAddress;r->a[3]=s.length; }
-- (void)refitAccelerationStructure:(id)a descriptor:(id)d destination:(id)b scratchBuffer:(MTL4BufferRange)s { rec_t *r=rec_put(RO_C_AS_REFIT,3);r->a[0]=rec_obj(a);r->a[1]=rec_obj(d);r->a[2]=rec_obj(b);r->a[3]=s.bufferAddress;r->a[4]=s.length; }
-- (void)copyAccelerationStructure:(id)a toAccelerationStructure:(id)b { rec_t *r=rec_put(RO_C_AS_COPY,2);r->a[0]=rec_obj(a);r->a[1]=rec_obj(b); }
-- (void)copyAndCompactAccelerationStructure:(id)a toAccelerationStructure:(id)b { rec_t *r=rec_put(RO_C_AS_COPY,2);r->a[0]=rec_obj(a);r->a[1]=rec_obj(b);r->a[2]=1; }
-- (void)writeCompactedAccelerationStructureSize:(id)a toBuffer:(MTL4BufferRange)b { rec_t *r=rec_put(RO_C_AS_SIZE,1);r->a[0]=rec_obj(a);r->a[1]=b.bufferAddress;r->a[2]=b.length; }
 - (void)dispatchThreadgroups:(MTLSize)n threadsPerThreadgroup:(MTLSize)t { rec_t *r = rec_put(RO_C_DISPATCH, 0); r->a[0] = n.width; r->a[1] = n.height; r->a[2] = n.depth; r->a[3] = t.width; r->a[4] = t.height; r->a[5] = t.depth; }
 - (void)dispatchThreadgroupsWithIndirectBuffer:(uint64_t)g threadsPerThreadgroup:(MTLSize)t { rec_t *r = rec_put(RO_C_DISPATCH_IND, 0); r->a[0] = g; r->a[1] = t.width; r->a[2] = t.height; r->a[3] = t.depth; }
 - (void)copyFromBuffer:(id)s sourceOffset:(NSUInteger)so toBuffer:(id)d destinationOffset:(NSUInteger)doff size:(NSUInteger)n {
@@ -535,7 +524,7 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
     rec_t *r = rec_put(RO_C_COPY_BT, 2); r->a[0] = rec_obj(s); r->a[1] = rec_obj(d); r->a[2] = so; r->a[3] = row; r->a[4] = img; r->a[5] = z.width; r->a[6] = z.height; r->a[7] = z.depth;
     r->a[8] = sl; r->a[9] = lv; r->a[10] = o.x; r->a[11] = o.y; r->a[12] = o.z; }
 // The two copies with blit options move one plane of a combined depth / stencil texture through a buffer (the depth plane copy, nvn_mtl.m enc_b_copy_*_opt); without their stand-ins
-// the encode thread stopped there (t_rt_range, t_unwritten_store with DM_NVN_ENC_THREAD=1, the iOS default)
+// the encode thread stopped there (t_unwritten_store with DM_NVN_ENC_THREAD=1)
 - (void)copyFromBuffer:(id)s sourceOffset:(NSUInteger)so sourceBytesPerRow:(NSUInteger)row sourceBytesPerImage:(NSUInteger)img sourceSize:(MTLSize)z toTexture:(id)d destinationSlice:(NSUInteger)sl destinationLevel:(NSUInteger)lv destinationOrigin:(MTLOrigin)o options:(MTLBlitOption)opt {
     rec_t *r = rec_put(RO_C_COPY_BT_OPT, 2); r->a[0] = rec_obj(s); r->a[1] = rec_obj(d); r->a[2] = so; r->a[3] = row; r->a[4] = img; r->a[5] = z.width; r->a[6] = z.height; r->a[7] = z.depth;
     r->a[8] = sl; r->a[9] = lv; r->a[10] = o.x; r->a[11] = o.y; r->a[12] = o.z; r->a[13] = opt; }
@@ -549,8 +538,6 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
     rec_t *r = rec_put(RO_C_COPY_TT, 2); r->a[0] = rec_obj(s); r->a[1] = rec_obj(d); r->a[2] = sl; r->a[3] = lv; r->a[4] = o.x; r->a[5] = o.y; r->a[6] = o.z; r->a[7] = z.width; r->a[8] = z.height; r->a[9] = z.depth;
     r->a[10] = dsl; r->a[11] = dlv; r->a[12] = dorg.x; r->a[13] = dorg.y; r->a[14] = dorg.z; }
 - (void)fillBuffer:(id)b range:(NSRange)rg value:(uint8_t)v { rec_t *r = rec_put(RO_C_FILL, 1); r->a[0] = rec_obj(b); r->a[1] = rg.location; r->a[2] = rg.length; r->a[3] = v; }
-// Threadgroup memory for the next dispatches (the tessellation hull kernel, nvn_tess.inc: its patches' control points)
-- (void)setThreadgroupMemoryLength:(NSUInteger)n atIndex:(NSUInteger)i { rec_t *r = rec_put(RO_C_TGMEM, 0); r->a[0] = n; r->a[1] = i; }
 // Diagnostics: encoder labels (DM_NVN_ENC_LABEL) and timestamps into a counter heap (DM_NVN_GPUPROF); the render form names a stage, the compute form none
 - (void)setLabel:(NSString *)l { rec_put(RO_LABEL, 1)->a[0] = rec_obj(l); }
 - (void)writeTimestampWithGranularity:(MTL4TimestampGranularity)g afterStage:(MTLRenderStages)st intoHeap:(id)h atIndex:(NSUInteger)i { rec_t *r = rec_put(RO_R_TS, 1); r->a[0] = rec_obj(h); r->a[1] = g; r->a[2] = st; r->a[3] = i; }

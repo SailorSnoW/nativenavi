@@ -11,7 +11,6 @@ module_t *g_mod; int g_nmod;
 __thread _Atomic int dm_host_work;
 void *module_sym(module_t *m, const char *name) { (void)m; (void)name; return NULL; }
 void *guest_sym(const char *name) { (void)name; return NULL; }
-int dm_sdk_ounce(void) { return 1; }
 void crash_watch_frame(void) {}
 
 // The first key above `after` whose home slot is `home`
