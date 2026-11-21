@@ -129,7 +129,7 @@ class PackReuse(unittest.TestCase):
             (t / d).mkdir(parents=True)
         files = {
             'dmhost': b'host', 'patched/main.patched.bin': b'code', 'patched/main.fixups.tsv': b'fixups',
-            'patched/main.gates.tsv': b'gates', 'patched/main.cuts.tsv': b'cuts', 'patched/main.obs.tsv': b'obs', 'patched/nro.tsv': b'nro',
+            'patched/main.gates.tsv': b'gates', 'patched/main.cuts.tsv': b'cuts', 'patched/main.obs.tsv': b'obs',
             'romfs/marker': b'game', 'msl/k.metallib': b'lib', 'msl/k.json': b'{}', 'msl/inputs.tsv': b'stamp',
             'font/nintendo_ext.ttf': b'font', 'aoc/1/data': b'dlc', 'pso/gpu.mtl4a': b'archive',
             'pso/prebuilt.tsv': b'prebuilt', 'pso/rest_pairs.tsv': b'rest', 'pso/archive.tsv': b'index',
@@ -213,7 +213,7 @@ class PackReuse(unittest.TestCase):
     def test_each_selected_file_content_invalidates_even_with_same_stat(self):
         self.pack()
         names = ['dmhost', 'patched/main.patched.bin', 'patched/main.fixups.tsv', 'patched/main.gates.tsv', 'patched/main.cuts.tsv',
-                 'patched/main.obs.tsv', 'patched/nro.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
+                 'patched/main.obs.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
                  'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'pso/gpu-prewarm-00.mtl4a', 'pso/gpu-prewarm-00.keys', 'pso/prewarm.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
                  'tools/nso_syms.py', 'source/Launcher.swift', 'source/LauncherSettings.swift', 'source/LauncherRow.swift']   # the settings window's sources
         names += ['profile/' + n for n in pack_app.TABLES]
@@ -298,7 +298,7 @@ class PackReuse(unittest.TestCase):
         self.assertEqual(list(out.rglob('._*')), [])
         self.assertEqual(list(out.rglob('.DS_Store')), [])
         info = plistlib.loads((out / 'Contents/Info.plist').read_bytes())
-        self.assertEqual(info['DMModuleFiles'], ['main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin', 'nro.tsv'])
+        self.assertEqual(info['DMModuleFiles'], ['main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin'])
         self.assertEqual(sorted(p.name for p in (out / 'Contents/Resources/dm/font').iterdir()), ['nintendo_ext.ttf'])
         self.assertEqual(sorted(p.name for p in (out / 'Contents/Resources/pso').iterdir()), ['archive.tsv', 'gpu-prewarm-00.keys', 'gpu-prewarm-00.mtl4a', 'gpu.mtl4a', 'prebuilt.tsv', 'prewarm.tsv', 'rest_pairs.tsv'])
         self.assert_reused()

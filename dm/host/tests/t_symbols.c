@@ -32,7 +32,6 @@ uint64_t guest_ns(void) { return 0; }
 uint64_t guest_ticks(void) { return 0; }
 void guest_clock_read_wait(void) {}
 void hlecount_seal(void) {}
-int svc_nro_deactivate(module_t *m) { m->loaded = 0; return 1; }   // no memory mappings in this fixture
 void thr_svc_enter(uint64_t *r, uint64_t a) { (void)r; (void)a; }
 void thr_svc_leave(void) {}
 void dm_spin_wait(uint64_t r, uint64_t a) { (void)r; (void)a; }
@@ -75,8 +74,7 @@ static void check_language_bindings(void) {
     };
     module_t sdk = {.name = "sdk", .base = image, .size = sizeof image, .ro_off = 16,
                     .symtab = symbols, .strtab = names, .nsym = 3};
-    module_t *loaded[] = {&sdk};
-    g_mod = &sdk; g_nmod = 1; g_loaded = loaded; g_nloaded = 1;
+    g_mod = &sdk; g_nmod = 1;
     int list_fallback, count_fallback;
     hle_force_ent hooks[] = {
         {k_language_list, &list_fallback, "test"}, {k_language_count, &count_fallback, "test"},
@@ -104,7 +102,7 @@ static void check_language_bindings(void) {
         force_check();
         reset_sections();
     }
-    g_mod = NULL; g_nmod = 0; g_loaded = NULL; g_nloaded = 0;
+    g_mod = NULL; g_nmod = 0;
     force_sec = forces; force_sec_n = 3;
 }
 
@@ -162,7 +160,7 @@ int main(void) {
     symtab[1] = (Elf64_Sym){.st_name = 1, .st_shndx = 1, .st_value = 0x80};
     symtab[2] = (Elf64_Sym){.st_name = 11, .st_shndx = 1, .st_value = 0x40};
     static module_t mod; mod.base = image; mod.symtab = symtab; mod.strtab = strtab; mod.nsym = 3; build_symhash(&mod);
-    static module_t *loaded[1]; loaded[0] = &mod; g_loaded = loaded; g_nloaded = 1;
+    g_mod = &mod; g_nmod = 1;
     static hle_force_ent aliases[3];
     aliases[0] = (hle_force_ent){"hw_member", NULL, "test", "sw_member"};
     aliases[1] = (hle_force_ent){"hw_orphan", NULL, "test", "sw_orphan"};
@@ -176,7 +174,7 @@ int main(void) {
     assert(force_lookup("forced_fn") == &values[4]);
     aliases[1] = (hle_force_ent){"hw_bad", NULL, "test", "forced_fn"};
     expect_abort(2);
-    g_loaded = NULL; g_nloaded = 0; force_sec = forces; force_sec_n = 3;
+    g_mod = NULL; g_nmod = 0; force_sec = forces; force_sec_n = 3;
     reset_sections();
     check_language_bindings();
     puts("Language list and count: verified SDK exports and paired host fallback: OK");

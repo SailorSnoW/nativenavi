@@ -20,8 +20,7 @@ uint64_t unimpl_c(unsigned idx, uint64_t *regs) {
     return 0;
 }
 
-// Name hash over the swhle section, built at the first lookup. Startup resolution is single-threaded;
-// runtime NRO relocation holds the loader's module write lock, so later lookups and stub insertions are serialized too.
+// Name hash over the swhle section, built at the first lookup. Startup resolution is single-threaded.
 // resolve_import used to strcmp its way through the whole section for every import no module defines, and
 // hle_implements for every weak one: 270 entries (the HLE hooks and the libc passthrough table of
 // hle_table.c) per lookup. These were the last by-name linear scans of the loading phase

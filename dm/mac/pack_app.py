@@ -3,7 +3,7 @@
 # dm/mac/Launcher.swift, and the iOS launcher's model and rows) as CFBundleExecutable, the Mac host beside it,
 # and in Contents/Resources what the IPA carries (dm/ios/tools/build_ipa.sh): romfs.img (the RomFS image), control.nacp (the game's control data, which the host finds beside the RomFS: hle_fs.c control_read), msl/<b-chain.img | vk | gl> (the Mac shader libraries, named as in the IPA),
 # aoc/<index>/ (DLC), pso/ (an NVN game's pipeline archive made offline for this Mac's GPU, dm/gfx/tools/pso_offline.py: the launcher hands it to the host as DM_PSO_BUNDLE),
-# and dm/ (the rewritten modules and their rewriter tables, nro.tsv, the profile's shader_map.tsv / pso_manifest.tsv / c1_full.tsv / cb_extent.tsv / shader_pairs.tsv / pso_pairs.tsv, font/, env.txt,
+# and dm/ (the rewritten modules and their rewriter tables, the profile's shader_map.tsv / pso_manifest.tsv / c1_full.tsv / cb_extent.tsv / shader_pairs.tsv / pso_pairs.tsv, font/, env.txt,
 # launcher.json: the game's launcher settings, dm/games/settings.py, which the settings window and Mac front ends show),
 # plus AppIcon.icns from the game's icon (sips, iconutil) and the Info.plist keys the launcher reads (DMTitleID, DMRomfsMarker, DMLanguage).
 # romfs.img, msl, aoc and pso are links into the signed data bundles in Contents/PlugIns that hold them (see Data bundles below), so that a pack which changes only the host signs in a second.
@@ -23,7 +23,7 @@ import nso_syms
 import romfs as rfs
 import shader_lib
 import vol_space   # the space a build may write, with what APFS frees on demand
-MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv', 'nro.tsv')   # what the host reads from the module folder (build_ipa.sh copies the same tables but changed.tsv: the iPhone's cheats never write code)
+MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv')   # what the host reads from the module folder (build_ipa.sh copies the same tables but changed.tsv: the iPhone's cheats never write code)
 MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json); an NVN game's b-<chain> goes in as one file of them (shader_lib.py)
 # read beside DM_NVN_SHMAP; any of them may be absent (a Vulkan or GL game has no c1_full.tsv). The shader pairs are the pipeline prebuild's (nvn_mtl.m pso_prebuild): without them the
 # app makes no pulling bases, a hybrid draw has no stand-in and a new pipeline compiles on the submit thread (build_ipa.sh copies them into the IPA the same way)

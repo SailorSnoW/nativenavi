@@ -712,13 +712,7 @@ def modules_for(tree, g, rewrite, jobs):
         mods.pop('DM_GAMES_FIRST', None)
     names = tree.py(f"import sys; sys.path.insert(0, 'dm/games'); import game; print(' '.join(game.load({g.id!r}).words('modules')))", mods).split()
     src = {m: g.build / 'extract' / g.ver / 'ExeFS' / m for m in names if m == 'main' or (g.build / 'extract' / g.ver / 'ExeFS' / m).is_file()}   # a version may lack a module another has
-    nro = g.build / f'nro_{g.ver}' / 'nro.tsv'
-    if nro.is_file():
-        for ln in nro.read_text().splitlines():
-            c = ln.split('\t')
-            if ln and not ln.startswith(('#', 'refused\t')): src[c[0]] = nro.parent / (c[0] + '.nro')
     shutil.rmtree(dst, ignore_errors=True); dst.mkdir(parents=True)
-    if nro.is_file(): shutil.copyfile(nro, dst / 'nro.tsv')
     say(f'  {g.id}: rewriting {len(src)} modules with the rewriter of {tree.id}')
     procs, todo = {}, list(src)
     while todo or procs:

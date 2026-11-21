@@ -76,18 +76,9 @@ typedef struct {
     unsigned nsym;
     uint32_t *symh; unsigned symh_mask;   // Name hash table of defined symbols (open addressing, stores symbol indices; for a duplicated name only the smallest index is kept = the first hit of a linear scan)
     uint64_t init, init_array, init_arraysz;   // init = DT_INIT (the module's _init: registers the DSO and runs this module's init_array)
-    uint64_t fini;             // DT_FINI (nn::ro::UnloadModule calls it)
-    // NRO modules (nn::ro, loader.c "NRO modules"): mapped at start like the others, but they take part in symbol lookups only between LoadModule and UnloadModule
-    int nro;
-    _Atomic int loaded;        // the profile's modules always; NRO activation also synchronizes with borrowed stack backing
-    int alone;                 // loaded alone (a JIT plugin, nro_load_alone): not linked with the game, so no other module's load or unload rebinds its imports
-    uint8_t sha256[32];        // an NRO's SHA-256 (what the game's NRR registers; LoadModule finds the module by the image it passes)
-    uint32_t nro_size;         // an NRO's file size (header +0x18), the bytes the hash covers
-    uint8_t *pristine; size_t pristine_len;   // an NRO's initialized data as rewritten; reload restores this and zeroes its bss
-    unsigned loads;            // how many times the game loaded it
 } module_t;
 
-extern module_t *g_mod;         // allocated once from the NSO list and NRO manifest; module addresses stay stable
+extern module_t *g_mod;         // allocated once from the module list; module addresses stay stable
 extern int g_nmod;
 // main's build ID (empty if none): code with fixed addresses in a game's module runs only on the build they were found in
 static inline const char *dm_main_build(void) { for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) return g_mod[i].build_id; return ""; }
@@ -97,22 +88,14 @@ extern pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
 void load_modules(const char *dir, const char **names, int n);
 const char *dm_module_dir(void);   // the folder load_modules read the modules and the rewriter's tables from
 void run_module_inits(void);
-module_t *nro_find(const uint8_t sha256[32]);   // the mapped NRO with this hash (loader.c)
-int nro_refused(const uint8_t sha256[32]);      // an NRO the pack refused (an online SDK, nro.tsv "refused")
-void nro_load(module_t *m);     // relocate an NRO against the loaded modules and bind the earlier modules' imports it defines (the caller runs its init)
-void nro_load_alone(module_t *m);   // relocate an NRO against itself only: a JIT plugin, which on Horizon is not linked with the game (hle_jit.c)
-void nro_unload_alone(module_t *m); // the end of a load alone (DestroyJitEnvironment): inactive again, after its fini; its memory stays mapped in the layout
 void dm_ctl_peek(uint64_t a, int n); void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path);   // DM_CTL "peek" and "memdump": guest memory to the log or a file (probe.c)
-const char *dm_jit_serve_dir(void); uint8_t *dm_jit_layout_base(void);   // a served nn::jit image and the layout the modules are mapped in for it (loader.c, hle_jit.c)
-void nro_unload(module_t *m);   // take an NRO out of the lookups and bind the imports that pointed into it again
-int svc_nro_deactivate(module_t *m);   // mark inactive under the memory map lock, refusing while a stack borrows its data
 void dm_device_share(const void *p, uint64_t size, int share);   // guest memory a device maps (share 1) or no longer maps (0): Horizon's DeviceShared attribute, which refuses unmapping it (hle_svc.c)
 void *module_sym(module_t *m, const char *name);
 int dm_sdk_major(void);   // SDK major version from the sdk module's version string (loader.c); 0 = unknown
 int dm_sdk_ounce(void);   // 1 when the sdk module was built for the Switch 2 (its spec string "spec: Ounce", loader.c)
 int dm_sdk_nvn2_item(unsigned item, int *out);   // a constant NVN2's own nvnDeviceGetInteger answers for item, read from the sdk module (loader.c); 0 when it has none
 #define DM_SDK_OLD(major) ((major) > 0 && (major) <= 10)   // SDK 10 and older: NVN API 53, the shared-font address points at the TTF itself
-int dm_game_imports(const char *prefix);   // main or an NRO imports a symbol whose name starts with prefix (loader.c)
+int dm_game_imports(const char *prefix);   // main imports a symbol whose name starts with prefix (loader.c)
 void *guest_sym(const char *name);
 module_t *module_of(const void *p);
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30

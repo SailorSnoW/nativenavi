@@ -320,7 +320,7 @@ static void module_sources(void) {
     uint8_t *b = mmap(NULL, 0x20000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     assert(b != MAP_FAILED);
     g_mod[0] = (module_t){.base=b, .size=0x20000, .text_end=0x2800, .ro_off=0x2800,
-        .data_off=0x3000, .patch_off=0x1e000, .key_page_off=0x8000, .key_page_size=0x4000, .loaded=1};
+        .data_off=0x3000, .patch_off=0x1e000, .key_page_off=0x8000, .key_page_size=0x4000};
     g_nmod = 1;
     assert(!mprotect(b, 0x4000, PROT_READ));
     assert(!mprotect(b + 0x8000, 0x4000, PROT_READ));
@@ -333,12 +333,6 @@ static void module_sources(void) {
     expect((uintptr_t)b + 0x8000, (uintptr_t)b + 0x8000, 0x4000, 4, 0, 1);
     *(uint8_t *)stack = 0x62;
     assert(!unmap(stack, (uintptr_t)b + 0x4000, P) && b[0x4000] == 0x62);
-    g_mod[0].nro = 1;
-    assert(!map(stack, (uintptr_t)b + 0x4000, P));
-    assert(!svc_nro_deactivate(&g_mod[0]) && g_mod[0].loaded);
-    assert(!unmap(stack, (uintptr_t)b + 0x4000, P));
-    assert(svc_nro_deactivate(&g_mod[0]) && !g_mod[0].loaded);
-    assert(map(stack, (uintptr_t)b + 0x4000, P) == BAD);
     g_nmod = 0; memset(g_mod, 0, sizeof test_modules); assert(!munmap(b, 0x20000));
 }
 
@@ -348,7 +342,7 @@ static void module_back_patch(void) {
     uint8_t *a = mmap(NULL, 0x30000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0), *b = a + 0x8000;
     assert(a != MAP_FAILED);
     g_mod[0] = (module_t){.base=b, .size=0x28000, .text_end=0x2800, .ro_off=0x2800, .data_off=0x3000, .patch_off=-0x8000, .patch_len=0x4000, .image_size=0x28000,
-        .file_image_len=0x4000, .key_page_off=0x10000, .key_page_size=0x4000, .back_off=0x20000, .back_len=0x8000, .loaded=1};
+        .file_image_len=0x4000, .key_page_off=0x10000, .key_page_size=0x4000, .back_off=0x20000, .back_len=0x8000};
     g_nmod = 1;
     assert(!mprotect(b, 0x4000, PROT_READ));
     assert(!mprotect(b + 0x10000, 0x4000, PROT_READ));
@@ -677,10 +671,9 @@ int main(int argc, char **argv) {
 #endif
     assert(!g_nmap && !g_alias_mapped && !g_heap_cur);
     assert(info(I_UsedMem) == DM_GAME_MEM_USED);
-    // Offline NRO copies are not extra guest memory: the game allocates their buffers in its heap. Ordinary modules' large bss still counts.
-    g_nmod = 2;
+    // A module's large bss counts as used memory
+    g_nmod = 1;
     g_mod[0] = (module_t){.size=0x10000000, .file_image_len=0x100000, .patch_off=-0x2000000};
-    g_mod[1] = (module_t){.size=0x160000000, .file_image_len=0x100000, .patch_off=-0x2000000, .nro=1};
     assert(info(I_UsedMem) == DM_GAME_MEM_USED + 0xff00000);
     assert(info(I_UsedNonSys) == DM_GAME_MEM_USED + 0xff00000);
     g_mod[0].back_len = 0x40000;   // a back patch area (patch_nso.py TWO) is code from the file, not bss
