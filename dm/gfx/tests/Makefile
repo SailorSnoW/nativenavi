@@ -24,12 +24,12 @@ FW=-framework Metal -framework MetalFX -framework Foundation -framework IOKit -f
 MTL_T_DEP=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 MTL_T_SRC=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX))
 # CPU-only section walks, including every registration producer; ASan needs no prefix ignorelist.
-REGISTRATION_SRC=../gl/hle_gl.m ../../host/hle.c ../../host/hle_table.c ../../host/hle_sf.c ../nvn/nvn_mtl.m $(MTL_T_SRC)
-REGISTRATION_DEP=Makefile t_registration.m ../vk/hle_vk.m $(REGISTRATION_SRC) $(MTL_T_DEP)
+REGISTRATION_SRC=../../host/hle.c ../../host/hle_table.c ../../host/hle_sf.c ../nvn/nvn_mtl.m $(MTL_T_SRC)
+REGISTRATION_DEP=Makefile t_registration.m $(REGISTRATION_SRC) $(MTL_T_DEP)
 t_registration: $(REGISTRATION_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_registration.m $(REGISTRATION_SRC) $(FW)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_registration.m $(REGISTRATION_SRC) $(FW)
 t_registration_asan: $(REGISTRATION_DEP)
-	clang $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_registration.m $(REGISTRATION_SRC) $(FW)
+	clang $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -fobjc-arc -o $@ t_registration.m $(REGISTRATION_SRC) $(FW)
 .PHONY: registration-asan
 registration-asan: t_registration_asan
 	ASAN_OPTIONS=halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./t_registration_asan
@@ -82,7 +82,6 @@ t_mtl_init: t_mtl_init.m $(MTL_T_DEP)
 .PHONY: check_t_mtl_init
 check_t_mtl_init: t_mtl_init
 	./t_mtl_init
-	DM_TEST_NO_METAL4=1 ./t_mtl_init
 t_nvn: t_nvn.c ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -DDM_TEST_NVN_SDK -fobjc-arc -o $@ t_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(FW)
 t_nvn_accel: t_nvn_accel.m $(MTL_T_DEP)
@@ -291,7 +290,6 @@ t_present_crop: t_present_crop.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_crop.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 .PHONY: check_t_present_crop
 check_t_present_crop: t_present_crop
-	DM_PRESENT_LINK=0 MTL_DEBUG_LAYER=1 ./t_present_crop --external-screenshots
 	DM_PRESENT_SNAP=0 DM_NVN_ENC_THREAD=0 ./t_present_crop
 	DM_PRESENT_SNAP=0 DM_NVN_ENC_THREAD=1 ./t_present_crop
 	DM_PRESENT_SNAP=1 DM_NVN_ENC_THREAD=0 ./t_present_crop
@@ -757,59 +755,6 @@ check_t_image_srgb: RUN_ENV = MTL_DEBUG_LAYER=1
 t_stencil_view: t_stencil_view.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_stencil_view.m $(MTL_T_SRC) $(FW)
 check_t_stencil_view: RUN_ENV = MTL_DEBUG_LAYER=1
-# The Vulkan layer (#included) over the whole NVN layer, whose device and present path it uses
-t_vk_fan: t_vk_fan.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_fan.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-check_t_vk_fan: RUN_ENV = MTL_DEBUG_LAYER=1
-t_vk_desc: t_vk_desc.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_desc.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-t_vk_cmds: t_vk_cmds.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_cmds.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-t_vk_compute: t_vk_compute.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_compute.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-t_vk_argbuf: t_vk_argbuf.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_argbuf.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-t_gl_imports: t_gl_imports.m ../gl/hle_gl.m ../gl/gl_aliases.h ../../host/hle.c ../../host/hle.h $(MTL_T_DEP)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_gl_imports.m ../../host/hle.c $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-.PHONY: check_t_gl_imports gl-imports gl-imports-cpu gl-arguments
-check_t_gl_imports: t_gl_imports
-	MTL_DEBUG_LAYER=1 ./t_gl_imports
-	MTL_DEBUG_LAYER=1 ./t_gl_imports --stubs
-gl-arguments: t_gl_imports
-	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 ../../tools/tests/test_gl_shaders.py --fixture "$$work"; MTL_DEBUG_LAYER=1 ./t_gl_imports --fixture "$$work"
-	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; mkdir "$$work/capture"; \
-	    MTL_DEBUG_LAYER=1 DM_MSL_DIR="$$work" DM_TEMP="$$work" DM_GL_CAPTURE="$$work/capture" \
-	    DM_GL_CAPTURE_COMPILER="$(abspath ../tools/gl_shaders.py)" ./t_gl_imports --capture
-gl-imports: check_t_gl_imports
-gl-imports-cpu: t_gl_imports
-	MTL_DEBUG_LAYER=1 ./t_gl_imports --cpu
-	MTL_DEBUG_LAYER=1 ./t_gl_imports --cpu --stubs
-check_t_vk_desc: RUN_ENV = MTL_DEBUG_LAYER=1
-# An attachment opened with LOAD_OP_DONT_CARE keeps what the image held, colour, depth and stencil (Re:ZERO's post chain)
-t_vk_dontcare: t_vk_dontcare.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_dontcare.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-# The validation layer fills every DontCare load with a pattern, so a DontCare load fails the check whatever the tile memory happens to hold
-check_t_vk_dontcare: RUN_ENV = MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS=1
-# A Vulkan 1D image is a one-row 2D texture: drawn into, mipmapped, layered and depth, under the validation layer that aborts on each with a Metal 1D texture
-# Swap chain images are released once the presents that showed them are done, over more recreations than the window-texture list holds
-t_vk_swapchain_life: t_vk_swapchain_life.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_swapchain_life.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-t_vk_1d: t_vk_1d.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_1d.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-check_t_vk_1d: RUN_ENV = MTL_DEBUG_LAYER=1
-# A clear reads the member of VkClearColorValue the format names: uint32, int32 or float32, by a render pass's LOAD_OP_CLEAR and by vkCmdClearColorImage
-t_vk_clear_int: t_vk_clear_int.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_clear_int.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-check_t_vk_clear_int: RUN_ENV = MTL_DEBUG_LAYER=1
-t_vk_clear_attachments: t_vk_clear_attachments.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_clear_attachments.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-check_t_vk_clear_attachments: RUN_ENV = MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS=1
-check_t_vk_cmds: RUN_ENV = MTL_DEBUG_LAYER=1
-check_t_vk_compute: RUN_ENV = MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1
-check_t_vk_argbuf: RUN_ENV = MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1
-t_vk_renderdragon: t_vk_renderdragon.m ../vk/hle_vk.m $(MTL_T_DEP)
-	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_renderdragon.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-check_t_vk_renderdragon: RUN_ENV = MTL_DEBUG_LAYER=1
 # Float32 missing components retain float padding through integer shader inputs.
 t_float_pad: t_float_pad.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_float_pad.m $(MTL_T_SRC) $(FW)

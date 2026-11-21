@@ -23,8 +23,8 @@ uint64_t unimpl_c(unsigned idx, uint64_t *regs) {
 // Name hash over the swhle section, built at the first lookup. Startup resolution is single-threaded;
 // runtime NRO relocation holds the loader's module write lock, so later lookups and stub insertions are serialized too.
 // resolve_import used to strcmp its way through the whole section for every import no module defines, and
-// hle_implements for every weak one: 270 entries (the HLE hooks and the libc / Vulkan / GL passthrough tables of
-// hle_table.c / hle_vk.m / hle_gl.m) per lookup. These were the last by-name linear scans of the loading phase
+// hle_implements for every weak one: 270 entries (the HLE hooks and the libc passthrough table of
+// hle_table.c) per lookup. These were the last by-name linear scans of the loading phase
 // whose module symbol tables module_sym's hash already fixed (loader.c build_symhash, whose comment measured
 // that phase at 77-86 ms of the ① load before it)
 static uint32_t name_h(const char *s) { uint32_t h = 2166136261u; while (*s) h = (h ^ (uint8_t)*s++) * 16777619u; return h; }

@@ -1,4 +1,4 @@
-// Race the first Metal device request with graphics suspend or another classic device request.
+// Race the first Metal device request with graphics suspend.
 #import <Metal/Metal.h>
 static id<MTLDevice> gated_device(void);
 #define MTLCreateSystemDefaultDevice gated_device
@@ -41,16 +41,13 @@ int main(void) {
         second_returned = dispatch_semaphore_create(0);
         dispatch_queue_t workers = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
         dispatch_group_t work = dispatch_group_create();
-        int classic = getenv("DM_TEST_NO_METAL4") != NULL;
         dispatch_group_async(work, workers, ^{
-            if (classic) mtl_device_classic();
-            else mtl_init();
+            mtl_init();
         });
         await(requesting_device, "Metal initialization did not request a device");
         dispatch_group_async(work, workers, ^{
             dispatch_semaphore_signal(second_started);
-            if (classic) mtl_device_classic();
-            else dm_gfx_suspend(1);
+            dm_gfx_suspend(1);
             dispatch_semaphore_signal(second_returned);
         });
         await(second_started, "the second caller did not start");
@@ -60,13 +57,11 @@ int main(void) {
         }
         dispatch_semaphore_signal(allow_device);
         if (dispatch_group_wait(work, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) ||
-            atomic_load(&device_requests) != 1 || !g_q || !g_ev || g_classic != classic ||
-            (!classic && (!g_q4 || !g_feedback_q))) {
+            atomic_load(&device_requests) != 1 || !g_q || !g_ev || !g_q4 || !g_feedback_q) {
             fputs("FAIL: the callers did not finish with one fully initialized device\n", stderr);
             return 1;
         }
-        if (classic) dm_gfx_suspend(1);   // The classic fallback has no residency sets to attach during the drain.
-        printf("Metal initialization passed with concurrent %s\n", classic ? "classic device requests" : "graphics suspend");
+        printf("Metal initialization passed with concurrent graphics suspend\n");
         return 0;
     }
 }

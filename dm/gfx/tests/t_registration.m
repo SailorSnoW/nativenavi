@@ -1,6 +1,11 @@
-// Walk the real HLE, libc, Vulkan, GL/EGL, NVN and service registrations without a GPU.
+// Walk the real HLE, libc, NVN and service registrations without a GPU.
 // Build under ASan without a global ignorelist: every producer must preserve its section's array layout.
-#include "../vk/hle_vk.m"
+#include "../../host/hle.h"
+#include "../nvn/nvn_mtl.h"
+#import <Metal/Metal.h>
+#include <mach-o/getsect.h>
+#include <mach-o/ldsyms.h>
+#include <time.h>
 #include <assert.h>
 #if __has_feature(address_sanitizer)
 #include <sanitizer/asan_interface.h>
@@ -15,7 +20,6 @@ module_t *g_mod; int g_nmod;
 struct dm_flags g_flag;
 pthread_key_t g_key18;
 void svc_thread_dump(void) {}
-void dm_vi_layer_size(int *w, int *h) { *w = *h = 0; }
 int dm_opmode(void) { return 1; }
 uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 uint64_t guest_ns(void) { return 0; }
@@ -58,15 +62,11 @@ int main(void) {
 #endif
     unsigned long nhle, nforce, nnvn, nsf, nodd;
     const hle_ent *hle = SECTION("swhle", hle_ent, &nhle);
-    void *(*gl_lookup)(const char *) = (void *)resolve_import(NULL, "eglGetProcAddress");
-    unsigned nvk = 0, ngl = 0;
     for (unsigned long i = 0; i < nhle; i++) {
         assert(hle[i].name && hle[i].fn && hle_implements(hle[i].name));
         assert((void *)resolve_import(NULL, hle[i].name) == hle[i].fn);
-        if (!strncmp(hle[i].name, "vk", 2)) { assert(vk_lookup(hle[i].name) == hle[i].fn); nvk++; }
-        if (!strncmp(hle[i].name, "gl", 2) || !strncmp(hle[i].name, "egl", 3)) { assert(gl_lookup(hle[i].name) == hle[i].fn); ngl++; }
     }
-    assert(nvk > 100 && ngl > 100);
+    assert(nhle);   // at least this file's own entry: the HLE hooks of dm/host are not linked here
     assert(((int (*)(void))resolve_import(NULL, "registration_hle"))() == 41);
     void *(*copy)(void *, const void *, size_t) = (void *)resolve_import(NULL, "memcpy");
     char dest[4]; assert(copy(dest, "abc", 4) == dest && !strcmp(dest, "abc"));
@@ -104,7 +104,6 @@ int main(void) {
     }
     const odd_entry *odd = SECTION("swtest", odd_entry, &nodd);
     assert(nodd == 2 && odd[0].value + odd[1].value == 93);
-    printf("registrations: %lu HLE (%u Vulkan, %u GL/EGL), %lu forced, %lu NVN, %lu services, %lu 24-byte entries: OK\n",
-           nhle, nvk, ngl, nforce, nnvn, nsf, nodd);
+    printf("registrations: %lu HLE, %lu forced, %lu NVN, %lu services, %lu 24-byte entries: OK\n", nhle, nforce, nnvn, nsf, nodd);
     return 0;
 }
