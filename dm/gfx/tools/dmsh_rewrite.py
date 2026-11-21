@@ -741,6 +741,16 @@ def raw_noinline(msl, stage='cs'):
     attr = 'inline __attribute__((always_inline))' if stage in RAW_INLINE_STAGES else '__attribute__((noinline))'
     return RAW_FIND.sub(lambda m: '\nstatic ' + attr + '\n' + m.group(1), msl) if 'dmsh_raw_find' in msl else msl
 
+# A subgroup shuffle of a literal is that literal: every lane holds the same value, so the lane read changes nothing (a lane that is not active gives an undefined value on
+# NVIDIA's GPU too, and the shaders mask those with the ballot). Six of Ocarina of Time's mesh shaders count their lanes' output with a prefix sum the translator's constant
+# propagation left as 32 shuffles of the constant 2, one per lane. Apple's M2 mesh compiler dies on some of them (MachineOperand::setReg, SIGBUS): with all 32 or with 24 it
+# crashes, with 28 or 16 it does not, and with a value that differs by lane it never does, so the cause in the compiler is not known; with none it has nothing to trip on
+# (shaders.md, A shuffle of a constant crashes Apple's M2 mesh compiler). The lane argument is dropped with the call: it has no side effect (a literal, a variable or a cast of one)
+SHUFFLE_LITERAL = re.compile(r'\bspvSubgroupShuffle\(\s*(-?(?:0x[0-9a-fA-F]+|\d[\d.]*(?:[eE][+-]?\d+)?)[uUfFhH]?)\s*,\s*(?:\w+|\w+\(\w+\))\s*\)')
+def shuffle_literal(msl):
+    def lit(m): return '(' + m.group(1) + ')' if m.group(1).startswith('-') else m.group(1)
+    return SHUFFLE_LITERAL.sub(lit, msl) if 'spvSubgroupShuffle(' in msl else msl
+
 GATHER4 = 'template<typename T> static inline __attribute__((always_inline)) vec<T, 4> dm_gather4(T a, T b, T c, T d) { return vec<T, 4>(a, b, c, d); }\n'
 
 def gather_offsets(msl):

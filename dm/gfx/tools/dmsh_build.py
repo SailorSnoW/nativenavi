@@ -829,6 +829,9 @@ def finish(key, w, j, c1):
         src = dmsh_rewrite.max_threads(src, j.get('local')); open(msl, 'w').write(src)   # the local size as the kernel's thread limit, so its pipeline allows the dispatch (see max_threads)
     if 'dmsh_raw_find' in src:
         src = dmsh_rewrite.raw_noinline(src, mesh['kind'] if mesh else j['stage']); open(msl, 'w').write(src)   # native stages were translated as cs; task and mesh searches stay inline (see raw_noinline)
+    if 'spvSubgroupShuffle(' in src:
+        folded = dmsh_rewrite.shuffle_literal(src)   # a shuffle of a literal is the literal (see shuffle_literal)
+        if folded != src: src = folded; open(msl, 'w').write(src)
     pad = []
     if j['stage'] == 'vs':   # outputs start as (0,0,0,1) (see vs_init); no point size beside a layer output (see vs_layer); the base instance from Metal (see vs_base_instance)
         src = dmsh_entry.vs_base_instance(dmsh_entry.vs_layer(dmsh_entry.vs_init(src))); open(msl, 'w').write(src)
