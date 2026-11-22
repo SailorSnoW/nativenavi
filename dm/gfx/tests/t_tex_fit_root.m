@@ -72,7 +72,7 @@ static void cube_views(id<MTLLibrary> library) {
 enum { RT_TID = NTID };
 static void rt_settle(void) {
     CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "the submission completed");
-    @autoreleasepool { mtl_drain(); dispatch_sync(g_feedback_q, ^{}); defer_drain(); }
+    @autoreleasepool { mtl_drain(); defer_settle(); }
 }
 static void retire_views(id<MTLComputePipelineState> pipeline, id<MTLTexture> root) {
     static const char *names[] = {"unregister", "descriptor gone", "pool gone", "descriptor gone, then the same registration"};

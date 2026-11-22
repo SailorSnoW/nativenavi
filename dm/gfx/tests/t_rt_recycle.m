@@ -45,7 +45,7 @@ static int resident(id o) { pthread_mutex_lock(&g_res_mu); int r = [g_res_object
 static unsigned waiting(void) { os_unfair_lock_lock(&g_rh_lk); unsigned n = g_rh_n; os_unfair_lock_unlock(&g_rh_lk); return n; }
 static void settle(void) {   // the released textures' fences pass and the deferred releases run (as in t_image_alias)
     mtl_sub_commit(); mtl_drain(); mtl_sub_begin(); mtl_sub_commit(); mtl_drain();
-    dispatch_sync(g_feedback_q, ^{}); defer_drain(); mtl_sub_begin();
+    defer_settle(); mtl_sub_begin();
 }
 static void fill(id<MTLTexture> t, uint8_t v) {
     NSUInteger row = t.width * 8, bytes = row * t.height;

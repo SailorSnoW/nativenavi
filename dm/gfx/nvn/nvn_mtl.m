@@ -708,16 +708,27 @@ static int defer_drain(void) { int back = 0; @autoreleasepool {
 } return back; }
 // A drain off the submit thread for entries whose fence had passed when they were queued. Between submissions no feedback handler comes: Ocarina of Time out of focus waits in
 // oe::PopNotificationMessage and submits nothing, while its streaming threads remade a run of about 10 MB of a virtual pool 70 times a second (vrun_set). Each old buffer waited for
-// the next submission's fence, and GPU allocated went from 11 to 20 GB in 12 s, with 6.7 GB of swap in 20 s (PR #1392). Entries handed back while g_smu was busy are tried again 10 ms later
+// the next submission's fence, and GPU allocated went from 11 to 20 GB in 12 s, with 6.7 GB of swap in 20 s (PR #1392). Entries handed back while g_smu was busy are tried again 10 ms later.
+// The drains run on a serial queue of their own, at the utility QoS of the global queue they used to run on, so that they can be waited for (defer_settle)
+static dispatch_queue_t kick_q(void) {
+    static dispatch_queue_t q; static dispatch_once_t once;
+    dispatch_once(&once, ^{ q = dispatch_queue_create("dm.nvn.defer-kick", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0)); });
+    return q;
+}
 static void defer_kick(void) {
     static _Atomic int queued;
     if (atomic_exchange(&queued, 1)) return;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ @autoreleasepool {
+    dispatch_async(kick_q(), ^{ @autoreleasepool {
         atomic_store(&queued, 0);   // before the drain: an entry queued during it kicks again
         int back = defer_drain(); res_commit();
-        if (back) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ defer_kick(); });
+        if (back) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC), kick_q(), ^{ defer_kick(); });
     } });
 }
+// Where everything retired so far has been released, for the tests (the host never waits for it): the feedback handlers already queued, the drains they or a retirement kicked
+// (defer_kick), then a drain here. Waiting for the feedback queue alone was not enough: a kicked drain releases what it takes after its residency commit, past g_res_commit_mu
+// (res_commit), so a commit on the waiting thread could return while the kicked one still released a family's textures (t_image_alias failed 18 runs in 20 without the
+// encode thread, 13 with it, on an M2 Pro). A drain kicked again 10 ms later, for entries handed back while g_smu was busy, is not waited for
+static void __attribute__((unused)) defer_settle(void) { dispatch_sync(g_feedback_q, ^{}); dispatch_sync(kick_q(), ^{}); defer_drain(); }
 // What a drain takes out of the residency set leaves it, and is released, at the set's next commit, which the next submission makes. With none open none may come: the drain is
 // committed off this thread then (a feedback handler's, or the submit thread closing its submission). Each side writes, then reads the other's state behind a full fence, so one of
 // them sees what is left

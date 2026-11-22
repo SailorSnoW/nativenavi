@@ -245,8 +245,8 @@ int main(void) { @autoreleasepool {
     mtl_sub_commit(); mtl_drain();
     // Finish a second submission: release calls are deferred to the next fence.
     mtl_sub_begin(); mtl_sub_commit(); mtl_drain();
-    // GPU completion publishes the fence before its feedback handler drains deferred objects.
-    dispatch_sync(g_feedback_q, ^{}); defer_drain(); res_commit();
+    // GPU completion publishes the fence before its feedback handler drains deferred objects, and a drain kicked off the submit thread releases after its commit (defer_settle).
+    defer_settle(); res_commit();
     CHECK(g_image_desc.n==0,"finalization releases every recorded description");
     }
     res_commit();   // apply descriptor retirements queued while the fixture's autorelease pool drained
@@ -263,7 +263,7 @@ int main(void) { @autoreleasepool {
         CHECK(tex_mtl(&a).heap!=nil,"a recreated family allocates its backing");
         mtl_tex_release(&a); mtl_tex_release(&b); mtl_alias_drop_pool(&pool);
         mtl_sub_commit(); mtl_drain(); mtl_sub_begin(); mtl_sub_commit(); mtl_drain();
-        dispatch_sync(g_feedback_q,^{}); defer_drain(); res_commit();
+        defer_settle(); res_commit();
     } }
     res_commit();
     CHECK(g_image_heap_n==0,"repeated destruction leaves no heap owner");

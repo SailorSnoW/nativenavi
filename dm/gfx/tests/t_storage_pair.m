@@ -22,7 +22,7 @@ static tex_t tex(uint64_t off, unsigned w, unsigned h, unsigned samples, int for
 #define POOLED(...) do { mtl_sub_commit(); mtl_drain(); @autoreleasepool { mtl_sub_begin(); __VA_ARGS__; mtl_sub_commit(); mtl_drain(); } mtl_sub_begin(); } while (0)
 static void settle(void) {   // the released textures' fences pass and the deferred releases run (as in t_image_alias)
     mtl_sub_commit(); mtl_drain(); mtl_sub_begin(); mtl_sub_commit(); mtl_drain();
-    dispatch_sync(g_feedback_q, ^{}); defer_drain(); mtl_sub_begin();
+    defer_settle(); mtl_sub_begin();
 }
 static int waits(id<MTLHeap> h) { int w = 0; os_unfair_lock_lock(&g_rh_lk); for (unsigned i = 0; i < g_rh_n; i++) w |= (__bridge id)g_rh[i].heap == h; os_unfair_lock_unlock(&g_rh_lk); return w; }
 static void drop_entry(const tex_t *t) { alias_key k = tex_alias_key(t); pthread_mutex_lock(&g_smu); own_alias_del_locked(&k); pthread_mutex_unlock(&g_smu); }
