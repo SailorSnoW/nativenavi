@@ -222,6 +222,21 @@ class PackReuse(unittest.TestCase):
                 p = self.tmp / name; st = p.stat(); data = p.read_bytes(); p.write_bytes(bytes([data[0] ^ 1]) + data[1:])
                 os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns)); self.assert_repacked()
 
+    def test_practice_tools_are_an_input(self):   # Resources/dm/practice: added, changed, a file added, taken out
+        (self.tmp / 'practice').mkdir()
+        for n in ('subsdk9.patched.bin', 'subsdk9.fixups.tsv', 'X.ips', 'LICENSE'): (self.tmp / 'practice' / n).write_bytes(n.encode())
+        self.pack(); self.args.practice = str(self.tmp / 'practice'); self.assert_repacked(); self.assert_reused()
+        self.assertEqual((Path(self.args.out) / 'Contents/Resources/dm/practice/X.ips').read_bytes(), b'X.ips')
+        for name in ('subsdk9.patched.bin', 'X.ips', 'LICENSE'):
+            with self.subTest(name=name):
+                p = self.tmp / 'practice' / name; st = p.stat(); data = p.read_bytes(); p.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+                os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns)); self.assert_repacked()
+        (self.tmp / 'practice/subsdk9.gates.tsv').write_bytes(b'gates'); self.assert_repacked()
+        self.args.practice = None; self.assert_repacked()
+        self.assertFalse((Path(self.args.out) / 'Contents/Resources/dm/practice').exists())
+        (self.tmp / 'empty').mkdir(); self.args.practice = str(self.tmp / 'empty')
+        with self.assertRaisesRegex(SystemExit, 'needs a rewritten module with its fixups and an IPS'): self.pack()
+
     def test_romfs_and_aoc_stat_trees_include_paths_modes_and_empty_directories(self):
         self.pack()
         for name in ('romfs/marker', 'aoc/1/data'):
@@ -618,6 +633,10 @@ class App(unittest.TestCase):
         for n, b in (('main.patched.bin', b'code'), ('main.fixups.tsv', b'f'), ('main.gates.tsv', b'g'), ('main.cuts.tsv', b'c'), ('main.obs.tsv', b'o'), ('main.changed.tsv', b'w'), ('main.sites.tsv', b's'), ('build_src.sha256', b'h')):
             (t / 'patched' / n).write_bytes(b)
         (t / 'romfs/region_common/audio/edward.bfsar').write_bytes(b'snd')
+        (t / 'practice').mkdir()
+        for n in ('subsdk9.patched.bin', 'subsdk9.fixups.tsv', 'subsdk9.gates.tsv', 'subsdk9.cuts.tsv', 'subsdk9.obs.tsv', 'subsdk9.changed.tsv', 'subsdk9.sites.tsv', 'build_src.sha256',
+                  'E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348.ips', 'LICENSE'):
+            (t / 'practice' / n).write_bytes(n.encode())
         (t / 'cache/b-0123456789ab/k_b.metallib').write_bytes(b'lib'); (t / 'cache/b-0123456789ab/inputs.tsv').write_text('# stamp\n')
         (t / 'cache/b-0123456789ab/k_b.json').write_text('{}'); (t / 'cache/b-0123456789ab/k_b.metal').write_text('msl'); (t / 'cache/b-0123456789ab/_b_build.json').write_text('[]')
         (t / 'cache/cas').mkdir()   # the Metal compile cache: not for the app
@@ -634,7 +653,7 @@ class App(unittest.TestCase):
                                        '/usr/bin/osacompile -o "$HOME/alert.scpt" "$1" "$2" 2> "$HOME/alert.error"\n')
         (t / 'bin/osascript').chmod(0o755)
         cls.app = t / 'Game - Test.app'
-        cls.args = pack_app.parse([str(cls.app), '--host', str(t / 'dmhost'), '--patched', str(t / 'patched'), '--romfs', str(t / 'romfs'), '--msl', str(t / 'cache/b-0123456789ab'),
+        cls.args = pack_app.parse([str(cls.app), '--host', str(t / 'dmhost'), '--patched', str(t / 'patched'), '--practice', str(t / 'practice'), '--romfs', str(t / 'romfs'), '--msl', str(t / 'cache/b-0123456789ab'),
                                    '--tables', str(t / 'profile'), '--font', str(t / 'font'), '--aoc', str(t / 'aoc'), '--pso', str(t / 'pso'), '--env-file', str(t / 'env.txt'), '--settings', str(t / 'launcher.json'), '--title-id', TID.lower(),
                                    '--name', 'Game: Test', '--version', '1.0.1', '--lang', 'fr', '--marker', 'region_common/audio/edward.bfsar', '--icon', str(t / 'icon.jpg'),
                                    '--category', 'public.app-category.games'])
@@ -675,8 +694,12 @@ class App(unittest.TestCase):
         self.assertFalse(self.app.with_name(self.app.name + '.partial').exists())
         self.assertEqual(sorted(p.name for p in (c / 'MacOS').iterdir()), ['dmhost', 'nxnative'])
         self.assertEqual(sorted(p.name for p in (c / 'Resources/dm').iterdir()),
-                         ['c1_full.tsv', 'env.txt', 'font', 'launcher.json', 'main.changed.tsv', 'main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin', 'pso_manifest.tsv', 'pso_pairs.tsv',
+                         ['c1_full.tsv', 'env.txt', 'font', 'launcher.json', 'main.changed.tsv', 'main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin', 'practice', 'pso_manifest.tsv', 'pso_pairs.tsv',
                           'shader_map.tsv', 'shader_pairs.tsv'])   # the shader pairs: the pipeline prebuild's, without which hybrid draws have no stand-in
+        self.assertEqual(sorted(p.name for p in (c / 'Resources/dm/practice').iterdir()),   # what the host reads of the practice tools (hle_practice.c) and their license
+                         ['E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348.ips', 'LICENSE', 'subsdk9.changed.tsv', 'subsdk9.cuts.tsv', 'subsdk9.fixups.tsv', 'subsdk9.gates.tsv', 'subsdk9.obs.tsv', 'subsdk9.patched.bin'])
+        self.assertEqual((c / 'Resources/dm/practice/subsdk9.patched.bin').read_bytes(), b'subsdk9.patched.bin')
+        self.assertNotIn('subsdk9.patched.bin', plistlib.loads((c / 'Info.plist').read_bytes())['DMModuleFiles'])   # not a module the launcher checks for: off by default
         self.assertEqual([p.name for p in (c / 'Resources/msl').iterdir()], ['b-0123456789ab.img'])   # the libraries only, as one file, not the compile cache
         sys.path.insert(0, str(Path(__file__).resolve().parents[1])); import romfs
         msl = romfs.Path(c / 'Resources/msl/b-0123456789ab.img')
@@ -970,12 +993,12 @@ class App(unittest.TestCase):
         romfs, probed, counted = (self.tmp / 'romfs').resolve(), [], []
         def can_clone(src, dst): probed.append(src); return src == romfs
         def tree_bytes(d): counted.append(d); return 0
-        lists = sum(p.stat().st_size for d, pats in (('patched', pack_app.MODULE_FILES), ('msl', pack_app.MSL_FILES), ('pso', pack_app.PSO_FILES))
+        lists = sum(p.stat().st_size for d, pats in (('patched', pack_app.MODULE_FILES), ('practice', pack_app.PRACTICE_FILES), ('msl', pack_app.MSL_FILES), ('pso', pack_app.PSO_FILES))
                     for pat in pats for p in (self.tmp / d).glob(pat) if p.is_file() and p.name != '_b_build.json')
         with mock.patch.object(pack_app, 'can_clone', can_clone), mock.patch.object(pack_app, 'tree_bytes', tree_bytes), \
              mock.patch.object(shutil, 'disk_usage', lambda p: types.SimpleNamespace(free=(1 << 30) + lists - 1)), mock.patch.object(pack_app.vol_space, 'important_bytes', lambda p: None), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(SystemExit, 'the app needs'): pack_app.pack(a)
-        self.assertEqual(len(probed), 5); self.assertEqual(counted, [(self.tmp / 'aoc').resolve()])
+        self.assertEqual(len(probed), 6); self.assertEqual(counted, [(self.tmp / 'aoc').resolve()])   # the RomFS and DLC trees, the modules, the practice tools, the libraries, the archive
 
     def test_copies(self):   # another volume (no APFS clone): plain copies, the same layout; a new app replaces the old one whole
         with mock.patch.object(pack_app, 'can_clone', lambda *a: False), mock.patch.object(pack_app, 'sign', lambda *a: None), mock.patch('sys.stdout'):
@@ -1037,7 +1060,8 @@ class Script(unittest.TestCase):
         with mock.patch.object(nsp, 'run', fake_run), mock.patch.object(nsp, 'PROG', self.prog), mock.patch.object(subprocess, 'run', sw_vers), mock.patch.object(nsp, 'chain_of', lambda repo: '0123456789ab'), \
              mock.patch.object(nsp, 'mac_gpu_arch', lambda *a: 'applegpu_g14s'), mock.patch.object(nsp, 'say', self.said.append):
             nsp.mac_app(sys.executable, REPO, out, 0x01008CF01BAAC000, tmp, tmp / 'ex', tmp / 'patched', tmp / 'dmhost', tmp / 'font', tmp / 'shader/cache',
-                        kw.get('aoc'), 'en-US', g, 'Game', '1.0.0', 'org.nxnative.01008cf01baac000', None, kw.get('sign', ''), {}, tmp, gpus=kw.get('gpus', ''), prebake=kw.get('prebake', False))
+                        kw.get('aoc'), 'en-US', g, 'Game', '1.0.0', 'org.nxnative.01008cf01baac000', None, kw.get('sign', ''), {}, tmp, gpus=kw.get('gpus', ''), prebake=kw.get('prebake', False),
+                        practice=kw.get('practice'))
         self.pso_cmd = next((c for c in ran if len(c) > 1 and c[1].endswith('pso_offline.py')), None)   # before the packer
         self.settings_cmd = next(c for c in ran if len(c) > 1 and c[1].endswith('dm/games/settings.py'))
         c = ran[-1]; return {c[i]: c[i + 1] for i in range(3, len(c) - 1) if c[i].startswith('--')}, tmp
@@ -1058,6 +1082,9 @@ class Script(unittest.TestCase):
         self.assertEqual(self.settings_env['DM_LANG'], 'en-US')
         o, tmp = self.pack_cmd(aoc=Path('/x/aoc'), sign='Developer ID Application: X (T)')
         self.assertEqual((o['--aoc'], o['--sign']), ('/x/aoc', 'Developer ID Application: X (T)'))
+        self.assertNotIn('--practice', o)   # a build without the practice tools
+        o, tmp = self.pack_cmd(practice=Path('/x/patched/practice'))
+        self.assertEqual(o['--practice'], '/x/patched/practice')   # the practice tools stage's folder, Resources/dm/practice
 
     def test_pso_archive(self):   # an NVN game with shader pairs: its pipeline archive for this Mac's GPU, made by pso_offline.py, goes into the app
         tmp = Path(tempfile.mkdtemp(dir=TEST_ROOT)); self.addCleanup(shutil.rmtree, tmp)

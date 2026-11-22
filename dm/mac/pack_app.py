@@ -4,7 +4,8 @@
 # and in Contents/Resources: romfs.img (the RomFS image), msl/<b-chain.img> (the Mac shader library),
 # aoc/<index>/ (DLC), pso/ (the pipeline archive made offline for this Mac's GPU, dm/gfx/tools/pso_offline.py: the launcher hands it to the host as DM_PSO_BUNDLE),
 # and dm/ (the rewritten modules and their rewriter tables, the profile's shader_map.tsv / pso_manifest.tsv / c1_full.tsv / cb_extent.tsv / shader_pairs.tsv / pso_pairs.tsv, font/, env.txt,
-# launcher.json: the game's launcher settings, dm/games/settings.py, which the settings window and Mac front ends show),
+# launcher.json: the game's launcher settings, dm/games/settings.py, which the settings window and Mac front ends show; practice/: the practice tools, the packing script's
+# practice_tools folder, which the host loads with DM_PRACTICE=1),
 # plus AppIcon.icns from the game's icon (sips, iconutil) and the Info.plist keys the launcher reads (DMTitleID, DMRomfsMarker, DMLanguage).
 # romfs.img, msl, aoc and pso are links into the signed data bundles in Contents/PlugIns that hold them (see Data bundles below), so that a pack which changes only the host signs in a second.
 # The large folders are APFS clones (cp -c) when the app is on the same APFS volume as the build, so they take no space; plain copies otherwise.
@@ -24,6 +25,7 @@ import romfs as rfs
 import shader_lib
 import vol_space   # the space a build may write, with what APFS frees on demand
 MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv')   # what the host reads from the module folder (changed.tsv: the mods' code patches, hle_mods.c)
+PRACTICE_FILES = MODULE_FILES + ('*.ips', 'LICENSE')   # what the host reads of the practice tools' folder (hle_practice.c), and their license
 MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json); the shader chain's b-<chain> goes in as one file of them (shader_lib.py)
 # read beside DM_NVN_SHMAP; any of them may be absent. The shader pairs are the pipeline prebuild's (nvn_mtl.m pso_prebuild): without them the
 # app makes no pulling bases, a hybrid draw has no stand-in and a new pipeline compiles on the submit thread
@@ -312,7 +314,7 @@ def copy_msl(msl, msls, dst, clone):
 
 def selected_inputs(a):
     """Resolve once: these same lists supply both the reuse key and the copies."""
-    for name in ('patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso'):
+    for name in ('patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'practice'):
         p = getattr(a, name)
         if p and not (rfs.Path(p).is_dir() if name == 'romfs' else shader_lib.exists(p) if name == 'msl' else Path(p).is_dir()): raise SystemExit(f'no {name} directory at {p}')
     if a.marker and not (rfs.Path(a.romfs) / a.marker).exists(): raise SystemExit(f'no RomFS at {a.romfs} (missing {a.marker})')
@@ -321,6 +323,10 @@ def selected_inputs(a):
     for p in mods:
         if p.name.endswith('.patched.bin') and not p.with_name(p.name.removesuffix('.patched.bin') + '.fixups.tsv').is_file():
             raise SystemExit(f'no rewriter fixups for {p}')
+    practice = sorted({p for pat in PRACTICE_FILES for p in Path(a.practice).glob(pat) if not detritus(p.name)}) if a.practice else []
+    if a.practice and not (any(p.name.endswith('.patched.bin') and p.with_name(p.name.removesuffix('.patched.bin') + '.fixups.tsv').is_file() for p in practice)
+                           and any(p.suffix == '.ips' for p in practice)):
+        raise SystemExit(f'the practice tools\' folder {a.practice} needs a rewritten module with its fixups and an IPS')
     msls = msl_inputs(a.msl)
     if not msls: raise SystemExit(f'no shader libraries at {a.msl}')
     pso = sorted({p for pat in PSO_FILES for p in Path(a.pso).glob(pat) if not detritus(p.name)}) if a.pso else []
@@ -329,11 +335,11 @@ def selected_inputs(a):
     tables = [Path(a.tables) / n for n in TABLES if (Path(a.tables) / n).is_file()]
     pairs = Path(a.pso_pairs) if a.pso_pairs and not any(p.name == 'pso_pairs.tsv' for p in tables) else None
     fonts = sorted(p for p in Path(a.font).glob('*.ttf') if not detritus(p.name))
-    files = [Path(a.host)] + mods + msls + pso + tables + fonts + ([pairs] if pairs else [])
+    files = [Path(a.host)] + mods + practice + msls + pso + tables + fonts + ([pairs] if pairs else [])
     files += [Path(p) for p in (a.env_file, a.settings, a.icon) if p]
     for p in files:
         if not p.is_file(): raise SystemExit(f'no input file at {p}')
-    return mods, msls, pso, tables, pairs, fonts, files
+    return mods, practice, msls, pso, tables, pairs, fonts, files
 
 
 def replace_app(tmp, out):
@@ -397,9 +403,9 @@ def pack(a):
             if key_file.is_file(): os.replace(key_file, set_aside)
     try:
         a = argparse.Namespace(**vars(a))
-        for name in ('out', 'host', 'patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'pso_pairs', 'env_file', 'settings', 'icon'):
+        for name in ('out', 'host', 'patched', 'practice', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'pso_pairs', 'env_file', 'settings', 'icon'):
             if getattr(a, name): setattr(a, name, str(Path(getattr(a, name)).resolve()))
-        mods, msls, pso, tables, pairs, fonts, files = selected_inputs(a)
+        mods, practice, msls, pso, tables, pairs, fonts, files = selected_inputs(a)
         clang = Path(run(['xcrun', '--find', 'clang']).strip()).resolve()
         swiftc = Path(run(['xcrun', '--find', 'swiftc']).strip())   # not resolved: the driver is a link to swift-frontend, which acts by its name
         sdk = Path(run(['xcrun', '--sdk', 'macosx', '--show-sdk-path']).strip()).resolve()
@@ -439,7 +445,7 @@ def pack(a):
     for d in (mac, dm / 'font'): d.mkdir(parents=True)
     romfs, msl, aoc = Path(a.romfs), Path(a.msl), Path(a.aoc) if a.aoc else None
     # each source is probed on its own, as they may lie on different volumes; cp -c copies what it cannot clone, so a probe decides only the free-space check and the step line
-    trees, lists = {'romfs': romfs, 'aoc': aoc}, {'mods': mods, 'msl': msls, 'pso': pso}
+    trees, lists = {'romfs': romfs, 'aoc': aoc}, {'mods': mods, 'practice': practice, 'msl': msls, 'pso': pso}
     clone = {k: bool(d) and can_clone(d, res) for k, d in trees.items()} | {k: bool(ps) and can_clone(ps[0], res) for k, ps in lists.items()}
     if is_chain_library(msl): clone['msl'] = False   # copy_msl writes it, which the free-space check below counts
     need = sum(tree_bytes(d) for k, d in trees.items() if d and not clone[k]) + sum(p.stat().st_size for k, ps in lists.items() if not clone[k] for p in ps)
@@ -450,6 +456,7 @@ def pack(a):
     build_launcher(mac / EXE, minos, clang, swiftc, sdk)
     shutil.copy(a.host, mac / 'dmhost')   # data and mode, not the build's extended attributes (copy2 would carry them into the app)
     copy(mods, dm, clone['mods'])
+    if practice: (dm / 'practice').mkdir(); copy(practice, dm / 'practice', clone['practice'])
     if tables: copy(tables, dm, False)
     if pairs: shutil.copyfile(pairs, dm / 'pso_pairs.tsv')   # the split's copy, for a profile without the table
     if fonts: copy(fonts, dm / 'font', False)
@@ -519,6 +526,7 @@ def parse(argv):
     ap.add_argument('out', help='the app (<name>.app)')
     ap.add_argument('--host', required=True, help='the Mac host built for the profile')
     ap.add_argument('--patched', required=True, help='the rewritten modules (patch_nso.py output)')
+    ap.add_argument('--practice', help='the practice tools: their rewritten module, the IPS of main\'s build and their license (the packing script\'s practice_tools folder; Resources/dm/practice)')
     ap.add_argument('--romfs', required=True, help='the RomFS of the packed version')
     ap.add_argument('--msl', required=True, help='the Mac shader libraries: <shader>/cache/b-<chain>')
     ap.add_argument('--msl-name', help='its folder name in the app (default: its own)')

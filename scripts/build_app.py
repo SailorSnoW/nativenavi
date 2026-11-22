@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # The Legend of Zelda: Ocarina of Time (game profile dm/games/0400486024DEC000) from its NUP to a build that runs on this Mac: unpack the NUP (scripts/pack_nup.py: the code modules, one RomFS
 #   image per version, the DLC) → rewrite the code modules (patch_nso.py) → split out the shaders and check them against the profile's tables (shader_split.py) → the Mac shader libraries
-#   (dmsh_build.py) → the Mac host and its fonts → the pipeline archive and the prewarm pipelines → the Mac app (dm/mac/pack_app.py).
+#   (dmsh_build.py) → the Mac host and its fonts → the practice tools (practice_tools) → the pipeline archive and the prewarm pipelines → the Mac app (dm/mac/pack_app.py).
 # PLATFORM = 'mac-app' / --platform mac-app (the default): a self-contained, double-clickable Mac app of the game beside the build folder, <game name>.app (OUT_APP / -o names another path):
 #   the launcher dm/mac/launcher.c, the Mac host, the RomFS (APFS clones on the build's volume), the Mac shader libraries, the DLC and the rewritten modules inside it; the save in
 #   ~/Library/Application Support/nxnative/<title ID>/, the log in ~/Library/Logs/nxnative/<title ID>.log. Signed ad-hoc, or with MAC_SIGN / --mac-sign; no hardened runtime, no notarization.
@@ -12,14 +12,16 @@
 #   or in a terminal: python3 scripts/build_app.py <NUP file or its folder> [options] (values given on the command line override "Settings", -h lists every option;
 #   without keyboard input a missing value is not asked for but reported as an error; exit code 0 on success, 1 on error, 130 when interrupted, 143 when stopped by SIGTERM, 129 when the terminal closed (SIGHUP)).
 #   Command-line options entered in Spyder's run configuration work the same way.
-# Uses only two things: this repository and the game as one NUP container (a .nup file: base game, updates and DLC; scripts/pack_nup.py), given as the file or as the folder that holds it.
+# Uses only two things: this repository and the game as one NUP container (a .nup file: base game, updates and DLC; scripts/pack_nup.py), given as the file or as the folder that holds it;
+#   and for the practice tools (PRACTICE / --practice) the release zip the profile pins by its SHA-256 (practice.tsv), which it downloads once into <build folder>/practice/.
 #   A NUP's files are not encrypted, so no keys are needed. The name, display version and icon come from the NACP and icon it carries, else the name from the profile (--icon / ICON gives the
 #   app an icon when the NUP carries none; --fallback-icon / FALLBACK_ICON only then).
 #   The newest version in the NUP is built. The version the profile registers (with every version in its shader_versions in the NUP, and the registered build IDs) is built from the profile as
 #   it is; any other version (a later update of the game) from a profile derived from it in <build folder>/profile: the same settings, and the version's own shaders (derive_profile).
 # Every intermediate file is under the build folder, <title ID>_build/ in the NUP's folder unless --work-dir / WORK_DIR names another: extract/ (the unpacked game files, kept: the game runs from
-#   them and the app is made of clones of them), aoc/ (one RomFS image per DLC index), tools/ (the Mac host), patched_*/, shader/ (shader package, libraries and caches), pso/ (the pipeline
-#   archive), profile/ (a derived profile), logs/ (each step's full output), tmp/, obsolete/ (what a build no longer uses: emptied of earlier builds' entries after the next successful build).
+#   them and the app is made of clones of them), aoc/ (one RomFS image per DLC index), tools/ (the Mac host), patched_*/ (with practice/, the practice tools rewritten), shader/ (shader
+#   package, libraries and caches), pso/ (the pipeline archive), practice/ (the practice tools' release zip), profile/ (a derived profile), logs/ (each step's full output), tmp/,
+#   obsolete/ (what a build no longer uses: emptied of earlier builds' entries after the next successful build).
 # The rewrite, the shader split, the shaders, the host and the app are reused when all their inputs are as at their last successful run (the game files, the tools, the profile, Xcode and the
 #   in-repo spirv-cross: fingerprint() keys beside their output); the shaders' inputs are the shader package's content and the chain's own tools, so a split that runs again and writes the
 #   same package leaves them reused.
@@ -67,6 +69,8 @@ PREBAKE = True                          # PLATFORM 'mac-app': also make the prew
 PSO_GPUS = ''                           # PLATFORM 'mac-app': the GPU architectures of the app's pipeline archive (Resources/pso), made on this Mac (metal-tt, comma-separated: 'g14s' for an M2 Max);
                                         #   empty = this Mac's GPU, 'none' = no archive: the app builds its pipeline bases on its first start
 MOTION = True                           # True passes a gyro controller's motion to the game; False builds with DM_MOTION=0, for when motion misbehaves
+PRACTICE = True                         # True puts the practice tools in the build (sloperinaGZ, the release the profile's practice.tsv pins, downloaded once into <build folder>/practice/);
+                                        #   they stay off until DM_PRACTICE=1 turns them on. False = a build without them, which downloads nothing
 PROFILE_OUT = ''                        # where a derived profile goes (empty = <build folder>/profile; the profile is <this>/<title ID>/)
 ALLOW_DAMAGED = False                   # files whose bytes do not start as their names promise (a .zs that is no zstd stream: a NUP has no hashes) stop the build; True packs those files as they are and goes on
 ALLOW_SHADER_REGRESSIONS = False        # shaders that translated in the previous build and fail with the current translation chain stop the build (logs/shader_regressions.log lists them);
@@ -1451,6 +1455,124 @@ def mac_host(py, repo, work, env, logs, g):
     return host, font
 
 
+# ---- The practice tools (the profile's practice.tsv; the game's note, "Practice tools") ----
+PRACTICE_DIR = 'practice'   # their folder in the rewritten modules' folder, which the host reads with DM_PRACTICE=1 (hle_practice.c), and in the app's Resources/dm
+PRACTICE_MODULE = 'subsdk9'   # the module's name, hle_practice.c's PRACTICE_MODULE
+PRACTICE_KEYS = ('release', 'url', 'sha256', 'module', 'patches', 'license')
+
+
+def practice_pin(g):
+    """The release the profile pins ({key: value} of its practice.tsv: PRACTICE_KEYS), None for a profile without the file"""
+    p = g.table('practice.tsv')
+    try: text = p.read_text(encoding='utf-8')
+    except FileNotFoundError: return None
+    pin = {}
+    for ln in text.splitlines():   # the same rules as game.tsv's: key<TAB>value, # starts a comment line
+        if ln.strip() and not ln.lstrip().startswith('#'): k, _, v = ln.partition('\t'); pin[k.strip()] = v.strip()
+    if missing := [k for k in PRACTICE_KEYS if not pin.get(k)]: raise BuildError(f'{p}: no {", ".join(missing)} row')
+    if not re.fullmatch(r'[0-9a-f]{64}', pin['sha256']): raise BuildError(f'{p}: sha256 is not a SHA-256 in lowercase hex: {pin["sha256"]}')
+    return pin
+
+
+def file_sha256(p):
+    h = hashlib.sha256()
+    with open(p, 'rb') as f:
+        for b in iter(lambda: f.read(1 << 20), b''): h.update(b)
+    return h.hexdigest()
+
+
+def practice_zip(work, pin, env, logs):
+    """The release zip the profile pins, in <build folder>/practice/: the one there when it has the pinned SHA-256, else downloaded from the pin's url (curl, which takes the
+    Mac's own certificates). → (its path, None), or (None, why not). A zip of other bytes, or another release's, moves to obsolete/"""
+    d = work / PRACTICE_DIR; d.mkdir(parents=True, exist_ok=True)
+    z = d / pin['url'].rstrip('/').rsplit('/', 1)[-1]
+    for p in d.glob('*.zip'):
+        if p != z or file_sha256(p) != pin['sha256']: retire(work, p)
+    if z.is_file(): return z, None
+    part = z.with_name(z.name + '.partial'); rmtree(part)
+    PROG.set(step=f'downloading {pin["url"]}')
+    if run(['curl', '--fail', '--silent', '--show-error', '--location', '--retry', '2', '--output', part, pin['url']], logs / 'practice_download.log', env=env, fatal=False):
+        rmtree(part); return None, f'the download of {pin["url"]} failed ({logs / "practice_download.log"}); with the zip put at {z} the next build takes it'
+    if (got := file_sha256(part)) != pin['sha256']:
+        rmtree(part); return None, f'{pin["url"]} has the SHA-256 {got}, not the profile\'s {pin["sha256"]}'
+    os.replace(part, z)
+    return z, None
+
+
+def practice_check(host, patched, tmp, ips, work, env, logs):
+    """The host's check of the practice tools in tmp before they go in: the game's modules and them loaded as DM_PRACTICE=1 loads them, the patch file's verdict written
+    (DM_MODS_CHECK: the host ends before the game starts), the mods folder left out. → None when the patch of main applies whole and the load gives no [RED] line, else why not"""
+    chk = work / 'tmp/practice-check'; rmtree(chk); chk.mkdir(parents=True)
+    for p in patched.iterdir():   # the modules folder the host is given: the game's modules as they are, with the folder to check as its practice/
+        if p.name != PRACTICE_DIR and not p.name.startswith(PRACTICE_DIR + '.'): (chk / p.name).symlink_to(p)
+    (chk / PRACTICE_DIR).symlink_to(tmp)
+    verdicts, log = work / 'tmp/practice-check.tsv', logs / 'practice_check.log'
+    rmtree(verdicts)
+    cenv = {k: v for k, v in env.items() if k not in ('DM_WINDOW', 'DM_CTL', 'DM_KEYS', 'DM_REC')}
+    cenv.update(DM_PRACTICE='1', DM_MODS=str(work / 'tmp/practice-no-mods'), DM_MODS_CHECK=str(verdicts))   # a folder that is not there: no mod of the player's
+    rc = run([host, chk], log, env=cenv, cwd=work / 'tmp', fatal=False)
+    if rc or not verdicts.is_file(): return f'the host\'s check failed (exit code {rc}, {log})'
+    rows = [r for r in (l.split('\t') for l in verdicts.read_text(errors='replace').splitlines()) if r[0] == 'file' and len(r) >= 8]
+    mine = [r for r in rows if r[1] == 'main' and Path(r[5]).name == ips]
+    if not mine: return f'the host did not apply {ips} to main ({log})'
+    if mine[0][3] != 'applied': return f'the host refused {ips} ({mine[0][3]}: {mine[0][7]})'
+    reds = [l.strip() for l in log.read_text(errors='replace').splitlines() if '[RED]' in l]
+    if reds: return f'the host\'s check logged {len(reds)} red line(s), the first: {reds[0]} ({log})'
+    return None
+
+
+def practice_tools(py, repo, work, game, patched, host, env, logs, g, on=True):
+    """The stage "practice tools": the sloperinaGZ release the profile pins (practice.tsv, practice_zip), its module rewritten by patch_nso.py, and the IPS of main's build with the
+    license, into <rewritten modules>/practice, where the host finds them with DM_PRACTICE=1 (hle_practice.c) and the app takes them (Resources/dm/practice). The host checks them
+    first (practice_check). Reused when the zip, main's build, the rewriter (the modules it imports, the patch files, capstone) and the host are as at the last successful run.
+    → (the folder, None) or (None, a [RED] line, said here and again at the end): the build goes on without them. None, None when they are off (PRACTICE / --no-practice), for a
+    profile without the file, and for a main the release has no patch for (another version of the game)"""
+    out, kf = patched / PRACTICE_DIR, patched / f'{PRACTICE_DIR}.key'
+    pin = practice_pin(g)
+    def without(): rmtree(out); rmtree(kf)
+    if not on or pin is None:
+        without()
+        if not on and pin: say('practice tools: off (PRACTICE / --no-practice), not in this build')
+        return None, None
+    PROG.add(1); PROG.stage('practice tools', step=f'sloperinaGZ {pin["release"]}')
+    def failed(why):
+        without(); red = f'[RED] practice tools: sloperinaGZ {pin["release"]} is not in this build: {why}'
+        PROG.end('not in this build', warn=True); say(red); return None, red
+    z, why = practice_zip(work, pin, env, logs)
+    if not z: return failed(why)
+    import capstone, zipfile
+    bid = build_id(game / 'ExeFS/main')
+    src = work / 'tmp/practice-src'; rmtree(src); src.mkdir(parents=True)
+    try:
+        with zipfile.ZipFile(z) as zf:
+            names = set(zf.namelist())
+            ips = sorted(n for n in names if n.startswith(pin['patches'].rstrip('/') + '/') and '/' not in n[len(pin['patches'].rstrip('/')) + 1:]
+                         and n.lower().endswith('.ips') and Path(n).name.lower().startswith(bid))   # <build ID>.ips: the 20 bytes of the build ID, of which build_id reads 16
+            if not ips:
+                without(); PROG.end(f'none: the release has no patch for main\'s build {bid}', warn=True)
+                say(f'practice tools: sloperinaGZ {pin["release"]} has no patch for this version\'s main (build {bid}): this build goes without them'); return None, None
+            if missing := [n for n in (pin['module'], pin['license']) if n not in names]: return failed(f'the zip has no {", ".join(missing)}')
+            for n, to in ((pin['module'], PRACTICE_MODULE), (ips[0], Path(ips[0]).name), (pin['license'], 'LICENSE')): (src / to).write_bytes(zf.read(n))
+    except (zipfile.BadZipFile, OSError) as e: return failed(f'{z}: {e}')
+    ipsname = Path(ips[0]).name
+    key = fingerprint(pin['sha256'], bid, ('files', [repo / 'dm/tools' / f for f in REWRITER_FILES] + patch_files(repo, src, [PRACTICE_MODULE], env.get('DM_GAME')) + [host]),
+                      capstone.__version__, {k: env.get(k) for k in ('DM_PATCH_FRONT', 'DM_GAME')})
+    note = f'sloperinaGZ {pin["release"]}, {PRACTICE_MODULE} and {ipsname}'
+    if (out / f'{PRACTICE_MODULE}.fixups.tsv').is_file() and (out / ipsname).is_file() and reused(kf, key) is not None:
+        PROG.end(f'{note}, reused (inputs unchanged)'); return out, None
+    rmtree(kf)
+    tmp = patched / f'{PRACTICE_DIR}.partial'; rmtree(tmp); tmp.mkdir()
+    PROG.set(step=f'rewriting {PRACTICE_MODULE}')
+    rc = run([py, repo / 'dm/tools/patch_nso.py', src / PRACTICE_MODULE, tmp, PRACTICE_MODULE], logs / f'rewrite_{PRACTICE_MODULE}.log', env=env, fatal=False)
+    if rc: rmtree(tmp); return failed(f'patch_nso.py exit code {rc} on {PRACTICE_MODULE} ({logs / f"rewrite_{PRACTICE_MODULE}.log"})')
+    for n in (ipsname, 'LICENSE'): shutil.copyfile(src / n, tmp / n)
+    PROG.set(step=f'the host checks {ipsname}')
+    if why := practice_check(host, patched, tmp, ipsname, work, env, logs): rmtree(tmp); return failed(why)
+    swap_in(tmp, out); kf.write_text(f'{key}\n{note}\n')
+    PROG.end(note)
+    return out, None
+
+
 def mac_run(work, game, patched, host, font, msl, aoc, lang, env, logs, g, env_file='', partial=False):
     """The command that runs the game in a window with sound after a development build (PLATFORM 'mac'): its save and temporary storage in <build folder>/run (kept from run to run),
     the unpacked RomFS, the Mac shader libraries (msl), the DLC, the profile's shader map (a host outside dm/host does not find it beside itself; c1_full.tsv and cb_extent.tsv are
@@ -1637,10 +1759,10 @@ def mac_app_name(name):   # the app's file name: the game name with the characte
     return re.sub(r'\s*[:/]\s*', ' - ', name).strip(' .-') or 'nxnative'
 
 
-def mac_app(py, repo, out, app, work, game, patched, host, font, msl, aoc, lang, g, name, version, bundle_id, icon, sign, env, logs, env_file='', gpus='', control=None, prebake=False):
+def mac_app(py, repo, out, app, work, game, patched, host, font, msl, aoc, lang, g, name, version, bundle_id, icon, sign, env, logs, env_file='', gpus='', control=None, prebake=False, practice=None):
     """The last stage of PLATFORM 'mac-app': pack the Mac app (dm/mac/pack_app.py) from what the build made: the Mac host and font (mac_host), the built version's RomFS and rewritten
     modules, the Mac shader libraries (msl: <shader>/cache, whose b-<chain> goes in), the DLC, the profile's tables (with the shader pairs the pipeline prebuild reads), the pipeline
-    archive made offline for this Mac (mac_pso; gpus: --gpu / PSO_GPUS), the launcher settings and an environment file.
+    archive made offline for this Mac (mac_pso; gpus: --gpu / PSO_GPUS), the practice tools (practice_tools' folder, None without them), the launcher settings and an environment file.
     The save and the log go to the player's Library, keyed by the title ID (app); a new app replaces the old one only when it is complete. control: the control.nacp that lists the
     game's languages (languages_control), by default the built version's"""
     lib = msl / f'b-{chain_of(repo)}'
@@ -1654,7 +1776,7 @@ def mac_app(py, repo, out, app, work, game, patched, host, font, msl, aoc, lang,
     cmd = [py, repo / 'dm/mac/pack_app.py', out, '--host', host, '--patched', patched, '--romfs', rfs.source(game), '--msl', lib, '--tables', g.table('shader_map.tsv').parent,
            '--font', font, '--title-id', f'{app:016X}', '--name', name, '--bundle-id', bundle_id, '--lang', lang, '--sign', sign or '-']
     split_pairs = work / 'shader/pso_pairs.tsv'   # the split's copy of pso_pairs.tsv, for a profile without the table (as mac_run's DM_PSO_PAIRS)
-    for opt, v in (('--version', version), ('--category', g.get('app_category')), ('--marker', g.get('romfs_marker')), ('--aoc', aoc), ('--icon', icon),
+    for opt, v in (('--version', version), ('--category', g.get('app_category')), ('--marker', g.get('romfs_marker')), ('--aoc', aoc), ('--icon', icon), ('--practice', practice),
                    ('--pso', pso), ('--pso-pairs', split_pairs if not g.table('pso_pairs.tsv').is_file() and split_pairs.is_file() else None),
                    ('--env-file', Path(os.path.expanduser(env_file)).resolve() if env_file else None), ('--settings', settings)):
         if v: cmd += [opt, v]
@@ -1704,6 +1826,8 @@ def parse_args(argv):
     ap.add_argument('--seen-shaders', action=argparse.BooleanOptionalAction, help='build only the shaders the profile\'s playtests used (its shader_seen.tsv) and those the last runs\' logs reported missing, not the whole map: '
                     'minutes instead of hours, but areas the list does not cover draw without the rest until this runs again (default: the SEEN_SHADERS setting, off)')
     ap.add_argument('--motion', action=argparse.BooleanOptionalAction, help='pass a gyro controller\'s motion to the game; --no-motion builds with DM_MOTION=0, for when motion misbehaves (default: the MOTION setting, on)')
+    ap.add_argument('--practice', action=argparse.BooleanOptionalAction, help='put the practice tools in the build: sloperinaGZ, the release the profile\'s practice.tsv pins, downloaded once into <build folder>/practice/ and checked by its SHA-256, '
+                    'off until DM_PRACTICE=1 turns them on; --no-practice: a build without them, which downloads nothing (default: the PRACTICE setting, on)')
     ap.add_argument('--allow-damaged', action='store_true', help='files whose bytes do not start as their names promise (a .zs file that is no zstd stream): pack them as they are and go on instead of stopping')
     ap.add_argument('--allow-shader-regressions', action='store_true', help='shaders that translated in the previous build and fail with the current translation chain: '
                     'pack the app without them instead of stopping')
@@ -1907,20 +2031,25 @@ def main(args=None):
     env_file = build_env_file(work, args.env_file or DM_ENV_FILE, motion)
     if not motion: say('motion (gyro): off, DM_MOTION=0 is built in')
     host, font = mac_host(py, repo, work, env, logs, g)
+    practice, practice_red = practice_tools(py, repo, work, game, patched, host, env, logs, g, PRACTICE if args.practice is None else args.practice)
     if mac_pack:   # the app packed from the host and the build's files
         if not icon: say('no game icon: the NUP carries none; the app\'s icon will be blank; --icon / ICON or --fallback-icon / FALLBACK_ICON gives it one')
         mac_app(py, repo, out_app, app, work, game, patched, host, font, msl, aoc, lang, g, app_name, app_version, bundle_id, icon, args.mac_sign or MAC_SIGN, env, logs, env_file,
-                (args.gpu or PSO_GPUS).strip(), control, PREBAKE if args.prebake is None else args.prebake)
+                (args.gpu or PSO_GPUS).strip(), control, PREBAKE if args.prebake is None else args.prebake, practice)
         rmtree(work / 'tmp')
         say(f'done: {out_app} ({tree_size(out_app)[1] / 2**30:.1f} GB); '
             f'open it from Finder. Its save is in ~/Library/Application Support/nxnative/{app:016X}/, its log in ~/Library/Logs/nxnative/{app:016X}.log')
+        if practice: say(f'practice tools: in the app, off; DM_PRACTICE=1 in ~/Library/Application Support/nxnative/{app:016X}/env.txt turns them on')
+        if practice_red: say(practice_red)
         if seen_shaders: say('a partial shader library: where a shader is missing, the log says so in red and the draw goes without it. Run this script again with --seen-shaders to add what the log names, or without it for the whole map')
         report_profile_status(g, reg, pkg_ver, derived, 'Mac app', patched)
         return
     cmd = mac_run(work, game, patched, host, font, msl, aoc, lang, env, logs, g, env_file, partial=seen_shaders)   # the development build ends with the command that runs the game
     rmtree(work / 'tmp')
-    say(f'done: the game runs on the Mac with this command (its save in {work / "run/save"}, kept from run to run; DM_WINDOW=1 opens a window, DM_AUDIO=1 plays sound):')
+    say(f'done: the game runs on the Mac with this command (its save in {work / "run/save"}, kept from run to run; DM_WINDOW=1 opens a window, DM_AUDIO=1 plays sound'
+        + ('; DM_PRACTICE=1 turns the practice tools on' if practice else '') + '):')
     PROG.say(cmd)
+    if practice_red: say(practice_red)
     if seen_shaders: say(f'a partial shader library: where a shader is missing, the log says so in red and the draw goes without it. Run this script again with --seen-shaders to add what {work / "run/host.log"} names, or without it for the whole map')
     report_profile_status(g, reg, pkg_ver, derived, 'Mac build', patched)
 

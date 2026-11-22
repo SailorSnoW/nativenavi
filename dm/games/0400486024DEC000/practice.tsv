@@ -1,0 +1,10 @@
+# The practice tools the packing script puts in the app: PracticeROM's sloperinaGZ (https://github.com/PracticeROM/sloperina, GPL-3.0), its official release, pinned by the
+# SHA-256 of its zip (the game's note, "Practice tools"). scripts/build_app.py takes the zip from <build folder>/practice/, or downloads it from url there, and refuses one with
+# other bytes. From it: the module, which patch_nso.py rewrites; of the patches folder the IPS whose name is main's build ID, which the host checks applies; the license.
+# A new release is new rows here, and the game played with it again.
+release	0.0.9
+url	https://github.com/PracticeROM/sloperina/releases/download/v0.0.9/sloperinaGZ-0.0.9.zip
+sha256	6f25fdfb17dc14b62f9271c308181cbe3ebdf8482e9db382b04959c7680f9e2c
+module	sloperinaGZ-0.0.9/files/exefs/subsdk9
+patches	sloperinaGZ-0.0.9/files/exefs
+license	sloperinaGZ-0.0.9/LICENSE
