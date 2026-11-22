@@ -1,6 +1,6 @@
 # Audio
 
-The audio renderer (`dm/host/hle_audren.c`), AudioOut, audio devices and codecs. Each entry: symptom, cause, fix, the games it was found on. The [symptom index](../agents/symptoms.md) lists every symptom.
+The audio renderer (`dm/host/hle_audren.c`, and `dm/host/rust/src/audren.rs` for what reads the SDK's data), AudioOut, audio devices and codecs. Each entry: symptom, cause, fix, the games it was found on. The [symptom index](../agents/symptoms.md) lists every symptom.
 
 ## Audio renderer
 
@@ -85,7 +85,7 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 
 - **Symptom:** SIGSEGV at address 0x18 in `UpsamplerManager::Allocate` on the render thread.
 - **Cause:** a DeviceSink below 48 kHz is upsampled by the SDK's upsampler, and `AudioRenderSystem::SetUpRenderResourceSet` allocates the `UpsamplerManager` only for the DSP (`sdk+0x21eb6c`: rate 0x7d00 and rendering device +0x48 == 0); with the host's CPU rendering the manager pointer (`AudioRenderSystem+0x150`, the render context's +0x20) is null.
-- **Fix:** the host answers `Allocate` on a null manager with no upsampler, so the generator skips the upsample command (`sdk+0x225b40`), and resamples the DeviceSink's stereo downmix 3:2 itself (a 16-tap windowed sinc in three phases, `up_3_2` in `hle_audren.c`), 240 samples per 5 ms frame for the 48 kHz output.
+- **Fix:** the host answers `Allocate` on a null manager with no upsampler, so the generator skips the upsample command (`sdk+0x225b40`), and resamples the DeviceSink's stereo downmix 3:2 itself (a 16-tap windowed sinc in three phases, `up_3_2` in `audren.rs`), 240 samples per 5 ms frame for the 48 kHz output.
 - **Found on:** DRAGON QUEST VII Reimagined: rate 32000, 160 samples per frame, `GenerateSinkCommands` `sdk+0x225a80`.
 - **Note:** until then the output code assumed an upsampled buffer at 32 kHz that no game had produced.
 
@@ -93,7 +93,7 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 
 - **Symptom:** the main thread spins at start-up in a resource wait (a `YieldThread` loop, no crash), right after `OpenAudioRenderer`.
 - **Cause:** the DSP service and an application's local SDK server use different command/state representations. The host forwarded the local CPU server's work-buffer requirement as the guest's DSP-service requirement. Larger local command structures could then exhaust a fixed sound heap that fits the service's budget. Changing only the device / execution fields in the local sizing routine does not reveal this difference: it still sizes the same compiled structures. The game note records the comparison against Horizon's actual sizing code and the resulting allocation failure.
-- **Fix:** `ar_service_work_size` in `hle_audren.c` computes the Horizon service budget through renderer revision 15, with revision gates for graph/splitter storage, effect states, performance frames and command storage. A DSP caller receives that size. On open the host independently asks the SDK for its CPU/manual requirement and supplies a page-aligned, zeroed backend buffer if it exceeds the caller's capacity; a buffer below the declared service requirement is rejected. Both open forms share the allocation, including a nested no-event open. Failed opens free it; close joins the render thread, closes the SDK renderer, then frees it. Explicit CPU renderers keep their SDK contract. A sufficient caller buffer is reused; revisions beyond the verified service model retain the SDK size. No firmware is loaded or distributed at runtime, and no game's heap constants change.
+- **Fix:** `ar_service_work_size` in `hle_audren.c`, through `work_size` in `audren.rs`, computes the Horizon service budget through renderer revision 15, with revision gates for graph/splitter storage, effect states, performance frames and command storage. A DSP caller receives that size. On open the host independently asks the SDK for its CPU/manual requirement and supplies a page-aligned, zeroed backend buffer if it exceeds the caller's capacity; a buffer below the declared service requirement is rejected. Both open forms share the allocation, including a nested no-event open. Failed opens free it; close joins the render thread, closes the SDK renderer, then frees it. Explicit CPU renderers keep their SDK contract. A sufficient caller buffer is reused; revisions beyond the verified service model retain the SDK size. No firmware is loaded or distributed at runtime, and no game's heap constants change.
 - **Found on:** Hyrule Warriors: Age of Calamity.
 - **Check:** `make -C dm/host/tests GAME=<id> audren-work` checks independently obtained Horizon sizing fixtures, both public parameter layouts, uninitialized padding, unsupported revisions, nested opens, undersized buffers, failure cleanup, caller-owned storage and close lifetime. The sizing implementation also matched 360 seeded parameter sets executed through Horizon's original machine code across REV1–REV15. The game note records the original-heap reproduction and audio check.
 
@@ -103,7 +103,7 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 
 - **Symptom:** no sound after boot; `audren: no DeviceSink (ID 0x13) in the command list` and a malformed-command error persist even when later command lists are valid.
 - **Cause:** the host's render thread can generate commands before the game's first `RequestUpdate`. Mario Kart 8 Deluxe's first list ended in a zeroed third command, so none of the supported header layouts could walk it. `capture` nevertheless latched the default layout and consumed the one-time sink scan. Later SDK 6 headers were read as SDK 8–20 headers, and SDK 4's DeviceSink was never found. Retrying only header detection still leaves the sink scan consumed.
-- **Fix:** a list decides nothing unless it walks whole. Until the first list walks, `capture` returns a silent frame before the sink scan and logs `audren: command list N commands long does not walk` once, not as a red line; the first valid list then finds its sink. This fork reads one header layout ([SDK 21's](#sdk-21-dsp-command-header-without-a-magic)), so no layout is selected any more: the rule protects the one-time sink scan and the malformed-list report. `t_audren_layout` checks stereo PCM with valid-first, empty and incomplete startup lists and the SDK's short first lists.
+- **Fix:** a list decides nothing unless it walks whole. Until the first list walks, `capture` (`audren.rs`) returns a silent frame before the sink scan and logs `audren: command list N commands long does not walk` once, not as a red line; the first valid list then finds its sink. This fork reads one header layout ([SDK 21's](#sdk-21-dsp-command-header-without-a-magic)), so no layout is selected any more: the rule protects the one-time sink scan and the malformed-list report. `t_audren_layout` checks stereo PCM with valid-first, empty and incomplete startup lists and the SDK's short first lists.
 - **Found on:** Mario Kart 8 Deluxe (SDK 4.4.0; [PR #331](https://github.com/seedds/nxnative/pull/331)).
 
 ### Malformed later command lists and bounded histogram logging
@@ -118,21 +118,29 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 
 - **Symptom:** the CPU processor drops the final mix.
 - **Cause:** `dsp::SendCommandBuffer`, `dsp::Wait` and `dsp::Signal` are stubs in the application build, and DeviceSink (command 0x13 in SDK 16, 0x14 from SDK 20) is a no-op in `CommandListProcessor::Process`.
-- **Fix:** take the output after `Process` from the mix buffers the DeviceSink command names (layout in `hle_audren.c`).
+- **Fix:** take the output after `Process` from the mix buffers the DeviceSink command names (layout in `audren.rs`).
+
+### DeviceSink fields read without a bound
+
+- **Symptom:** none seen: no SDK writes such a list. A DeviceSink input index outside the renderer's mix buffers, or a command with the sink's ID too short for the sink's fields, read memory past the mix buffers or past the command list; now `[RED] audren: DeviceSink input N names mix buffer M, of K: no sound`, `[RED] audren: the DeviceSink command (ID 0x14) is 0x40 bytes, too short for its inputs: no sound` or `[RED] audren: the command list's K mix buffers of N samples at 0x... cannot be read: no sound`, once each, and silent frames.
+- **Cause:** the C took the sink's six `s16` input indices as they came (`mix + index × samples`) and read the sink's fields at +0x120 to +0x138 of any enabled command with its ID, whatever its size. The list's header names how many mix buffers there are (+0x10), which the C never read. Ocarina of Time's sdk (22.2.8) shows that it is their count: `CommandListProcessor::Setup` (`sdk+0x25b3f0`) copies it, and `ClearMixBufferCommand` (`sdk+0x259970`) zeroes that many buffers of `samples` words at the list's address every frame. `GetMixBuffer` (`sdk+0x258930`) itself takes a signed index with no bound.
+- **Fix:** `capture` moved to Rust (`audren.rs`, [Rust in the host](../development.md#rust-in-the-host)): the mix buffers are one slice of count × samples words, which the FFI entry point makes only for a non-null, word-aligned address, and each input must name a buffer inside it. A sink command must hold its fields. The game's lists play as before: the same first-frame histogram, `DeviceSink inputs 6 (0 1 …)`, now with the header's count, `(78 buffers)`: the game's parameter asks for 72, and the list counts 78.
+- **Check:** `audren.rs` `a_sink_input_outside_the_mix_buffers_gives_no_sound`, `a_command_with_the_sinks_id_too_short_for_its_fields_is_not_read`, `random_lists_never_panic`, and Miri over the FFI entry points (`audren_ffi.rs`).
+- **Found on:** the move of `capture` to Rust, by reading the C; the buffer count checked in Ocarina of Time's sdk and in its own lists.
 
 ### Unaligned command headers during layout probing
 
 - **Symptom:** UBSan reports a misaligned `uint32_t` load in `cmd_ok` while `t_audren_layout` probes SDK 4/6 lists (issue #409).
 - **Cause:** interpreting the command ID as another layout's size can advance the candidate pointer off word alignment. Typed header loads then have undefined C behavior even though arm64 supports the machine load. A wrong size could also take the next header outside the generated list.
-- **Fix:** `cmd_size` decodes its multibyte wire field with `memcpy`, as `cmd_id` and the magic check did for the layouts that had a 16-bit ID and a magic. `cmd_ok` verifies that the complete header and command fit before consuming them; malformed-command diagnostics do not dereference a rejected header. This fork reads only SDK 21's layout and probes none, but a list can still be incomplete and a size in it unaligned, so the readers stay as they are.
-- **Check:** `t_audren_layout` (`test_headers`) checks a deliberately unaligned header, every truncated header/body length, invalid signed sizes and stereo PCM, including recovery from incomplete startup lists; the parser's minimum is the 0x10-byte header (`CMD_HEADER`). Its UBSan alignment suppression was removed.
+- **Fix:** `cmd_size` decoded its multibyte wire field with `memcpy`, as `cmd_id` and the magic check did for the layouts that had a 16-bit ID and a magic. `cmd_ok` verified that the complete header and command fit before consuming them; malformed-command diagnostics do not dereference a rejected header. This fork reads only SDK 21's layout and probes none, but a list can still be incomplete and a size in it unaligned: since the readers moved to Rust (`command` in `audren.rs`), every field is read through a bounds-checked little-endian accessor.
+- **Check:** `audren.rs` `commands_are_whole_or_refused` checks a deliberately unaligned header, every truncated header/body length and invalid signed sizes; `t_audren_layout` checks stereo PCM, including recovery from incomplete startup lists. The parser's minimum is the 0x10-byte header (`CMD_HEADER`). Its UBSan alignment suppression was removed.
 - **Found on:** the sanitizer audit's SDK 4/6 fixtures, representing Mario Kart 8 Deluxe and Fire Emblem: Three Houses; no game crash was attributed to this undefined load.
 
 ### SDK 8: command IDs numbered differently
 
 - **Symptom:** no music and no sound effects, only the movies' sound (the log repeats `audren: first-frame commands …` every frame and never prints `DeviceSink inputs`).
 - **Cause:** SDK 8 numbers the DSP commands differently: its command list goes 4×6, 7×24, 11×2, 16×1, 21×1 where SDK 20's goes 7×6, 11×24, 15×2, 20×1, 25×1, and the output command (DeviceSink, the same 0x148-byte layout with device name `MainAudioOut`, six inputs) is 0x10, not SDK 16's 0x13. The host never found it and played silence.
-- **Fix:** when the expected ID is missing from the first full command list, `capture` in `hle_audren.c` takes the one command of DeviceSink's size with 1 to 6 inputs as the sink and logs the ID it adopted. That size was 0x148 bytes then; this fork reads only SDK 21's layout, where it is 0x140 (`SINK_SIZE`), so the rule now serves a later SDK that renumbers its commands, not SDK 8's own lists. `t_audren_layout`'s `test_sink_id` checks it.
+- **Fix:** when the expected ID is missing from the first full command list, `capture` (`audren.rs`, then `histogram`) takes the one command of DeviceSink's size with 1 to 6 inputs as the sink and logs the ID it adopted. That size was 0x148 bytes then; this fork reads only SDK 21's layout, where it is 0x140 (`SINK_SIZE`), so the rule now serves a later SDK that renumbers its commands, not SDK 8's own lists. `t_audren_layout`'s `test_sink_id` checks it.
 - **Found on:** The Legend of Zelda: Link's Awakening (SDK 8.2.0).
 
 ### SDK 20's `AudioRenderSystem` layout
@@ -153,7 +161,7 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 
 - **Symptom:** no sound; red `audren: command 0 in the command list is malformed (first word 0x181901 size 0)`.
 - **Cause:** SDK 21's DSP command header has no magic: +0x00 enabled (bit 0), +0x01 command ID, +0x02 size (s16), +0x04 estimated time, +0x08 node ID (`CommandListProcessor::Process`, `sdk+0x24fd50`), and every command body moved 8 bytes forward. DeviceSink is still ID 0x14 but 0x140 bytes: input count +0x128, input indices +0x12c, upsample buffer +0x120 (written at `sdk+0x23a7b0`). `AudioRenderSystem` keeps SDK 20's offsets (update lock +0x2d0).
-- **Fix:** `capture` (`hle_audren.c`) reads this layout, each walk bounded by the generated list's length: `cmd_on`, `cmd_id` and `cmd_size` for the header, `SINK_SIZE`, `SINK_UPSAMPLE`, `SINK_INPUTS` and `SINK_INDEX` for the DeviceSink. It is the fork's only layout (SDK 21 on); the walks of the layouts with a magic are gone, so an SDK 20 list [does not walk](#incomplete-startup-lists-decide-nothing) and plays silence. Its first lists hold 4 commands or fewer, and their sink plays before the first full list's sink scan.
+- **Fix:** `capture` (`audren.rs`) reads this layout, each walk bounded by the generated list's length: `command` for the header, `SINK_SIZE`, `SINK_UPSAMPLE`, `SINK_INPUTS` and `SINK_INDEX` for the DeviceSink. It is the fork's only layout (SDK 21 on); the walks of the layouts with a magic are gone, so an SDK 20 list [does not walk](#incomplete-startup-lists-decide-nothing) and plays silence. Its first lists hold 4 commands or fewer, and their sink plays before the first full list's sink scan.
 - **Found on:** Rhythm Heaven Groove (SDK 21.4.0, one boot).
 
 ## AudioOut and devices

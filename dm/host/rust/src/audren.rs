@@ -1,5 +1,10 @@
-//! nn::audio's AudioRenderer, the parts of hle_audren.c that read what the game's SDK wrote: the renderer parameter the game opens with. Safe code only: the raw pointers
-//! the C hands over become slices in audren_ffi.rs.
+//! nn::audio's AudioRenderer, the parts of hle_audren.c that read what the game's SDK wrote: the renderer parameter the game opens with, and the command list each render
+//! leaves, out of which the frame is taken (its DeviceSink's mix buffers, folded to stereo and resampled to 48 kHz where the renderer runs slower). Safe code only: the raw
+//! pointers the C hands over become slices in audren_ffi.rs.
+
+use crate::log::{Hx, Text, log};
+use crate::sys;
+use core::fmt::Write;
 
 /// The AudioRendererParameter fields the service's sizing reads: eleven 32-bit words from +0 (the voice-drop byte at +0x20 in place of the ninth)
 pub(crate) const PARAM_BYTES: usize = 11 * 4;
@@ -68,8 +73,372 @@ pub(crate) fn work_size(p: &[u8; PARAM_BYTES], revision: u32) -> usize {
     align(size + commands + 0x7e, WORK_PAGE)
 }
 
+// ---------- the command list ----------
+// The renderer's output as the host takes it (hle_audren.c capture, after each render): the SDK generates a command list (AudioRenderSystem::GenerateCommand), its CPU
+// processor runs it (CommandListProcessor::Process), and the DeviceSink command at its end, a no-op for the CPU processor, names the mix buffers that hold the frame.
+//
+// The format, as this SDK's generation writes it (SDK 21 on; CommandListProcessor::Process, Rhythm Heaven Groove's sdk+0x24fd50): the list's header +0x04 command count,
+// +0x08 mix buffers' address, +0x10 their count, +0x14 samples per frame, +0x18 sample rate, the commands from +0x20. Ocarina of Time's sdk (22.2.8) reads the header in
+// CommandListProcessor::Setup (sdk+0x25b3f0), and its ClearMixBufferCommand (sdk+0x259970) zeroes count × samples words at the address every frame. A command has no magic:
+// +0x00 enabled (bit 0), +0x01 command ID (u8), +0x02 size (s16), +0x04 estimated time, +0x08 node ID. DeviceSink is ID 0x14 and 0x140 bytes (written at that sdk's
+// +0x23a7b0): +0x18 device name, +0x120 upsample buffer, +0x128 input count, +0x12c input indices (s16), each the index of a mix buffer. When the first full command list
+// has no command with that ID, its one command of that size with 1 to 6 inputs is the sink (a later SDK that numbers its commands differently would otherwise render every
+// frame and play silence). A list can be incomplete, and a size in it unaligned: every field is read through a bounds-checked little-endian accessor.
+
+/// The most samples of one frame (240 is 5 ms at 48 kHz)
+pub(crate) const FRAME_MAX: usize = 1024;
+/// Per output sample: the sink's six channels, then their stereo fold (hle.h DM_AUDIO_SINK_CHANNELS)
+pub(crate) const SINK_CHANNELS: usize = 8;
+/// The 3:2 resampler's taps
+const TAPS: usize = 16;
+const LIST_HEADER: usize = 0x20;
+const CMD_HEADER: usize = 0x10;
+const SINK_SIZE: usize = 0x140;
+const SINK_UPSAMPLE: usize = 0x120;
+const SINK_INPUTS: usize = 0x128;
+const SINK_INDEX: usize = 0x12c;
+/// DeviceSink's command ID in SDK 21 on, the one Scan starts with: the C makes Scan (audren_rs.h DM_AUDREN_SCAN_INIT), so only the tests name it here
 #[cfg(test)]
-mod tests {
+pub(crate) const SINK_ID: u8 = 0x14;
+/// The most input samples a 32 kHz frame may have for its 3:2 output to fit FRAME_MAX
+const MAX_32K: usize = FRAME_MAX * 2 / 3 - 1;
+
+/// One renderer's state (in hle_audren.c's ar_t, zeroed when the renderer opens): the 3:2 resampler's last samples and its position, and whether its sink was logged
+#[repr(C)]
+pub(crate) struct State {
+    up: [i32; SINK_CHANNELS * (TAPS - 1 + FRAME_MAX)],
+    up_pos: u32,
+    sink_logged: u8,
+    _pad: [u8; 3],
+}
+
+/// What capture keeps for all renderers (hle_audren.c g_scan, used under its g_render_mu): the frame being mixed, whether a list has walked yet, the sink's command ID,
+/// and the lines said once
+#[repr(C)]
+pub(crate) struct Scan {
+    mixed: [i32; FRAME_MAX * SINK_CHANNELS],
+    walked: u8,
+    hist_logged: u8,
+    sink_id: u8,
+    said: u8,
+    _pad: [u8; 4],
+}
+
+const _: () = assert!(size_of::<State>() == 33256 && size_of::<Scan>() == 32776); // audren_rs.h asserts the same
+
+// Scan::said: the lines said once
+const SAID_SKIP: u8 = 1;
+const SAID_MALFORMED: u8 = 2;
+const SAID_RATE: u8 = 4;
+const SAID_SHORT: u8 = 8;
+const SAID_MIX: u8 = 16;
+const SAID_INPUT: u8 = 32;
+
+impl Scan {
+    fn once(&mut self, what: u8) -> bool {
+        let first = self.said & what == 0;
+        self.said |= what;
+        first
+    }
+}
+
+/// A frame of output: its sample count, and whether any of its samples is not 0
+pub(crate) struct Frame {
+    pub(crate) samples: usize,
+    pub(crate) loud: bool,
+}
+
+fn bytes<const N: usize>(b: &[u8], at: usize) -> Option<[u8; N]> {
+    b.get(at..)?.get(..N)?.try_into().ok()
+}
+fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+    bytes(b, at).map(u32::from_le_bytes)
+}
+fn u64_at(b: &[u8], at: usize) -> Option<u64> {
+    bytes(b, at).map(u64::from_le_bytes)
+}
+
+/// The size of the command at `at` when it is whole inside the list: a header, and a size (+2, s16) of at least the header that the list's end leaves room for
+fn command(list: &[u8], at: usize) -> Option<usize> {
+    let rest = list.len().checked_sub(at)?;
+    if rest < CMD_HEADER {
+        return None;
+    }
+    let size = usize::try_from(i16::from_le_bytes(bytes(list, at + 2)?)).ok()?;
+    (CMD_HEADER..=rest).contains(&size).then_some(size)
+}
+
+/// The first of the list's ncmd commands that is not whole (its index and offset), None when they all are
+fn first_bad(list: &[u8], ncmd: u32) -> Option<(u32, usize)> {
+    let mut at = LIST_HEADER;
+    for i in 0..ncmd {
+        match command(list, at) {
+            Some(size) => at += size,
+            None => return Some((i, at)),
+        }
+    }
+    None
+}
+
+/// The DeviceSink's output out of one command list, into dst: per sample its six channels, then their stereo fold, clamped to 16 bits (hle_audren.c queues them for the
+/// output, which takes what the route needs). `mix` makes the renderer's mix buffers a slice, from the address and the word count (buffers × samples) the list's header
+/// names; it is called only for a sink this reads. None when the list gives no frame: before the first list that walks (generated before the game's first update), a
+/// malformed list, no enabled sink, or a sink this cannot read (each said once, in red where it should not happen)
+pub(crate) fn capture<'m>(scan: &mut Scan, st: &mut State, list: &[u8], dst: &mut [i16], mix: impl FnOnce(u64, usize) -> Option<&'m [i32]>) -> Option<Frame> {
+    if list.len() < LIST_HEADER {
+        return None;
+    }
+    let ncmd = u32_at(list, 4)?;
+    if scan.walked == 0 && ncmd != 0 {
+        // a list generated before the game's first update need not be whole: a silent frame, and nothing is decided or reported from it
+        if first_bad(list, ncmd).is_some() {
+            if scan.once(SAID_SKIP) {
+                log!("audren: command list {ncmd} commands long does not walk (generated before the first update?): silent frame");
+            }
+            return None;
+        }
+        scan.walked = 1;
+    }
+    if scan.walked == 0 {
+        return None;
+    }
+    // A later list can be incomplete too: every command is checked before the one-time sink scan or a sink before a malformed tail gives PCM
+    if let Some((i, at)) = first_bad(list, ncmd) {
+        if scan.once(SAID_MALFORMED) {
+            log!("[RED] audren: command {i} in the command list is malformed (offset {}, list {} bytes)", Hx(at), Hx(list.len()));
+        }
+        return None;
+    }
+    if scan.hist_logged == 0 && ncmd > 4 {
+        scan.hist_logged = 1;
+        histogram(scan, list, ncmd); // the first full list
+    }
+    let mut at = LIST_HEADER;
+    for _ in 0..ncmd {
+        let size = command(list, at)?; // whole (first_bad above)
+        let cmd = &list[at..at + size];
+        if cmd[1] == scan.sink_id && cmd[0] & 1 != 0 {
+            return sink(scan, st, list, cmd, dst, mix);
+        }
+        at += size;
+    }
+    None
+}
+
+/// The first full list's command IDs, counted, and the sink's ID checked against them
+fn histogram(scan: &mut Scan, list: &[u8], ncmd: u32) {
+    let mut hist = [0u32; 64];
+    let (mut cand, mut ncand) = (0u8, 0u32);
+    let mut at = LIST_HEADER;
+    for _ in 0..ncmd {
+        let Some(size) = command(list, at) else { return };
+        let id = list[at + 1];
+        hist[usize::from(id & 63)] += 1;
+        if size == SINK_SIZE && u32_at(list, at + SINK_INPUTS).is_some_and(|n| n.wrapping_sub(1) < 6) {
+            cand = id; // a command of DeviceSink's size with 1 to 6 inputs
+            ncand += 1;
+        }
+        at += size;
+    }
+    let mut line = Text::<512>::new(); // complete entries only, as many as 511 bytes hold
+    for (k, &n) in hist.iter().enumerate().filter(|(_, n)| **n != 0) {
+        let mut entry = Text::<32>::new();
+        let _ = write!(entry, " {k}\u{d7}{n}");
+        if !line.push(entry.as_str()) {
+            break;
+        }
+    }
+    log!("audren: first-frame commands {ncmd}, by command ID: {}", line.as_str());
+    let id = scan.sink_id;
+    if hist[usize::from(id & 63)] == 0 && ncand == 1 {
+        log!("audren: no command with ID {} in the command list; the only {}-byte command is ID {}, taking it as DeviceSink", Hx(id), Hx(SINK_SIZE), Hx(cand));
+        scan.sink_id = cand;
+    } else if hist[usize::from(id & 63)] == 0 {
+        log!("[RED] audren: no DeviceSink (ID {}) in the command list, {ncand} commands of {} bytes: the game will have no sound", Hx(id), Hx(SINK_SIZE));
+    }
+}
+
+/// One frame from the sink command `cmd` of `list`
+fn sink<'m>(scan: &mut Scan, st: &mut State, list: &[u8], cmd: &[u8], dst: &mut [i16], mix: impl FnOnce(u64, usize) -> Option<&'m [i32]>) -> Option<Frame> {
+    let (mix_at, buffers, samples, rate) = (u64_at(list, 8)?, u32_at(list, 0x10)?, u32_at(list, 0x14)?, u32_at(list, 0x18)?);
+    let fields = (u32_at(cmd, SINK_INPUTS), u64_at(cmd, SINK_UPSAMPLE), bytes::<12>(cmd, SINK_INDEX));
+    let (Some(nin), Some(up_at), Some(index)) = fields else {
+        // a command with the sink's ID too short for its fields (the C read past such a command, and past the list when it ended there)
+        if scan.once(SAID_SHORT) {
+            log!("[RED] audren: the DeviceSink command (ID {}) is {} bytes, too short for its inputs: no sound", Hx(scan.sink_id), Hx(cmd.len()));
+        }
+        return None;
+    };
+    let input: [i16; 6] = core::array::from_fn(|j| i16::from_le_bytes([index[2 * j], index[2 * j + 1]]));
+    if st.sink_logged == 0 {
+        st.sink_logged = 1;
+        let first = |j: usize| if nin as usize > j { i32::from(input[j]) } else { -1 };
+        log!(
+            "audren: DeviceSink inputs {nin} ({} {} \u{2026}) rate {rate} samples per frame {samples} mix buffer {mix_at:#x} ({buffers} buffers) upsample buffer {up_at:#x}{}",
+            first(0),
+            first(1),
+            if rate == 32000 { " (32 kHz: resampled to 48 kHz on the host)" } else { "" }
+        );
+    }
+    let samples = samples as usize;
+    if nin == 0 || samples > if rate == 48000 { FRAME_MAX } else { MAX_32K } {
+        return None;
+    }
+    if rate != 48000 && rate != 32000 {
+        if scan.once(SAID_RATE) {
+            log!("[RED] audren: renderer sample rate {rate} (the SDK takes 32000 or 48000): no sound");
+        }
+        return None;
+    }
+    // The input buffers: the mix buffers the sink's inputs name, at the renderer's rate (with CPU rendering the SDK makes no upsampler: hle_audren.c UpsamplerManager)
+    let Some(words) = (buffers as usize).checked_mul(samples).and_then(|w| mix(mix_at, w)) else {
+        if scan.once(SAID_MIX) {
+            log!("[RED] audren: the command list's {buffers} mix buffers of {samples} samples at {mix_at:#x} cannot be read: no sound");
+        }
+        return None;
+    };
+    let k = (nin as usize).min(6);
+    let mut ch: [&[i32]; 6] = [&[]; 6];
+    for j in 0..k {
+        // each index inside the buffers the header counts (the C read mix + index × samples for any index)
+        let Some(c) = usize::try_from(input[j]).ok().filter(|&b| b < buffers as usize).and_then(|b| words.get(b * samples..(b + 1) * samples)) else {
+            if scan.once(SAID_INPUT) {
+                log!("[RED] audren: DeviceSink input {j} names mix buffer {}, of {buffers}: no sound", input[j]);
+            }
+            return None;
+        };
+        ch[j] = c;
+    }
+    // Channel order front-left front-right center LFE back-left back-right; 6 → 2 with the system default downmix coefficients (front 1.0, center 0.707, LFE 0.251, back 0.707, Q15).
+    // The stereo fold is mixed before the 32 kHz resampler and clamped last: folding clamped surround samples after an HDMI → stereo switch loses cancellation between channels
+    const CF: i64 = 32768;
+    const CC: i64 = 23167;
+    const CL: i64 = 8224;
+    const CB: i64 = 23167;
+    for (s, f) in scan.mixed.chunks_exact_mut(SINK_CHANNELS).take(samples).enumerate() {
+        let x: [i64; 6] = core::array::from_fn(|j| if j < k { i64::from(ch[j][s]) } else { 0 });
+        if k >= 6 {
+            for j in 0..6 {
+                f[j] = x[j] as i32;
+            }
+            let c = x[2] * CC + x[3] * CL;
+            f[6] = ((x[0] * CF + c + x[4] * CB) >> 15) as i32;
+            f[7] = ((x[1] * CF + c + x[5] * CB) >> 15) as i32;
+        } else {
+            f[0] = x[0] as i32;
+            f[1] = (if k > 1 { x[1] } else { x[0] }) as i32;
+            f[2..6].fill(0);
+            f[6] = f[0];
+            f[7] = f[1];
+        }
+    }
+    let nout = if rate == 48000 { samples } else { up_3_2(st, &mut scan.mixed, samples, SINK_CHANNELS) };
+    let out = dst.get_mut(..nout * SINK_CHANNELS)?;
+    let mut loud = false;
+    for (d, &v) in out.iter_mut().zip(scan.mixed.iter()) {
+        let v = v.clamp(-32768, 32767);
+        *d = v as i16;
+        loud |= v != 0;
+    }
+    Some(Frame { samples: nout, loud })
+}
+
+/// The 3:2 resampler's coefficients, three phases of 16 taps: a windowed sinc (Blackman, cutoff 0.9 of the input's Nyquist), each phase normalized to 1. The bits are those
+/// the C computed (hle_audren.c until the move here, at -O2 with clang's FMA contraction), so the output is the same to the bit; the test `coefficients_follow_the_formula`
+/// computes them again
+const H: [[f32; TAPS]; 3] = [
+    [
+        f32::from_bits(0x3a0d1547), // 0.000538189372
+        f32::from_bits(0xbb5bb910), // -0.00335270539
+        f32::from_bits(0x3c3380d8), // 0.0109560117
+        f32::from_bits(0xbcd2ce4d), // -0.0257331375
+        f32::from_bits(0x3d4310a2), // 0.0476232842
+        f32::from_bits(0xbd9435ab), // -0.0723679885
+        f32::from_bits(0x3dbd1166), // 0.0923183411
+        f32::from_bits(0x3f6668c3), // 0.900036037
+        f32::from_bits(0x3dbd1166), // 0.0923183411
+        f32::from_bits(0xbd9435ab), // -0.0723679885
+        f32::from_bits(0x3d4310a2), // 0.0476232842
+        f32::from_bits(0xbcd2ce4d), // -0.0257331375
+        f32::from_bits(0x3c3380d8), // 0.0109560117
+        f32::from_bits(0xbb5bb910), // -0.00335270539
+        f32::from_bits(0x3a0d1547), // 0.000538189372
+        f32::from_bits(0x20bf988b), // 3.24576031e-19
+    ],
+    [
+        f32::from_bits(0x3988c7ab), // 0.000260887056
+        f32::from_bits(0xbaeaac5e), // -0.00179041526
+        f32::from_bits(0x3b9573f1), // 0.00456094043
+        f32::from_bits(0xbbce65f7), // -0.00629877625
+        f32::from_bits(0xa494f844), // -6.46053469e-17
+        f32::from_bits(0x3cf30789), // 0.029666679
+        f32::from_bits(0xbe005484), // -0.125322402
+        f32::from_bits(0x3f446846), // 0.767216086
+        f32::from_bits(0x3ee210c6), // 0.441534221
+        f32::from_bits(0xbe23c82e), // -0.159943312
+        f32::from_bits(0x3d927cae), // 0.0715268701
+        f32::from_bits(0xbceac167), // -0.0286566745
+        f32::from_bits(0x3c1162ad), // 0.0088736238
+        f32::from_bits(0xbad7f73c), // -0.00164768798
+        f32::from_bits(0xa18bbcda), // -9.46899497e-19
+        f32::from_bits(0x37a702f4), // 1.99093265e-05
+    ],
+    [
+        f32::from_bits(0x37a702f4), // 1.99093265e-05
+        f32::from_bits(0xa18bbcda), // -9.46899497e-19
+        f32::from_bits(0xbad7f73c), // -0.00164768798
+        f32::from_bits(0x3c1162ad), // 0.0088736238
+        f32::from_bits(0xbceac167), // -0.0286566745
+        f32::from_bits(0x3d927cae), // 0.0715268701
+        f32::from_bits(0xbe23c82e), // -0.159943312
+        f32::from_bits(0x3ee210c6), // 0.441534221
+        f32::from_bits(0x3f446846), // 0.767216086
+        f32::from_bits(0xbe005484), // -0.125322402
+        f32::from_bits(0x3cf30789), // 0.029666679
+        f32::from_bits(0xa494f844), // -6.46053469e-17
+        f32::from_bits(0xbbce65f7), // -0.00629877625
+        f32::from_bits(0x3b9573f1), // 0.00456094043
+        f32::from_bits(0xbaeaac5e), // -0.00179041526
+        f32::from_bits(0x3988c7ab), // 0.000260887056
+    ],
+];
+
+/// 3:2 upsampling of the first n samples of nch interleaved channels in io, written over them (io holds FRAME_MAX samples), with the renderer's history in st: evaluated 8
+/// input samples late so every tap is known, the last 15 input samples kept across frames. The output's sample count
+fn up_3_2(st: &mut State, io: &mut [i32], n: usize, nch: usize) -> usize {
+    let hist = (TAPS - 1) * nch;
+    st.up[hist..hist + n * nch].copy_from_slice(&io[..n * nch]); // the frame after the last TAPS - 1 samples of the one before (copied first: the output goes over the input)
+    let mut pos = st.up_pos as usize; // the next output's position in thirds of an input sample, from the frame start
+    assert!(nch <= SINK_CHANNELS); // a bug otherwise: the callers pass SINK_CHANNELS (the tests 2 and 6)
+    let mut m = 0;
+    while pos < 3 * n {
+        let x = &st.up[nch * (pos / 3)..][..TAPS * nch];
+        // Each channel's taps summed in order, as the C's v += c * x (which clang fused), the channels side by side as clang's vector code had them: the same bits, and
+        // the channels' sums do not wait for one another (one channel's 16 taps in a row took 5 times as long)
+        let mut v = [0f32; SINK_CHANNELS];
+        for (row, &c) in x.chunks_exact(nch).zip(&H[pos % 3]) {
+            match <&[i32; SINK_CHANNELS]>::try_from(row) {
+                Ok(row) => sys::fma8(&mut v, c, row), // the sink's 8 channels, the frames capture resamples: in vector registers
+                Err(_) => {
+                    for (v, &x) in v.iter_mut().zip(row) {
+                        *v = sys::fma(c, x as f32, *v);
+                    }
+                }
+            }
+        }
+        for (out, &v) in io[nch * m..nch * (m + 1)].iter_mut().zip(&v) {
+            *out = sys::lrint(v);
+        }
+        pos += 2;
+        m += 1;
+    }
+    st.up_pos = (pos - 3 * n) as u32;
+    st.up.copy_within(nch * n..nch * n + hist, 0);
+    m
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     use super::*;
 
     const REV: u32 = 0x3056_4552; // "REV0"; + n << 24 is revision n
@@ -139,6 +508,347 @@ mod tests {
             let mut p = param(&[0x10_0000; 11]);
             p[0x20] = 0xff;
             assert!(work_size(&p, REV + (revision << 24)) > 0);
+        }
+    }
+
+    // ---------- the command list (as t_audren_layout.c builds them, and the cases that test could not reach) ----------
+    use crate::log::captured;
+
+    const SAMPLES: usize = 240;
+    const NMIX: usize = 8;
+    const NCMD: usize = 6;
+
+    pub(crate) fn new_scan() -> Box<Scan> {
+        Box::new(Scan { mixed: [0; FRAME_MAX * SINK_CHANNELS], walked: 0, hist_logged: 0, sink_id: SINK_ID, said: 0, _pad: [0; 4] })
+    }
+    pub(crate) fn new_state() -> Box<State> {
+        Box::new(State { up: [0; SINK_CHANNELS * (TAPS - 1 + FRAME_MAX)], up_pos: 0, sink_logged: 0, _pad: [0; 3] })
+    }
+    fn out() -> Vec<i16> {
+        vec![0; FRAME_MAX * SINK_CHANNELS]
+    }
+
+    /// A command as SDK 21 on writes it: enabled, command ID, size; no magic
+    fn put(list: &mut [u8], at: usize, id: u8, size: usize) -> usize {
+        list[at..at + size].fill(0);
+        list[at] = 1;
+        list[at + 1] = id;
+        list[at + 2..at + 4].copy_from_slice(&(size as i16).to_le_bytes());
+        at + size
+    }
+
+    /// ncmd - 1 commands of 0x40 bytes, then the DeviceSink (ID 0x14, 0x140 bytes) with the given inputs; the header names NMIX buffers of `samples` at `mix_at`
+    pub(crate) fn build(ncmd: usize, samples: usize, rate: u32, inputs: &[i16], mix_at: u64) -> Vec<u8> {
+        let mut l = vec![0u8; LIST_HEADER + (ncmd - 1) * 0x40 + SINK_SIZE];
+        l[4..8].copy_from_slice(&(ncmd as u32).to_le_bytes());
+        l[8..16].copy_from_slice(&mix_at.to_le_bytes());
+        l[0x10..0x14].copy_from_slice(&(NMIX as u32).to_le_bytes());
+        l[0x14..0x18].copy_from_slice(&(samples as u32).to_le_bytes());
+        l[0x18..0x1c].copy_from_slice(&rate.to_le_bytes());
+        let mut at = LIST_HEADER;
+        for _ in 0..ncmd - 1 {
+            at = put(&mut l, at, 6, 0x40);
+        }
+        let sink = at;
+        put(&mut l, at, SINK_ID, SINK_SIZE);
+        l[sink + SINK_INPUTS..sink + SINK_INPUTS + 4].copy_from_slice(&(inputs.len() as u32).to_le_bytes());
+        for (j, i) in inputs.iter().enumerate() {
+            l[sink + SINK_INDEX + 2 * j..sink + SINK_INDEX + 2 * j + 2].copy_from_slice(&i.to_le_bytes());
+        }
+        l
+    }
+    fn stereo(ncmd: usize) -> Vec<u8> {
+        build(ncmd, SAMPLES, 48000, &[0, 1], 0x1000)
+    }
+
+    /// capture with the mix buffers in `mix`
+    fn run(scan: &mut Scan, st: &mut State, list: &[u8], mix: &[i32], dst: &mut [i16]) -> Option<usize> {
+        capture(scan, st, list, dst, |_, words| mix.get(..words)).map(|f| f.samples)
+    }
+    fn mix_of(per_buffer: impl Fn(usize, usize) -> i32) -> Vec<i32> {
+        (0..NMIX * SAMPLES).map(|w| per_buffer(w / SAMPLES, w % SAMPLES)).collect()
+    }
+    fn said(lines: &[String], text: &str) -> bool {
+        lines.iter().any(|l| l.contains(text))
+    }
+
+    #[test]
+    fn commands_are_whole_or_refused() {
+        let mut wire = vec![0u8; 0x41];
+        put(&mut wire, 1, 0x14, 0x40); // at an odd offset: no typed load
+        let q = &wire[1..];
+        assert_eq!(command(q, 0), Some(0x40));
+        for n in 0..0x40 {
+            assert_eq!(command(&q[..n], 0), None, "truncated to {n}"); // header and body truncation fail before any field is read
+        }
+        for bad in [0i16, -1, 4, 0xf, 0x41] {
+            wire[3..5].copy_from_slice(&bad.to_le_bytes());
+            assert_eq!(command(&wire[1..], 0), None, "size {bad}");
+        }
+        let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+        let list = stereo(NCMD);
+        for n in 0..LIST_HEADER {
+            assert_eq!(run(&mut scan, &mut st, &list[..n], &[], &mut o), None);
+        }
+    }
+
+    #[test]
+    fn startup_lists_decide_nothing_until_one_walks() {
+        let mix = mix_of(|b, _| [1000, -1000][b.min(1)]);
+        let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+        let mut empty = stereo(NCMD);
+        empty[4..8].fill(0);
+        assert_eq!(run(&mut scan, &mut st, &empty[..LIST_HEADER], &mix, &mut o), None);
+        // The third command zeroed, as in a list generated before the game's first update: silent frames, none reported as malformed
+        let mut incomplete = stereo(NCMD);
+        incomplete[LIST_HEADER + 2 * 0x40..LIST_HEADER + 3 * 0x40].fill(0);
+        captured::take();
+        for _ in 0..3 {
+            assert_eq!(run(&mut scan, &mut st, &incomplete, &mix, &mut o), None);
+        }
+        let lines = captured::take();
+        assert!(said(&lines, "does not walk") && !said(&lines, "[RED]") && !said(&lines, "by command ID:"), "{lines:?}");
+        assert_eq!(lines.len(), 1);
+        // The SDK starts with short valid lists: their sink plays before the first full list's sink scan
+        assert_eq!(run(&mut scan, &mut st, &stereo(2), &mix, &mut o), Some(SAMPLES));
+        assert_eq!(scan.sink_id, SINK_ID);
+        for s in 0..SAMPLES {
+            assert_eq!((o[8 * s + 6], o[8 * s + 7]), (1000, -1000));
+        }
+        assert_eq!(run(&mut scan, &mut st, &stereo(NCMD), &mix, &mut o), Some(SAMPLES)); // and the full frames after them
+    }
+
+    #[test]
+    fn a_sink_under_another_id_is_found_by_its_size() {
+        let mix = mix_of(|b, _| [1000, -1000][b.min(1)]);
+        let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+        let mut list = stereo(NCMD);
+        list[LIST_HEADER + (NCMD - 1) * 0x40 + 1] = 0x15;
+        captured::take();
+        assert_eq!(run(&mut scan, &mut st, &list, &mix, &mut o), Some(SAMPLES));
+        let lines = captured::take();
+        assert!(scan.sink_id == 0x15 && said(&lines, "taking it as DeviceSink") && !said(&lines, "[RED]"), "{lines:?}");
+        assert_eq!((o[6], o[7]), (1000, -1000));
+    }
+
+    #[test]
+    fn malformed_lists_after_one_walks_give_nothing() {
+        for bad in 0..3 {
+            let mix = mix_of(|b, _| [700, -900][b.min(1)]);
+            let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+            let mut first = stereo(NCMD);
+            first[4..8].copy_from_slice(&1u32.to_le_bytes());
+            assert_eq!(run(&mut scan, &mut st, &first[..LIST_HEADER + 0x40], &mix, &mut o), None); // a first list that walks, without a sink or histogram
+            let mut list = stereo(NCMD);
+            if bad < 2 {
+                list[LIST_HEADER + bad * 0x40..LIST_HEADER + (bad + 1) * 0x40].fill(0);
+            } else {
+                list[4..8].copy_from_slice(&(NCMD as u32 + 1).to_le_bytes());
+                list.extend([0u8; 0x40]);
+            }
+            o.fill(1234);
+            captured::take();
+            assert_eq!(run(&mut scan, &mut st, &list, &mix, &mut o), None, "bad {bad}");
+            let lines = captured::take();
+            assert!(said(&lines, "malformed") && !said(&lines, "by command ID:") && scan.sink_id == SINK_ID, "{lines:?}");
+            assert!(o.iter().all(|&v| v == 1234));
+            assert_eq!(run(&mut scan, &mut st, &stereo(NCMD), &mix, &mut o), Some(SAMPLES)); // a valid full list after it still finds the sink
+            assert_eq!((o[6], o[7]), (700, -900));
+            let mut tail = stereo(NCMD);
+            tail[4..8].copy_from_slice(&(NCMD as u32 + 1).to_le_bytes());
+            tail.extend([0u8; 0x40]);
+            assert_eq!(run(&mut scan, &mut st, &tail, &mix, &mut o), None); // validation goes on after the histogram was logged
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // a megabyte of commands, slow under Miri; safe code only
+    fn the_histogram_keeps_whole_entries_within_its_buffer() {
+        // 64 IDs × 1000 commands need 566 bytes of histogram text, more than its 512-byte buffer; disabled commands keep the sink out of it
+        const COUNT: usize = 64000;
+        let mut l = vec![0u8; LIST_HEADER + COUNT * 0x10];
+        l[4..8].copy_from_slice(&(COUNT as u32).to_le_bytes());
+        for i in 0..COUNT {
+            let at = put(&mut l, LIST_HEADER + i * 0x10, (i / 1000) as u8, 0x10) - 0x10;
+            l[at] = 0;
+        }
+        let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+        captured::take();
+        assert_eq!(run(&mut scan, &mut st, &l, &[], &mut o), None);
+        let lines = captured::take();
+        let hist = lines.iter().find_map(|l| l.split_once("by command ID:")).map(|(_, h)| h.to_owned()).unwrap();
+        assert!(hist.len() <= 512 && hist.starts_with("  0\u{d7}1000 1\u{d7}1000"), "{} bytes: {hist}", hist.len()); // the line's space, then the entry's
+    }
+
+    #[test]
+    fn six_channels_in_order_and_a_mono_sink_on_the_front_pair() {
+        let mut mix = mix_of(|b, _| 1000 * (b as i32 + 1));
+        let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, SAMPLES, 48000, &[0, 1, 2, 3, 4, 5], 0x1000), &mix, &mut o), Some(SAMPLES));
+        for s in 0..SAMPLES {
+            for j in 0..6 {
+                assert_eq!(o[8 * s + j], 1000 * (j as i16 + 1));
+            }
+        }
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, SAMPLES, 48000, &[0], 0x1000), &mix, &mut o), Some(SAMPLES));
+        for s in 0..SAMPLES {
+            assert_eq!(&o[8 * s..8 * s + 8], &[1000, 1000, 0, 0, 0, 0, 1000, 1000]);
+        }
+        // A center above 16 bits must cancel the front before the stereo fold is clamped
+        mix = mix_of(|b, _| [-30000, 0, 60000, 0, 0, 0, 0, 0][b]);
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, SAMPLES, 48000, &[0, 1, 2, 3, 4, 5], 0x1000), &mix, &mut o), Some(SAMPLES));
+        assert_eq!((o[0], o[2], o[6], o[7]), (-30000, 32767, 12420, 32767));
+    }
+
+    /// t_audren_layout.c test_stereo_unchanged: golden PCM from the stereo-only capture before the surround path, over three frames with cancellation and clipping, at 48 and
+    /// 32 kHz (the resampler's history across frames, and the clamp after it)
+    #[test]
+    fn stereo_matches_the_golden_output() {
+        let golden = [0xb2c9_1fe3_77e1_ac44u64, 0x9dfe_f1ca_9df2_4ea6];
+        for (r, (rate, count)) in [(48000u32, 240usize), (32000, 160)].into_iter().enumerate() {
+            let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+            let mut hash = 14_695_981_039_346_656_037u64;
+            for frame in 0..3 {
+                let mut mix = vec![0i32; NMIX * SAMPLES];
+                for c in 0..6 {
+                    for i in 0..count {
+                        mix[c * count + i] = ((frame * 977 + c * 7919 + i * 613) % 120_001) as i32 - 60000;
+                    }
+                }
+                let list = build(NCMD, count, rate, &[0, 1, 2, 3, 4, 5], 0x1000);
+                assert_eq!(run(&mut scan, &mut st, &list, &mix, &mut o), Some(240));
+                for i in 0..240 {
+                    for j in 6..8 {
+                        let v = o[i * 8 + j] as u16;
+                        hash = (hash ^ u64::from(v & 255)).wrapping_mul(1_099_511_628_211);
+                        hash = (hash ^ u64::from(v >> 8)).wrapping_mul(1_099_511_628_211);
+                    }
+                }
+            }
+            assert_eq!(hash, golden[r], "{rate} Hz");
+        }
+    }
+
+    #[test]
+    fn each_renderer_resamples_with_its_own_history() {
+        let (mut a, mut b) = (new_state(), new_state());
+        let mut io = vec![20000i32; FRAME_MAX * SINK_CHANNELS];
+        assert_eq!(up_3_2(&mut a, &mut io, 160, 2), 240);
+        io.fill(0);
+        assert_eq!(up_3_2(&mut b, &mut io, 160, 2), 240);
+        assert!(io[..2 * 240].iter().all(|&v| v == 0)); // a's loud frame does not reach b's output
+        // Six channels each on their own: an LFE-only block stays on the LFE
+        let mut c = new_state();
+        let mut six = vec![0i32; FRAME_MAX * SINK_CHANNELS];
+        for i in 0..160 {
+            six[6 * i + 3] = 20000;
+        }
+        assert_eq!(up_3_2(&mut c, &mut six, 160, 6), 240);
+        assert!((0..240).all(|m| (0..6).all(|j| j == 3 || six[6 * m + j] == 0)));
+        assert_eq!(six[6 * 100 + 3], 20000);
+    }
+
+    #[test]
+    fn a_sink_input_outside_the_mix_buffers_gives_no_sound() {
+        // The C read mix + index × samples for any index the sink held
+        let mix = mix_of(|_, _| 1000);
+        for bad in [NMIX as i16, -1, i16::MAX] {
+            let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+            captured::take();
+            assert_eq!(run(&mut scan, &mut st, &build(NCMD, SAMPLES, 48000, &[0, bad], 0x1000), &mix, &mut o), None, "index {bad}");
+            let lines = captured::take();
+            assert!(said(&lines, &format!("[RED] audren: DeviceSink input 1 names mix buffer {bad}, of 8: no sound")), "{lines:?}");
+            assert_eq!(run(&mut scan, &mut st, &build(NCMD, SAMPLES, 48000, &[0, bad], 0x1000), &mix, &mut o), None);
+            assert!(!said(&captured::take(), "[RED]")); // said once
+        }
+        // More buffers named than the slice holds: the header's count is taken at its word, and a closure that cannot give them refuses
+        let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+        captured::take();
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, SAMPLES, 48000, &[0, 1], 0x1000), &mix[..NMIX * SAMPLES - 1], &mut o), None);
+        assert!(said(&captured::take(), "mix buffers of 240 samples at 0x1000 cannot be read"));
+    }
+
+    #[test]
+    fn a_command_with_the_sinks_id_too_short_for_its_fields_is_not_read() {
+        let mix = mix_of(|_, _| 1000);
+        let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+        let mut l = vec![0u8; LIST_HEADER + 0x40];
+        l[4..8].copy_from_slice(&1u32.to_le_bytes());
+        l[0x10..0x14].copy_from_slice(&(NMIX as u32).to_le_bytes());
+        l[0x14..0x18].copy_from_slice(&(SAMPLES as u32).to_le_bytes());
+        l[0x18..0x1c].copy_from_slice(&48000u32.to_le_bytes());
+        put(&mut l, LIST_HEADER, SINK_ID, 0x40); // the list ends with it: the C read 0xf8 bytes past the list
+        captured::take();
+        assert_eq!(run(&mut scan, &mut st, &l, &mix, &mut o), None);
+        assert!(said(&captured::take(), "[RED] audren: the DeviceSink command (ID 0x14) is 0x40 bytes, too short for its inputs: no sound"));
+    }
+
+    #[test]
+    fn rates_and_sample_counts_out_of_range_give_no_frame() {
+        let mix = vec![0i32; NMIX * FRAME_MAX];
+        let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+        captured::take();
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, 240, 44100, &[0, 1], 0x1000), &mix, &mut o), None);
+        assert!(said(&captured::take(), "[RED] audren: renderer sample rate 44100 (the SDK takes 32000 or 48000): no sound"));
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, FRAME_MAX + 1, 48000, &[0, 1], 0x1000), &mix, &mut o), None);
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, MAX_32K + 1, 32000, &[0, 1], 0x1000), &mix, &mut o), None);
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, FRAME_MAX, 48000, &[0, 1], 0x1000), &mix, &mut o), Some(FRAME_MAX));
+        assert!(run(&mut scan, &mut st, &build(NCMD, MAX_32K, 32000, &[0, 1], 0x1000), &mix, &mut o).is_some_and(|n| n <= FRAME_MAX));
+        assert_eq!(run(&mut scan, &mut st, &build(NCMD, 240, 48000, &[], 0x1000), &mix, &mut o), None); // no inputs
+    }
+
+    /// Lists of random bytes and random edits of valid lists: whatever they hold, capture refuses or gives a frame, and never panics (a panic would abort the host)
+    #[test]
+    fn random_lists_never_panic() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mix = vec![0x7fff_ffffi32; NMIX * FRAME_MAX];
+        let rounds = if cfg!(miri) { 40 } else { 20000 };
+        for round in 0..rounds {
+            let (mut scan, mut st, mut o) = (new_scan(), new_state(), out());
+            scan.walked = (round & 1) as u8;
+            let rate = [48000, 32000, 44100, 0][next() as usize % 4];
+            let mut l = build(1 + next() as usize % 8, next() as usize % (FRAME_MAX + 2), rate, &[0, 1, 2, 3, 4, 5], 0x1000);
+            for _ in 0..next() % 16 {
+                let at = next() as usize % l.len();
+                l[at] = next() as u8;
+            }
+            let cut = next() as usize % (l.len() + 1);
+            if round % 3 == 0 {
+                l.truncate(cut);
+            }
+            let _ = run(&mut scan, &mut st, &l, &mix, &mut o);
+            let noise: Vec<u8> = (0..next() % 0x400).map(|_| next() as u8).collect();
+            let _ = run(&mut scan, &mut st, &noise, &mix, &mut o);
+        }
+        captured::take();
+    }
+
+    /// The coefficients H holds, computed again by the C's formula: a windowed sinc (Blackman, 16 taps, cutoff 0.9 of the input's Nyquist) in three phases, each normalized
+    /// to 1, with clang's two fused multiply-adds in the window (hle_audren.c's object had them: fmadd d11, d0, d1, d14 and fmadd d0, d0, d12, d11)
+    #[test]
+    #[cfg_attr(miri, ignore)] // Miri's sin and cos are not the system's
+    fn coefficients_follow_the_formula() {
+        use std::f64::consts::PI;
+        for (p, phase) in H.iter().enumerate() {
+            let (mut w, mut sum) = ([0f64; TAPS], 0f64);
+            for (k, wk) in w.iter_mut().enumerate() {
+                let x = p as f64 / 3.0 + (TAPS / 2) as f64 - 1.0 - k as f64;
+                let fc = 0.9;
+                let s = if x == 0.0 { fc } else { (PI * fc * x).sin() / (PI * x) };
+                let t = (x + (TAPS / 2) as f64) / TAPS as f64;
+                let win = (4.0 * PI * t).cos().mul_add(0.08, (2.0 * PI * t).cos().mul_add(-0.5, 0.42));
+                *wk = s * win;
+                sum += *wk;
+            }
+            for (k, (wk, h)) in w.iter().zip(phase).enumerate() {
+                assert_eq!(((wk / sum) as f32).to_bits(), h.to_bits(), "phase {p} tap {k}");
+            }
         }
     }
 }

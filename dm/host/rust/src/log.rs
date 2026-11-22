@@ -48,6 +48,47 @@ macro_rules! log {
 }
 pub(crate) use log;
 
+/// C's `%#x`: 0x and the hex digits, but a plain 0 for zero
+pub(crate) struct Hx<T>(pub T);
+
+impl<T: fmt::LowerHex + Default + PartialEq> fmt::Display for Hx<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 == T::default() { f.write_str("0") } else { write!(f, "{:#x}", self.0) }
+    }
+}
+
+/// Text in a fixed buffer of N bytes, the last kept free as a C string's NUL would be: a write that does not fit whole writes nothing and fails
+pub(crate) struct Text<const N: usize> {
+    buf: [u8; N],
+    n: usize,
+}
+
+impl<const N: usize> Text<N> {
+    pub(crate) fn new() -> Self {
+        Self { buf: [0; N], n: 0 }
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.buf[..self.n]).unwrap_or("") // only whole strs are ever written
+    }
+
+    /// s appended when it fits whole; false, and nothing written, when it does not
+    pub(crate) fn push(&mut self, s: &str) -> bool {
+        if self.n + s.len() >= N {
+            return false;
+        }
+        self.buf[self.n..self.n + s.len()].copy_from_slice(s.as_bytes());
+        self.n += s.len();
+        true
+    }
+}
+
+impl<const N: usize> Write for Text<N> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if self.push(s) { Ok(()) } else { Err(fmt::Error) }
+    }
+}
+
 /// The lines the code under test logged, per test thread
 #[cfg(test)]
 pub(crate) mod captured {
@@ -79,5 +120,21 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert!(got[0].len() < LINE && got[0].chars().all(|c| c == '\u{d7}'), "{}", got[0].len());
         assert_eq!(got[0].len(), (LINE - 1) / 2 * 2);
+    }
+
+    #[test]
+    fn hx_is_cs_alternate_hex() {
+        assert_eq!(format!("{} {} {}", Hx(0u32), Hx(0x14u8), Hx(0x2e7000usize)), "0 0x14 0x2e7000");
+    }
+
+    #[test]
+    fn text_takes_whole_writes_only_and_keeps_a_byte_free() {
+        let mut t = Text::<8>::new();
+        assert!(t.push("abc") && t.push("defg"));
+        assert!(!t.push("h")); // 8 bytes would leave none for the NUL
+        assert_eq!(t.as_str(), "abcdefg");
+        let mut t = Text::<8>::new();
+        assert!(t.write_str("\u{d7}\u{d7}\u{d7}\u{d7}").is_err()); // 8 bytes
+        assert_eq!(t.as_str(), "");
     }
 }

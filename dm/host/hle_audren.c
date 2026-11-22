@@ -10,15 +10,13 @@
 //      The local SDK uses a different command format whose storage can exceed the service's budget; that backend storage is supplied by the host. Explicit CPU renderers keep the SDK contract;
 //   2. A render thread (a guest thread started by the host): fills each returned 5 ms buffer, spacing fresh renders if the output returns several buffers together;
 //   3. Takes over AudioRenderSystem::ExecuteAudioRendererRendering (reached through the PLT): generates commands and runs CommandListProcessor like the original,
-//      then finds the DeviceSink command in the command list (a no-op for the CPU processor) and queues its six channels and a stereo fold, each clamped after mixing, for the output to select for the current route (hle_audio.c).
-// Command list format (SDK 21 on): header +0x04 command count, +0x08 mix buffer address, +0x10 buffer count, +0x14 samples per frame, +0x18 sample rate, commands from +0x20;
-//   each command +0x00 enabled (bit 0), +0x01 command ID (DeviceSink = 0x14), +0x02 size (s16); DeviceSink 0x140 bytes, +0x120 upsampler buffer, +0x128 input count, +0x12c input indices (s16).
+//      then takes the frame out of the command list's DeviceSink (a no-op for the CPU processor): its six channels and a stereo fold, each clamped after mixing, queued for the output to select for the current route (hle_audio.c).
+// What reads the game's data is in Rust (audren_rs.h; dm/host/rust/src/audren.rs, which also describes the command list's format): the work size and the frame out of each list.
 #include "hle.h"
 #include "audren_rs.h"
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <mach/thread_policy.h>
-#include <math.h>
 #include <stdatomic.h>
 #include <time.h>
 #include <unistd.h>
@@ -33,7 +31,8 @@ void dm_pcmout_wait(void *k, int ms);
 
 // P_SIZE: bytes of the game's AudioRendererParameter copied before the two fields are changed. SDK 16's struct is 0x38 bytes; SDK 8's (Link's Awakening) has one more word,
 // its revision at +0x38: copying only 0x38 left the revision uninitialized and the SDK rejected it (CheckValidRevision, Result 0x499). The SDK reads only its own size of the copy
-enum { P_DEVICE = 0x2c, P_MODE = 0x30, P_SIZE = 0x40, WORK_PAGE = 0x1000, FRAME_MAX = 1024, NBUF = 4 };
+enum { P_DEVICE = 0x2c, P_MODE = 0x30, P_SIZE = 0x40, WORK_PAGE = 0x1000, FRAME_MAX = DM_AUDREN_FRAME_MAX, NBUF = 4 };
+_Static_assert(DM_AUDREN_CHANNELS == DM_AUDIO_SINK_CHANNELS, "audren.rs writes the channels the output takes");
 static void *gsym(const char *n) { void *p = guest_sym(n); if (!p) die("audren: missing SDK symbol %s", n); return p; }
 static void cpu_manual(uint8_t *dst, const uint8_t *src) { memcpy(dst, src, P_SIZE); *(int32_t *)(dst + P_DEVICE) = 1; *(int32_t *)(dst + P_MODE) = 1; }
 
@@ -79,8 +78,7 @@ typedef struct {
     // A fresh render holds cq_mu while the SDK signals the renderer event. A woken guest thread can enter RequestUpdate and need cq_mu before the signal's handoff returns.
     // Take the mutex with dm_host_lock so a thread waiting for it counts as blocked.
     pthread_mutex_t cq_mu; pthread_cond_t cq_cv;   // serializes catch-up publication, dequeue and fresh renders; wake on enqueue, dequeue or close
-    int sink_logged;
-    int32_t up_buf[DM_AUDIO_SINK_CHANNELS * (15 + FRAME_MAX)]; uint32_t up_pos;   // up_3_2's last samples and position
+    dm_audren_state rs;                      // capture's state of this renderer (audren.rs State): the 3:2 resampler's history, whether its sink was logged
     int16_t pcm[NBUF][FRAME_MAX * DM_AUDIO_SINK_CHANNELS]; aout_buf bufs[NBUF];   // the blocks its output plays from (six channels plus their stereo fold): AudioOut queues only the pointer and copies the samples when the sound card asks (issue #1336)
 } ar_t;
 static ar_t g_ar[AR_MAX];
@@ -299,144 +297,27 @@ HLE_FORCE("_ZN2nn5audio18CloseAudioRendererENS0_19AudioRendererHandleE", "close 
     }
 }
 
-// The command list as this SDK's generation writes it (SDK 21 on; CommandListProcessor::Process, Rhythm Heaven Groove's sdk+0x24fd50): a command has no magic, +0x00 enabled (bit 0),
-//   +0x01 command ID (u8), +0x02 size (s16), +0x04 estimated time, +0x08 node ID. DeviceSink is ID 0x14 and 0x140 bytes (written at that sdk's +0x23a7b0): +0x18 device name,
-//   +0x120 upsample buffer, +0x128 input count, +0x12c input indices (s16). When the first full command list has no command with that ID, its one command of that size with
-//   1 to 6 inputs is the sink (a later SDK that numbers its commands differently would otherwise render every frame and play silence)
-enum { CMD_HEADER = 0x10, SINK_SIZE = 0x140, SINK_UPSAMPLE = 0x120, SINK_INPUTS = 0x128, SINK_INDEX = 0x12c };
-static int g_sink_id = 0x14;
-// A list can be incomplete, and a size in it unaligned: decode wire fields without typed loads.
-static int cmd_size(const uint8_t *q) { int16_t n; memcpy(&n, q + 2, sizeof n); return n; }
-static int cmd_id(const uint8_t *q) { return q[1]; }
-static int cmd_on(const uint8_t *q) { return q[0] & 1; }
-static int cmd_ok(const uint8_t *q, const uint8_t *end) {
-    if (q > end || (size_t)(end - q) < CMD_HEADER) return 0;
-    int n = cmd_size(q);
-    return n >= CMD_HEADER && (size_t)n <= (size_t)(end - q);
-}
-static int cmd_walks(const uint8_t *cl, uint32_t ncmd, const uint8_t *end) {
-    const uint8_t *q = cl + 0x20;
-    for (uint32_t i = 0; i < ncmd; i++) { if (!cmd_ok(q, end)) return 0; q += cmd_size(q); }
-    return 1;
-}
 // A renderer at 32 kHz (DRAGON QUEST VII Reimagined: 160 samples per 5 ms frame) has its DeviceSink upsampled to the output's 48 kHz by the SDK's upsampler, which AudioRenderSystem::
 //   SetUpRenderResourceSet allocates only for the DSP (SDK 19: sdk+0x21eb6c, sample rate 0x7d00 and rendering device +0x48 == 0). With the host's CPU rendering there is no
 //   UpsamplerManager, and the sink's command generation (GenerateSinkCommands, sdk+0x225a80) called Allocate on null and crashed in its mutex. The takeover below answers "no upsampler"
-//   for a null manager (the generator then skips the upsample command, sdk+0x225b40), and the host upsamples the stereo downmix 3:2 itself: a windowed sinc (Blackman, 16 taps, cutoff 0.9 of
-//   the input's Nyquist) in three phases, evaluated 8 input samples late so every tap is known, with the last 15 samples kept across frames
+//   for a null manager (the generator then skips the upsample command, sdk+0x225b40), and the host upsamples the sink's output 3:2 itself
+//   (audren.rs up_3_2: a windowed sinc, 16 taps in three phases)
 HLE_FORCE("_ZN2nn5audio6server16UpsamplerManager8AllocateEv", "upsampler for a DeviceSink below 48 kHz: none with CPU rendering (no manager), the host resamples its output",
           void *, h_up_Allocate, void *mgr) {
     static void *(*orig)(void *); if (!orig) orig = gsym("_ZN2nn5audio6server16UpsamplerManager8AllocateEv");
     return mgr ? orig(mgr) : NULL;
 }
-enum { RS_T = 16 };
-static uint32_t up_3_2(ar_t *a, const int32_t *in, uint32_t n, int32_t *out, int nch) {   // nch interleaved channels
-    static float h[3][RS_T]; int32_t *buf = a->up_buf; uint32_t pos = a->up_pos;   // pos: the next output's position in thirds of an input sample, from the frame start
-    if (!h[0][RS_T / 2 - 1]) {
-        for (int p = 0; p < 3; p++) {
-            double sum = 0, w[RS_T];
-            for (int k = 0; k < RS_T; k++) {
-                double x = p / 3.0 + RS_T / 2 - 1 - k, fc = 0.9, s = x == 0 ? fc : sin(M_PI * fc * x) / (M_PI * x);
-                double t = (x + RS_T / 2) / RS_T, win = 0.42 - 0.5 * cos(2 * M_PI * t) + 0.08 * cos(4 * M_PI * t);
-                w[k] = s * win; sum += w[k];
-            }
-            for (int k = 0; k < RS_T; k++) h[p][k] = (float)(w[k] / sum);
-        }
-    }
-    memcpy(buf + nch * (RS_T - 1), in, (size_t)n * nch * 4);   // the frame after the last RS_T - 1 samples of the one before (copied first: out may be in)
-    uint32_t m = 0;
-    for (; pos < 3 * n; pos += 2, m++) {
-        const int32_t *x = buf + nch * (pos / 3); const float *c = h[pos % 3];
-        for (int j = 0; j < nch; j++) {
-            float v = 0;
-            for (int k = 0; k < RS_T; k++) v += c[k] * (float)x[nch * k + j];
-            out[nch * m + j] = (int32_t)lrintf(v);
-        }
-    }
-    a->up_pos = pos - 3 * n;
-    memmove(buf, buf + nch * n, (RS_T - 1) * nch * 4);
-    return m;
-}
-static int capture(ar_t *a, const uint8_t *cl, size_t len, int16_t *dst) {   // six sink channels, then the stereo fold, per sample
-    if (len < 0x20) return 0;
-    uint32_t ncmd = *(const uint32_t *)(cl + 4), samples = *(const uint32_t *)(cl + 0x14), rate = *(const uint32_t *)(cl + 0x18);
-    const int32_t *mix = *(const int32_t *const *)(cl + 8); const uint8_t *cend = cl + len;
-    static int logged, hist_logged, walked;
-    if (!walked && ncmd) {   // a list generated before the game's first update need not be whole: a silent frame, and nothing is decided or reported from it
-        if (!cmd_walks(cl, ncmd, cend)) {
-            static int skipped; if (!skipped++) LOG("audren: command list %u commands long does not walk (generated before the first update?): silent frame", ncmd);
-            return 0;
-        }
-        walked = 1;
-    }
-    if (!walked) return 0;
-    // A later list can be incomplete too. Validate every command before consuming the
-    // one-time sink scan or returning PCM from a sink that precedes a malformed tail.
-    const uint8_t *c = cl + 0x20;
-    for (uint32_t i = 0; i < ncmd; i++) {
-        if (!cmd_ok(c, cend)) { if (!logged++) LOG("[RED] audren: command %u in the command list is malformed (offset %#zx, list %#zx bytes)", i, (size_t)(c - cl), len); return 0; }
-        c += cmd_size(c);
-    }
-    if (!hist_logged && ncmd > 4) {   // first full command list: command ID histogram and the sink ID check
-        hist_logged = 1;
-        int hist[64] = {0}, cand = -1, ncand = 0; const uint8_t *q = cl + 0x20; char line[512] = {0}; size_t o = 0;
-        for (uint32_t i = 0; i < ncmd; i++) {
-            int sz = cmd_size(q); hist[cmd_id(q) & 63]++;
-            if (sz == SINK_SIZE && *(const uint32_t *)(q + SINK_INPUTS) - 1 < 6) { cand = cmd_id(q); ncand++; }
-            q += sz;
-        }
-        for (int k = 0; k < 64; k++) if (hist[k]) {
-            int n = snprintf(line + o, sizeof line - o, " %d×%d", k, hist[k]);
-            // snprintf returns the untruncated length: keep only complete entries and
-            // never advance the next write past the available buffer.
-            if (n < 0 || (size_t)n >= sizeof line - o) { line[o] = 0; break; }
-            o += (size_t)n;
-        }
-        LOG("audren: first-frame commands %u, by command ID: %s", ncmd, line);
-        if (!hist[g_sink_id & 63] && ncand == 1) { LOG("audren: no command with ID %#x in the command list; the only %#x-byte command is ID %#x, taking it as DeviceSink", g_sink_id, SINK_SIZE, cand); g_sink_id = cand; }
-        else if (!hist[g_sink_id & 63]) LOG("[RED] audren: no DeviceSink (ID %#x) in the command list, %d commands of %#x bytes: the game will have no sound", g_sink_id, ncand, SINK_SIZE);
-    }
-    c = cl + 0x20;
-    for (uint32_t i = 0; i < ncmd; i++) {
-        int size = cmd_size(c);
-        if (cmd_id(c) == g_sink_id && cmd_on(c)) {
-            uint32_t nin = *(const uint32_t *)(c + SINK_INPUTS); int16_t in[6];
-            for (uint32_t j = 0; j < 6; j++) in[j] = ((const int16_t *)(c + SINK_INDEX))[j];
-            const int32_t *up = *(const int32_t *const *)(c + SINK_UPSAMPLE);
-            if (!a->sink_logged++) LOG("audren: DeviceSink inputs %u (%d %d …) rate %u samples per frame %u mix buffer %p upsample buffer %p%s", nin, nin ? in[0] : -1, nin > 1 ? in[1] : -1, rate, samples, (void *)mix, (void *)up,
-                               rate == 32000 ? " (32 kHz: resampled to 48 kHz on the host)" : "");
-            if (!nin || samples > (rate == 48000 ? FRAME_MAX : FRAME_MAX * 2 / 3 - 1)) return 0;
-            if (rate != 48000 && rate != 32000) { static int once; if (!once++) LOG("[RED] audren: renderer sample rate %u (the SDK takes 32000 or 48000): no sound", rate); return 0; }
-            // Input buffers: the mix buffers the DeviceSink inputs name, at the renderer's rate (with CPU rendering the SDK makes no upsampler, below)
-            const int32_t *ch[6]; uint32_t k = nin > 6 ? 6 : nin;
-            for (uint32_t j = 0; j < k; j++) ch[j] = mix + (size_t)in[j] * samples;
-            // Channel order front-left front-right center LFE back-left back-right; 6 → 2 with the system default downmix coefficients (front 1.0, center 0.707, LFE 0.251, back 0.707, Q15)
-            enum { CF = 32768, CC = 23167, CL = 8224, CB = 23167 };
-            static int32_t st[FRAME_MAX * DM_AUDIO_SINK_CHANNELS];   // capture runs under g_render_mu
-            for (uint32_t s = 0; s < samples; s++) {
-                int32_t *f = st + DM_AUDIO_SINK_CHANNELS * s;
-                if (k >= 6) for (uint32_t j = 0; j < 6; j++) f[j] = ch[j][s];
-                else { f[0] = ch[0][s]; f[1] = k > 1 ? ch[1][s] : ch[0][s]; for (uint32_t j = 2; j < 6; j++) f[j] = 0; }
-                // Keep the existing stereo operation order, including the 32 kHz resampler: mix before resampling and clamp last.
-                // Folding the clamped surround samples after an HDMI -> stereo switch loses cancellation between channels.
-                if (k >= 6) { int64_t c = (int64_t)ch[2][s] * CC + (int64_t)ch[3][s] * CL;
-                              f[6] = (int32_t)(((int64_t)ch[0][s] * CF + c + (int64_t)ch[4][s] * CB) >> 15);
-                              f[7] = (int32_t)(((int64_t)ch[1][s] * CF + c + (int64_t)ch[5][s] * CB) >> 15); }
-                else { f[6] = f[0]; f[7] = f[1]; }
-            }
-            uint32_t nout = rate == 48000 ? samples : up_3_2(a, st, samples, st, DM_AUDIO_SINK_CHANNELS);
-            uint64_t loud = 0;
-            for (uint32_t s = 0; s < nout * DM_AUDIO_SINK_CHANNELS; s++) {
-                int32_t v = st[s]; v = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
-                dst[s] = (int16_t)v; loud |= (uint64_t)v;
-            }
-            atomic_fetch_add(&a->frames, 1); if (loud) atomic_fetch_add(&a->nonsilent, 1);
-            uint64_t f = atomic_load(&a->frames); if (f == 200 || f % 12000 == 0) LOG("audren: renderer %d rendered %llu frames, %llu of them not silent", ar_index(a), (unsigned long long)f, (unsigned long long)atomic_load(&a->nonsilent));
-            return (int)nout;
-        }
-        c += size;
-    }
-    return 0;
+
+// The frame out of a command list (audren.rs capture: the DeviceSink's mix buffers, six channels then their stereo fold per sample, resampled to 48 kHz) into dst, which
+// holds FRAME_MAX samples; its sample count, 0 for none. g_scan is what capture keeps for all renderers (whether a list has walked yet, the sink's ID, the frame being
+// mixed): capture runs under g_render_mu (render_once)
+static dm_audren_scan g_scan = DM_AUDREN_SCAN_INIT;
+static int capture(ar_t *a, const uint8_t *cl, size_t len, int16_t *dst) {
+    int loud = 0, n = dm_audren_capture(&g_scan, &a->rs, cl, len, dst, FRAME_MAX * DM_AUDIO_SINK_CHANNELS, &loud);
+    if (n < 0) return 0;
+    atomic_fetch_add(&a->frames, 1); if (loud) atomic_fetch_add(&a->nonsilent, 1);
+    uint64_t f = atomic_load(&a->frames); if (f == 200 || f % 12000 == 0) LOG("audren: renderer %d rendered %llu frames, %llu of them not silent", ar_index(a), (unsigned long long)f, (unsigned long long)atomic_load(&a->nonsilent));
+    return n;
 }
 // Render one frame (generate commands + CPU processing); dst = output (six channels and their stereo fold, *nout samples). The two callers (render thread, catch-up) are serialized by a host lock: they share one command buffer.
 // One lock over all renderers: capture keeps what it learns from the first lists (whether one has walked yet, the sink's ID) for all of them; a frame takes hundredths of a millisecond (0.02 ms mean)

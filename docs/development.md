@@ -513,6 +513,7 @@ Signing: `pack_app.py` signs the inner host first, then the bundle (`codesign --
 
 Part of the host is Rust: `dm/host/rust`, one static library (`libdmhost_rs.a`) that `dm/host/rust.mk` builds with cargo into `dm/host/gen/rust`, and that the host and the unit tests that need it link. It holds code that reads data the game's SDK wrote, where a bound the C did not check would read past it. It is a trial of Rust for the host: other code moves only once the trial has shown its worth. What it has now:
 - `audren`: the work buffer Horizon's renderer service asks of the game (`dm_audren_work_size`, which `hle_audren.c` calls).
+- `audren`: the frame out of each command list (`dm_audren_capture`, which `hle_audren.c` `capture` calls after every render): the list's walk and its first-frame histogram, the DeviceSink's mix buffers, the stereo fold and the 3:2 resampler of a 32 kHz renderer. The PCM is the C's to the bit (the golden hashes of `t_audren_layout` and `stereo_matches_the_golden_output`). Rust bounds what the C read unchecked: the sink's input indices against the mix buffers the list's header counts, and the sink's fields against its command's size ([DeviceSink fields read without a bound](reference/audio.md#devicesink-fields-read-without-a-bound)).
 
 Its C side is one header per module (`dm/host/audren_rs.h`), written by hand. The rules:
 - **Unsafe code only in the modules that talk to C** (`src/lib.rs` names them: `*_ffi.rs`, `log.rs`, `sys.rs`), each block with a `// SAFETY:` comment that says why it holds. The manifest denies `unsafe_code` everywhere else and clippy's `undocumented_unsafe_blocks`.
@@ -522,7 +523,9 @@ Its C side is one header per module (`dm/host/audren_rs.h`), written by hand. Th
 - **Log lines that move from C keep their text byte for byte** (`log.rs` writes them through `dm_log`), since the symptom index and the tests search for it.
 - **No crate from outside the repository.** cargo builds `--locked --offline`, and the Rust version is the one `rust-toolchain.toml` names: rustup installs it on the first build, and the packing script checks that cargo runs there before it starts (`check_rust`).
 
-The release profile matches the C where it can: `opt-level = 2`, line tables for crash reports and the dSYM, `panic = "abort"`, and overflow checks on. It also uses LTO, inside the library only: without it the link took whole members of `core` (float and IPv6 formatting), 0.13 MB of code nothing calls, while with it the library adds 4 KB to the host. The host's own C stays without `-flto` (`dm/host/Makefile`).
+The release profile matches the C where it can: `opt-level = 2`, line tables for crash reports and the dSYM, `panic = "abort"`, and overflow checks on. It also uses LTO, inside the library only: without it the link took whole members of `core` (float and IPv6 formatting), 0.13 MB of code nothing calls. With it, the library's code in the host is 14 KB. The host's own C stays without `-flto` (`dm/host/Makefile`).
+
+What clang gave the C for free, stable `no_std` Rust has to write out. `core` has no fused multiply-add and no rounding to an integer (both are std's, and unstable in `core` as of Rust 1.95), and the compiler does not fuse `a * b + c` on its own. So `sys.rs` has the instructions clang emitted for the resampler: `fmadd`, `frintx` and `fcvtzs` in inline assembly, and 4-lane `fmla` through NEON intrinsics for the sink's 8 channels. Measured on a 160-sample frame of 8 channels (the C at -O2: 2.8 µs): libSystem's `fmaf` and `lrintf` called per tap, 41.6 µs; inline `fmadd` with one channel's taps in a row, 15.5 µs; the channels side by side, 7.3 µs; NEON, 3.4 µs. All gave the same bits. Ocarina of Time renders at 48 kHz and never resamples.
 
 The checks, in `dm/host/rust`:
 
@@ -531,10 +534,10 @@ cargo test --locked --offline
 cargo clippy --locked --offline --all-targets -- -D warnings
 cargo clippy --locked --offline --release --target aarch64-apple-darwin -- -D warnings   # the no_std build, with its panic handler
 cargo fmt --check
-cargo +nightly miri test   # undefined behaviour, the FFI entry points included; rustup toolchain install nightly --component miri
+MIRIFLAGS=-Zmiri-permissive-provenance cargo +nightly miri test   # undefined behaviour, the FFI entry points included; rustup toolchain install nightly --component miri
 ```
 
-`tests.yml` runs all but Miri, which stays local because a moving nightly would fail CI for no change here. The host tests (`make -C dm/host/tests run`) then check the C side through the library.
+The Miri flag silences its one warning: the mix buffers' address reaches Rust as an integer in the game's memory, so `audren_ffi.rs` takes it with `ptr::with_exposed_provenance`. Miri cannot run inline assembly or NEON intrinsics, so under Miri `sys.rs` has plain Rust in their place (the same arithmetic); the instructions themselves are checked by the golden hashes in `cargo test` and the host tests. `tests.yml` runs all but Miri, which stays local because a moving nightly would fail CI for no change here. The host tests (`make -C dm/host/tests run`) then check the C side through the library.
 
 ## Build by hand (Mac)
 

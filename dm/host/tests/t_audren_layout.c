@@ -1,4 +1,5 @@
-// The renderer's output as the host takes it from the SDK's command list (hle_audren.c capture): the command headers and the DeviceSink of SDK 21 on, decoded without typed loads.
+// The renderer's output as the host takes it from the SDK's command list (hle_audren.c capture, which audren.rs does): the command headers and the DeviceSink of SDK 21 on.
+// audren.rs's own tests (cargo test in dm/host/rust) check its readers alone: truncated and invalid headers, the resampler's history, inputs outside the mix buffers.
 // A list generated before the game's first update need not be whole (a zeroed command in it): such a list is a silent frame and nothing is decided or reported from it; a malformed
 // list after the first one that walks is reported and never yields PCM. Also the update lock read off the SDK's code, each renderer's own blocks, and the render thread's pacing.
 #include "../hle.h"
@@ -121,7 +122,7 @@ static uint8_t *put(uint8_t *q, int id, int size) {   // a command as SDK 21 on 
 // ncmd - 1 commands of 0x40 bytes, then the DeviceSink (ID 0x14, 0x140 bytes) with two inputs, mix buffers 0 and 1
 static size_t build(int ncmd) {
     memset(list, 0, sizeof list);
-    *(uint32_t *)(list + 4) = (uint32_t)ncmd; *(const int32_t **)(list + 8) = mix; *(uint32_t *)(list + 0x14) = SAMPLES; *(uint32_t *)(list + 0x18) = 48000;
+    *(uint32_t *)(list + 4) = (uint32_t)ncmd; *(const int32_t **)(list + 8) = mix; *(uint32_t *)(list + 0x10) = NMIX; *(uint32_t *)(list + 0x14) = SAMPLES; *(uint32_t *)(list + 0x18) = 48000;
     uint8_t *q = list + 0x20;
     for (int i = 0; i < ncmd - 1; i++) q = put(q, 6, 0x40);
     uint8_t *sink = q; q = put(q, 0x14, 0x140);
@@ -141,19 +142,9 @@ static const char *caught_log(void) {
     assert(fseek(caught_file, 0, SEEK_SET) == 0); size_t bytes = fread(caught, 1, sizeof caught - 1, caught_file); caught[bytes] = 0; fclose(caught_file);
     return caught;
 }
-static void test_headers(void) {
-    _Alignas(8) uint8_t aligned[0x40], wire[0x41]; uint8_t *q = wire + 1;
-    put(aligned, 0x14, sizeof aligned); memcpy(q, aligned, sizeof aligned);
-    assert(cmd_size(q) == sizeof aligned && cmd_id(q) == 0x14 && cmd_on(q));
-    assert(cmd_ok(q, q + sizeof aligned));
-    // Header and body truncation must fail before any field or next-command read.
-    for (size_t n = 0; n < sizeof aligned; n++) assert(!cmd_ok(q, q + n));
-    const int16_t invalid[] = {0, -1, 4, 0xf, 0x41};
-    for (size_t n = 0; n < sizeof invalid / sizeof *invalid; n++) {
-        memcpy(q + 2, invalid + n, sizeof *invalid);
-        assert(!cmd_ok(q, q + sizeof aligned));
-    }
+static void test_headers(void) {   // a list shorter than its header gives no frame (the command headers themselves: audren.rs commands_are_whole_or_refused)
     int16_t out[FRAME_MAX * DM_AUDIO_SINK_CHANNELS];
+    build(NCMD);
     for (size_t n = 0; n < 0x20; n++) assert(capture(&g_ar[0], list, n, out) == 0);
 }
 
@@ -178,7 +169,7 @@ static void test(int incomplete) {
     // The SDK starts with short valid lists: their sink plays before the first full list's sink scan.
     n = build(2);
     int got = capture(&g_ar[0], list, n, out);
-    assert(g_sink_id == 0x14);
+    assert(g_scan.sink_id == 0x14);
     assert(got == SAMPLES);
     for (int s = 0; s < SAMPLES; s++) assert(out[DM_AUDIO_SINK_CHANNELS * s + 6] == 1000 && out[DM_AUDIO_SINK_CHANNELS * s + 7] == -1000);
     n = build(NCMD);
@@ -194,7 +185,7 @@ static void test_sink_id(void) {
     catch_log();
     int got = capture(&g_ar[0], list, n, out);
     const char *text = caught_log();
-    assert(got == SAMPLES && g_sink_id == 0x15 && strstr(text, "taking it as DeviceSink") && !strstr(text, "[RED]"));
+    assert(got == SAMPLES && g_scan.sink_id == 0x15 && strstr(text, "taking it as DeviceSink") && !strstr(text, "[RED]"));
     for (int s = 0; s < SAMPLES; s++) assert(out[DM_AUDIO_SINK_CHANNELS * s + 6] == 1000 && out[DM_AUDIO_SINK_CHANNELS * s + 7] == -1000);
 }
 
@@ -205,7 +196,7 @@ static void test_malformed(int bad) {
     size_t n = build(NCMD);
     *(uint32_t *)(list + 4) = 1;
     assert(capture(&g_ar[0], list, 0x20 + 0x40, out) == 0);   // a first list that walks, without a sink or histogram
-    int sink_id = g_sink_id;
+    int sink_id = g_scan.sink_id;
     n = build(NCMD);
     if (bad < 2) memset(list + 0x20 + (size_t)bad * 0x40, 0, 0x40);
     else { *(uint32_t *)(list + 4) = NCMD + 1; memset(list + n, 0, 0x40); n += 0x40; }
@@ -220,7 +211,7 @@ static void test_malformed(int bad) {
     assert(got == 0);
     assert(!strstr(text, "by command ID:"));
     assert(strstr(text, "malformed"));
-    assert(g_sink_id == sink_id);
+    assert(g_scan.sink_id == sink_id);
     for (size_t i = 0; i < sizeof out / sizeof *out; i++) assert(out[i] == 1234);
 
     // A subsequent valid full list still finds the sink and yields stereo.
@@ -264,20 +255,7 @@ static void test_two_renderers(void) {
     assert(ar_of_sys(&y) == &g_ar[1] && g_ar[1].sys == &y);
     assert(ar_of_sys(&y) == &g_ar[1]);
     assert(ar_of_sys(&z) == NULL);   // no renderer left to be it
-    // The 3:2 upsampler's history is each renderer's own: frames of one do not reach the other's output
-    int32_t quiet[2 * 160] = {0}, loud[2 * 160], out[2 * 240];
-    for (int i = 0; i < 2 * 160; i++) loud[i] = 20000;
-    memset(g_ar, 0, sizeof g_ar);
-    assert(up_3_2(&g_ar[0], loud, 160, out, 2) == 240);
-    assert(up_3_2(&g_ar[1], quiet, 160, out, 2) == 240);
-    for (int i = 0; i < 2 * 240; i++) assert(out[i] == 0);
-    // Six channels (the 5.1 route): each channel resamples on its own; an LFE-only block stays on the LFE
-    int32_t six_in[6 * 160] = {0}, six_out[6 * 240];
-    for (int i = 0; i < 160; i++) six_in[6 * i + 3] = 20000;
-    memset(g_ar, 0, sizeof g_ar);
-    assert(up_3_2(&g_ar[2], six_in, 160, six_out, 6) == 240);
-    for (int m = 0; m < 240; m++) for (int j = 0; j < 6; j++) if (j != 3) assert(six_out[6 * m + j] == 0);
-    assert(six_out[6 * 100 + 3] == 20000);
+    // The 3:2 upsampler's history is each renderer's own (ar_t.rs): audren.rs each_renderer_resamples_with_its_own_history
     memset(g_ar, 0, sizeof g_ar);
 }
 
@@ -551,7 +529,7 @@ int main(int argc, char **argv) {
     test_histogram();
     test_render_cadence(44100, 256);
     test_render_cadence(48000, 512);
-    puts("audren layout: update lock read off Update or UpdateImpl, renderers' own blocks, bounded histograms, malformed-list rejection, unaligned and truncated headers, a sink under another ID, stereo PCM and empty/incomplete startup recovery passed");
+    puts("audren layout: update lock read off Update or UpdateImpl, renderers' own blocks, bounded histograms, malformed-list rejection, truncated list headers, a sink under another ID, stereo PCM and empty/incomplete startup recovery passed");
     return 0;
 }
 
