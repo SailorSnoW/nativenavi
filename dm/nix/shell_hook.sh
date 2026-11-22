@@ -43,13 +43,18 @@ else
     fi
   fi
 
+  # cargo looks for its subcommands (clippy, fmt, miri) in $CARGO_HOME/bin before PATH, where rustup's proxies in ~/.cargo/bin would run rustup's toolchains
+  # in place of the shell's: a CARGO_HOME of the shells' own, with no bin of its own (the library has no crates to cache)
+  export CARGO_HOME=${NXNATIVE_VENVS:-$_nx_root/.venv}/cargo
+
   # The stamp's first line is the interpreter: a new one (flake.lock update) must recreate the venv, whose python links into the old store path
   _nx_venv=${NXNATIVE_VENVS:-$_nx_root/.venv}/$NXNATIVE_SHELL
   _nx_python_line="python $NXNATIVE_PYTHON"
   # shellcheck disable=SC2086
-  _nx_stamp=$(cd "$_nx_root" && printf '%s\n%s\n' "$_nx_python_line" "${NXNATIVE_PIP_EXTRA-}" && shasum -a 256 $NXNATIVE_REQUIREMENTS)
-  # Never --clear a folder this hook did not create
-  if [ -e "$_nx_venv" ] && [ ! -f "$_nx_venv/.nxnative" ]; then
+  [ -z "$NXNATIVE_REQUIREMENTS" ] || _nx_stamp=$(cd "$_nx_root" && printf '%s\n%s\n' "$_nx_python_line" "${NXNATIVE_PIP_EXTRA-}" && shasum -a 256 $NXNATIVE_REQUIREMENTS)
+  if [ -z "$NXNATIVE_REQUIREMENTS" ]; then
+    :   # a shell with no Python packages (miri) makes no venv; shasum would have read the terminal
+  elif [ -e "$_nx_venv" ] && [ ! -f "$_nx_venv/.nxnative" ]; then   # never --clear a folder this hook did not create
     _nx_red "$_nx_venv is not a venv this shell made, so it is left alone and not used: remove it, or set NXNATIVE_VENVS to another folder"
   else
     if [ "$(cat "$_nx_venv/.nxnative" 2>/dev/null)" != "$_nx_stamp" ]; then

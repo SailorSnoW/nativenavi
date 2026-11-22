@@ -3,6 +3,9 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
+import tomllib
 import unittest
 
 REPO = Path(__file__).resolve().parents[3]
@@ -34,6 +37,26 @@ class Flake(unittest.TestCase):
 
     def test_hook_reads_the_xcode_version(self):
         self.assertRegex((REPO / 'dm/gfx/tools/own_compilers.py').read_text(), r"(?m)^XCODE_VERSION = '[0-9.]+'")
+
+    def test_rust_toolchain_has_what_the_flake_reads(self):   # the flake takes rust-overlay's stable.<channel>, the version rustup takes outside Nix
+        self.assertIn('lib.importTOML ./dm/host/rust/rust-toolchain.toml', self.flake)
+        toolchain = tomllib.loads((REPO / 'dm/host/rust/rust-toolchain.toml').read_text())['toolchain']
+        self.assertRegex(toolchain['channel'], r'^\d+\.\d+\.\d+$', 'rust-toolchain.toml: a version, which rust-bin.stable has, not "stable"')
+        self.assertIn('aarch64-apple-darwin', toolchain['targets'])
+
+    def test_hook_without_requirements_makes_no_venv(self):   # the miri shell: shasum with no files would have waited on the terminal
+        bash = shutil.which('bash')
+        if bash is None: self.skipTest('no bash')
+        with tempfile.TemporaryDirectory() as d:
+            env = {'PATH': '/usr/bin:/bin', 'HOME': d, 'NXNATIVE_SHELL': 'miri', 'NXNATIVE_REQUIREMENTS': '', 'NXNATIVE_NO_XCODE_CHECK': '1', 'NXNATIVE_TOOLS': '',
+                   'NXNATIVE_STDENV_PATH': '', 'NXNATIVE_PYTHON': sys.executable, 'NXNATIVE_VENVS': d}
+            p = subprocess.Popen([bash, '-c', f'source {REPO / "dm/nix/shell_hook.sh"}; printf "%s\\n" "$CARGO_HOME"'], cwd=REPO, env=env, text=True,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)   # stdin stays open: a read of it would hang
+            try: p.wait(timeout=30)
+            except subprocess.TimeoutExpired: p.kill(); self.fail('the hook read stdin')
+            out, err = p.stdout.read(), p.stderr.read(); p.stdin.close(); p.stdout.close(); p.stderr.close()
+            self.assertEqual((p.returncode, out.strip()), (0, f'{d}/cargo'), err)   # a CARGO_HOME of the shells' own: rustup's proxies in ~/.cargo/bin are not cargo's subcommands
+            self.assertFalse((Path(d) / 'miri').exists(), 'no venv for a shell without requirements')
 
     def test_hook_parses(self):
         bash = shutil.which('bash')

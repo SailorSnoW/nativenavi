@@ -537,6 +537,11 @@ cargo fmt --check
 MIRIFLAGS=-Zmiri-permissive-provenance cargo +nightly miri test   # undefined behaviour, the FFI entry points included; rustup toolchain install nightly --component miri
 ```
 
+With Nix, the flake's shells have this Rust too, so they need no rustup.
+- `nix develop` (the `default` and `coverage` shells) has the version that `rust-toolchain.toml` names, with clippy and rustfmt (`packages.rust`). It comes from rust-overlay's copies of the official builds, pinned by `flake.lock`, and the library it builds is the same bytes as rustup's.
+- `nix develop .#miri` has the nightly with Miri that `flake.lock` pins (`packages.rust-miri`). There, `MIRIFLAGS=-Zmiri-permissive-provenance cargo miri test`, without `+nightly`.
+- The shells give cargo a home of their own (`CARGO_HOME=.venv/cargo`). cargo looks for its subcommands in `$CARGO_HOME/bin` before `PATH`, so with rustup installed, `cargo clippy` and `cargo miri` would otherwise run rustup's proxies, and through them rustup's toolchains.
+
 The Miri flag silences its one warning: the mix buffers' address reaches Rust as an integer in the game's memory, so `audren_ffi.rs` takes it with `ptr::with_exposed_provenance`. Miri cannot run inline assembly or NEON intrinsics, so under Miri `sys.rs` has plain Rust in their place (the same arithmetic); the instructions themselves are checked by the golden hashes in `cargo test` and the host tests. `tests.yml` runs all but Miri, which stays local because a moving nightly would fail CI for no change here. The host tests (`make -C dm/host/tests run`) then check the C side through the library.
 
 ## Build by hand (Mac)
