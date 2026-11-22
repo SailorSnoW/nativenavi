@@ -82,7 +82,8 @@ int main(void) { @autoreleasepool {
         tex_t a = target(&pool, 95001, 0, 640, 360); mtl_tex_init(&a);
         id<MTLTexture> ta = tex_mtl(&a);
         CHECK(ta && ta.heap && ta.width == 640 && ta.height == 360, "a GPU-only pool's target is placed in a heap of its own, at its own size");
-        CHECK(resident(ta.heap) && !resident(ta), "its heap is what the residency set holds");
+        // The texture too: a view of a placed texture needs its parent resident (docs/reference/rendering.md, Views of placed textures need their parent resident)
+        CHECK(resident(ta.heap) && resident(ta), "its heap and the texture itself are in the residency set");
         CHECK(g_rh_made == 1 && g_rh_reused == 0, "a new heap is counted as made");
         MTLSizeAndAlign need = [g_dev heapTextureSizeAndAlignWithDescriptor:tex_desc(&a, 0)];
         CHECK(ta.heap.size >= need.size + need.size / 8, "the heap is made an eighth larger than its first target");
