@@ -79,6 +79,22 @@ class Prereqs(unittest.TestCase):
         for gone in ('xcodegen', 'glslangValidator', 'zstd'):   # what the removed paths ran: no longer asked for
             with self.subTest(gone=gone): self.check(which=lambda tool, gone=gone, **k: None if tool == gone else '/x')
 
+    def test_missing_cargo_names_rustup(self):   # the host has a Rust library (dm/host/rust)
+        with self.assertRaisesRegex(nsp.BuildError, r'tools not found: cargo \(Rust: install rustup, https://rustup\.rs\)$'):
+            self.check(which=lambda tool, **k: None if tool == 'cargo' else '/x')
+
+    def test_rust_toolchain_is_resolved_in_the_rust_folder(self):   # where rustup reads rust-toolchain.toml (and installs the version it names)
+        run = mock.Mock(side_effect=fake_run())
+        with mock.patch.object(nsp.subprocess, 'run', run), mock.patch.object(nsp.shutil, 'which', lambda *a, **k: '/home/.cargo/bin/cargo'):
+            nsp.check_rust({'PATH': '/bin'}, Path('/repo/dm/host/rust'))
+        self.assertEqual(run.call_args.args[0], ['/home/.cargo/bin/cargo', '--version'])
+        self.assertEqual(run.call_args.kwargs['cwd'], Path('/repo/dm/host/rust'))
+
+    def test_rust_toolchain_that_cannot_be_had_stops(self):
+        failed = mock.Mock(return_value=subprocess.CompletedProcess([], 1, '', 'error: toolchain 1.95.0 is not installed\n'))
+        with mock.patch.object(nsp.subprocess, 'run', failed), self.assertRaisesRegex(nsp.BuildError, r'is not available \(error: toolchain 1\.95\.0 is not installed\).*rustup toolchain install'):
+            nsp.check_rust({'PATH': '/bin'}, Path('/repo/dm/host/rust'))
+
     def test_translator_runs_once_with_the_scripts_environment(self):
         run = mock.Mock(side_effect=fake_run())
         with tempfile.TemporaryDirectory() as d, mock.patch.object(nsp.subprocess, 'run', run):

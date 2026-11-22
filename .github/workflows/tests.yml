@@ -38,6 +38,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Rust (the version dm/host/rust/rust-toolchain.toml names; the host links a Rust library)
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            export PATH="$HOME/.cargo/bin:$PATH"; echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          cd dm/host/rust && rustup toolchain install && cargo --version
+      # Miri (cargo +nightly miri test) stays local: a nightly that moves would make this job fail for no change here
+      - name: Rust unit tests and lints (dm/host/rust)
+        working-directory: dm/host/rust
+        run: |
+          rustup component add clippy rustfmt
+          cargo test --locked --offline
+          cargo clippy --locked --offline --all-targets -- -D warnings
+          cargo clippy --locked --offline --release --target aarch64-apple-darwin -- -D warnings
+          cargo fmt --check
       - name: Host unit tests (dm/host/tests)
         run: |
           mkdir -p logs
@@ -88,6 +104,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Rust (the version dm/host/rust/rust-toolchain.toml names; the host links a Rust library)
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            export PATH="$HOME/.cargo/bin:$PATH"; echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          cd dm/host/rust && rustup toolchain install && cargo --version
       - name: Registration sections (all producers, ASan and UBSan, no global ignorelist)
         run: |
           mkdir -p logs
@@ -126,6 +149,13 @@ jobs:
           cache-dependency-path: .github/requirements/coverage.txt
       - name: Install coverage.py and the packages the tools import
         run: python -m pip install -r .github/requirements/coverage.txt
+      - name: Rust (the version dm/host/rust/rust-toolchain.toml names; the host links a Rust library)
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            export PATH="$HOME/.cargo/bin:$PATH"; echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          cd dm/host/rust && rustup toolchain install && cargo --version
       - name: Host unit tests (dm/host/tests), llvm-cov
         continue-on-error: true
         run: |
@@ -228,6 +258,13 @@ jobs:
           xcodebuild -version
           xcrun metal --version
           python3 dm/gfx/tools/own_compilers.py --check-metal
+      - name: Rust (the version dm/host/rust/rust-toolchain.toml names; the host links a Rust library)
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            export PATH="$HOME/.cargo/bin:$PATH"; echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          cd dm/host/rust && rustup toolchain install && cargo --version
       - name: Mac host
         run: |
           mkdir -p logs

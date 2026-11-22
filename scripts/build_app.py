@@ -76,7 +76,7 @@ ALLOW_OTHER_METAL = False               # the shaders are built only with the Me
 
 PROGRESS = 'auto'                       # stage lines on the console: 'bar' (one line per stage, redrawn in place), 'lines' (a plain line every BEAT seconds), 'off' (only each stage's start and end); 'auto' = bar in a terminal or Spyder, lines when the output goes to a file; 'json' = one JSON event per line, for a program that shows the build
 BEAT = 30                               # seconds between progress lines in 'lines' mode
-TOOL_PATHS = ['/opt/homebrew/bin', '/usr/local/bin']   # searched after the caller's PATH (tool_env): GUI apps such as Spyder do not get the shell's PATH
+TOOL_PATHS = ['/opt/homebrew/bin', '/usr/local/bin', os.path.expanduser('~/.cargo/bin')]   # searched after the caller's PATH (tool_env): GUI apps such as Spyder do not get the shell's PATH. ~/.cargo/bin: rustup's cargo
 
 
 class BuildError(Exception):
@@ -775,19 +775,31 @@ def check_capstone():   # patch_nso.py checks the same, but only at the rewrite 
         raise BuildError(f'Capstone {capstone.__version__} is unsupported; the rewriter requires Capstone 5.x. Run: {cmd}')
 
 
-def check_prereqs(env, xlate):
+def check_prereqs(env, xlate, rust=None):   # rust: the host's Rust folder (dm/host/rust), whose toolchain check_rust makes sure of
     missing = [m for m in ('lz4.block', 'capstone', 'fontTools', 'zbic') if not _importable(m)] + ([] if _importable('compression.zstd') or _importable('backports.zstd') else ['backports.zstd'])   # zstd: built in from Python 3.14. zbic: a system 22.0.0+ module's segments, which only the rewrite reads, after the whole game is unpacked
     if missing: raise BuildError(f'the current Python ({sys.executable}) is missing modules: {", ".join(missing)} (pip install lz4 "capstone>=5,<6" fonttools zbic backports.zstd; backports.zstd only before Python 3.14)')
     check_capstone()
-    tools = {'xcodebuild': 'Xcode', 'make': 'Xcode'}
+    tools = {'xcodebuild': 'Xcode', 'make': 'Xcode', 'cargo': 'Rust: install rustup, https://rustup.rs'}
     gone = [f'{t} ({how})' for t, how in tools.items() if not shutil.which(t, path=env['PATH'])]
     if gone: raise BuildError('tools not found: ' + ', '.join(gone))
+    if rust: check_rust(env, rust)
     mtl = subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '--version'], capture_output=True, text=True, env=env)   # Xcode 26 and later install the Metal toolchain separately
     if mtl.returncode: raise BuildError(f'the Metal compiler does not run ({(mtl.stderr.strip().splitlines() or ["no output"])[-1]}): install it with xcodebuild -downloadComponent MetalToolchain')
     if not xlate.exists(): raise BuildError(f'the shader translator is missing from the repository: {xlate}')
     check_translator(xlate, env)
     sc = env.get('SPIRV_CROSS', str(xlate.parent.parent / 'spirv_cross_bin/spirv-cross'))
     if not shutil.which(sc, path=env.get('PATH')): raise BuildError(f'spirv-cross is missing or not executable: {sc}')
+
+
+def check_rust(env, rust):
+    """The Rust the host's static library is built with (rust-toolchain.toml in rust, dm/host/rust): cargo run once in that folder, where rustup picks the version the file
+    names and installs it when it is missing (a download, on the first build), so a toolchain that cannot be had stops the build here and not at the Mac host, after the shaders"""
+    cargo = shutil.which('cargo', path=env['PATH'])
+    try: r = subprocess.run([cargo or 'cargo', '--version'], cwd=rust, env=env, capture_output=True, text=True, timeout=1800, errors='replace')
+    except (OSError, subprocess.SubprocessError) as e: raise BuildError(f'cargo does not start ({e}): install Rust with rustup (https://rustup.rs)') from e
+    if r.returncode == 0: return
+    why = (r.stderr.strip().splitlines() or r.stdout.strip().splitlines() or [f'exit code {r.returncode}'])[-1]
+    raise BuildError(f'the Rust that {rust / "rust-toolchain.toml"} names is not available ({why}): run `rustup toolchain install` in {rust}')
 
 
 def check_translator(xlate, env):
@@ -949,13 +961,19 @@ def apple_silicon():   # hw.optional.arm64 is 1 on Apple silicon (for a Python u
 
 
 HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex')   # the folders the host's compile lines take their sources and headers from (dm/host/Makefile SRC, GFX)
+RUST_DIR = 'dm/host/rust'   # the host's Rust static library (dm/host/rust.mk)
+
+
+def rust_files(repo):   # what the host's Rust library is built from: its sources, the manifest and lock, and the toolchain file that names the Rust version
+    r = repo / RUST_DIR
+    return [r / 'Cargo.toml', r / 'Cargo.lock', r / 'rust-toolchain.toml', repo / 'dm/host/rust.mk', *sorted((r / 'src').rglob('*.rs'))]
 
 
 def build_mac_host(repo, out, env, logs, g):
     """The Mac host for the profile, built into out: dm/host's per-game host (make gen/<id>/dmhost: one object per source on every core, kept for the next build) copied with its dSYM,
     since make takes no target path with spaces and dm/host/dmhost may be another build's.
     Reused when the compile lines and their inputs (the source files of HOST_DIRS, the chain header dm/gfx/nvn/dmsh_chain.h among them, the profile header make generates, dav1d and its headers, the compiler
-    and the macOS SDK) are as at the last build into out"""
+    and the macOS SDK, the Rust library's files: rust_files) are as at the last build into out"""
     host = repo / 'dm/host'
     run(['make', '-s', f'GAME={g.id}', f'gen/{g.id}/game_profile.h', 'gen/dav1d/libdav1d.a', 'host_msl'], logs / 'mac_host_make.log', env=env, cwd=host)
     built = host / f'gen/{g.id}/dmhost'
@@ -966,7 +984,7 @@ def build_mac_host(repo, out, env, logs, g):
     srcs = [p for d in HOST_DIRS if (repo / d).is_dir() for p in sorted((repo / d).iterdir()) if p.is_file() and p.suffix in ('.c', '.m', '.h', '.S', '.inc')]
     key = fingerprint(fingerprint(cmd, ('files', [host / f'gen/{g.id}/game_profile.h', host / 'gen/msl-macosx/host_msl_gen.h', host / 'gen/dav1d/libdav1d.a']),
                                   ('tree', tp / 'dav1d/include'), ('cmd', ['clang', '--version']), ('cmd', ['xcrun', '--show-sdk-build-version']), env=env),
-                      ('files', srcs))
+                      ('files', srcs), ('files', rust_files(repo)))   # the Rust library's version is the one its rust-toolchain.toml names
     if out.is_file() and reused(kf, key) is not None: return out
     rmtree(kf); out.parent.mkdir(parents=True, exist_ok=True)
     run(['make', '-s', f'GAME={g.id}', f'gen/{g.id}/dmhost'], logs / 'mac_host_build.log', env=env, cwd=host)
@@ -1819,7 +1837,7 @@ def main(args=None):
     # DM_GAME picks the profile; DM_ROOT / WORK point at the build folder: the tools' default paths and temporary directories all stay inside it
     env.update(DM_GAME=g.id, DM_ROOT=str(work), WORK=str(work / 'tmp'))
     logs = work / 'logs'
-    check_prereqs(env, xlate)
+    check_prereqs(env, xlate, repo / RUST_DIR)
     picks = pick_packages(fam, have, versions)
 
     ex = work / 'extract'; ex.mkdir(parents=True, exist_ok=True); (work / 'tmp').mkdir(exist_ok=True)

@@ -1,1 +1,3 @@
 gen/
+# cargo run by hand in rust/ (cargo test, clippy, miri) builds there; the host's build uses gen/rust (rust.mk)
+rust/target/

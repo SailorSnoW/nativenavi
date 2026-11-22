@@ -92,14 +92,16 @@ symbols: $(B)/t_symbols
 	$(B)/t_symbols
 run: $(B)/t_system_event
 run: $(B)/t_audren_work
-$(B)/t_audren_work: t_audren_work.c ../hle_audren.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_audren_work.c
+# hle_audren.c's Rust half: the host's static library, by the rule the host's build uses (../rust.mk)
+include ../rust.mk
+$(B)/t_audren_work: t_audren_work.c ../hle_audren.c ../audren_rs.h ../hle.h ../dm.h $(GAME_H) $(RS_LIB) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_audren_work.c $(RS_LIB)
 .PHONY: audren-work
 audren-work: $(B)/t_audren_work
 	$(B)/t_audren_work
 run: $(B)/t_audren_layout
-$(B)/t_audren_layout: t_audren_layout.c ../hle_audren.c ../hle.h ../dm.h $(GAME_H) | $(B)
-	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_audren_layout.c
+$(B)/t_audren_layout: t_audren_layout.c ../hle_audren.c ../audren_rs.h ../hle.h ../dm.h $(GAME_H) $(RS_LIB) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_audren_layout.c $(RS_LIB)
 .PHONY: audren-layout
 audren-layout: $(B)/t_audren_layout
 	$(B)/t_audren_layout

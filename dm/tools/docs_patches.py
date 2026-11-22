@@ -15,7 +15,7 @@ import game   # noqa: E402
 OUT = REPO / 'docs' / 'agents' / 'game-patches.md'
 SDK = REPO / 'dm/tools/sdk_patches.py'
 HOST = ['dm/host', 'dm/gfx', 'dm/mac']   # tracked files only: dm/host/gen and other build output are git-ignored
-HOST_EXT = ('.c', '.m', '.mm', '.h', '.inc', '.swift')
+HOST_EXT = ('.c', '.m', '.mm', '.h', '.inc', '.swift', '.rs')
 # What a build-keyed host table does (the table's name in the source; a row of another table is listed under its own name)
 TABLES = {}   # none in this host: a build-keyed table added to it is named here
 # Profile keys that are not behaviour switches: per-game data or controls, not something the host does differently

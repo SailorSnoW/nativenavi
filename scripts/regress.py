@@ -93,8 +93,9 @@ rfs = shader_lib.romfs
 ROOT = Path(os.environ.get('REGRESS_ROOT', ''))
 GAMES = Path(os.environ.get('REGRESS_GAMES', ''))
 HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex')   # as build_app.py: the host's sources and headers
+RUST_FILES = ('dm/host/rust.mk', 'dm/host/rust/Cargo.toml', 'dm/host/rust/Cargo.lock', 'dm/host/rust/rust-toolchain.toml')   # as build_app.py rust_files, with the sources under dm/host/rust/src
 REWRITER = ('dm/tools/patch_nso.py', 'dm/tools/jump_solver.py', 'dm/tools/nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py')
-HEAVY_EXE = {'clang', 'make', 'xcodebuild', 'ld', 'ld64', 'swift-frontend', 'dotnet', 'metal', 'metal-tt', 'air-tt', 'applegpu-nt', 'dmsh_xlate', 'spirv-cross'}   # jobs that skew a measurement
+HEAVY_EXE = {'clang', 'make', 'xcodebuild', 'ld', 'ld64', 'swift-frontend', 'dotnet', 'metal', 'metal-tt', 'air-tt', 'applegpu-nt', 'dmsh_xlate', 'spirv-cross', 'cargo', 'rustc'}   # jobs that skew a measurement
 HEAVY_PY = r'(dmsh_build|shader_split|own_compilers|patch_nso)\.py'   # (the shared measuring rule)
 # Tolerances, from runs of one revision against itself (docs/development.md, The regression harness)
 TOL = {'fps_pct': 10.0, 'p99_pct': 30.0, 'p99_ms': 4.0, 'footprint_pct': 15.0, 'footprint_mb': 300.0, 'prepare_s': 10.0, 'prepare_x': 1.5, 'prebuild_x': 1.5, 'prebuild_s': 30.0,
@@ -628,6 +629,8 @@ def build_summary(m):
 
 def host_for(tree, g, jobs):
     srcs = [p for d in HOST_DIRS for p in sorted((tree.path / d).iterdir()) if p.is_file() and p.suffix in ('.c', '.m', '.h', '.S', '.inc')]
+    rs = tree.path / 'dm/host/rust/src'
+    srcs += [tree.path / f for f in RUST_FILES if (tree.path / f).is_file()] + (sorted(rs.rglob('*.rs')) if rs.is_dir() else [])   # a baseline from before the Rust library has none
     r = sh(['make', '-s', f'GAME={g.id}', 'host_msl'], cwd=tree.path / 'dm/host', env=g.env(tree))   # the host's own Metal sources, compiled at build time (dm/gfx/tools/host_msl.py)
     if r.returncode: raise HarnessError(f'{g.id}: host shader libraries of {tree.id} do not build:\n{r.stdout}{r.stderr}')
     srcs.append(tree.path / 'dm/host/gen/msl-macosx/host_msl_gen.h')   # includes sources, compiler, SDK and deployment target, even on a cache hit

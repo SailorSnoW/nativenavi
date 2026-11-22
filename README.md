@@ -16,6 +16,7 @@ This is a hard fork of [nxnative](https://github.com/seedds/nxnative), which run
 
 - An Apple silicon Mac with macOS 26.6 or later.
 - [Xcode](https://developer.apple.com/download/all/?q=Xcode%2027.2) 27.2 and Python 3.12 or newer (an arm64 one).
+- Rust, through [rustup](https://rustup.rs): part of the Mac host is written in Rust. The first build downloads the Rust version the host is built with.
 - Your own copy of the game as a [NUP](https://github.com/a55uka/nup) container (a `.nup` file; the one this was built from is 25.6 GB).
 - Disk space: on the Mac this was written on, the build folder takes about 70 GB and the finished app about 37 GB.
 
@@ -28,7 +29,10 @@ The game's movies are AV1. A Mac with an M3 chip or later decodes them in hardwa
 ```
 xcodebuild -downloadComponent MetalToolchain
 python3 -m pip install lz4 "capstone>=5,<6" fonttools zbic "backports.zstd; python_version < '3.14'"
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
+
+The last line installs rustup, Rust's installer: answer its question with the default, then open a new Terminal window so that its tools are found.
 
 **2. Build**, with the `.nup` file or the folder that holds it:
 

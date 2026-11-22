@@ -14,6 +14,7 @@
 // Command list format (SDK 21 on): header +0x04 command count, +0x08 mix buffer address, +0x10 buffer count, +0x14 samples per frame, +0x18 sample rate, commands from +0x20;
 //   each command +0x00 enabled (bit 0), +0x01 command ID (DeviceSink = 0x14), +0x02 size (s16); DeviceSink 0x140 bytes, +0x120 upsampler buffer, +0x128 input count, +0x12c input indices (s16).
 #include "hle.h"
+#include "audren_rs.h"
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <mach/thread_policy.h>
@@ -36,45 +37,9 @@ enum { P_DEVICE = 0x2c, P_MODE = 0x30, P_SIZE = 0x40, WORK_PAGE = 0x1000, FRAME_
 static void *gsym(const char *n) { void *p = guest_sym(n); if (!p) die("audren: missing SDK symbol %s", n); return p; }
 static void cpu_manual(uint8_t *dst, const uint8_t *src) { memcpy(dst, src, P_SIZE); *(int32_t *)(dst + P_DEVICE) = 1; *(int32_t *)(dst + P_MODE) = 1; }
 
-static size_t ar_align(size_t n, size_t alignment) { return (n + alignment - 1) & ~(alignment - 1); }
-// Horizon's renderer service budget, through renderer revision 15. Its command/state representation is independent of the application's SDK: an older client still uses the
-// service's compact commands. The SDK's local server instead sizes its own CPU command structures, so forwarding its size inflates the guest's service requirement.
-// Derived from the service's sizing and revision gates; checked against its isolated machine-code execution. No firmware code is needed at runtime. Unknown revisions retain
-// the SDK requirement. SDK 8 keeps the public parameter revision at +0x38, while SDK 9+ uses +0x34 (the copied parameter holds both).
-// dm_audren_work_size: the same for a parameter whose revision the caller found
-size_t dm_audren_work_size(const uint8_t *p, uint32_t revision) {
-    if ((revision & 0xffffff) != 0x564552 || revision < 0x31564552 || revision > 0x3f564552) return 0;
-    unsigned r = (revision >> 24) - 0x30;
-    size_t n[11];
-    for (int i = 0; i < 11; i++) {
-        if (i == 8) { n[i] = p[0x20]; continue; }   // voice-drop is a byte; the following public-struct padding is not initialized
-        int32_t v = ((const int32_t *)p)[i];
-        if (v < 0 || v > 0x100000) return 0;   // bound arithmetic even if the caller supplied an invalid parameter
-        n[i] = (size_t)v;
-    }
-    size_t mix = n[2], sub = n[3], voices = n[4], sinks = n[5], effects = n[6], perf = n[7], splitters = n[9], dest = n[10], mixes = sub + 1;
-    size_t size = ar_align(((sinks + sub) * 0x3c0 + n[1] * 4) * (mix + 6), 64);
-    size += ar_align(mix * 4, 64) + sub * 0x400 + mixes * 0x940 + ar_align(mixes * 8, 16);
-    size += voices * 0x1d0 + ar_align(voices * (r >= 15 ? 0x238 : 0x220), 16) + ar_align(voices * 8, 16);
-    if (r >= 2) {
-        size_t graph = mixes * mixes * 4 + mixes * 12 + 2 * ar_align(mixes, 64) / 8 + ar_align(mixes * mixes, 64) / 8;
-        size += ar_align(graph, 16);
-        size += splitters * 0x20 + ar_align(dest * (r >= 12 ? (r >= 15 ? 0x130 : 8) : 0xe0), 16);
-        if (r < 5) size += ar_align(dest * 4, 16);
-    }
-    size += (effects + voices * 4) * 0x20 + 0x50;
-    if (r >= 12 && splitters && dest) size += ar_align(dest * (r >= 14 ? 0xe0 : 0x80), 64);
-    size = ar_align(size + (r >= 9 ? effects * 0x80 : 0), 64);
-    size += (sinks + sub) * 0x280 + effects * (r >= 9 ? 0x530 : 0x4b0) + sinks * 0x170 + voices * 0x100 + 0x40;
-    if (perf) {
-        size_t frame = (sub + voices + sinks + effects + 1) * (r >= 5 ? 0x18 : 0x10) + (r >= 5 ? 0x990 : 0x658);
-        size += ar_align(frame * (perf + 1), 64) + 0xc0;
-    }
-    size_t commands = 0x18000;
-    if (r >= 5) commands = effects * 0x540 + sub * 0x3f24 + sinks * 0x130 + dest * 0x360
-        + voices * (splitters * 0x50 + (r >= 8 ? 0x284 : 0x250)) + (voices + sub + effects + sinks + 0x65) * 0x28 + 0x2c4;
-    return ar_align(size + commands + 0x7e, WORK_PAGE);
-}
+// Horizon's renderer service budget, through renderer revision 15: dm_audren_work_size (audren_rs.h; audren.rs work_size says how it was derived). The SDK's local server
+// sizes its own CPU command structures, so forwarding its size would inflate the guest's service requirement. Unknown revisions retain the SDK requirement. SDK 8 keeps the
+// public parameter revision at +0x38, while SDK 9+ uses +0x34 (the copied parameter holds both)
 
 // An SDK without the renderer in the process (SDK 1.3.1: no ExecuteAudioRendererRendering, only CreateAudioRendererManagerByHipc) is only the client of audren:u, which this
 // host does not serve. Ocarina of Time's SDK (22.2.8) renders in the process; for any other, the calls go to the SDK as the game made them and the log says so

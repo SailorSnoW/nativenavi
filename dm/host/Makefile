@@ -35,6 +35,10 @@ gen/dav1d/%.o: $(DAV1D)/% $(DAV1D_H) ../mac/min_os.mk
 	clang -O2 -g -mmacosx-version-min=$(MACOS_MIN) -fvisibility=hidden -fomit-frame-pointer -fno-align-functions -I$(DAV1D) -I$(DAV1D)/include -I$(DAV1D)/config -c $< -o $@
 $(DAV1D_LIB): $(DAV1D_OBJ)
 	rm -f $@; ar rcs $@ $^
+# The host's Rust code, a static library (rust.mk: RS_LIB)
+include rust.mk
+.PHONY: rust
+rust: $(RS_LIB)
 # The host's own Metal shaders (dm/gfx/msl/*.metal) compiled for MSL_SDK into gen/msl-<sdk>/host_msl_gen.h (dm/gfx/tools/host_msl.py; dm/gfx/nvn/host_msl.m loads them), so the host
 # compiles no MSL at run time
 MSL_SDK ?= macosx
@@ -73,8 +77,8 @@ $(OBJ_DIR)/host/%.o: % Makefile ../mac/min_os.mk | $(GAME_H) $(MSL_H)
 $(OBJ_DIR)/gfx/%.o: ../gfx/% Makefile ../mac/min_os.mk | $(GAME_H) $(MSL_H)
 	@mkdir -p $(dir $@)
 	clang $(HOST_CFLAGS) -MMD -MP -c $< -o $@
-$(HOST_BIN): $(HOST_OBJ) $(DAV1D_LIB) Makefile ../mac/min_os.mk
-	clang $(HOST_CFLAGS) -o $@ $(HOST_OBJ) $(DAV1D_LIB) $(HOST_FRAMEWORKS)
+$(HOST_BIN): $(HOST_OBJ) $(DAV1D_LIB) $(RS_LIB) Makefile rust.mk ../mac/min_os.mk
+	clang $(HOST_CFLAGS) -o $@ $(HOST_OBJ) $(DAV1D_LIB) $(RS_LIB) $(HOST_FRAMEWORKS)
 	dsymutil $@
 ifneq ($(strip $(GAME)),)
 -include $(HOST_OBJ:.o=.d)

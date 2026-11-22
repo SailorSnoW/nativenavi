@@ -59,7 +59,7 @@ Reading the report (`report.md` beside `report.json` in `<root>/reports/<date-ti
 
 The workflows in `.github/workflows` run on GitHub, on pull requests and pushes to `main`. This fork has no remote yet, so nothing runs them: the local commands of the next section are the check.
 
-- `tests.yml`: the host's unit tests and ThreadSanitizer targets; the host and CPU texture tests again under ASan, UBSan and TSan (a ratchet over the findings listed in `dm/sanitizers/`: `make -C dm/host/tests asan tsan-threads` and `make -C dm/gfx/tex/tests asan` locally); line coverage of those tests and the tool tests (report only; `make coverage` in both folders and `dm/tools/coverage_report.py` locally); the CPU-only graphics tests; the Python tool tests (`dm/tools/tests`, `dm/gfx/tests`), including the translator's synthetic-shader tests; a Mac host build, and every graphics test compiled ([Continuous integration](../development.md#continuous-integration)).
+- `tests.yml`: the host's unit tests and ThreadSanitizer targets; the Rust library's tests and lints; the host and CPU texture tests again under ASan, UBSan and TSan (a ratchet over the findings listed in `dm/sanitizers/`: `make -C dm/host/tests asan tsan-threads` and `make -C dm/gfx/tex/tests asan` locally); line coverage of those tests and the tool tests (report only; `make coverage` in both folders and `dm/tools/coverage_report.py` locally); the CPU-only graphics tests; the Python tool tests (`dm/tools/tests`, `dm/gfx/tests`), including the translator's synthetic-shader tests; a Mac host build, and every graphics test compiled ([Continuous integration](../development.md#continuous-integration)).
 - `lint-python.yml` and `lint-c.yml`: the ratchets of `dm/tools/lint_python.py` and `dm/tools/lint_c.py`.
 - `fuzz.yml` fuzzes the file parsers nightly from synthetic seeds; a change to a parser in `romfs.py`, `nacp.py`, `nso.py` or `shader_split.py` can run its harness locally (`dm/tools/fuzz/fuzz_<parser>.py --time 300`).
 
@@ -74,6 +74,7 @@ This fork has no remote and no pull requests yet: a change is one local commit p
 - **The profile or the note** (`dm/games/0400486024DEC000/`): the Python tests; a full shader build after a change to the profile's shader inputs; the game on the Mac along its route, with `scripts/bench.py` numbers when the change is about speed; the finding in the game's note ([AGENTS.md](../../AGENTS.md)).
 - **The host, the chain or the tools** (`dm/host`, `dm/gfx`, `dm/tools`, `dm/gfx/tools`, `scripts`): everything above, then
   - the host build, `make -C dm/host dmhost`;
+  - after a change to the Rust library (`dm/host/rust`), its tests, lints and Miri there ([Rust in the host](../development.md#rust-in-the-host));
   - the host tests, `make -C dm/host/tests run`;
   - the graphics tests, `make -C dm/gfx/tests run` (they need this Mac's GPU);
   - `dmsh_chain.py --header` after a chain change;
