@@ -31,7 +31,7 @@ def zstd_segment(raw, size, what):
     """A ZBIC segment (NSO flag bit 7, system 22.0.0 on) decompressed to size: zbic.decompress decodes Nintendo's zstd variant, and its own
     checks catch a damaged stream, so its messages are passed on; a wrong length still gets this loader's own Error, as a short LZ4 stream does"""
     try:
-        import zbic   # pyright: ignore[reportMissingImports]  # an optional package, only a system 22.0.0+ module's ZBIC segments need it
+        import zbic   # imported here: an optional package (tools.txt), only a system 22.0.0+ module's ZBIC segments need it
     except ImportError:
         raise Error(f'{what}: ZBIC (zstd) segments need the zbic package (python3 -m pip install zbic)') from None
     try:

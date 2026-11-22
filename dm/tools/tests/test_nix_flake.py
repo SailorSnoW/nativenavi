@@ -28,6 +28,15 @@ class Flake(unittest.TestCase):
         self.assertTrue(files, 'flake.nix names no requirement files')
         for f in files: self.assertTrue((REPO / '.github/requirements' / f).is_file(), f'flake.nix names .github/requirements/{f}, which does not exist')
 
+    def test_ci_jobs_install_what_a_shell_installs(self):   # each job's pip install is one shell's lists, so the shell has the job's packages and versions
+        shells = {m[1]: frozenset(re.findall(r'"([^"]+)"', m[2])) for m in re.finditer(r'shell "(\w+)" \{.*?requirements = \[([^\]]*)\]', self.flake, re.S)}
+        self.assertEqual(shells.get('coverage'), {'coverage.txt', 'tools.txt'}, 'the coverage shell installs the tools\' packages with coverage.py')
+        self.assertEqual(shells.get('lint'), {'lint.txt', 'tools.txt'}, 'the lint shell installs the tools\' packages, which pyright resolves')
+        installs = {frozenset(re.findall(r'-r \.github/requirements/(\S+\.txt)', line)) for wf in sorted((REPO / '.github/workflows').glob('*.yml'))
+                    for line in wf.read_text().splitlines() if 'pip install' in line and '-r .github/requirements/' in line}
+        self.assertTrue(installs, 'no workflow installs a requirement list')
+        for files in installs: self.assertIn(files, set(shells.values()), f'a workflow installs {sorted(files)}, which no shell of flake.nix installs together')
+
     def test_fuzz_shell_installs_the_documented_atheris(self):
         self.assertRegex((REPO / '.github/requirements/fuzz.txt').read_text(), r'(?m)^atheris==')
         self.assertIn('NXNATIVE_PIP_SKIP = "atheris"', self.flake)
@@ -52,6 +61,7 @@ class Flake(unittest.TestCase):
                    'NXNATIVE_STDENV_PATH': '', 'NXNATIVE_PYTHON': sys.executable, 'NXNATIVE_VENVS': d}
             p = subprocess.Popen([bash, '-c', f'source {REPO / "dm/nix/shell_hook.sh"}; printf "%s\\n" "$CARGO_HOME"'], cwd=REPO, env=env, text=True,
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)   # stdin stays open: a read of it would hang
+            assert p.stdin and p.stdout and p.stderr   # all three are pipes (communicate would close stdin before the wait)
             try: p.wait(timeout=30)
             except subprocess.TimeoutExpired: p.kill(); self.fail('the hook read stdin')
             out, err = p.stdout.read(), p.stderr.read(); p.stdin.close(); p.stdout.close(); p.stderr.close()

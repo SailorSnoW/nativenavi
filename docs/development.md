@@ -103,6 +103,25 @@ and `memory-tsan`; `memory` includes undefined-behavior and address sanitizers.
 The heap-probe check imports the production profile reader and needs only the
 Python standard library; LZ4 is loaded when decoding NSO files.
 
+## The Nix shells
+
+`flake.nix` has the toolchain that the tests, the lints and the packing script use, at the versions CI uses. Xcode 27.2 and its Metal toolchain stay Apple's: each shell checks that they are the ones selected (`own_compilers.py`'s `XCODE_VERSION`). Each shell also does three things:
+- It puts Apple's `/usr/bin` ahead of the GNU tools that `nix develop` adds, because the scripts rely on BSD `cp -c`, `stat -f` and bsdtar.
+- It makes a venv of its own in `.venv/<shell>` from the pinned lists in `.github/requirements`, and installs them again when a list changes.
+- It gives cargo a home of its own ([Rust in the host](#rust-in-the-host)).
+
+| Shell | What it has | For |
+|---|---|---|
+| `nix develop` (`default`) | Python 3.14 with `tools.txt`; the Rust that `rust-toolchain.toml` names, with clippy and rustfmt; .NET SDK 10; zstd; SPIRV-Tools | building, the packing script, the host, graphics and Python tests, the Rust checks |
+| `nix develop .#coverage` | the same, with `coverage.txt` added | the coverage job's commands |
+| `nix develop .#lint` | Python 3.14 with `lint.txt` and `tools.txt`; Node.js for pyright; LLVM's release as `LLVM` (`lint-c.yml`'s `LLVM_VERSION`) | `lint_python.py`, `lint_c.py` |
+| `nix develop .#miri` | the nightly with Miri that `flake.lock` pins | `cargo miri test` |
+| `nix develop .#fuzz` | Python 3.14 with `fuzz.txt`, and atheris built with LLVM's clang | `dm/tools/fuzz` |
+
+`tools.txt` lists the packages the tools import. The coverage and lint shells install it beside their own list, as CI's jobs do, so the tests and pyright see the same versions as the default shell. CI installs these lists on Python 3.14 (`setup-python`), and the same Rust through rustup.
+
+Outside a shell, a command takes Apple's `/usr/bin/python3` (3.9.6 with Xcode 27.2). The graphics tests' Python steps then stop at a `TypeError` on `str | None`: that is the interpreter, not the code.
+
 ## Continuous integration
 
 `.github/workflows/tests.yml` runs host and CPU graphics tests, Python tool
@@ -160,7 +179,8 @@ threshold fails it. It builds the host unit tests and the CPU texture test again
 with clang's source-based coverage (`make coverage`, into `build/cov` and `cov/`;
 `dm/sanitizers/coverage.mk`), and runs the tool tests (`dm/tools/tests`) under
 coverage.py over `dm/tools`, `dm/gfx/tools`, `dm/games` and `scripts`
-(configured in `pyproject.toml`, pinned in `.github/requirements/coverage.txt`).
+(configured in `pyproject.toml`, pinned in `.github/requirements/coverage.txt`,
+installed with `tools.txt`, the packages the tools import).
 `dm/tools/coverage_report.py` turns the reports into the job summary: line
 coverage per area, the 15 largest files and, on a pull request, the changed lines
 the tests run and those they do not. The C areas list only the files a test
@@ -170,7 +190,7 @@ minutes on an Apple-silicon Mac, most of it the tool tests):
 ```sh
 make -C dm/host/tests GAME=0400486024DEC000 -j8 coverage
 make -C dm/gfx/tex/tests coverage
-python3 -m pip install -r .github/requirements/coverage.txt   # in a venv
+python3 -m pip install -r .github/requirements/coverage.txt -r .github/requirements/tools.txt   # in a venv, or nix develop .#coverage
 DM_GAME=0400486024DEC000 python3 -m coverage run -m unittest discover -s dm/tools/tests
 python3 -m coverage combine && python3 -m coverage json   # writes coverage.json
 python3 dm/tools/coverage_report.py --host dm/host/tests/build/cov/coverage.lcov \
@@ -185,10 +205,12 @@ GitHub's macOS runners are virtual Macs without Metal 4.
 pyright in basic mode (`pyproject.toml`). It is a ratchet: today's findings are
 in `dm/tools/lint_python_baseline.tsv`, so it fails only on a new finding, or on
 a fixed one still listed there. Astral's ty, a faster type checker, can replace
-pyright once it is stable. With the pinned tools in a new venv:
+pyright once it is stable. With the pinned tools in a new venv, and the packages
+the tools import (`tools.txt`), so pyright resolves them at the versions the
+tools run with (`nix develop .#lint` is that environment):
 
 ```sh
-python3 -m venv /path/to/lint-venv && /path/to/lint-venv/bin/pip install -r .github/requirements/lint.txt
+python3 -m venv /path/to/lint-venv && /path/to/lint-venv/bin/pip install -r .github/requirements/lint.txt -r .github/requirements/tools.txt
 /path/to/lint-venv/bin/python3 dm/tools/lint_python.py            # the check CI runs
 /path/to/lint-venv/bin/python3 dm/tools/lint_python.py --update   # after fixing findings: shrink the baseline
 ```

@@ -117,9 +117,13 @@
             env = dotnetRoot;
           };
 
+          # tools.txt with each tool's own list: the tests and pyright see the packages the tools import, at the versions the default shell has
           coverage = shell "coverage" {
             tools = build;
-            requirements = [ "coverage.txt" ];
+            requirements = [
+              "coverage.txt"
+              "tools.txt"
+            ];
             env = dotnetRoot;
           };
 
@@ -128,7 +132,10 @@
               python
               pkgs.nodejs
             ];
-            requirements = [ "lint.txt" ];
+            requirements = [
+              "lint.txt"
+              "tools.txt"
+            ];
             env = {
               LLVM = "${own.llvm}";
             };

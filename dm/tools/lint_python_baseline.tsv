@@ -14,7 +14,6 @@ pyright	dm/tools/docs_symptoms.py	reportOptionalMemberAccess	1	"group" is not a 
 pyright	dm/tools/gpuprof.py	reportArgumentType	1	Argument of type "Unknown | None" cannot be assigned to parameter "value" of type "int" in function "__setitem__" Type "Unknown | None" is not assignable to type "int" "None" is not assignable to "int"
 pyright	dm/tools/gpuprof.py	reportOptionalMemberAccess	1	"split" is not a known attribute of "None"
 pyright	dm/tools/make_ext_font.py	reportOptionalSubscript	1	Object of type "None" is not subscriptable
-pyright	dm/tools/nso_fnmap.py	reportMissingImports	1	Import "numpy" could not be resolved
 pyright	dm/tools/patch_nso.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
 pyright	dm/tools/patch_nso.py	reportArgumentType	2	Argument of type "str | None" cannot be assigned to parameter "string" of type "str" in function "fullmatch" Type "str | None" is not assignable to type "str" "None" is not assignable to "str"
 pyright	dm/tools/patch_nso.py	reportCallIssue	2	No overloads for "fullmatch" match the provided arguments

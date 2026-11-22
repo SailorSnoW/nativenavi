@@ -146,9 +146,11 @@ jobs:
         with:
           python-version: '3.14'
           cache: pip
-          cache-dependency-path: .github/requirements/coverage.txt
+          cache-dependency-path: |
+            .github/requirements/coverage.txt
+            .github/requirements/tools.txt
       - name: Install coverage.py and the packages the tools import
-        run: python -m pip install -r .github/requirements/coverage.txt
+        run: python -m pip install -r .github/requirements/coverage.txt -r .github/requirements/tools.txt
       - name: Rust (the version dm/host/rust/rust-toolchain.toml names; the host links a Rust library)
         run: |
           if ! command -v rustup > /dev/null; then

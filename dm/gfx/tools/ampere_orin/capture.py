@@ -19,7 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np  # pyright: ignore[reportMissingImports]  # numpy is in .github/requirements/tools.txt, not in the lint environment
+import numpy as np  # .github/requirements/tools.txt
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))

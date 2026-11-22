@@ -8,7 +8,8 @@
 #   --rebaseline  writes every current finding: only with a raised tool version in .github/requirements/lint.txt, whose findings change with it
 #   --against REV fails when the baseline has an entry or a count that REV's has not, unless that checker's pinned version increased (CI uses the PR's base)
 # Run it with the pinned tools, so the findings match CI's (other versions or other packages in the environment change them):
-#   python3 -m venv <dir> && <dir>/bin/pip install -r .github/requirements/lint.txt && <dir>/bin/python3 dm/tools/lint_python.py [--update]
+#   python3 -m venv <dir> && <dir>/bin/pip install -r .github/requirements/lint.txt -r .github/requirements/tools.txt && <dir>/bin/python3 dm/tools/lint_python.py [--update]
+# (tools.txt: the packages the tools import, which pyright resolves; the flake's lint shell, nix develop .#lint, is that environment)
 # Under GitHub Actions, new findings are annotated on their lines and a summary goes to $GITHUB_STEP_SUMMARY.
 import argparse, collections, json, os, re, subprocess, sys, pathlib
 
