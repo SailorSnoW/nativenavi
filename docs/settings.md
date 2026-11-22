@@ -1,11 +1,12 @@
 # Settings
 
-The Mac app shows the game's settings in a [window](#the-mac-settings-window) before the game starts. A setting that only matters while another is on appears under it and disappears when that one is turned off. Click **Play** to start; the app remembers your choices for the next start. The settings are grouped under **Game**, **Controls** and **Performance**.
+The Mac app shows the game's settings in a [window](#the-mac-settings-window) before the game starts. A setting that only matters while another is on appears under it and disappears when that one is turned off. Click **Play** to start; the app remembers your choices for the next start. The settings are grouped under **Game**, **Controls** and **Performance**, and **Practice** in an app that carries the practice tools.
 
 - [Tested defaults](#tested-defaults)
 - [Game](#game): [Frame rate](#frame-rate), [Dynamic resolution](#dynamic-resolution), [Console mode](#console-mode), [Screen upscaling](#screen-upscaling), [3D upscaler](#3d-upscaler), [3D upscaler sharpness](#3d-upscaler-sharpness), [Game language](#game-language), [Display mode](#display-mode)
 - [Controls](#controls): [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join), [Switch 2 controllers](#switch-2-controllers), [Microphone](#microphone), [Microphone gain](#microphone-gain)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
+- [Practice](#practice): [Practice tools](#practice-tools)
 - [The Mac settings window](#the-mac-settings-window)
 - [Settings in a file](#settings-in-a-file)
 
@@ -209,9 +210,17 @@ Apple's performance overlay shows frame rate, frame and GPU times, and memory. I
 
 Sets every setting back to the game's tested default; **Play** then forgets your choices, so those defaults apply, and those of later builds too ([Tested defaults](#tested-defaults)). Settings fixed by an `env.txt` or by the program that started the app stay as they are.
 
+## Practice
+
+Shown in an app that carries the practice tools: the packing script puts them in unless it is given `--no-practice`.
+
+### Practice tools
+
+**Off** by default. On, the game starts with sloperinaGZ, PracticeROM's practice menu for speedrunners ([the game's note](../dm/games/0400486024DEC000/README.md#practice-tools)): in the game, hold **R** and push the **right stick down** to open or close it. While it is open, the game does not see your controller. It keeps its own settings and log in `~/Library/Application Support/nxnative/<title ID>/sdcard/sloperinaGZ/`. Off, none of it is loaded: the game runs as in an app without the practice tools. In an `env.txt`: `DM_PRACTICE=1`.
+
 ## The Mac settings window
 
-The Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts. The window shows the most used ones first: **Frame rate**, **Console mode**, **Game language**, **Display mode**, **Game rumble** and **Microphone**. The others are under **Advanced settings**, in the usual sections, with **Reset to tested defaults**. The window remembers whether Advanced settings is open.
+The Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts. The window shows the most used ones first: **Frame rate**, **Console mode**, **Game language**, **Display mode**, **Game rumble**, **Microphone** and, in an app that has them, **Practice tools**. The others are under **Advanced settings**, in the usual sections, with **Reset to tested defaults**. The window remembers whether Advanced settings is open.
 
 Click **Play** (or press Return) to start the game. **Quit**, ⌘Q or closing the window ends the app without the game. The app remembers your choices, and a game started without the window, from a front end or with the window turned off, uses them too ([Saved choices](frontends.md#saved-choices)). A setting fixed by an `env.txt` or by the program that started the app is shown greyed out.
 
@@ -244,5 +253,6 @@ A line like `DM_PRESENT_SNAP=1` in the app's `env.txt` (`~/Library/Application S
 | Encode thread | `DM_NVN_ENC_THREAD` | `1`, `0` |
 | Hold frames when late | `DM_FPS_HOLD` | `on`, `off` |
 | Performance HUD | `DM_METAL_HUD` | `1`, `0` |
+| Practice tools | `DM_PRACTICE` | `1`, `0` |
 
 `DM_LAUNCHER=0` skips the settings window; the choices you saved there still apply. `DM_SAVED_CHOICES=0` starts with the tested defaults and keeps your saved choices for later. How the settings are listed for the game: [dm/games/settings.tsv](../dm/games/settings.tsv).

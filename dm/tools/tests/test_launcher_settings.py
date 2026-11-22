@@ -69,6 +69,19 @@ class LauncherSettingsTests(unittest.TestCase):
         s = mac['DM_FULLSCREEN']
         self.assertEqual((s['kind'], s['default'], s['options'], s['level']), ('choice', '0', [['0', 'Window'], ['1', 'Fullscreen']], 'basic'))
 
+    def test_practice_tools_only_in_an_app_that_carries_them(self):   # the packing script's practice_tools folder, which pack_app.py's --practice puts in Resources/dm/practice
+        self.assertNotIn('DM_PRACTICE', build(OOT))   # no practice/: a build with --no-practice, or a release without a patch for main
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']):
+            tools = Path(tmp) / settings.PRACTICE_DIR; tools.mkdir()
+            (tools / 'subsdk9.patched.bin').write_bytes(b'code')
+            self.assertNotIn('DM_PRACTICE', [s['env'] for s in settings.build(OOT, tmp, Path(tmp) / 'control.nacp')['settings']])   # a module without its IPS
+            (tools / 'E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348.ips').write_bytes(b'PATCH')
+            listed = settings.build(OOT, tmp, Path(tmp) / 'control.nacp')['settings']
+        s = {r['env']: r for r in listed}['DM_PRACTICE']
+        self.assertEqual((s['kind'], s['section'], s['default'], s['on'], s['off'], s['level']), ('toggle', 'Practice', '0', '1', '0', 'basic'))   # hle_practice.c loads them on 1 only
+        self.assertIn('right stick down', s['note'])   # how the menu opens (sloperinaGZ's USAGE.md)
+        self.assertEqual(list(dict.fromkeys(r['section'] for r in listed)), ['Game', 'Controls', 'Performance', 'Practice'])
+
     def test_written_list_follows_the_schema(self):
         schema = json.loads((ROOT / 'docs/launcher.schema.json').read_text(encoding='utf-8'))
         with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']):

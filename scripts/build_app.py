@@ -70,7 +70,7 @@ PSO_GPUS = ''                           # PLATFORM 'mac-app': the GPU architectu
                                         #   empty = this Mac's GPU, 'none' = no archive: the app builds its pipeline bases on its first start
 MOTION = True                           # True passes a gyro controller's motion to the game; False builds with DM_MOTION=0, for when motion misbehaves
 PRACTICE = True                         # True puts the practice tools in the build (sloperinaGZ, the release the profile's practice.tsv pins, downloaded once into <build folder>/practice/);
-                                        #   they stay off until DM_PRACTICE=1 turns them on. False = a build without them, which downloads nothing
+                                        #   they stay off until DM_PRACTICE=1 turns them on (the app's settings window: Practice tools). False = a build without them, which downloads nothing
 PROFILE_OUT = ''                        # where a derived profile goes (empty = <build folder>/profile; the profile is <this>/<title ID>/)
 ALLOW_DAMAGED = False                   # files whose bytes do not start as their names promise (a .zs that is no zstd stream: a NUP has no hashes) stop the build; True packs those files as they are and goes on
 ALLOW_SHADER_REGRESSIONS = False        # shaders that translated in the previous build and fail with the current translation chain stop the build (logs/shader_regressions.log lists them);
@@ -1827,7 +1827,7 @@ def parse_args(argv):
                     'minutes instead of hours, but areas the list does not cover draw without the rest until this runs again (default: the SEEN_SHADERS setting, off)')
     ap.add_argument('--motion', action=argparse.BooleanOptionalAction, help='pass a gyro controller\'s motion to the game; --no-motion builds with DM_MOTION=0, for when motion misbehaves (default: the MOTION setting, on)')
     ap.add_argument('--practice', action=argparse.BooleanOptionalAction, help='put the practice tools in the build: sloperinaGZ, the release the profile\'s practice.tsv pins, downloaded once into <build folder>/practice/ and checked by its SHA-256, '
-                    'off until DM_PRACTICE=1 turns them on; --no-practice: a build without them, which downloads nothing (default: the PRACTICE setting, on)')
+                    'off until DM_PRACTICE=1 turns them on (the app\'s settings window: Practice tools); --no-practice: a build without them, which downloads nothing (default: the PRACTICE setting, on)')
     ap.add_argument('--allow-damaged', action='store_true', help='files whose bytes do not start as their names promise (a .zs file that is no zstd stream): pack them as they are and go on instead of stopping')
     ap.add_argument('--allow-shader-regressions', action='store_true', help='shaders that translated in the previous build and fail with the current translation chain: '
                     'pack the app without them instead of stopping')
@@ -2039,7 +2039,7 @@ def main(args=None):
         rmtree(work / 'tmp')
         say(f'done: {out_app} ({tree_size(out_app)[1] / 2**30:.1f} GB); '
             f'open it from Finder. Its save is in ~/Library/Application Support/nxnative/{app:016X}/, its log in ~/Library/Logs/nxnative/{app:016X}.log')
-        if practice: say(f'practice tools: in the app, off; DM_PRACTICE=1 in ~/Library/Application Support/nxnative/{app:016X}/env.txt turns them on')
+        if practice: say('practice tools: in the app, off until Practice tools in its settings window turns them on')
         if practice_red: say(practice_red)
         if seen_shaders: say('a partial shader library: where a shader is missing, the log says so in red and the draw goes without it. Run this script again with --seen-shaders to add what the log names, or without it for the whole map')
         report_profile_status(g, reg, pkg_ver, derived, 'Mac app', patched)

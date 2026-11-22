@@ -8,7 +8,8 @@
 #   default   a value (a toggle's: 1 on, 0 off); DM_GAME_<NAME>: the host's own default from the game profile (game_profile.h, game.py); build:<VAR>: the build's setting (the packer's environment)
 #   shown     always; DM_GAME_<NAME>!=<value> or ==<value>; fixups:<KEY>: main's rewriter table has that key (a stub in the game's build, patch_nso.py); languages>1 (more than one to pick, so also when the control data lists none);
 #             mac-mic: a Mac app whose modules import the supported polling InputStream API;
-#   section   Game, Controls or Performance: a heading on the single settings screen. Rows appear in table order within each section
+#             practice: an app that carries the practice tools (Resources/dm/practice, which the host loads with DM_PRACTICE=1): the rewritten modules' practice/ has a rewritten module and an IPS (the packing script's practice_tools stage);
+#   section   Game, Controls, Performance or Practice: a heading on the single settings screen. Rows appear in table order within each section
 #             Reset to tested defaults clears all launcher choices; values fixed by an env file stay
 #   label, note  the setting's name and the line under it (may be empty; only for a setting with a cost: latency, memory, heat)
 #   meta      optional, key=value pairs separated by ; (settings.py META lists the keys; docs/frontends.md, The settings list, describes them):
@@ -34,3 +35,4 @@ DM_PSO_PREBUILD	toggle	-	1	always	Performance	Pipeline prebuild	The first start 
 DM_NVN_ENC_THREAD	toggle	-	DM_GAME_ENC_THREAD	always	Performance	Encode thread
 DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
 DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD
+DM_PRACTICE	toggle	-	0	practice	Practice	Practice tools	sloperinaGZ, the practice menu speedrunners use: hold R and push the right stick down in the game to open it. It changes the game's code; off, none of it is loaded.	level=basic

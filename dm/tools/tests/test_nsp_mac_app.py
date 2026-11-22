@@ -971,6 +971,16 @@ class App(unittest.TestCase):
                 pack_app.pack(a)
             self.assertFalse(Path(a.out).exists())
 
+    def test_pack_practice_row_without_the_tools(self):   # a settings list that offers Practice tools (settings.py saw practice/) for an app packed without --practice: refused, nothing written
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as d:
+            listed = Path(d) / 'launcher.json'
+            listed.write_text(json.dumps({'game': TID, 'settings': [{'env': 'DM_PRACTICE', 'kind': 'toggle', 'section': 'Practice', 'label': 'Practice tools', 'note': '', 'default': '0', 'on': '1', 'off': '0'}]}))
+            a = types.SimpleNamespace(**vars(self.args)); a.settings = str(listed); a.practice = None; a.out = str(self.tmp / 'NoPractice.app')
+            with contextlib.redirect_stdout(io.StringIO()) as o, self.assertRaisesRegex(SystemExit, 'offers DM_PRACTICE, and the app would not carry the practice tools'):
+                pack_app.pack(a)
+            self.assertEqual(o.getvalue(), ''); self.assertFalse(Path(a.out).exists())
+            self.assertEqual(pack_app.selected_inputs(types.SimpleNamespace(**{**vars(a), 'practice': self.args.practice}))[1][0].parent, Path(self.args.practice))   # with them, the list goes in
+
     def test_pack_bad_archive(self):   # a pipeline archive folder without its archive or stamp is refused before anything is copied
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as src:
             src = Path(src); (src / 'prebuilt.tsv').write_text('chain\t0123456789ab\n')

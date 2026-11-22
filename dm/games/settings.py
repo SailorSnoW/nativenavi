@@ -9,8 +9,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / 'tools'))
 import game, nacp, nso_syms
 
-SECTIONS = ('Game', 'Controls', 'Performance')   # headings on the single settings screen
+SECTIONS = ('Game', 'Controls', 'Performance', 'Practice')   # headings on the single settings screen
 SCHEMA = 1   # launcher.json's version (docs/launcher.schema.json); it grows only by optional fields, so a reader of 1 reads every 1
+PRACTICE_DIR = 'practice'   # the practice tools' folder in the rewritten modules' folder (scripts/build_app.py PRACTICE_DIR), Resources/dm/practice in the app
 # The meta column's keys, each with the pattern its value must match. A key is added here, in docs/frontends.md and in
 # docs/launcher.schema.json together (test_launcher_settings.py checks that the three agree); a reader ignores keys it does not know
 META = {
@@ -53,6 +54,8 @@ def build(gid, patched, control):
     macros = dict(re.findall(r'^#define (DM_GAME_\w+) (.*)$', game.header_one(g), re.M))   # the host's own defaults, as it is compiled for this game
     keys = fixups_keys(Path(patched) / 'main.fixups.tsv')
     mac_mic = nso_syms.audio_input_capable(Path(patched).glob('*.patched.bin'))
+    tools = Path(patched) / PRACTICE_DIR
+    practice = any(tools.glob('*.patched.bin')) and any(tools.glob('*.ips'))   # what pack_app.py's --practice takes, and the app then carries
     have = nacp.languages(control)
     langs = [(c, n) for c, n in nacp.LANGUAGES if not have or c in have]   # no list (none of the NUP's packages may have control data): any language may be the game's, as DM_LANG and the packing script's check take it
 
@@ -63,6 +66,7 @@ def build(gid, patched, control):
     def shown(cond, n):
         if cond == 'always': return True
         if cond == 'mac-mic': return mac_mic
+        if cond == 'practice': return practice
         if cond == 'languages>1': return len(langs) > 1
         if cond.startswith('fixups:'): return cond[7:] in keys
         m = re.fullmatch(r'(DM_GAME_\w+)(!=|==)(.*)', cond)

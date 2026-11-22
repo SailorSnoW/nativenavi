@@ -45,7 +45,7 @@ The built app carries the settings the game supports, as its settings window sho
 ```
 
 - `env`: the environment switch the setting sets. `kind`: `choice` (one of `options`, each `[value, label]`), `range` (a number from `min` to `max` in `step`s) or `toggle` (`on` or `off`, the values the switch takes).
-- `section`: the heading the row goes under, today `Game`, `Controls` or `Performance`. Sections come in the order of their first rows, and rows in the order to show them. A new section may appear in schema 1: a reader draws a section it does not know like the others, under its name, as the app's own window does.
+- `section`: the heading the row goes under, today `Game`, `Controls`, `Performance` or `Practice` (Practice tools, `DM_PRACTICE`: only in an app that carries them, `Resources/dm/practice/`). Sections come in the order of their first rows, and rows in the order to show them. A new section may appear in schema 1: a reader draws a section it does not know like the others, under its name, as the app's own window does.
 - `default`: the tested default ([Tested defaults](settings.md#tested-defaults)), with profile defaults resolved for the game. A front end that keeps only the choices that differ from it lets a newer build's tested defaults reach the player, as the app's own window does.
 - `level` (optional): `basic` marks a setting to show first, for a front end that shows a short list and puts the rest behind a second step. Without it, the front end decides.
 - `needs` (optional): `<VAR>=<value>` makes the row a sub-setting of the row that sets `<VAR>`, drawn only while that row has that value (Rumble strength only while rumble is on). A row naming a variable the list does not have stays drawn.

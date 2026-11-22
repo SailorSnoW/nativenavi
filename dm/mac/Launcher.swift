@@ -32,7 +32,6 @@ struct LauncherView: View {
             .padding([.horizontal, .top], 20)
             Form {
                 settingSections(basic: true)
-                if m.values["DM_MIC"] == "1" { MicrophoneDevicePicker() }
                 Section {
                     DisclosureGroup("Advanced settings", isExpanded: $advanced) {}
                 }
@@ -70,6 +69,8 @@ struct LauncherView: View {
                 Section(section) {
                     ForEach(rows) { SettingRow(s: $0, m: m) }
                 }
+                // The input device, while Microphone is on: under the section that has it, not after the sections that follow (Practice)
+                if rows.contains(where: { $0.env == "DM_MIC" }) && m.values["DM_MIC"] == "1" { MicrophoneDevicePicker() }
             }
         }
     }

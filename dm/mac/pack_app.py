@@ -26,6 +26,7 @@ import shader_lib
 import vol_space   # the space a build may write, with what APFS frees on demand
 MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv')   # what the host reads from the module folder (changed.tsv: the mods' code patches, hle_mods.c)
 PRACTICE_FILES = MODULE_FILES + ('*.ips', 'LICENSE')   # what the host reads of the practice tools' folder (hle_practice.c), and their license
+PRACTICE_SETTING = 'DM_PRACTICE'   # the switch that loads them, the settings list's Practice tools (settings.tsv), offered only by an app that carries them
 MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json); the shader chain's b-<chain> goes in as one file of them (shader_lib.py)
 # read beside DM_NVN_SHMAP; any of them may be absent. The shader pairs are the pipeline prebuild's (nvn_mtl.m pso_prebuild): without them the
 # app makes no pulling bases, a hybrid draw has no stand-in and a new pipeline compiles on the submit thread
@@ -339,6 +340,8 @@ def selected_inputs(a):
     files += [Path(p) for p in (a.env_file, a.settings, a.icon) if p]
     for p in files:
         if not p.is_file(): raise SystemExit(f'no input file at {p}')
+    if a.settings and not practice and any(s.get('env') == PRACTICE_SETTING for s in json.loads(Path(a.settings).read_text(encoding='utf-8'))['settings']):
+        raise SystemExit(f'the settings list {a.settings} offers {PRACTICE_SETTING}, and the app would not carry the practice tools (--practice)')
     return mods, practice, msls, pso, tables, pairs, fonts, files
 
 
