@@ -11,7 +11,7 @@
 #define PATCH_FILE_MAX (16u << 20)
 #define NSO_HEADER 0x100
 
-typedef struct { char name[256]; char dir[1024]; char root[1024]; } mod_t;
+typedef struct { char name[256]; char dir[1024]; char root[1024]; int builtin; } mod_t;
 typedef struct { char path[1536]; char bid[65]; int mod, ips; } pfile_t;
 typedef struct { uint64_t off; uint32_t len; uint8_t *data; } rec_t;
 typedef struct { rec_t *r; int n, cap; } recs_t;
@@ -83,6 +83,7 @@ static void scan_patch_dir(const char *dir, int mod) {
         if (e->d_name[0] == '.') continue;
         int ips = has_suffix(e->d_name, ".ips"), pch = has_suffix(e->d_name, ".pchtxt");
         if (!ips && !pch) {
+            if (g_mods[mod].builtin) continue;   // a built-in set's folder also holds its rewritten module
             if (!strcmp(e->d_name, "main") || !strcmp(e->d_name, "sdk") || !strcmp(e->d_name, "rtld") || !strncmp(e->d_name, "subsdk", 6) || !strcmp(e->d_name, "main.npdm"))
                 LOG("[RED] mods: %s: %s/%s replaces or adds a code module, which the rewriter has to process when the game is built: not loaded", g_mods[mod].name, dir, e->d_name);
             continue;
@@ -264,6 +265,22 @@ void dm_mods_init(void) {
     }
     if (overlay[0]) setenv("DM_ROMFS_OVERLAY", overlay, 1);
     LOG("mods: %s: %d on, %d off (order.txt)", base, g_nmods, off);
+}
+
+// A built-in set of code patches (the practice tools' IPS, hle_practice.c): the .ips / .pchtxt files of dir, applied as a mod's, at the highest priority (the player turned it on
+// in the launcher), and not in the Mods menu or order.txt. Before load_modules, after dm_mods_init
+void dm_mods_add_builtin(const char *name, const char *dir) {
+    if (g_nmods == MOD_MAX) { LOG("[RED] mods: more than %d mods: %s is not loaded", MOD_MAX, name); return; }
+    int idx = g_nmods++, before = g_npfiles;
+    mod_t *m = &g_mods[idx];
+    snprintf(m->name, sizeof m->name, "%s", name); snprintf(m->dir, sizeof m->dir, "%s", dir); snprintf(m->root, sizeof m->root, "%s", dir); m->builtin = 1;
+    scan_patch_dir(dir, idx);
+    int added = g_npfiles - before;   // to the front: the files applied last win, and dm_mods_patch_module applies from the end of the list to its start
+    pfile_t *tmp = added ? malloc((size_t)added * sizeof *g_pfiles) : NULL;
+    if (added && !tmp) die("mods: patch file list allocation failed");
+    if (added) { memcpy(tmp, g_pfiles + before, (size_t)added * sizeof *g_pfiles); memmove(g_pfiles + added, g_pfiles, (size_t)before * sizeof *g_pfiles); memcpy(g_pfiles, tmp, (size_t)added * sizeof *g_pfiles); }
+    free(tmp);
+    LOG("mods: %s (built in): %d exefs patch file(s) from %s, before the mods folder's", name, added, dir);
 }
 
 const char *dm_mods_dir_path(void) { return g_base; }
@@ -474,10 +491,14 @@ static const char *rec_refusal(const module_t *m, const changed_t *c, const rec_
     *at = off;
     if (end > m->key_page_off) return "lies outside the module's image";
     *final = 0;
-    if (off >= m->text_end) return NULL;
-    if (!c->ok) return "is code, and the module has no changed-words list of its build beside it (rewrite it with dm/tools/patch_nso.py)";
+    // The code a patch writes: the text, and the padding after it up to the read-only data (a code cave: sloperinaGZ's IPS puts its stubs at main+0x3c46400, past
+    // TEXT_END 0x3c461d0), which the loader seals executable with the text. The rewriter never wrote the padding, so only the text has moved words to refuse
+    uint64_t code_end = m->ro_off > m->text_end ? m->ro_off : m->text_end;
+    if (off >= code_end) return NULL;
+    if (off < m->text_end && !c->ok) return "is code, and the module has no changed-words list of its build beside it (rewrite it with dm/tools/patch_nso.py)";
     uint64_t text_end = end < m->text_end ? end : m->text_end;
-    if (changed_hit(c, off, text_end - off)) return "replaces an instruction the rewriter already moved out of line";
+    if (off < text_end && changed_hit(c, off, text_end - off)) return "replaces an instruction the rewriter already moved out of line";
+    text_end = end < code_end ? end : code_end;
     for (uint64_t a = off & ~3ull; a < text_end; a += 4) {
         uint32_t was, now; uint8_t word[4];
         memcpy(word, m->base + a, 4); memcpy(&was, word, 4);

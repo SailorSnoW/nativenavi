@@ -157,6 +157,30 @@ int main(void) {
     CHECK(ct && strstr(ct, "\tbaked\tGamma\t") && strstr(ct, "\trewriter-refused\tGamma\t"), "DM_MODS_CHECK on a rewritten module: what is in it and what the rewriter refused");
     free(ct);
 
+    // A built-in set (the practice tools' IPS, hle_practice.c): its folder's other files are not patch files and not refused code modules; it goes before
+    // the mods folder's files, so it wins where they overlap; code it writes into the padding between the text and the read-only data (a code cave) is checked as code
+    static const uint8_t good[] = {'I','P','S','3','2', 0,0,0x42,0x00, 0,4, 0x1F,0x20,0x03,0xD5, 0,0,0x01,0x10, 0,4, 0x01,0x00,0x00,0x14, 'E','E','O','F'};
+    static const uint8_t bad[] = {'I','P','S','3','2', 0,0,0x42,0x04, 0,4, 0x01,0x00,0x00,0xD4, 'E','E','O','F'};
+    snprintf(p, sizeof p, "%s/practice/" BUILD "00000000.ips", base); put(p, good, sizeof good);
+    snprintf(p, sizeof p, "%s/practice/subsdk9.patched.bin", base); puts_file(p, "");
+    snprintf(p, sizeof p, "%s/practice/subsdk9.fixups.tsv", base); puts_file(p, "");
+    snprintf(p, sizeof p, "%s/bad/" BUILD ".ips", base); put(p, bad, sizeof bad);
+    snprintf(p, sizeof p, "%s/dm3/main.changed.tsv", base); puts_file(p, "# BUILD_ID " BUILD "\n80\t8\n");
+    int before = g_npfiles;
+    snprintf(p, sizeof p, "%s/practice", base); dm_mods_add_builtin("practice tools", p);
+    CHECK(g_npfiles == before + 1 && strstr(g_pfiles[0].path, "/practice/") && g_mods[g_pfiles[0].mod].builtin, "a built-in set: its one patch file, first in the list");
+    snprintf(p, sizeof p, "%s/bad", base); dm_mods_add_builtin("bad", p);
+    for (uint64_t a = 0; a < 0x4000; a += 4) { uint32_t w = 0xAA0103E0; memcpy(m->base + a, &w, 4); }
+    memset(m->base + 0x4000, 0x55, 0x4000);
+    m->ro_off = 0x5000;
+    snprintf(p, sizeof p, "%s/dm3", base);
+    dm_mods_patch_module(m, p);
+    CHECK(word_at(m, 0x10) == 0x14000001, "a built-in set wins over the mods folder's patch at the same place");
+    CHECK(word_at(m, 0x4100) == NOP, "a plain instruction in the code cave is applied");
+    CHECK(word_at(m, 0x4104) == 0x55555555, "an svc in the code cave is refused");
+    CHECK(!memcmp(m->base + 0x4000, "hi\0", 3), "bytes in the cave that are no instruction the rewriter replaces still apply (Alpha's string)");
+    m->ro_off = 0;
+
     int green = -1, pink = -1;
     for (int i = 0; i < dm_mods_count(); i++) { if (!strcmp(dm_mods_name(i), "Tunics/Green")) green = i; if (!strcmp(dm_mods_name(i), "Tunics/Pink")) pink = i; }
     CHECK(green >= 0 && pink >= 0 && dm_mods_on(pink) && !dm_mods_on(green), "the pack's listed variants");

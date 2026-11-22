@@ -58,6 +58,8 @@ enum { STB_LOCAL = 0, STB_WEAK = 2, STV_DEFAULT = 0 };
 // Run-time state of one NSO module
 typedef struct {
     char name[16];
+    char dir[1024];            // the folder holding its rewriter output (<name>.patched.bin, .fixups.tsv, ...): the modules folder, or an add-on's own
+    int addon;                 // an add-on module (the practice tools' subsdk9, hle_practice.c): its imports also bind to HLE_ADDON takeovers (hle.h)
     uint8_t *base;             // Start address of the image (including the patch area) in the host address space
     size_t size;
     uint64_t text_end, ro_off, data_off, key_page_off, key_page_size;   // From the rewriter fixups header
@@ -82,7 +84,7 @@ static inline const char *dm_main_build(void) { for (int i = 0; i < g_nmod; i++)
 // Four thread-local slots: K18 = the Switch's x18, KTLS = tpidr_el0, KTLR = tpidrro_el0 (ThreadLocalRegion), KGATE = host gate entry; the actual key numbers are written into the key page by the loader
 extern pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
 
-void load_modules(const char *dir, const char **names, int n);
+void load_modules(const char *dir, const char **names, const char *const *dirs, int n);   // dirs[i] (dirs may be NULL): an add-on module's own folder, NULL for one of dir
 void run_module_inits(void);
 void dm_ctl_peek(uint64_t a, int n); void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path);   // DM_CTL "peek" and "memdump": guest memory to the log or a file (probe.c)
 void dm_device_share(const void *p, uint64_t size, int share);   // guest memory a device maps (share 1) or no longer maps (0): Horizon's DeviceShared attribute, which refuses unmapping it (hle_svc.c)
@@ -108,6 +110,7 @@ uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance
 uint64_t guest_ns_at_host_time(uint64_t host_ns);  // Host Mach-absolute ns projected into the current guest clock
 int guest_clock_pinned(void);  // the guest clock is frozen or DM_DETCLOCK's: guest_ns_at_host_time maps every host time to one
 uint64_t guest_ticks(void);           // The guest's system counter on that clock: the Switch 2's 31.25 MHz (hle_os.c)
+uint64_t guest_tick_hz(void);         // That counter's rate, what a rewritten mrs cntfrq_el0 reads (hle_os.c)
 int dm_detclock_enabled(void);
 void guest_clock_freeze_for(int reason, int on);   // Freeze by reason (1 background, 2 system keyboard); see hle_os.c
 void guest_clock_read_wait(void);     // A guest read of the system counter: counts it in dm_clock_reads and waits while the app is in the background (hle_os.c)
@@ -135,6 +138,7 @@ void dm_guest_write_prepare(void *addr, size_t len);
 void dm_guest_heap_range(uint64_t *base, size_t *open_len);   // hle_svc.c: the guest heap's base and opened length (guest addresses), 0 / 0 when none
 void dm_mods_init(void);              // Before load_modules (main.c): finds the mods folder's mods, in order, and puts their romfs folders into DM_ROMFS_OVERLAY (hle_mods.c)
 void dm_mods_patch_module(module_t *m, const char *dir);   // A mapped, still writable module: the mods' .pchtxt / .ips patches for its build (loader.c map_image)
+void dm_mods_add_builtin(const char *name, const char *dir);   // A built-in set of code patches (the practice tools' IPS): dir's .ips / .pchtxt at the highest priority, not in the Mods menu (hle_mods.c)
 void dm_mods_check_done(void);        // DM_MODS_CHECK: writes the verdicts and ends the host (after dm_mods_report_unmatched)
 void dm_mods_report_unmatched(void);  // After load_modules: the patch files no loaded module's build matched
 const char *dm_mods_dir_path(void);   // The mods folder ("" when neither DM_MODS nor DM_ROOT is set); it need not exist

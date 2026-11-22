@@ -138,6 +138,28 @@ Run headless, `DM_CTL` at a control file. The work folder has `boot.sh <secs> <l
 
 From an empty save: at about 45 s `A` (title), `A` (New Game), then the movie. From `save_ref`: at about 58 s `A~0.2`, 5 s later `A~0.2` (Load), 30 s later three `A~0.1` 3 s apart, then 12 s to the bridge outside Link's house. There `LUp~3.5`, `A~0.2` (Climb Down) and `LDown~4` three or four times reach the village floor.
 
+## Practice tools
+
+[sloperinaGZ](https://github.com/PracticeROM/sloperina) (PracticeROM, GPL-3.0) is the gz-style practice menu runners use for this game on emulators and consoles: a `subsdk9` module (devkitA64 GCC) and an IPS32 patch of `main` for each build it knows (1.0.0 `33FA6C2C…`; 1.1.1, which is v131072, `E0F3CCFA…`). With `DM_PRACTICE=1` the host loads both as Atmosphère's LayeredFS does (`dm/host/hle_practice.c`): `subsdk9` from the modules folder's `practice/`, rewritten by `patch_nso.py` like the game's modules, placed before `sdk` in the load order; the IPS through the mods' load-time patching, as a built-in set at the highest priority. Off, the default, nothing of it is read.
+
+- **What it does.** Its DT_INIT hooks main's GOT: `nvnBootstrapLoader`, to wrap the present, the window's textures, device init, the pools and texture copies; the five public `GetNpadStates`, to hide buttons from the game while its menu is open; `nn::fs` Commit, for its save backups. It reads its own input through `nn::hid::detail::GetNpadStates`. It keeps its settings, log and caches on the SD card (`sd:/sloperinaGZ/`, mounted as `ootgz`). It draws with the game's own `MergeShader` (programs 0 and 9, in `shader_map.tsv`), or on the CPU when that fails.
+- **What the IPS does.** It writes a marker and stubs in main's padding past `TEXT_END` (main+0x3c46400–0x3c47000). It branches to them at the frame site main+0x3b500dc and at four stores of Link's position, and keeps its hook pointer at main+0x4e9a4d0, past bss and below the rewriter's key page. None of these sites is in main's changed, cut, observation or gate tables.
+- **What the host needed:**
+  - [a rewrite of a module without unwind entries](../../../docs/reference/rewriter.md#a-module-without-unwind-entries);
+  - [the counter frequency through the gate](../../../docs/reference/rewriter.md#the-counter-frequency-read-raw);
+  - [add-on takeovers](../../../docs/reference/services.md#an-add-on-module-calls-sdk-functions-the-game-never-makes) for the SD card and the hid detail readers;
+  - [the check of a mod's code past the text](../../../docs/reference/services.md#a-mods-code-written-past-the-end-of-the-text-was-not-checked).
+- **Current** (2026-11-22, M2 Pro, headless, release 0.0.9: zip sha256 `6f25fdfb17dc14b62f9271c308181cbe3ebdf8482e9db382b04959c7680f9e2c`):
+  - It loads, its 11 patches of main apply and 5 of its imports bind to add-on takeovers.
+  - Its log says `running on game 1.1.1 (patch v4)`, `gpu drawing ready` and `drawing on screen: scale 48/16 on 2560x1440`.
+  - R + right stick down opens its menu on the title screen, drawn in the game's style, and the d-pad moves in it. No red line in 64 s.
+  - Off, `main`, `subsdk0` and `sdk` have the same `DM_LOADHASH` as on the host before this change, and no SD card folder is made.
+- **Open:**
+  - Packing it (a packing script stage, the launcher's setting).
+  - Frame advance holds the game's thread and presents on its own, while the frame step measures the time between presents (`DM_FRAME_DELTA`, `nvn_fstep.h`). Whether one tap steps 1/60 s is unchecked.
+  - Its save backups stay off: they look for the sdk module through the address of an import, which binds to the host, and find none (sloperina's `savebackup.c`). That is safe. Chained to the sdk's own `CommitSaveData`, they would go around the host's save transactions.
+  - The gameplay features (warps, inventory, levitation, watches in play) are not tried yet.
+
 ## Offline pipeline bundle
 
 The packaging connection uses the host's existing descriptor export and bundle reader for every NVN profile (PR #2674). Its seed list includes the iPhone's rows through 2026-11-14 06:00: 10,415 added rows, including 4,447 render rows.
@@ -230,6 +252,10 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [A module without unwind entries](../../../docs/reference/rewriter.md#a-module-without-unwind-entries): the [practice tools](#practice-tools)' `subsdk9` stopped the rewriter with `KeyError: 0`. Resolved.
+- [The counter frequency read raw](../../../docs/reference/rewriter.md#the-counter-frequency-read-raw): its timers would have run 1.3 times too fast on an M2 Pro. Resolved.
+- [An add-on module calls SDK functions the game never makes](../../../docs/reference/services.md#an-add-on-module-calls-sdk-functions-the-game-never-makes): its SD card and its own input. Resolved.
+- [A mod's code written past the end of the text was not checked](../../../docs/reference/services.md#a-mods-code-written-past-the-end-of-the-text-was-not-checked): its IPS's code cave. Resolved.
 - [`nn::codec` AV1 decoder taken over](../../../docs/reference/movies.md#nncodec-av1-decoder-taken-over): its 26 movies (`Event/Movie/*.webm`) are all AV1 with no sound track, so the host decodes AV1 only and refuses the VP9, VP8 and H.264 decoders its movie library imports and never calls. Current.
 - [Small passes shaded on a few cores](../../../docs/reference/rendering.md#small-passes-shaded-on-a-few-cores): the 128x128 face of its environment cube map, 202-245 draws a frame.
 - [An upscaler that runs as a chain of dispatches drawn by MetalFX](../../../docs/reference/rendering.md#an-upscaler-that-runs-as-a-chain-of-dispatches-drawn-by-metalfx): the launcher's MetalFX choice did nothing for its `agl_ndsr_vr` chain.

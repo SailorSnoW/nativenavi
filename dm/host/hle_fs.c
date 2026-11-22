@@ -621,6 +621,14 @@ HLE_FORCE("_ZN2nn2fs26GetUtf16EntryNameLengthMaxEPbPmPKc", "fsp-srv; host mounts
 HLE_FORCE("_ZN2nn2fs21MountTemporaryStorageEPKc", "fsp-srv; temporary storage → host directory", Result, h_fs_MountTemp, const char *name) {
     char b[1024]; return mount(name, envdir("DM_TEMP", "run/platform/temp", b, sizeof b), 0);
 }
+// The SD card: only the practice tools mount it (sd:/sloperinaGZ/: their settings, log, translations; hle_practice.c), the game never does. A host directory, DM_SDCARD or
+// <DM_ROOT>/sdcard, which the mount creates. Their release asks MountSdCard first and MountSdCardForDebug when that is refused; both are the same folder here
+HLE_ADDON("_ZN2nn2fs11MountSdCardEPKc", "fsp-srv; the SD card → host directory (practice tools)", Result, h_fs_MountSd, const char *name) {
+    char b[1024]; return mount(name, envdir("DM_SDCARD", "sdcard", b, sizeof b), 0);
+}
+HLE_ADDON("_ZN2nn2fs19MountSdCardForDebugEPKc", "fsp-srv; the SD card → host directory (practice tools)", Result, h_fs_MountSdDebug, const char *name) {
+    char b[1024]; return mount(name, envdir("DM_SDCARD", "sdcard", b, sizeof b), 0);
+}
 HLE_FORCE("_ZN2nn2fs16GetFreeSpaceSizeEPlPKc", "fsp-srv; free space of a mount: 256 MB (the host directory has no size limit of its own)", Result, h_fs_FreeSpace, int64_t *out, const char *path) {
     (void)path; if (out) *out = 256 << 20; return RES_OK;
 }

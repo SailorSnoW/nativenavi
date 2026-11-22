@@ -16,10 +16,8 @@ pyright	dm/tools/gpuprof.py	reportOptionalMemberAccess	1	"split" is not a known 
 pyright	dm/tools/make_ext_font.py	reportOptionalSubscript	1	Object of type "None" is not subscriptable
 pyright	dm/tools/nso_fnmap.py	reportMissingImports	1	Import "numpy" could not be resolved
 pyright	dm/tools/patch_nso.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/patch_nso.py	reportArgumentType	1	Argument of type "set[Unknown] | list[Unknown]" cannot be assigned to parameter "a" of type "SupportsLenAndGetItem[SupportsRichComparisonT@bisect_right]" in function "bisect_right" Type "set[Unknown] | list[Unknown]" is not assignable to type "SupportsLenAndGetItem[Unknown]" "set[Unknown]" is incompatible with protocol "SupportsLenAndGetItem[Unknown]" "__getitem__" is not present
 pyright	dm/tools/patch_nso.py	reportArgumentType	2	Argument of type "str | None" cannot be assigned to parameter "string" of type "str" in function "fullmatch" Type "str | None" is not assignable to type "str" "None" is not assignable to "str"
 pyright	dm/tools/patch_nso.py	reportCallIssue	2	No overloads for "fullmatch" match the provided arguments
-pyright	dm/tools/patch_nso.py	reportIndexIssue	3	"__getitem__" method not defined on type "set[Unknown]"
 pyright	dm/tools/patch_nso.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
 pyright	dm/tools/patch_nso.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
 pyright	dm/tools/patch_nso.py	reportOptionalSubscript	2	Object of type "None" is not subscriptable

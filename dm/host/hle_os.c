@@ -72,7 +72,9 @@ uint64_t guest_ns_at_host_time(uint64_t host_ns) {
 // The system counter on that clock: 31.25 MHz (32 ns a tick) on the Switch 2, whose SDK reads cntpct_el0 and converts with that rate (nn::os::GetSystemTickFrequency answers
 // 0x1dcd650, sdk 20.5.19 Ounce). Read at the Switch's 19.2 MHz, every tick span a Switch 2 game measured came out 1.63 times too short, and the same clock's GPU timestamps
 // 1.63 times too late: Donkey Kong Bananza's frame-rate controller took its frame for seconds long and held it at 20 fps (present interval 3)
-uint64_t guest_ticks(void) { return guest_ns() / 32; }
+#define GUEST_TICK_NS 32
+uint64_t guest_ticks(void) { return guest_ns() / GUEST_TICK_NS; }
+uint64_t guest_tick_hz(void) { return 1000000000ull / GUEST_TICK_NS; }   // 0x1dcd650, as GetSystemTickFrequency; a rewritten mrs cntfrq_el0 reads it (patch_nso.py)
 int dm_detclock_enabled(void) { return detclock_cfg() && atomic_load(&g_gdet_on); }
 void dm_guest_frame_tick(void) {
     crash_watch_frame();

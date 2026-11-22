@@ -429,6 +429,13 @@ To enroll a cut for any game's own module:
 - **Found on:** FINAL FANTASY RESONANCE 1.0.1 `main` (Unreal Engine 5.6.1): `main+0x219234`.
 - **Check:** of the 120 modules of 33 games on hand, only DRAGON QUEST VII Reimagined's `main` has other `x18` sites there (110 before `+0xb310`, none in a window or a `br x18`), and its rewrite is byte-identical.
 
+### A module without unwind entries
+
+- **Symptom:** `KeyError: 0` in `patch_nso.py`, at the parse of the eh_frame_hdr's table (`rd(o, penc)`).
+- **Cause:** the rewriter read the eh_frame_hdr's header and table without checking that there was one. A module linked without unwind tables has an empty eh_frame_hdr (MOD0's start and end equal), and the bytes after it were read as encodings, the first of them 0.
+- **Fix:** the FDE starts come from `nso_code.fde_table`, which returns none for a missing or invalid eh_frame_hdr, and `func_of` takes the text of a module without FDEs as one function, as it takes the text before the first FDE ([above](#code-before-the-first-unwind-entry-is-one-function)), analysed [in pieces](#long-functions-analysed-in-pieces) when long. Modules with an eh_frame_hdr rewrite byte for byte as before.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game): sloperinaGZ's `subsdk9` (devkitA64 GCC with `-fno-unwind-tables`), its 0.39 MB of text in 2 pieces.
+
 ### Long functions analysed in pieces
 
 - **Symptom:** the rewrite never finishes, the Mac swaps, the rewriter's footprint reaches 100 GB.
@@ -490,6 +497,13 @@ To enroll a cut for any game's own module:
 - **Symptom:** SIGILL / trap on a system register read.
 - **Cause:** a newer SDK reads a register macOS traps (`CTR_EL0` in SDK 16's `FlushDataCache`).
 - **Fix:** rewrite to a constant (`patch_nso.py`, the `ctr` site kind).
+
+### The counter frequency read raw
+
+- **Symptom:** a module's timers run 1.3 times too fast: what it measures with `cntpct_el0` and converts with `cntfrq_el0`.
+- **Cause:** the rewriter sent `mrs cntpct_el0` to the host gate, which answers the Switch 2's 31.25 MHz counter (`hle_os.c` `guest_ticks`), but left `mrs cntfrq_el0` raw, which macOS answers with the Mac's own counter rate (24 MHz on an M2 Pro). Nintendo's SDK never reads it (`nn::os::GetSystemTickFrequency` is a constant), so no game module showed it.
+- **Fix:** `mrs xN, cntfrq_el0` is a gate site too (kind `cntfrq` in `<name>.gates.tsv`), which the host answers with `guest_tick_hz` (`hle.c` `gate_dispatch`), the same definition as the counter's. The game's three modules have no such read and rewrite byte for byte as before.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game): sloperinaGZ's `subsdk9`, two reads (`sys_tick_freq`).
 
 ## Relocations and module layout
 

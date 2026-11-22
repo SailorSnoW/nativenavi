@@ -938,6 +938,20 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Open:** code modules of a mod (ExLaunch, Skyline) are not loaded ([what one would need](../development.md#what-an-exlaunch-mod-would-need-open)).
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), with two RomFS mods (a controller UI, a pack of tunic recolours) and synthetic patches.
 
+### An add-on module calls SDK functions the game never makes
+
+- **Symptom:** the practice tools' `subsdk9` read no controller (its `nn::hid::detail::GetNpadStates` ran the SDK's own reader, whose HID client the host never sets up) and could not keep its settings (`nn::fs::MountSdCard` needs fsp-srv, which the host does not serve).
+- **Cause:** the host takes over the SDK calls the game makes. An add-on module makes others, and a forced takeover of them would also rebind the game's own modules (the sdk reaches the detail readers through its own PLT) and be reported in red on every run without the add-on, since no game module references it.
+- **Fix:** `HLE_ADDON` takeovers (`hle.h`, the `swaddon` section) bind for the imports of an add-on module only (`loader.c` `bind_sym`, `module_t` `addon`): the three detail readers answer as the public ones (`hle_hid.c`), and `MountSdCard` / `MountSdCardForDebug` mount a host folder, `DM_SDCARD` or `<DM_ROOT>/sdcard` (`hle_fs.c`). An add-on module loads from a folder of its own (`load_modules`' `dirs`, `hle_practice.c`). Without the add-on the game's modules load as before: their `DM_LOADHASH` is unchanged.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game): sloperinaGZ 0.0.9, 5 of its 36 imports.
+
+### A mod's code written past the end of the text was not checked
+
+- **Symptom:** none seen: a patch that writes an `svc`, an `x18` instruction or a timer register read into the padding between a module's text and its read-only data would have been applied, and run raw against Apple's kernel.
+- **Cause:** `hle_mods.c` `rec_refusal` checked the instructions a patch writes only below `TEXT_END`. The padding after it, up to the read-only data, is on the pages the loader seals executable with the text, and mods use it as a code cave: sloperinaGZ's IPS puts its stubs at main+0x3c46400, past `TEXT_END` 0x3c461d0.
+- **Fix:** the check covers the text and that padding (up to `RO_OFF`). The rewriter never writes the padding, so there only the instruction check applies, not the moved-words list. Data patches past it are not checked as code.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game): sloperinaGZ's IPS of main (11 patches, applied), and a synthetic `svc` in a cave (`t_mods`, refused).
+
 ### A game that asks for an amiibo never finds one
 
 - **Symptom:** a game's amiibo screen waits for a figure forever; nothing in the host can put one on the reader.

@@ -217,6 +217,11 @@ static void force_init(void) {
         }
     }
 }
+static int force_lookup_quiet(const char *name) {
+    if (!g_fmask) return 0;
+    for (unsigned j = sym_hash(name) & g_fmask; g_fidx[j]; j = (j + 1) & g_fmask) if (!strcmp(g_force[g_fidx[j] - 1].name, name)) return 1;
+    return 0;
+}
 static void *force_lookup(const char *name) {
     if (!g_fmask) return NULL;
     for (unsigned j = sym_hash(name) & g_fmask; g_fidx[j]; j = (j + 1) & g_fmask) {
@@ -225,6 +230,23 @@ static void *force_lookup(const char *name) {
             if (!g_force_hits[i]++ && g_flag.imports) LOG("force %s  (%s)", name, g_force[i].why);
             void *hlecount_wrap(const char *, const char *, void *); return hlecount_wrap("FORCE", name, g_force[i].fn);   // A counting stub when DM_HLECOUNT is set
         }
+    }
+    return NULL;
+}
+// HLE_ADDON takeovers (the __DATA,swaddon section): bound for an add-on module's imports only (bind_sym), so the game's own modules load as they do without the add-on
+static const hle_force_ent *g_addon; static unsigned g_naddon, g_addon_hits;
+static void addon_init(void) {
+    unsigned long sz; g_addon = (const hle_force_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swaddon", &sz);
+    g_naddon = g_addon ? (unsigned)(sz / sizeof *g_addon) : 0;
+    for (unsigned i = 0; i < g_naddon; i++) for (unsigned j = 0; j < i; j++)
+        if (!strcmp(g_addon[i].name, g_addon[j].name)) die("duplicate entry in the add-on takeover list: %s", g_addon[i].name);
+    for (unsigned i = 0; i < g_naddon; i++) if (force_lookup_quiet(g_addon[i].name)) die("%s is both a forced and an add-on takeover", g_addon[i].name);
+}
+static void *addon_lookup(const char *name) {   // a short list, looked up only for an add-on's few dozen imports
+    for (unsigned i = 0; i < g_naddon; i++) if (!strcmp(g_addon[i].name, name)) {
+        g_addon_hits++;
+        if (g_flag.imports) LOG("add-on takeover %s  (%s)", name, g_addon[i].why);
+        void *hlecount_wrap(const char *, const char *, void *); return hlecount_wrap("ADDON", name, g_addon[i].fn);
     }
     return NULL;
 }
@@ -339,6 +361,7 @@ static unsigned relr_apply(module_t *m, uint64_t relr, uint64_t relrsz, uint64_t
 // *other: the module's own definition was taken over by an earlier module's; *weak0: an undefined weak symbol nothing defines, bound to 0
 static uint64_t bind_sym(module_t *m, const Elf64_Sym *s, int *other, int *weak0) {
     uint64_t v = (uint64_t)force_lookup(m->strtab + s->st_name);
+    if (!v && m->addon) v = (uint64_t)addon_lookup(m->strtab + s->st_name);
     *other = *weak0 = 0;
     // Symbols the module defines itself are also looked up globally in load order (the ELF default; Horizon's rtld does the same): the definition of an earlier-loaded module overrides a later one; only local / non-default visibility binds to itself.
     // Engage's main defines its own operator new / delete (Unity's memory manager) and sdk has a copy too (forwarding to malloc / free): previously sdk bound its own delete,
@@ -485,7 +508,7 @@ static void map_image(module_t *m, const char *dir) {
 }
 
 
-void load_modules(const char *dir, const char **names, int n) {
+void load_modules(const char *dir, const char **names, const char *const *dirs, int n) {
     // Map everything and parse the symbol tables first, then relocate all at once (cross-module symbols must all be in place first)
     // DM_BOOTPROF: breakdown of ① host loading (milliseconds), to set the upper bound for ③ pre-relocation / mmap
     uint64_t t0 = now_ns(), tm = 0, tp = 0, tg = 0, tr = 0, t;
@@ -494,21 +517,24 @@ void load_modules(const char *dir, const char **names, int n) {
     for (int i = 0; i < n; i++) {
         module_t *m = &g_mod[i];
         strlcpy(m->name, names[i], sizeof m->name);
-        read_layout(m, dir);
+        m->addon = dirs && dirs[i];
+        strlcpy(m->dir, m->addon ? dirs[i] : dir, sizeof m->dir);
+        read_layout(m, m->dir);
     }
     create_keys();
     for (int i = 0; i < n; i++) {
         module_t *m = &g_mod[i];
-        t = now_ns(); map_image(m, dir); tm += now_ns() - t;   // On return the code area is already read-only+execute; from here on the loader only writes data
+        t = now_ns(); map_image(m, m->dir); tm += now_ns() - t;   // On return the code area is already read-only+execute; from here on the loader only writes data
         if (!i) tsd_check();
         t = now_ns(); parse_dynamic(m); tp += now_ns() - t;
-        t = now_ns(); register_gates(m, dir); tg += now_ns() - t;
-        LOG("%s: base %p size %#zx", names[i], m->base, m->size);
+        t = now_ns(); register_gates(m, m->dir); tg += now_ns() - t;
+        LOG("%s: base %p size %#zx%s%s", names[i], m->base, m->size, m->addon ? ", an add-on from " : "", m->addon ? m->dir : "");
         g_nmod++;
     }
-    force_init();
+    force_init(); addon_init();
     t = now_ns(); for (int i = 0; i < g_nmod; i++) relocate(&g_mod[i]); tr = now_ns() - t;
     force_check();
+    for (int i = 0; i < g_nmod; i++) if (g_mod[i].addon) { LOG("add-on takeovers: %u imports of the add-ons bound to them (%u entries)", g_addon_hits, g_naddon); break; }
     { void hlecount_seal(void); hlecount_seal(); }   // DM_HLECOUNT: relocation done, seal the counting stub pages as read-only executable
     if (getenv("DM_SYMCHECK")) LOG("DM_SYMCHECK: %lu symbol lookups at load time, hash and linear disagree %lu", g_symchk_n, g_symchk_bad);
     if (g_flag.bootprof) LOG("① breakdown: mapping (read + copy + seal pages) %.1f ms, dynamic section parsing %.1f ms, gate registration %.1f ms, relocation + forced takeover %.1f ms, total %.1f ms",

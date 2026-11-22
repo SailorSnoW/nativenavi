@@ -5,7 +5,7 @@
 #   mrs tpidr_el0       → read thread slot KTLS; msr tpidr_el0 → write KTLS
 #   mrs tpidrro_el0     → read thread slot KTLR (Horizon ThreadLocalRegion pointer)
 #   any of these with x18 as its register → a copy between thread slots, K18 among them (site_slot_copy; the host gate writes K18 for mrs x18, cntpct_el0)
-#   svc #n, mrs cntpct_el0 → host gate (gate address taken from thread slot KGATE; once in C, gates.tsv is looked up by return point)
+#   svc #n, mrs cntpct_el0 / cntvct_el0 / cntfrq_el0 → host gate (gate address taken from thread slot KGATE; once in C, gates.tsv is looked up by return point)
 #   sub sp, sp, xN      → xN rounded up to 16 first (Apple's kernel faults on a misaligned sp, Horizon does not; site_sp_align)
 #   sub sp, sp, #imm … add sp, sp, #imm with imm not a multiple of 16 → both rounded up to 16, when nothing between them reaches past the frame (odd_sp_frames)
 #   ldxr* / ldxp → ldaxr* / ldaxp, stxr* / stxp → stlxr* / stlxp: every exclusive access gets acquire or release ordering (exclusive_order_sites; the games ran on the Switch's Cortex-A57 without it, Apple cores need it)
@@ -526,7 +526,7 @@ def emit_gate_call():
     emit(MRS_TPIDRRO(30)); emit_slot_addr(30, 29, 'KGATE'); emit(LDRX(30, 30)); emit(LDRX(29, 31))
 
 def site_gate(ins, kind, arg):
-    """svc / mrs cntpct_el0 → host gate. The gate address is taken from thread slot KGATE; the gate looks up gates.tsv by return point (the address of this block's ldp)."""
+    """svc / mrs cntpct_el0 (cntvct_el0, cntfrq_el0) → host gate. The gate address is taken from thread slot KGATE; the gate looks up gates.tsv by return point (the address of this block's ldp)."""
     start = here()
     emit(STP_PRE(29, 30, 31, -16))
     emit_gate_call()
@@ -691,31 +691,14 @@ def site_retry_window(parts):
     return start
 
 # ---- Function boundaries (eh_frame_hdr) ----
-m0 = struct.unpack_from('<I', IMG, 4)[0]
-assert IMG[m0:m0 + 4] == b'MOD0'
-ehs = m0 + struct.unpack_from('<i', IMG, m0 + 16)[0]
-def rd(o, enc):
-    fmt, app = enc & 0xF, enc & 0x70
-    v, sz = {0x3: (struct.unpack_from('<I', IMG, o)[0], 4), 0xB: (struct.unpack_from('<i', IMG, o)[0], 4),
-             0x4: (struct.unpack_from('<Q', IMG, o)[0], 8)}[fmt]
-    if app == 0x10: v += o
-    if app == 0x30: v += ehs
-    return v, sz
-_, penc, cenc, tenc = IMG[ehs:ehs + 4]
-o = ehs + 4
-_, s = rd(o, penc); o += s
-nfde, s = rd(o, cenc); o += s
-starts = set()
-for _ in range(nfde):
-    a, s = rd(o, tenc); o += s
-    _, s = rd(o, tenc); o += s
-    starts.add(a)
-starts = sorted(x for x in starts if x < TEXT_END)
+# The starts of the FDEs the eh_frame_hdr's table lists (nso_code.fde_table). A module built without unwind tables has none: sloperinaGZ's subsdk9 (GCC with
+# -fno-unwind-tables) has an empty eh_frame_hdr, whose bytes this script used to parse as a table all the same (KeyError on an encoding of 0). func_of then takes its text as one function
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import nso_code
+starts = sorted({a for a, _ in nso_code.fde_table(IMG) if a < TEXT_END})
 
 # ---- Linear scan to find all rewrite points (not relying on register read/write reports) ----
 # Data blocks in the text (nso_code.py: Absolum's main starts with 1.7 MB of them) are not code: words there that read as rewrite sites are left alone
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import nso_code
 DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_END, md)
 CODE_RANGES = list(zip([0] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_END]))
 
@@ -892,6 +875,9 @@ for o in (o for s, e in CODE_RANGES for o in range(s, e, 4)):
     if w & 0xFFFFFFE0 == 0xD53BD060: kinds[o] = ('tpidrro_r', None); continue
     if w & 0xFFFFFFE0 == 0xD53BE020: kinds[o] = ('cntpct', w & 31); continue
     if w & 0xFFFFFFE0 == 0xD53BE040: kinds[o] = ('cntvct', w & 31); continue
+    # mrs xN, cntfrq_el0: read raw it is the Mac's own counter rate (24 MHz on an M2 Pro), not that of the counter the cntpct gate reads (31.25 MHz, hle_os.c guest_tick_hz). Nintendo's
+    # SDK never reads it (nn::os::GetSystemTickFrequency is a constant; the game's modules have none); sloperinaGZ's subsdk9 does, and its timers ran 1.3 times too fast
+    if w & 0xFFFFFFE0 == 0xD53BE000: kinds[o] = ('cntfrq', w & 31); continue
     # mrs xN, ctr_el0 (cache type): the Apple kernel does not expose it to user mode (SIGILL); SDK 16's nn::os::FlushDataCache reads it for the cache line size
     if w & 0xFFFFFFE0 == 0xD53B0020: kinds[o] = ('ctr', w & 31); continue
     # sub sp, sp, xN (extended register, LSL #0): sp may end up misaligned, which Horizon allows and Apple's kernel does not (site_sp_align); with x18 it is an x18 site (site_sp)
@@ -904,10 +890,11 @@ def func_of(a):
     """The function holding a: from the FDE start at or before it to the next one. Code before the first FDE is one function as well, from the end of the data block before it (or the text's
     start) to the first FDE: FINAL FANTASY RESONANCE 1.0.1 main (Unreal Engine 5.6.1) has no unwind entry before main+0x6a75d4, and each of its sites there used to be a function of one
     instruction, so the byte jump table at main+0x219234 (adr x18; ldrb w0,[x17,x16]; add x18,x18,x0,lsl #2; br x18) was never seen. Of the 120 modules of 33 games on hand, only one other has x18
-    sites before its first FDE (DRAGON QUEST VII Reimagined main, 110 before +0xb310, none in an exclusive window or a br x18), so every other rewrite is byte-identical"""
+    sites before its first FDE (DRAGON QUEST VII Reimagined main, 110 before +0xb310, none in an exclusive window or a br x18), so every other rewrite is byte-identical.
+    A module with no FDE at all (sloperinaGZ's subsdk9) is the same case: its text, from the end of the data block before the site, is one function (analysed in pieces when long)"""
     i = bisect.bisect_right(starts, a) - 1
     if i >= 0: return (starts[i], starts[i + 1] if i + 1 < len(starts) else TEXT_END)
-    return (max((e for s, e in DATA_BLOCKS if e <= a), default=0), starts[0]) if starts else (a, a + 4)
+    return (max((e for s, e in DATA_BLOCKS if e <= a), default=0), starts[0] if starts else TEXT_END)
 done = set(); windows = []; jumps = {}; tabjumps = {}; tailcalls = set(); retries = []
 def tail_call_at_end(insl, j):
     """The br x18 is an indirect tail call, not a jump table: the last write of x18 before it is a plain pointer load and the br ends the function. Ace Attorney Investigations Collection
@@ -1292,7 +1279,7 @@ for a in sorted(kinds):
     elif k == 'tpidrro_r': st = site_sysreg_read(ins, 'KTLR'); stat(k)
     elif k == 'tpidr_w': st = site_tpidr_write(ins); stat(k)
     elif k == 'svc': st = site_gate(ins, 'svc', arg); stat(k)
-    elif k in ('cntpct', 'cntvct'): st = site_gate(ins, k, arg); stat(k)
+    elif k in ('cntpct', 'cntvct', 'cntfrq'): st = site_gate(ins, k, arg); stat(k)
     elif k == 'sp_align': st = site_sp_align(ins, arg); stat(k)
     elif k == 'ctr':   # a constant: DminLine = 4 (64-byte lines); movz xN, #4, lsl #16, in place, or into the slot K18 for x18
         if arg == 18: st = site_slot_copy(ins, 0xD2A00080 | 15, 'K18'); stat(k)

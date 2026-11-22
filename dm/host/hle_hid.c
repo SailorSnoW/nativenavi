@@ -587,6 +587,11 @@ HLE_FORCE("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadHandheldStateEiRKj", "handheld c
 HLE_FORCE("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyDualStateEiRKj", "dual Joy-Con states (not connected on the host)", int, h_hid_StatesJoyDual, NpadState *s, int n, const uint32_t *id) { return states(s, n, *id, STYLE_JOYDUAL); }
 HLE_FORCE("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyLeftStateEiRKj", "left Joy-Con states (not connected on the host)", int, h_hid_StatesJoyLeft, NpadState *s, int n, const uint32_t *id) { return states(s, n, *id, STYLE_JOYLEFT); }
 HLE_FORCE("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj", "right Joy-Con states (not connected on the host)", int, h_hid_StatesJoyRight, NpadState *s, int n, const uint32_t *id) { return states(s, n, *id, STYLE_JOYRIGHT); }
+// The sdk's detail readers, which its own public GetNpadStates would call and nothing of the game's does (the host answers the public ones): the practice tools read their input with
+// them (hle_practice.c), to see the buttons their wrappers of the game's public calls take out. (out count, states, count, id), the same states as the public calls
+HLE_ADDON("_ZN2nn3hid6detail13GetNpadStatesEPiPNS0_16NpadFullKeyStateEiRKj", "full-key controller states (practice tools)", void, h_hid_DetailFullKey, int *got, NpadState *s, int n, const uint32_t *id) { *got = states(s, n, *id, STYLE_FULLKEY); }
+HLE_ADDON("_ZN2nn3hid6detail13GetNpadStatesEPiPNS0_17NpadHandheldStateEiRKj", "handheld controller states (practice tools)", void, h_hid_DetailHandheld, int *got, NpadState *s, int n, const uint32_t *id) { *got = states(s, n, *id, STYLE_HANDHELD); }
+HLE_ADDON("_ZN2nn3hid6detail13GetNpadStatesEPiPNS0_16NpadJoyDualStateEiRKj", "dual Joy-Con states (practice tools)", void, h_hid_DetailJoyDual, int *got, NpadState *s, int n, const uint32_t *id) { *got = states(s, n, *id, STYLE_JOYDUAL); }
 HLE_FORCE("_ZN2nn3hid14DisconnectNpadERKj", "disconnect a controller; ignored by the host", void, h_hid_Disconnect, const uint32_t *id) { (void)id; }
 static uint32_t g_hold_type;
 HLE_FORCE("_ZN2nn3hid18SetNpadJoyHoldTypeENS0_15NpadJoyHoldTypeE", "Joy-Con hold orientation; the host only records it", void, h_hid_HoldType, int t) { g_hold_type = (uint32_t)t; }

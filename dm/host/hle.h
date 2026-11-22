@@ -48,7 +48,12 @@ typedef struct { const char *name; void *fn; const char *why; } hle_force_ent;
 #define HLE_STR(x) HLE_STR_(x)
 #define HLE_STR_(x) #x
 // Past 8 parameters the stub enters at dm_bigstack_enter_n with x17 = the bytes of stack arguments the caller passes: 8 per parameter past the eighth, rounded up to 16 (hle_bigstack.c copies them to the host stack)
-#define HLE_FORCE(mangled, why, ret, cname, ...)                                                   \
+#define HLE_FORCE(mangled, why, ret, cname, ...) HLE_FORCE_IN("swforce", mangled, why, ret, cname, __VA_ARGS__)
+// An add-on's takeover: bound only for the imports of an add-on module (loader.c, module_t addon: the practice tools' subsdk9, hle_practice.c), before the loaded modules' definitions as
+// HLE_FORCE is, and never for the game's own modules, whose load result stays what it is without the add-on. For SDK functions only an add-on calls (an SD card mount, the hid detail
+// readers the sdk's own public ones would call): an entry no loaded module references is not reported, since the game runs without the add-on
+#define HLE_ADDON(mangled, why, ret, cname, ...) HLE_FORCE_IN("swaddon", mangled, why, ret, cname, __VA_ARGS__)
+#define HLE_FORCE_IN(sect, mangled, why, ret, cname, ...)                                          \
     _Static_assert(HLE_NARG(__VA_ARGS__) <= 16, #cname ": more parameters than the big-stack entry carries over (hle.h)"); \
     static ret cname(__VA_ARGS__) __attribute__((used));                                          \
     extern const char cname##_bs[];                                                               \
@@ -56,7 +61,7 @@ typedef struct { const char *name; void *fn; const char *why; } hle_force_ent;
             "    adrp x16, _" #cname "@PAGE\n    add x16, x16, _" #cname "@PAGEOFF\n"              \
             ".if " HLE_STR(HLE_NARG(__VA_ARGS__)) " > 8\n    mov x17, #(((" HLE_STR(HLE_NARG(__VA_ARGS__)) " - 8) * 8 + 15) & ~15)\n" \
             "    b _dm_bigstack_enter_n\n.else\n    b _dm_bigstack_enter\n.endif\n");           \
-    DM_REGISTER("swforce", hle_force_ent, hle_force_##cname, {mangled, (void *)(uintptr_t)cname##_bs, why}); \
+    DM_REGISTER(sect, hle_force_ent, hle_force_##cname, {mangled, (void *)(uintptr_t)cname##_bs, why}); \
     static ret cname(__VA_ARGS__)
 // Same as above, but the implementation runs on the caller's stack. Only for a take-over that runs the game's own code (an NRO's init and fini, a JIT plugin): that code's stack
 // use is the game's, sized for the thread's own stack (which can be larger than the 512 KB host stack), and it may switch stacks itself (a coroutine), which would reuse the

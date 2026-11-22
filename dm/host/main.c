@@ -113,7 +113,8 @@ static void host_load(int argc, char **argv) {
     }
     { void dm_term_install(void); dm_term_install(); }   // SIGTERM graceful exit (hle_lifecycle.c)
     { void crash_set_dump_hook(void (*)(void)); void svc_thread_dump(void); crash_set_dump_hook(svc_thread_dump); }   // Dump guest thread state on a crash
-    const char *names[argc + DM_GAME_NMOD]; int n = 0;
+    const char *names[argc + DM_GAME_NMOD + 1], *dirs[argc + DM_GAME_NMOD + 1]; int n = 0;   // + 1: the practice tools' module
+    memset(dirs, 0, sizeof dirs);   // NULL: a module of the modules folder
     int i = 2;
     for (; i < argc && strcmp(argv[i], "--"); i++) names[n++] = argv[i];
     if (i < argc && !strcmp(argv[i], "--")) for (i++; i < argc && g_argc < 63; i++) g_argv[g_argc++] = argv[i];
@@ -124,7 +125,9 @@ static void host_load(int argc, char **argv) {
     }
     if (!n) n = profile_modules(argv[1], names);
     dm_mods_init();
-    load_modules(argv[1], names, n);
+    { int dm_practice_modules(const char *, const char **, const char **, int); n = dm_practice_modules(argv[1], names, dirs, n); }   // DM_PRACTICE=1 (hle_practice.c)
+    load_modules(argv[1], names, dirs, n);
+    { void dm_practice_check(void); dm_practice_check(); }
     dm_mods_report_unmatched();
     dm_mods_check_done();
     dm_sdk_major();   // logs the SDK version (loader.c)
