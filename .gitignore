@@ -11,5 +11,6 @@ dm/games/*/cb_extent.tsv
 /.venv/
 /result
 /result-*
-/.envrc
+# .envrc is committed (the flake's default shell); a checkout's own additions go in .envrc.local, which it sources
+/.envrc.local
 /.direnv/

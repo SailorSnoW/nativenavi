@@ -120,6 +120,8 @@ Python standard library; LZ4 is loaded when decoding NSO files.
 
 `tools.txt` lists the packages the tools import. The coverage and lint shells install it beside their own list, as CI's jobs do, so the tests and pyright see the same versions as the default shell. CI installs these lists on Python 3.14 (`setup-python`), and the same Rust through rustup.
 
+With direnv, `.envrc` loads the default shell in every shell that enters the checkout. nix-direnv caches that shell. Run `direnv allow` once, after reading the file. A checkout's own additions go in `.envrc.local`, which `.envrc` sources and git ignores. For one command, use `nix develop -c <command>`, or `nix develop .#lint -c python3 dm/tools/lint_python.py`.
+
 Outside a shell, a command takes Apple's `/usr/bin/python3` (3.9.6 with Xcode 27.2). The graphics tests' Python steps then stop at a `TypeError` on `str | None`: that is the interpreter, not the code.
 
 ## Continuous integration

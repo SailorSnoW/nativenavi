@@ -37,6 +37,13 @@ class Flake(unittest.TestCase):
         self.assertTrue(installs, 'no workflow installs a requirement list')
         for files in installs: self.assertIn(files, set(shells.values()), f'a workflow installs {sorted(files)}, which no shell of flake.nix installs together')
 
+    def test_envrc_loads_the_flake(self):   # direnv: the default shell, reloaded when a file it reads changes
+        envrc = (REPO / '.envrc').read_text()
+        self.assertRegex(envrc, r'(?m)^use flake$')
+        for f in ('dm/nix/shell_hook.sh', 'dm/host/rust/rust-toolchain.toml', '.github/requirements/tools.txt'):
+            self.assertIn(f, envrc, f'.envrc does not watch {f}, which the default shell reads')
+            self.assertTrue((REPO / f).is_file(), f)
+
     def test_fuzz_shell_installs_the_documented_atheris(self):
         self.assertRegex((REPO / '.github/requirements/fuzz.txt').read_text(), r'(?m)^atheris==')
         self.assertIn('NXNATIVE_PIP_SKIP = "atheris"', self.flake)
