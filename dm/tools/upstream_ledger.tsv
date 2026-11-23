@@ -46,14 +46,21 @@ fa59a0a79086	2026-11-22	skip	-	gfx/nvn: resolve mismatched-size MSAA Downsample 
 184847c51117	2026-11-23	skip	-	host/gates: grow the dispatch index during module preload (PR #3121)	the game has 182 gates, the table 8,192
 1a1d512475df	2026-11-23	skip	-	game: port BRAVELY DEFAULT II 1.0.0	another game (BRAVELY DEFAULT II)
 1ed3e12a6c7b	2026-11-23	skip	-	chain/atomics: translate RED.ADD.F16x2, the half-pair atomic add (PR #3200)	RED.ADD.F16x2: none of the game's shaders use it
+24346dac37b8	2026-11-23	skip	-	games/01008CB0156BC000: target 60 fps in Trails into Reverie	another game (Trails into Reverie)
 36c09285632e	2026-11-23	ported	276d0bc	host/haptics: drive Switch Pro Controllers through their HD rumble report (PR #2607)	Pro Controller HD rumble report; untested on hardware here
 388befdf6c21	2026-11-23	skip	-	ios/rotation: add Rotation setting (DM_ROTATION) to launcher and in-game menu	iOS rotation
 38a787a07aa1	2026-11-23	skip	-	host/save-sync: ask before sending over a missing cloud save (PR #3197)	iCloud save sync (removed)
+3a2a62f705ed	2026-11-23	ported	361cf68	gfx/nvn: clear relaxed draw-pass barrier state on NVN queue switch	a draw pass after another NVN queue's takes the full barrier (draw_barriers game, several queues here)
 3c4e06aa2f6b	2026-11-23	skip	-	game: port Ultra Street Fighter II 1.1.1	another game (Street Fighter II)
+3cf75061ced4	2026-11-23	ported	129f584	gfx/dmsh: specialize the blend fix-up away when both blend words are 0 (PR #3176)	pipelines whose blend and rounding words are both 0 drop the guard (dm_blend_off); chain cfa56b0a15ed, the app must be rebuilt; no difference shown on the headless route
+3d186f2b834b	2026-11-23	ported	2b2dbc4	nvn/present: put a retried display link on probation	a retried display link silent past 4 refreshes goes back to the rescue at once; not exercised headless
 3dd1f7a65525	2026-11-23	ported	6776527	gfx/nvn: keep CPU_NO_ACCESS texture pools out of gmem_map and chunk from 256 MB	CPU_NO_ACCESS render-target pools out of gmem_map, chunks from 256 MB (265 MB less resident here)
 3f852b8cb718	2026-11-23	skip	-	ci/coverage: install SPIRV-Tools for Vulkan tests	Vulkan CI
+54c602f25def	2026-11-23	skip	-	game: BRAVELY DEFAULT II defaults to 60 fps	another game (BRAVELY DEFAULT II)
 58272b4a1d27	2026-11-23	skip	-	ci/lint: fix FFT replay and matcher test typing	another game's lint fixes
 5e098c8c2422	2026-11-23	skip	-	rewriter/fft: match job-pool wake-up stub across updates	another game (FINAL FANTASY TACTICS)
+5fc927d5ed2d	2026-11-23	skip	-	nvn/fstep: 40 fps in ticks of 1/120 s (Ocarina of Time)	a 40 fps mode on 120 Hz screens: below the game's 60, not a goal; its tick unit takes state +0x38, the measured frame time here
+610baa4dcde5	2026-11-23	skip	-	gfx/shaders: build mesh libraries for every shader variation's geometry pair (PR #3191)	geometry-shader variation pairs: the game has no geometry shaders and the geometry stage (dmsh_mesh.py) was removed
 65dfeb337877	2026-11-23	skip	-	rewriter/layout: preserve read-only jump table offsets	follows 17454fc3's relayout
 6ef18a1fd706	2026-11-23	ported	672d70a	nvn/fstep: ignore pauses and window switches for hold steps and payback (PR #3174)	stalls and named pauses in the frame step; also skips the measured frame time across a pause
 7ff0aef4e202	2026-11-23	ported	6835337	gfx/nvn: publish coherent presentation-time and display-link history snapshots (PR #2194)	presentation history behind a lock
@@ -71,6 +78,8 @@ b3e0d8c5275e	2026-11-23	skip	-	packing/uepak: use raw size for single-block Unre
 c12000da28ed	2026-11-23	ported	1f4201a	games/ocarina: scale dynamic-resolution threshold to target fps (PR #1954)	merged with eccf3e24: threshold = min(game x 60 / target, 5000 / target)
 c36551c390f5	2026-11-23	ported	b644990	host/front_mac: guard fullscreen mode switches against re-entry and bounces, and settle before display link	fullscreen mode switch re-entry guard, bounces, link waits for the screen; g_screen_id replaced by the NSScreen's number
 d08d7da62390	2026-11-23	ported	4df7cc9	gfx/nvn: trim on memory pressure and evict idle spares and uploaded textures	memory pressure trims (critical on the Mac), idle spares and uploads; iOS branches out; fixed: view cache entries taken by texture address, t_pkg_evict waited one submission too early
+dbefe889cd1f	2026-11-23	skip	-	games/0400486024DEC000: update sead::PerspectiveProjection in place for Vert+ screen shape	builds on the screen-shape hooks of 47578ded (Vert+ for taller screens), which this tree does not have: the game keeps its 16:9 framing
+dc75d1fc8193	2026-11-23	no-op	-	host/hid: fix handle metadata and bring up Trails into Reverie	the game asks once, npad 0 FullKey (DM_RUMBLE_LOG): the keyboard keeps that style and the haptics sink is installed before the guest thread (front_mac.m); it never calls GetVibrationDeviceInfo
 e3f2d21fd9c4	2026-11-23	ported	d267381,1fbafb0	chain/shader_lib: clean up partial outputs and stop cleanly on a full drive (PR #2610)	shader_lib / shader_cache cleanup, then dmsh_build.py's full-drive stop (chain dd154ebc7bd0)
 e531be818c03	2026-11-23	ported	533596c	tools/regress: run each revision's pso_offline.py in its own process (PR #3190)	regress.py runs each revision's pso_offline.py in its own process; the Vulkan test beside it left out
 ef393b7ead46	2026-11-23	partial	bfbc68e	games/pragmata: reserve a 40 GiB iOS alias region and note the entitlement on failure	the reserve error's size and errno only; the iOS alias region of another game not taken
