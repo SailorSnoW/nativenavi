@@ -10,9 +10,13 @@
 #   other Mac shader libraries, shmap=<file> another shader map (with the c1_full.tsv / cb_extent.tsv of those libraries beside it), patched=<folder> other rewritten modules,
 #   pso=<folder> another pipeline archive); without one, a single variant 'base'. --runs N: each variant N times, in turn (default 2).
 #   --fps: DM_FPS_TARGET (with the display link at that rate) for every variant; --env KEY=VALUE for every variant. --out <folder>: where the runs go
-#   (default <id>_build/bench/<date-time>): per run log.txt, frames.tsv and the screenshots, and results.json and results.md for all.
-# A route line in bench.tsv: name, DM_KEYS (seconds from host start), the window's start and length in seconds, a description. The window starts once the scene is loaded and the
-# pipelines of the first frames are built, so runs compare the scene rather than its loading. Load on the Mac moves the numbers: compare variants of one invocation, not invocations.
+#   (default <id>_build/bench/<date-time>): per run log.txt, frames.tsv and the screenshots, and results.json and results.md for all. --headless: no window (no display link,
+#   no WindowServer compositing, nothing on the screen), for measuring while the Mac is in use.
+# A route line in bench.tsv: name, DM_KEYS (seconds from host start, or @<file>: a DM_REC recording in the profile's folder), the window's start and length in seconds, or in
+# presented frames with an f before both (f1000, f1950), a description, and optionally switches the route runs with (KEY=VALUE separated by spaces: DM_DETCLOCK for a recording,
+# so each frame steps the game by one vsync whatever the Mac's speed and the variants see the same frames). The window starts once the scene is loaded and the pipelines of the
+# first frames are built, so runs compare the scene rather than its loading. A frame route ends once the frame after its window and its screenshot are in, or at --timeout.
+# Load on the Mac moves the numbers: compare variants of one invocation, not invocations.
 import argparse, datetime, json, math, os, re, shutil, signal, statistics, subprocess, sys, time
 from pathlib import Path
 
@@ -38,7 +42,15 @@ def routes(gid):
         if not ln.strip() or ln.startswith('#'): continue
         c = ln.split('\t')
         if len(c) < 4: fail(f'{f}: a route line needs name, keys, window start and window length: {ln!r}')
-        out[c[0]] = {'keys': c[1], 'from': float(c[2]), 'secs': float(c[3]), 'about': c[4] if len(c) > 4 else ''}
+        by_frame = c[2].startswith('f')
+        if by_frame != c[3].startswith('f'): fail(f'{f}: the window\'s start and length are both seconds or both frames (f<n>): {ln!r}')
+        keys = c[1]
+        if keys.startswith('@'):   # a recording beside bench.tsv, played from its absolute path (DM_KEYS=@<file>)
+            kf = f.parent / keys[1:]
+            if not kf.is_file(): fail(f'{f}: route {c[0]!r}: no keys file {kf}')
+            keys = '@' + str(kf)
+        env = dict(kv.split('=', 1) for kv in c[5].split()) if len(c) > 5 and c[5].strip() else {}
+        out[c[0]] = {'keys': keys, 'from': float(c[2].lstrip('f')), 'secs': float(c[3].lstrip('f')), 'about': c[4] if len(c) > 4 else '', 'frames': by_frame, 'env': env}
     return out
 
 
@@ -47,8 +59,8 @@ def pct(xs, p):   # nearest-rank percentile
     s = sorted(xs); return s[min(len(s) - 1, max(0, math.ceil(p / 100 * len(s)) - 1))]
 
 
-def frames(tsv, t0, t1):
-    """The per-frame rows of one run (frame / @name / value), the frames whose @t_s lies in [t0, t1): frame time, on-screen interval, GPU time"""
+def window_rows(tsv, t0, t1, by_frame=False):
+    """The per-frame rows of one run (frame / @name / value) in the window: the frames whose @t_s lies in [t0, t1), or with by_frame those numbered in [t0, t1)"""
     rows = {}
     with open(tsv, errors='replace') as fh:
         for ln in fh:
@@ -56,7 +68,12 @@ def frames(tsv, t0, t1):
             if len(c) != 3 or not c[1].startswith('@'): continue
             try: rows.setdefault(int(c[0]), {})[c[1]] = float(c[2])
             except ValueError: continue
-    sel = [r for f, r in sorted(rows.items()) if '@t_s' in r and t0 <= r['@t_s'] < t1]
+    return [r for f, r in sorted(rows.items()) if '@t_s' in r and t0 <= (f if by_frame else r['@t_s']) < t1]
+
+
+def frames(tsv, t0, t1, by_frame=False):
+    """The window's frame times, on-screen intervals and GPU times, the frames dropped and the frames in it (window_rows)"""
+    sel = window_rows(tsv, t0, t1, by_frame)
     ft = [r['@frame_ms'] for r in sel if r.get('@frame_ms', 0) > 0]
     shown = [r['@presented_ms'] for r in sel if r.get('@presented_ms', 0) > 0]
     gpu = [r['@gpu_ms'] for r in sel if r.get('@gpu_ms', -1) >= 0]
@@ -73,6 +90,29 @@ def summary(ft, shown, gpu, dropped, n, secs, budget):
     return d
 
 
+def means(sel):
+    """Means of the window, steadier than the percentiles for a change of a few percent: frame time, GPU time (the command buffers summed), the GPU's real span (first start
+    to last end, which overlapping command buffers do not inflate) at p50, the CPU the submission took, passes and draws"""
+    def mean(k, ok=lambda x: x >= 0):
+        xs = [r[k] for r in sel if k in r and ok(r[k])]
+        return round(statistics.fmean(xs), 2) if xs else None
+    span = [r['@gpu_end_ms'] - r['@gpu_beg_ms'] for r in sel if r.get('@gpu_end_ms', 0) > r.get('@gpu_beg_ms', 0) > 0]
+    sp = pct(span, 50)
+    return {'frame_mean': mean('@frame_ms', lambda x: x > 0), 'gpu_mean': mean('@gpu_ms'), 'span_p50': round(sp, 2) if sp is not None else None,
+            'sub_cpu_mean': mean('@sub_cpu_ms'), 'passes': mean('@passes'), 'draws': mean('@draws')}
+
+
+def last_frame(tsv):   # the newest frame number in a growing DM_NVN_TSV, from its tail
+    try:
+        with open(tsv, 'rb') as fh:
+            fh.seek(0, 2); fh.seek(max(0, fh.tell() - 4096)); lines = fh.read().decode(errors='replace').splitlines()
+    except OSError: return -1
+    for ln in reversed(lines[1:] or lines):
+        c = ln.split('\t')
+        if len(c) == 3 and c[0].isdigit(): return int(c[0])
+    return -1
+
+
 def run_one(a, gid, build, var, route, out, lock):
     build, out = build.resolve(), out.expanduser().resolve()
     var = {k: str(Path(v).expanduser().resolve()) if k in ('host', 'patched', 'msl', 'shmap') else v for k, v in var.items()}
@@ -86,8 +126,12 @@ def run_one(a, gid, build, var, route, out, lock):
     out.mkdir(parents=True, exist_ok=True); save, temp = out / 'save', out / 'temp'
     shutil.rmtree(save, ignore_errors=True); shutil.copytree(a.save, save); temp.mkdir(exist_ok=True)
     env.update(DM_ROOT=str(build), DM_ROMFS=str(romfs), DM_SAVE=str(save), DM_TEMP=str(temp), DM_MSL_DIR=str(var.get('msl') or build / 'shader/cache'),
-               DM_FONT_DIR=str(build / 'font'), DM_NVN_SHMAP=str(var.get('shmap') or prof / 'shader_map.tsv'), DM_WINDOW='1', DM_AUDIO='0', DM_KEYS=route['keys'],
+               DM_FONT_DIR=str(build / 'font'), DM_NVN_SHMAP=str(var.get('shmap') or prof / 'shader_map.tsv'), DM_AUDIO='0', DM_KEYS=route['keys'],
                DM_NVN_TSV=str(out / 'frames.tsv'), DM_NVN_TSV_CALLS='0', DM_CTL=str(out / 'ctl'), DM_METAL_HUD='0' if a.no_hud else '1')
+    headless = getattr(a, 'headless', False)
+    if headless: env.pop('DM_WINDOW', None); env['DM_METAL_HUD'] = '0'
+    else: env['DM_WINDOW'] = '1'
+    env.update(route.get('env') or {})   # the route's own switches (a recording's DM_DETCLOCK); --env and the variants come after them
     if (build / 'pso/mac').is_dir(): env.setdefault('DM_PSO_BUNDLE', str(build / 'pso/mac'))   # the offline pipeline archive the Mac app bundles (launcher.c sets it there); without it an NVN game rebuilds every base before its first frame
     if (build / 'aoc').is_dir(): env['DM_AOC_DIR'] = str(build / 'aoc')
     archive = var.get('pso') or a.pso_archive
@@ -98,10 +142,15 @@ def run_one(a, gid, build, var, route, out, lock):
     for k, v in var.items():
         if k not in ('host', 'msl', 'shmap', 'patched', 'pso'): env[k] = v
     (out / 'ctl').write_text('')
+    by_frame = route.get('frames', False)
     end = route['from'] + route['secs'] + 2
     # Readback/PNG capture can stall a frame and change adaptive pacing. Keep the
     # default visual proof after the timing window, before the two-second exit tail.
-    shots = sorted(a.shots) if a.shots else [route['from'] + route['secs'] + 0.5]
+    shots = sorted(a.shots) if a.shots else [route['from'] + route['secs'] + (20 if by_frame else 0.5)]
+    if by_frame:   # shots at presented frames (DM_NVN_SHOT), the same frames in every run; the run ends once the last one is written
+        env['DM_NVN_SHOT'] = ','.join(str(int(f)) for f in shots) + f':{out}/shot_f%d.png'
+        last_shot, end_frame, shots = int(shots[-1]), int(max(shots[-1], route['from'] + route['secs'])), []
+        end = getattr(a, 'timeout', None) or 600
     p = None
     if lock: wait_lock(lock)
     try:
@@ -109,6 +158,7 @@ def run_one(a, gid, build, var, route, out, lock):
             p = subprocess.Popen([str(host), str(patched)], cwd=out, env=env, stdout=log, stderr=subprocess.STDOUT)
         t0 = time.monotonic()
         while time.monotonic() - t0 < end and p.poll() is None:
+            if by_frame and last_frame(out / 'frames.tsv') > end_frame and (out / f'shot_f{last_shot}.png').is_file(): break
             el = time.monotonic() - t0
             while shots and el >= shots[0]:
                 with open(out / 'ctl', 'a') as c: c.write(f'shot {out}/shot_{int(shots.pop(0))}s.png\n')
@@ -120,7 +170,15 @@ def run_one(a, gid, build, var, route, out, lock):
             except subprocess.TimeoutExpired: p.kill(); p.wait()
         if lock: lock.unlink(missing_ok=True)
     budget = 1000.0 / (a.fps or 60)
-    s = summary(*frames(out / 'frames.tsv', route['from'], route['from'] + route['secs']), route['secs'], budget) if (out / 'frames.tsv').is_file() else {'frames': 0}
+    s = {'frames': 0}
+    if (out / 'frames.tsv').is_file():
+        sel = window_rows(out / 'frames.tsv', route['from'], route['from'] + route['secs'], by_frame)
+        secs = route['secs']
+        if by_frame:   # the window's wall time: from the first frame's start to the last one's end
+            secs = (sel[-1]['@t_s'] - sel[0]['@t_s'] + sel[-1].get('@frame_ms', 0) / 1000) if len(sel) > 1 else 0
+            if len(sel) < route['secs']: print(f'  [RED] the run stopped before the window\'s end: {len(sel)} of {route["secs"]:g} frames (see {out / "log.txt"})', flush=True)
+        s = summary(*frames(out / 'frames.tsv', route['from'], route['from'] + route['secs'], by_frame), secs, budget)
+        s.update(means(sel))
     log_text = (out / 'log.txt').read_text(errors='replace')
     m = re.findall(r'frame step: game time [\d.]+ s in [\d.]+ s \(([\d.]+) of real time\)', log_text)
     if m: s['game_speed'] = float(m[-1])
@@ -177,8 +235,10 @@ def main():
     ap.add_argument('--env', action='append', default=[], help='KEY=VALUE for every variant (repeatable)')
     ap.add_argument('--pso-archive', help='DM_PSO_ARCHIVE for every variant (the pipeline archive; default the host\'s own)')
     ap.add_argument('--lock', default='', help='a lock file to hold while a game runs, shared with other measuring runs on this Mac')
-    ap.add_argument('--shots', type=lambda v: [float(x) for x in v.split(',')], help='screenshot times in seconds from host start, comma-separated (default: after the measurement window; in-window captures perturb timing)')
+    ap.add_argument('--shots', type=lambda v: [float(x.lstrip('f')) for x in v.split(',')], help='screenshot times in seconds from host start, or presented frames for a frame route, comma-separated (default: after the measurement window; in-window captures perturb timing)')
     ap.add_argument('--no-hud', action='store_true', help='no Metal performance HUD')
+    ap.add_argument('--headless', action='store_true', help='no window: no display link or compositing, nothing on the screen')
+    ap.add_argument('--timeout', type=float, default=600, help='seconds a run of a frame route may take before it is stopped (default 600)')
     ap.add_argument('--out', help='the output folder (default <id>_build/bench/<date-time>)')
     a = ap.parse_args()
     build = Path(a.build).expanduser().resolve()
@@ -197,15 +257,17 @@ def main():
         variants[label] = dict(kv.split('=', 1) for kv in kvs.split(',') if kv)
     out = Path(a.out).expanduser().resolve() if a.out else build / 'bench' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     lock = Path(a.lock) if a.lock else None
-    print(f'{gid}, route {a.route!r} ({route["about"]}): window {route["from"]:g}–{route["from"] + route["secs"]:g} s; {len(variants)} variant(s) × {a.runs} run(s) → {out}', flush=True)
+    unit = 'frames' if route.get('frames') else 's'
+    print(f'{gid}, route {a.route!r} ({route["about"]}): window {route["from"]:g}–{route["from"] + route["secs"]:g} {unit}; {len(variants)} variant(s) × {a.runs} run(s) → {out}', flush=True)
     results = {k: [] for k in variants}
     for i in range(a.runs):
         for label, var in variants.items():
             d = out / f'{label}-{i + 1}'
             s = run_one(a, gid, build, var, route, d, lock); results[label].append(s)
-            print(f'  {label} run {i + 1}: ' + (f'{s["fps"]} fps, frame p50 {s["frame_p50"]} / p99 {s["frame_p99"]} / max {s["frame_max"]} ms, GPU p50 {s["gpu_p50"]} ms' if s.get('frames') else f'no frames (see {d / "log.txt"})'), flush=True)
-    keys = ['fps', 'frame_p50', 'frame_p95', 'frame_p99', 'frame_max', 'shown_p99', 'shown_max', 'dropped', 'over_budget', 'gpu_p50', 'gpu_p95', 'game_speed', 'red_lines']
-    md = (f'{gid}, route `{a.route}` ({route["about"]}), window {route["secs"]:g} s, fps target {a.fps or "profile"}; '
+            print(f'  {label} run {i + 1}: ' + (f'{s["fps"]} fps, frame p50 {s["frame_p50"]} / p99 {s["frame_p99"]} / max {s["frame_max"]} ms, GPU p50 {s["gpu_p50"]} / mean {s.get("gpu_mean")} ms, span p50 {s.get("span_p50")} ms' if s.get('frames') else f'no frames (see {d / "log.txt"})'), flush=True)
+    keys = ['fps', 'frame_p50', 'frame_p95', 'frame_p99', 'frame_max', 'frame_mean', 'shown_p99', 'shown_max', 'dropped', 'over_budget', 'gpu_p50', 'gpu_p95', 'gpu_mean', 'span_p50',
+            'sub_cpu_mean', 'passes', 'draws', 'game_speed', 'red_lines']
+    md = (f'{gid}, route `{a.route}` ({route["about"]}), window {route["secs"]:g} {unit}, fps target {a.fps or "profile"}; '
           f'medians over runs (range); times in ms; over_budget = frames longer than 1.5 frame times\n\n' + table(results, keys) + '\n')
     (out / 'results.md').write_text(md); (out / 'results.json').write_text(json.dumps({'game': gid, 'route': a.route, **{k: v for k, v in vars(a).items() if k != 'build' and k != 'save'}, 'save': str(a.save), 'variants': variants, 'results': results}, indent=1, default=str))
     print('\n' + md)

@@ -25,6 +25,32 @@ class Bench(unittest.TestCase):
             self.assertEqual(s['fps'], 100.0); self.assertEqual(s['frame_p50'], 10.0); self.assertEqual(s['frame_p99'], 10.0); self.assertEqual(s['frame_max'], 50.0)
             self.assertEqual(s['over_budget'], 1)   # only the 50 ms frame is longer than 1.5 × 8.33 ms
 
+    def test_frame_window_and_means(self):   # a frame route's window: frames by number, the means and the GPU's span from the same rows; last_frame reads a growing table's tail
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / 'frames.tsv'
+            rows = ['# kind: nvn-per-frame', 'frame\tname\tvalue']
+            for i in range(1, 301):   # frames 1..300 at 20 ms, the GPU busy 18 ms of a 19 ms span
+                t = i * 0.02
+                rows += [f'{i}\t@t_s\t{t:.3f}', f'{i}\t@frame_ms\t20.0', f'{i}\t@gpu_ms\t18.0', f'{i}\t@gpu_beg_ms\t{t * 1000:.3f}', f'{i}\t@gpu_end_ms\t{t * 1000 + 19:.3f}',
+                         f'{i}\t@passes\t{100 + i % 2}']
+            f.write_text('\n'.join(rows) + '\n')
+            sel = bench.window_rows(f, 100, 200, by_frame=True)
+            self.assertEqual(len(sel), 100); self.assertEqual(sel[0]['@t_s'], 2.0)
+            self.assertEqual(len(bench.window_rows(f, 100, 200)), 0)   # by seconds nothing lies past 6 s
+            m = bench.means(sel)
+            self.assertEqual(m['gpu_mean'], 18.0); self.assertEqual(m['span_p50'], 19.0); self.assertEqual(m['passes'], 100.5); self.assertIsNone(m['sub_cpu_mean'])
+            self.assertEqual(bench.last_frame(f), 300); self.assertEqual(bench.last_frame(Path(d) / 'none.tsv'), -1)
+
+    def test_recording_route(self):   # a route whose keys are a recording beside bench.tsv, its window in frames and its own switches
+        with tempfile.TemporaryDirectory() as d:
+            gid = '0100000000000000'; prof = Path(d) / 'dm/games' / gid; prof.mkdir(parents=True); (prof / 'walk.keys').write_text('f10:A~f2,\n')
+            (prof / 'bench.tsv').write_text('# routes\nwalk\t@walk.keys\tf1000\tf500\ta walk\tDM_DETCLOCK=16666667 DM_FPS_HOLD=off\nold\t1:A\t5\t10\tseconds\n')
+            with mock.patch.object(bench, 'REPO', Path(d)): rs = bench.routes(gid)
+            w = rs['walk']
+            self.assertTrue(w['frames']); self.assertEqual((w['from'], w['secs']), (1000, 500)); self.assertEqual(w['env'], {'DM_DETCLOCK': '16666667', 'DM_FPS_HOLD': 'off'})
+            self.assertEqual(w['keys'], '@' + str(Path(d) / 'dm/games' / gid / 'walk.keys'))
+            self.assertFalse(rs['old']['frames']); self.assertEqual(rs['old']['env'], {})
+
     def test_percentile(self):
         xs = list(range(1, 101))
         self.assertEqual(bench.pct(xs, 50), 50); self.assertEqual(bench.pct(xs, 99), 99); self.assertEqual(bench.pct(xs, 100), 100); self.assertIsNone(bench.pct([], 50))
