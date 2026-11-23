@@ -710,6 +710,10 @@ static pthread_mutex_t g_deferred_mu = PTHREAD_MUTEX_INITIALIZER;
 // Previously only the former existed: when the view cache was invalidated, a texture that 'is still the current storage of some serial' was also removed from the residency set. Invalidation used to happen only when the base texture was really replaced, so it was never hit;
 // after the transparency chain's in-place composite swapped the storage of two textures, each of the two live textures was removed once this way, and afterwards they are used as attachments and sampled every frame as usual - the GPU accesses non-resident memory.
 static void defer_kick(void);
+// A reset finalizes thousands of pools at once (hle_nvn.c dm_gfx_reset), each of whose buffers is ready to release at once: one drain at the end instead of one per object, each of
+// which walked the whole queue the earlier ones had filled while the next object waited for its lock (4,488 pools in Kokiri Forest took 1.3-1.7 s, nearly all in that wait)
+static _Atomic int g_defer_batch;
+void mtl_defer_batch(int on) { atomic_store(&g_defer_batch, on); if (!on) defer_kick(); }
 // Most objects wait for the next submission's fence. A caller that knows no submission still to come can reach the object passes an earlier one (mtl_pool_del); a fence the GPU has
 // already passed is then drained at once (defer_kick), as no feedback handler is left to do it
 static void defer_obj_at(id obj, int keep_resident, uint64_t fence) {
@@ -720,7 +724,7 @@ static void defer_obj_at(id obj, int keep_resident, uint64_t fence) {
     [g_deferred addObject:d];
     pthread_mutex_unlock(&g_deferred_mu);
     // After the entry is in: a feedback handler stores g_done before it drains, so either its drain finds the entry or this load sees its fence
-    if (fence <= atomic_load(&g_done)) defer_kick();
+    if (fence <= atomic_load(&g_done) && !atomic_load(&g_defer_batch)) defer_kick();
 }
 static void defer_obj_release(id obj) { defer_obj_at(obj, 0, g_fence + 1); }
 static void defer_obj_unref(id obj) { defer_obj_at(obj, 1, g_fence + 1); }
@@ -20056,3 +20060,9 @@ void mem_census(const char *why) { @autoreleasepool {
 #include "nvn_capture.inc"   // DM_NVN_CAPTURE (one frame for dm/gfx/tests/nvn_replay)
 #include "nvn_ndve.inc"      // DM_NDVE_ENGINE (nn::ndve's movie network)
 #pragma clang attribute pop
+
+uint64_t mtl_present_tickets(void) { pthread_mutex_lock(&g_pq_mu); uint64_t n = g_pq_in; pthread_mutex_unlock(&g_pq_mu); return n; }   // the presents queued so far (hle_nvn.c g_present_base)
+// A reset (hle_nvn.c dm_gfx_reset), with g_sub_mu held, after every object of the game's has been finalized: the tables keyed by the game's addresses that no Finalize empties
+void mtl_reset_guest(void) {
+    rc_forget();   // counter reports, by guest address
+}

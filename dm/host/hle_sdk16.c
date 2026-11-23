@@ -434,3 +434,24 @@ HLE_FORCE("_ZN2nn4diag6detail10VAbortImplEPKcS3_S3_iPKNS_6ResultEPKNS_2os17UserE
     LOG("[diag] abort at %s: %s (%s:%d) message format %s", fn ? fn : "?", expr ? expr : "?", file ? file : "?", line, fmt ? fmt : "?");
     diag_abort(res ? *(const uint32_t *)res : 0, dm_bigstack_caller(__builtin_return_address(0)));   // VAbortImpl never returns to its caller
 }
+
+// A reset (hle_reset.c). The network clock task's event lives in host memory and the SDK made it: it goes with the game's kernel event. The NFC device goes back to its state before
+// nfp::Initialize, its application area written out first if the game changed it (as removing the tag does); the amiibo on the reader stays there. The vsync threads end once the
+// kernel's bindings are gone (vsync_tick), which dm_sdk16_reset_wait waits for, so that the new boot's binding gets a thread of its own and not a second one
+void dm_sdk16_reset(void) {
+    memset(g_ev_netclock, 0, sizeof g_ev_netclock);
+    pthread_mutex_lock(&g_nfp_mu);
+    if (g_tag.area_dirty) nfp_area_save();
+    g_tag.area_made = g_tag.area_open = g_tag.area_dirty = 0;
+    g_nfp_state = NFP_STATE_INIT;
+    pthread_mutex_unlock(&g_nfp_mu);
+}
+void dm_sdk16_reset_wait(void) {
+    uint64_t t0 = now_ns(); int n = 0;
+    for (;;) {
+        pthread_mutex_lock(&g_vs_mu); n = 0; for (vsync_event_t *v = g_vs_events; v; v = v->next) n++; pthread_mutex_unlock(&g_vs_mu);
+        if (!n || now_ns() - t0 > 200000000ull) break;
+        usleep(1000);
+    }
+    if (n) LOG("[RED] reset: %d vsync threads did not end within 200 ms", n);
+}

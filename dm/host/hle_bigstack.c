@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <sys/mman.h>
 #define DM_LOG_IMPL   // dm_log is defined here, not by dm.h's weak definition
 #include "dm.h"
@@ -30,6 +31,7 @@ static void bs_init(void) { if (pthread_key_create(&g_bs_key, bs_free)) die("big
 // sp inside the guest address block -> the top of this thread's host stack (16-byte aligned); otherwise 0 (no switch)
 uintptr_t dm_bigstack_top(uintptr_t sp);
 uintptr_t dm_bigstack_top(uintptr_t sp) {
+    if (__builtin_expect(atomic_load_explicit(&dm_reset_stop, memory_order_relaxed), 0)) dm_reset_entry(sp);   // a reset (hle_reset.c): a game thread may end at its entry into the host
     if (!dm_guest_as_contains(sp)) return 0;
     pthread_once(&g_bs_once, bs_init);
     uint8_t *top = pthread_getspecific(g_bs_key);

@@ -100,3 +100,11 @@ HLE_FORCE("_ZN2nn7account9CloseUserERKNS0_10UserHandleE", "close exactly this se
 HLE_FORCE("_ZN2nn7account12AsyncContext6CancelEv", "async context cancel; no request", Result, h_acc_AcCancel, void *self) { (void)self; return RES_OK; }
 HLE_FORCE("_ZN2nn7account12AsyncContextD1Ev", "async context destructor; no session to close", void, h_acc_AcDtor, void *self) { (void)self; }
 HLE_FORCE("_ZN2nn7account12AsyncContextaSEOS1_", "async context move assignment; the object holds no host state", void *, h_acc_AcMove, void *self, void *other) { (void)other; return self; }
+
+// A reset (hle_reset.c): a new process has no open user (ListOpenUsers would list the stopped game's); the session tokens keep counting
+void dm_account_reset(void) {
+    pthread_mutex_lock(&g_account_lock);
+    for (account_session *s = g_account_sessions, *n; s; s = n) { n = s->next; free(s); }
+    g_account_sessions = NULL;
+    pthread_mutex_unlock(&g_account_lock);
+}

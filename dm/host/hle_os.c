@@ -108,9 +108,11 @@ void guest_clock_read_wait(void) {
     dm_clock_reads++;
     if (!atomic_load(&g_gfz_wait) || atomic_load(&dm_host_work)) return;
     pthread_mutex_lock(&g_gfz_mu);
-    while (g_gfz_reasons & GFZ_WAIT_MASK) pthread_cond_wait(&g_gfz_cv, &g_gfz_mu);
+    while ((g_gfz_reasons & GFZ_WAIT_MASK) && !atomic_load(&dm_reset_stop)) pthread_cond_wait(&g_gfz_cv, &g_gfz_mu);   // a reset: the read goes on to its gate's end of the thread
     pthread_mutex_unlock(&g_gfz_mu);
 }
+int guest_clock_frozen_for(int reason) { pthread_mutex_lock(&g_gfz_mu); int on = g_gfz_reasons >> reason & 1; pthread_mutex_unlock(&g_gfz_mu); return on; }   // hle_reset.c: the prepare step (3) is under way
+void dm_clock_reset_wake(void) { pthread_mutex_lock(&g_gfz_mu); pthread_cond_broadcast(&g_gfz_cv); pthread_mutex_unlock(&g_gfz_mu); }   // hle_reset.c
 void guest_clock_freeze_for(int reason, int on) {
     pthread_mutex_lock(&g_gfz_mu);
     if (on) g_gfz_reasons |= 1u << reason; else g_gfz_reasons &= ~(1u << reason);
@@ -163,4 +165,13 @@ HLE_FORCE("getenv", "the game profile's game_env answers its names; the SDK's ow
     for (const char *const *p = game_env(); n && *p; p++) if (!strncmp(*p, name, n) && (*p)[n] == '=') return (char *)*p + n + 1;
     if (!orig && !(orig = guest_sym("getenv"))) return NULL;
     return orig(name);
+}
+
+// A reset (hle_reset.c), after the services have let their entries go: every key left is the stopped game's (its memory is about to go, and the new boot may put another object there)
+void dm_objmap_reset(void) {
+    pthread_mutex_lock(&g_om_lock);
+    unsigned n = 0; for (unsigned i = 0; i < OM_SIZE; i++) if (g_om[i].k) n++;
+    memset(g_om, 0, sizeof g_om);
+    pthread_mutex_unlock(&g_om_lock);
+    if (n) LOG("reset: %u host objects of the game's left in the side table, forgotten", n);
 }

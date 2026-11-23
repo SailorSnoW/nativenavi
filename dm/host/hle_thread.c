@@ -324,7 +324,10 @@ static void wake(thr_t *t, int64_t res) {
     wait_unlink(t); t->wkind = 0; t->woke = 1; t->wres = res; wake_queue(t);
     note_runnable(t);
 }
-// Suspend until woken or timed out (ns<0 infinite, 0 immediate timeout); returns wres or R_TIMEOUT.
+// A reset (hle_reset.c): whether the waiting thread t (the caller) can end at the gate it waits in, every frame below it the game's. A wait in guest code that host code called
+// (an HLE take-over's callback, the audio render thread inside the SDK) goes on as before: the host code above it may hold a lock, and its waker is still to come
+static int thr_reset_can_stop(thr_t *t) { const uint64_t *r = atomic_load(&t->svc_regs); return r && !t->host_owned && dm_reset_gate_can_end(r, t->handle == 0x1001 ? 2 : 1); }
+// Suspend until woken or timed out (ns<0 infinite, 0 immediate timeout); returns wres, R_TIMEOUT, or R_CANCELLED when a reset ends the wait.
 // Relative timeouts use host time even in replay: this wait may hold up the next present that advances the guest clock.
 static int64_t block(thr_t *t, int kind, int64_t ns) {
     t->wkind = kind; t->woke = 0; t->next = g_wait; g_wait = t; t->wseq = ++g_wseq;
@@ -334,6 +337,7 @@ static int64_t block(thr_t *t, int kind, int64_t ns) {
     if (ns > 0) { clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += ns / 1000000000; dl.tv_nsec += ns % 1000000000;
                   if (dl.tv_nsec >= 1000000000) { dl.tv_sec++; dl.tv_nsec -= 1000000000; } }
     while (!t->woke) {
+        if (atomic_load_explicit(&dm_reset_stop, memory_order_relaxed) && thr_reset_can_stop(t)) { wait_unlink(t); t->wkind = 0; return R_CANCELLED; }   // the gate ends the thread (hle_reset.c)
         int rc = g_cond_wait(&t->cv, ns > 0 ? &dl : NULL);
         if (rc == ETIMEDOUT && !t->woke) { wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
     }
@@ -407,8 +411,8 @@ static void *thread_main(void *p) {
     guest_gate_stack(1);   // the guest runs on its own stack from dm_thread_enter on: this pthread's stack below this frame is where its SVCs run
     // CloseHandle before StartThread ends the thread here (closed_unstarted): as on Horizon, closing the last handle of a thread that never ran destroys it.
     // Without this the pthread and its 1 MB stack waited for ever, and the object kept a slot of the thread limit (thr_limit_used counts it as not exited)
-    g_lock(); while (!t->started && !t->closed) g_cond_wait(&t->cv, NULL);
-    int run = t->started; if (run) t->entered = 1; g_unlock();
+    g_lock(); while (!t->started && !t->closed && !atomic_load(&dm_reset_stop)) g_cond_wait(&t->cv, NULL);
+    int run = t->started && !atomic_load(&dm_reset_stop); if (run) t->entered = 1; g_unlock();   // a reset ends a thread that has not run yet here
     if (!run) thread_exit(t);   // never reaches guest code; StartThread before the close still runs it
     { char nb[48], hn[64]; snprintf(hn, sizeof hn, "%#x %s", t->handle, thr_name(t, nb, sizeof nb)); pthread_setname_np(hn); }   // the guest's name (set before StartThread) for sample / Instruments
     dm_thread_enter(t->entry, t->arg, t->stack_top);   // Does not return: the guest must exit through ExitThread
@@ -442,6 +446,75 @@ static void thread_exit(thr_t *t) {
     pthread_exit(NULL);
 }
 void dm_thread_returned(void) { die("guest thread entry function returned (Horizon requires ExitThread)"); }
+// A reset (hle_reset.c). The calling thread: 0 not a guest thread, 1 a worker, 2 the main guest thread, 3 a guest thread of the host's own
+int dm_thread_reset_role(void) { thr_t *t = pthread_getspecific(g_keythr); return !t ? 0 : t->handle == 0x1001 ? 2 : t->host_owned ? 3 : 1; }   // 3: the host's own (dm_guest_thread_spawn)
+void dm_thread_reset_exit(void) { thread_exit(cur()); }   // at its gate, as ExitThread
+void dm_thread_reset_main_out(void) {   // the main guest thread at its gate: it leaves the table as an exited thread, and its pthread goes back to the boot loop
+    thr_t *t = cur();
+    t->exit_ns = now_ns();
+    g_lock(); t->exited = 1; hand_signal(t); wake_sync_waiters(t); pthread_setspecific(g_keythr, NULL); g_unlock();
+}
+// Every guest wait looks at dm_reset_stop again (block(), a created thread's wait for its start, handoff waits)
+void dm_thread_reset_wake(void) {
+    g_lock();
+    for (thr_t *t = g_all; t; t = t->all) { pthread_cond_broadcast(&t->cv); pthread_cond_broadcast(&t->pcv); if (t->hcv_init) pthread_cond_broadcast(&t->hcv); }
+    pthread_cond_broadcast(&g_hand_cv);
+    g_unlock();
+}
+// The guest threads a reset could not stop: name, what they wait on, and where they are, host frames included (dladdr), read with the thread suspended for a moment
+void dm_thread_reset_dump(void) {
+    g_lock();
+    for (thr_t *t = g_all; t; t = t->all) {
+        if (t->exited || !t->mport) continue;
+        char nb[48], line[2048]; int p = snprintf(line, sizeof line, "[dm] reset: thread %#x '%s' last svc %#x wait kind %d:", t->handle, thr_name(t, nb, sizeof nb), t->last_svc, t->wkind);
+        if (thread_suspend(t->mport) == KERN_SUCCESS) {
+            arm_thread_state64_t st; mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
+            if (thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &n) == KERN_SUCCESS) {
+                uint64_t fp = __darwin_arm_thread_state64_get_fp(st), pc = __darwin_arm_thread_state64_get_pc(st), lr = __darwin_arm_thread_state64_get_lr(st);
+                for (int k = 0; k < 40 && p < (int)sizeof line - 96; k++) {
+                    uint64_t a = k == 0 ? pc : k == 1 ? lr : 0;
+                    if (k >= 2) { uint64_t fr[2]; vm_size_t g = 0; if (!fp || vm_read_overwrite(mach_task_self(), fp, 16, (vm_address_t)fr, &g) || g != 16 || fr[0] <= fp) break; a = fr[1]; fp = fr[0]; }
+                    module_t *m = module_of((void *)a); Dl_info di;
+                    if (m) p += snprintf(line + p, sizeof line - p, " %s+%#llx", m->name, a - (uint64_t)m->base);
+                    else if (dladdr((void *)a, &di) && di.dli_sname) p += snprintf(line + p, sizeof line - p, " %s+%#lx", di.dli_sname, (unsigned long)(a - (uint64_t)di.dli_saddr));
+                    else p += snprintf(line + p, sizeof line - p, " %#llx", a);
+                }
+            }
+            thread_resume(t->mport);
+        }
+        fprintf(stderr, "%s\n", line);
+    }
+    g_unlock();
+}
+// A reset (hle_reset.c), once every guest thread has ended: the kernel's tables as a new process starts with them. The thread objects (the game closes no handle at a kill) and the
+// events go; thread IDs start again at the first (a new process's), while binding numbers keep counting (g_next_se_id): a host thread that signals a binding (the vsync event's,
+// hle_sdk16.c) ends once its binding is gone, which a number given again would hide
+void dm_thread_reset_tables(void) {
+    g_lock();
+    int nthr = 0, nev = 0;
+    for (thr_t *t = g_all, *n; t; t = n) {
+        n = t->all; nthr++;
+        while (atomic_load_explicit(&t->sig_pend, memory_order_acquire)) sched_yield();   // a wake signalled after its waker let G go
+        pthread_cond_destroy(&t->cv); pthread_cond_destroy(&t->pcv); if (t->hcv_init) pthread_cond_destroy(&t->hcv); free(t);
+    }
+    g_all = NULL; g_wait = NULL;
+    for (int i = 1; i < MAX_H; i++) {
+        if (g_h[i].type == O_EVENT_R || g_h[i].type == O_EVENT_W) { event_t *e = g_h[i].obj; if (--e->refs == 0) { free(e); nev++; } }
+        g_h[i].type = O_FREE; g_h[i].obj = NULL;
+    }
+    g_next_id = 0x51;
+    pthread_mutex_lock(&g_se_lock); int nse = g_nse; g_nse = 0; pthread_mutex_unlock(&g_se_lock);
+    g_unlock();
+    LOG("reset: kernel tables emptied (%d thread objects, %d events, %d system event bindings)", nthr, nev, nse);
+}
+// Guest threads not ended yet; *main_live: whether the main guest thread is one of them
+int dm_thread_reset_live(int *main_live) {
+    int n = 0; *main_live = 0;
+    g_lock();
+    for (thr_t *t = g_all; t; t = t->all) if (!t->exited) { n++; if (t->handle == 0x1001) *main_live = 1; }
+    g_unlock();
+    return n;
+}
 
 // IL2CPP's Boehm garbage collector stops the world: SetThreadActivity(handle, paused) on each thread, GetThreadContext3 to read registers for roots, scan the stack, then resume. Both used to be placeholders that reported success:
 // threads kept running and the context was empty, so the collector missed pointers held only in registers and freed objects still in use (finalizers releasing native resources with them). They now really stop, as on Horizon:
@@ -591,14 +664,18 @@ static void hitch_init(void) {
     pthread_t th; pthread_create(&th, NULL, hitch_main, (void *)e); pthread_detach(th);
     LOG("DM_HITCH_DUMP=%s: the guest threads are logged when no frame is presented for that many ms", e);
 }
-// Register the main thread and return its handle (passed to nnosInitialize as the main thread handle)
-uint32_t svc_thread_main_init(void) {
+// Register the main thread and return its handle (passed to nnosInitialize as the main thread handle). The process-wide part runs once; a reset's boot (hle_reset.c) registers the
+// main thread again, into tables dm_thread_reset_tables emptied, so it gets handle 0x1001 and the first thread ID again, as in a new process
+static void thread_once(void) {
     pthread_key_create(&g_keythr, NULL);
     qos_map_init();
     { const char *e = getenv("DM_PREEMPT"); g_core_preempt = e ? atoi(e) != 0 : DM_GAME_CORE_PREEMPT; }
     { const char *e = getenv("DM_WAKE_UNLOCKED"); if (e) g_wake_unlocked = atoi(e) != 0; }
     pause_install();
     hitch_init();
+}
+uint32_t svc_thread_main_init(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, thread_once);
     thr_t *t = calloc(1, sizeof *t);
     pthread_cond_init(&t->cv, NULL); pthread_cond_init(&t->pcv, NULL);
     // Its affinity is its ideal core alone, as Horizon creates every thread (Mesosphere KThread::Initialize); it was 7, which a same-core handoff now takes for a thread that can run elsewhere (dm_yield_to_core_peers)
@@ -1031,10 +1108,13 @@ void dm_thread_cpu(char *out, size_t n, double secs) {
 // Sleep until dl (host monotonic ns) on time: macOS nanosleep / mach_wait_until carry timer slack; measured, 33 ms sleeps take about 36.4 ms, 5 ms take 6.1 ms, 1 ms take 1.26 ms (the same at any QoS).
 // Metroid Dread's sound thread sleeps "33 ms minus this round's work" (main+0xf95b0), and on the host its period became 36.9 ms; cutscenes render a frame whenever the audio play position that thread updates moves, so they ran at about 27 fps (30 on the Switch).
 // Each step sleeps only 3/4 of the remaining time (the slack is at most about 25%, so it never oversleeps), looping until within 20 µs: a 33 ms sleep takes about 4 system calls with an error of tens of microseconds, and nothing spins
+// A reset (hle_reset.c) ends the sleep: steps are at most SLEEP_STEP_MAX, and each looks at dm_reset_stop (a sleep shorter than that is the same as before)
+#define SLEEP_STEP_MAX 100000000ull
 static void sleep_precise(uint64_t dl) {
-    for (int i = 0; i < 16; i++) {
-        uint64_t now = now_ns(); if (now + 20000 >= dl) return;
+    for (int i = 0; i < 16;) {
+        uint64_t now = now_ns(); if (now + 20000 >= dl || atomic_load_explicit(&dm_reset_stop, memory_order_relaxed)) return;
         uint64_t rem = dl - now, s = rem < 100000 ? rem : rem - rem / 4;
+        if (s > SLEEP_STEP_MAX) s = SLEEP_STEP_MAX; else i++;
         struct timespec ts = {(time_t)(s / 1000000000u), (long)(s % 1000000000u)}; nanosleep(&ts, 0);
     }
 }

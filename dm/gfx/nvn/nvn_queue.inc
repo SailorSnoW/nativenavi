@@ -128,6 +128,47 @@ static void nq_cost_end(nq_cost c) {
     atomic_fetch_add(&g_sub_instr,ins-c.instr); atomic_fetch_add(&g_cum_sub_instr,ins-c.instr);
     atomic_fetch_add(&g_cum_sub_cyc,cyc-c.cycles); atomic_fetch_add(&g_cum_sub_sys_ns,thr_sys_ns()-c.sys);
 }
+// A reset (hle_nvn.c dm_gfx_reset): the replay thread drops every job not replayed yet, at its next scan, as the end of a process drops what its queues hold: a wait on an event
+// or a sync that the stopped game was to signal would hold its queue for good. It is the replay thread's to do, as a node it took may still be on its way to g_sub_mu
+static int nq_drop_req, nq_drop_done;
+static void nq_start(void);
+static void nq_drop_all(void) {   // the replay thread, holding nq_mu; comes back holding it
+    nq_job *jobs = NULL; nq_node *pres = NULL; unsigned nj = 0;
+    for (nq_queue *q = nq_queues; q; q = q->next) {
+        for (nq_job *j = q->first, *jn; j; j = jn) {
+            jn = j->next; nj++;
+            for (nq_node *n = j->first, *nn; n; n = nn) {
+                nn = n->next;
+                if (n->kind == NQ_FENCE) nq_publish(n->receipt, q->physical);
+                if (n->receipt) nq_put(n->receipt);
+                free(n->signals); free(n->bytes);
+                if (n->kind == NQ_PRESENT) { n->next = pres; pres = n; } else free(n);   // its texture's pin goes below, outside nq_mu
+            }
+            j->first = j->last = NULL;
+            nq_publish(j->receipt, q->physical); nq_put(j->receipt);   // a present dropped has no ticket: its waiter goes on (nvn_queue_present_wait)
+            j->next = jobs; jobs = j;
+        }
+        q->first = q->last = NULL;
+    }
+    pthread_mutex_unlock(&nq_mu);
+    pthread_mutex_lock(&g_sub_mu); void *pool = objc_autoreleasePoolPush();
+    for (nq_job *j = jobs, *jn; j; j = jn) { jn = j->next; nq_job_free(j); }
+    for (nq_node *n = pres, *nn; n; n = nn) { nn = n->next; mtl_tex_unpin(n->texture.serial); free(n); }
+    objc_autoreleasePoolPop(pool); pthread_mutex_unlock(&g_sub_mu);
+    pthread_mutex_lock(&nq_mu);
+    if (nj) LOG("reset: %u queued NVN jobs dropped", nj);
+}
+void nvn_queue_reset_drop(void) {
+    pthread_once(&nq_once, nq_start);
+    pthread_mutex_lock(&nq_mu);
+    nq_drop_req = 1; nq_drop_done = 0; pthread_cond_broadcast(&nq_cv);
+    while (!nq_drop_done) pthread_cond_wait(&nq_cv, &nq_mu);
+    nq_drop_req = 0;
+    for (nq_event_write *w = nq_event_writes, *n; w; w = n) { n = w->next; free(w); }   // both keyed by the stopped game's event words
+    for (nq_event_src *e = nq_event_srcs, *n; e; e = n) { n = e->next; free(e); }
+    nq_event_writes = NULL; nq_event_srcs = NULL;
+    pthread_mutex_unlock(&nq_mu);
+}
 static void *nq_worker(void *unused) {
     (void)unused; pthread_setname_np("NVN queue replay");
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE,0);
@@ -137,6 +178,7 @@ static void *nq_worker(void *unused) {
         pthread_mutex_lock(&nq_mu); nq_queue *q=NULL; nq_node *n=NULL; nq_job *j=NULL;
         for(;;) {
         scan_again:;
+            if(nq_drop_req && !nq_drop_done) { nq_drop_all(); nq_drop_done=1; pthread_cond_broadcast(&nq_cv); }   // a reset (nvn_queue_reset_drop)
             if(nq_test_held) { pthread_cond_wait(&nq_cv,&nq_mu); continue; }
             int mapped_event_wait=0; nq_node *ahead=NULL;
             for(q=nq_queues;q;q=q->next) {

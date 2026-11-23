@@ -754,3 +754,20 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         regs[0] = 0; return 0;
     }
 }
+
+// A reset (hle_reset.c), once the game's threads have ended and nothing of the host's reads or maps its memory any more (graphics, audio and the video decoders let theirs go):
+// the guest address block as a new process starts with it. One fresh inaccessible mapping over the whole block at the same address (its parts and sizes stay), no heap, no
+// mapping, no alias page, no address region, no device-shared range
+void dm_guest_mem_reset(void) {
+    if (!g_as) return;
+    pthread_mutex_lock(&g_map_lock);
+    if (mmap(g_as, g_reserve, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == MAP_FAILED) die("reset: the guest address block could not be mapped again (errno %d)", errno);
+    size_t heap = atomic_exchange(&g_heap_cur, 0); int nmap = g_nmap; g_nmap = 0;
+    memset(g_alias_bits, 0, ((g_alias_cap >> 18) + 1) * sizeof *g_alias_bits); memset(g_alias_exposed, 0, (g_alias_cap / (size_t)getpagesize() / 64 + 1) * sizeof *g_alias_exposed);
+    atomic_store(&g_alias_hw, 0); int64_t alias = atomic_exchange(&g_alias_mapped, 0);
+    pthread_mutex_unlock(&g_map_lock);
+    pthread_mutex_lock(&g_dshare_mu); int nds = g_ndshare; g_ndshare = 0; pthread_mutex_unlock(&g_dshare_mu);
+    pthread_mutex_lock(&g_rgn_lock); g_nrgn = 0; pthread_mutex_unlock(&g_rgn_lock);
+    if (nds) LOG("[RED] reset: %d device-shared ranges were still registered (an NVN memory pool the graphics reset did not let go)", nds);
+    LOG("reset: guest memory given back (heap %.2f GB, %d mappings, alias region %.2f GB)", heap / 1073741824.0, nmap, alias / 1073741824.0);
+}

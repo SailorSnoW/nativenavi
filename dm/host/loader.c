@@ -548,6 +548,43 @@ void load_modules(const char *dir, const char **names, const char *const *dirs, 
                              tm / 1e6, tp / 1e6, tg / 1e6, tr / 1e6, (now_ns() - t0) / 1e6);
 }
 
+// A reset (hle_reset.c): each module's writable part as it was when the game first started (after relocation, the forced take-overs, the mods' patches and the frame step
+// settings), copied back before the game starts again, so its data and bss are a new process's. The code and patch areas are read-only and stay; the key page is read-only and
+// holds the same key numbers. Pages of zeros (bss) are not kept, only cleared again. The modules keep their addresses, so the gates, the forced imports and every guest function
+// the host looked up stay valid
+typedef struct { uint8_t *lo; size_t n; uint8_t **page; } mod_snap;   // page[i]: a copy of 16 KB page i, NULL for a page of zeros
+static mod_snap *g_snap; static size_t g_snap_bytes;
+static void mod_writable(const module_t *m, uint8_t **lo, size_t *n) {
+    uint64_t a = (m->text_end + 0x3FFF) & ~0x3FFFull, b = m->patch_off > 0 ? ((uint64_t)m->patch_off & ~0x3FFFull) : m->back_len ? m->back_off : m->size;
+    *lo = m->base + a; *n = b > a ? b - a : 0;
+}
+static int in_key_page(const module_t *m, const uint8_t *p) { return p >= m->base + m->key_page_off && p < m->base + m->key_page_off + m->key_page_size; }
+void loader_snapshot(void) {
+    static const uint8_t zero[0x4000];
+    if (!(g_snap = calloc((size_t)g_nmod, sizeof *g_snap))) die("module snapshot");
+    for (int i = 0; i < g_nmod; i++) {
+        mod_snap *s = &g_snap[i]; mod_writable(&g_mod[i], &s->lo, &s->n);
+        if (!(s->page = calloc(s->n / 0x4000 + 1, sizeof *s->page))) die("module snapshot");
+        for (size_t o = 0; o < s->n; o += 0x4000) {
+            uint8_t *p = s->lo + o;
+            if (in_key_page(&g_mod[i], p) || !memcmp(p, zero, 0x4000)) continue;
+            if (!(s->page[o / 0x4000] = malloc(0x4000))) die("module snapshot");
+            memcpy(s->page[o / 0x4000], p, 0x4000); g_snap_bytes += 0x4000;
+        }
+    }
+}
+void loader_reset(void) {
+    for (int i = 0; i < g_nmod; i++) {
+        mod_snap *s = &g_snap[i]; const module_t *m = &g_mod[i];
+        for (size_t o = 0; o < s->n; o += 0x4000) {
+            uint8_t *p = s->lo + o;
+            if (in_key_page(m, p)) continue;
+            if (mprotect(p, 0x4000, PROT_READ | PROT_WRITE)) die("reset: %s+%#lx cannot be made writable (errno %d)", m->name, (unsigned long)(p - m->base), errno);
+            if (s->page[o / 0x4000]) memcpy(p, s->page[o / 0x4000], 0x4000); else memset(p, 0, 0x4000);
+        }
+    }
+    LOG("reset: the modules' data and bss as at the first start (%.1f MB kept of it)", g_snap_bytes / 1048576.0);
+}
 // Plays the role of rtld's InitModules (rtld+0x830): call each module's DT_INIT. The order is reverse of the load list:
 // modules later in the list are the ones the earlier ones depend on, so the sdk module's DT_INIT, which constructs the
 // libc++ globals (std::cout and friends), runs before main's static initializers, which already write to them. Forward

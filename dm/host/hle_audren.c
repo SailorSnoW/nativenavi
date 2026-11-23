@@ -297,6 +297,16 @@ HLE_FORCE("_ZN2nn5audio18CloseAudioRendererENS0_19AudioRendererHandleE", "close 
     }
 }
 
+// A reset (hle_reset.c): each render thread leaves its loop as at Close (it checks open every round and every 10 ms while waiting for the output), closes its output and returns, and
+// the SDK's thread entry then ends it at ExitThread's gate. Its renderer goes with the game's memory; the game's own Close never comes
+void dm_audren_reset_stop(void) {
+    for (int i = 0; i < AR_MAX; i++) {
+        ar_t *a = &g_ar[i];
+        if (!a->handle[0] || !a->render_tt) continue;
+        pthread_mutex_lock(&a->cq_mu); atomic_store(&a->open, 0); pthread_cond_broadcast(&a->cq_cv); pthread_mutex_unlock(&a->cq_mu);
+    }
+}
+
 // A renderer at 32 kHz (DRAGON QUEST VII Reimagined: 160 samples per 5 ms frame) has its DeviceSink upsampled to the output's 48 kHz by the SDK's upsampler, which AudioRenderSystem::
 //   SetUpRenderResourceSet allocates only for the DSP (SDK 19: sdk+0x21eb6c, sample rate 0x7d00 and rendering device +0x48 == 0). With the host's CPU rendering there is no
 //   UpsamplerManager, and the sink's command generation (GenerateSinkCommands, sdk+0x225a80) called Allocate on null and crashed in its mutex. The takeover below answers "no upsampler"
@@ -494,4 +504,23 @@ HLE_FORCE("_ZN2nn5audio36ReleaseAudioOutputDeviceNotificationEPNS_2os11SystemEve
     static void (*destroy)(void *); if (!destroy) destroy = gsym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE");
     destroy(ev);
     atomic_store(&g_ad_notify, AD_FREE);
+}
+
+// A reset (hle_reset.c), once every guest thread has ended (the render threads among them, dm_audren_reset_stop) and before the game's memory goes: the renderers' host state as a new process has it. The SDK's
+// renderer and the render thread's ThreadType and stack were in the game's memory; the host's work buffers, thread records and the renderer events it lends the SDK are freed
+void dm_audren_reset(void) {
+    int n = 0;
+    pthread_mutex_lock(&g_ar_mu);
+    for (int i = 0; i < AR_MAX; i++) {
+        ar_t *a = &g_ar[i];
+        if (!a->handle[0]) continue;
+        free(objmap_del(a->handle[0])); free(a->render_tt);   // the host_thread record (hle_guestthread.c); its stack was the SDK's malloc
+        a->render_tt = NULL; a->handle[0] = a->handle[1] = NULL; a->sys = NULL; n++;
+    }
+    pthread_mutex_unlock(&g_ar_mu);
+    pthread_mutex_lock(&g_rev_mu); for (int i = 0; i < 4; i++) { g_rev[i].obj = NULL; memset(g_rev[i].ev, 0, sizeof g_rev[i].ev); } pthread_mutex_unlock(&g_rev_mu);
+    pthread_mutex_lock(&g_render_mu); g_scan = (dm_audren_scan)DM_AUDREN_SCAN_INIT; pthread_mutex_unlock(&g_render_mu);
+    atomic_store(&g_dev_vol, 1.0f); atomic_store(&g_dev_autotune, 0);
+    atomic_store(&g_ad_binding, 0); atomic_store(&g_ad_notify, AD_FREE);   // the device change notification the game acquired: a second Acquire would be refused (0x499)
+    LOG("reset: audio renderer: %d renderers forgotten", n);
 }

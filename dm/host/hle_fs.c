@@ -947,7 +947,11 @@ HLE_FORCE("_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", "fsp-srv → 
 }
 
 // ---------- Directories ----------
-typedef struct { DIR *d; char path[1024]; DirectoryEntry *snap; int64_t nsnap, psnap; int mode; } dirh_t;
+typedef struct dirh { DIR *d; char path[1024]; DirectoryEntry *snap; int64_t nsnap, psnap; int mode; struct dirh *prev, *next; } dirh_t;
+// The directories the game has open, for a reset (dm_fs_reset), which closes them as the end of a process does
+static dirh_t *g_dirs; static pthread_mutex_t g_dirs_mu = PTHREAD_MUTEX_INITIALIZER;
+static void dir_track(dirh_t *h) { pthread_mutex_lock(&g_dirs_mu); h->prev = NULL; h->next = g_dirs; if (g_dirs) g_dirs->prev = h; g_dirs = h; pthread_mutex_unlock(&g_dirs_mu); }
+static void dir_untrack(dirh_t *h) { pthread_mutex_lock(&g_dirs_mu); if (h->prev) h->prev->next = h->next; else if (g_dirs == h) g_dirs = h->next; if (h->next) h->next->prev = h->prev; pthread_mutex_unlock(&g_dirs_mu); }
 typedef struct { const char *name; size_t at; } name_at;
 static int name_at_cmp(const void *a, const void *b) {
     const name_at *x = a, *y = b; int c = strcmp(x->name, y->name);
@@ -1053,7 +1057,7 @@ HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → o
             memcpy(o->name, m->names + c->name, c->nlen < sizeof o->name ? c->nlen : sizeof o->name - 1);
             o->type = c->type ? ENT_FILE : ENT_DIR; o->size = c->type ? (int64_t)c->b : 0;
         }
-        *out = (uint64_t)h; return RES_OK;
+        dir_track(h); *out = (uint64_t)h; return RES_OK;
     }
     HP(path); DIR *d = opendir(hp);
     if (!d) return err_res("opendir", hp);
@@ -1065,7 +1069,7 @@ HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → o
         if (dir_snapshot(h, &g_mnt[i], c + 1)) { int err = errno; closedir(d); free(h); errno = err; return err_res("opendir", hp); }
         break;
     }
-    *out = (uint64_t)h; return RES_OK;
+    dir_track(h); *out = (uint64_t)h; return RES_OK;
 }
 HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", "fsp-srv → readdir(3)", Result, h_fs_ReadDirectory, int64_t *count, DirectoryEntry *ents, uint64_t hh, int64_t max) { dm_thread_service_request();
     SDK_HANDLE(hh, "_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", Result (*)(int64_t *, DirectoryEntry *, uint64_t, int64_t), RES_FAIL, count, ents, hh, max);
@@ -1094,7 +1098,32 @@ HLE_FORCE("_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", "fsp-srv → close
         return;
     }
     if (!hh) return;   // the game also closes after a failed open (handle 0): nothing to do in the original either
-    dirh_t *h = (dirh_t *)hh; if (h->d) closedir(h->d); free(h->snap); free(h);
+    dirh_t *h = (dirh_t *)hh; dir_untrack(h); if (h->d) closedir(h->d); free(h->snap); free(h);
+}
+// A reset (hle_reset.c), once the game's threads have ended: the file system as a new process finds it. Every file and directory the game had open is closed, and every mount
+// but the game's RomFS image goes: the next MountSaveData clears the work directory and clones it from the committed save again, so what the stopped game wrote and never
+// committed is lost, as on Horizon when an application is ended, and is never published. The RomFS image's mount stays (its index is the process's; the game's MountRom finds it
+// mounted already, which is harmless), as do the mods' RomFS overlays and the directory indexes
+void dm_fs_reset(void) {
+    pthread_once(&g_txn_lock_once, txn_locks_init);
+    PATH_LOCK(); pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < MAX_MOUNT; i++) pthread_rwlock_wrlock(&g_txn_lock[i]);   // no write or commit is under way (the game's threads are gone), and none starts meanwhile
+    int nf = 0, nd = 0, nm = 0, k = 0;
+    for (int fd = 0; fd < 65536; fd++) if (g_fmode[fd] || atomic_load(&g_ftxn[fd])) { close(fd); g_fmode[fd] = 0; atomic_store(&g_ftxn[fd], 0); nf++; }
+    pthread_mutex_lock(&g_dirs_mu);
+    for (dirh_t *h = g_dirs, *n; h; h = n) { n = h->next; if (h->d) closedir(h->d); free(h->snap); free(h); nd++; }
+    g_dirs = NULL;
+    pthread_mutex_unlock(&g_dirs_mu);
+    for (int i = 0; i < g_nmnt; i++) {
+        if (g_mnt[i].img) { if (k != i) g_mnt[k] = g_mnt[i]; k++; }
+        else nm++;
+    }
+    g_nmnt = k;
+    pthread_mutex_lock(&g_sdk_h_lock); memset(g_sdk_h, 0, sizeof g_sdk_h); atomic_store(&g_sdk_nh, 0); pthread_mutex_unlock(&g_sdk_h_lock);   // the SDK's own handles (its RAM disk) were in the game's memory
+    pthread_mutex_lock(&g_fslog_lock); for (int i = 0; i < 4096; i++) { free(g_fdpath[i]); g_fdpath[i] = NULL; } pthread_mutex_unlock(&g_fslog_lock);
+    for (int i = MAX_MOUNT - 1; i >= 0; i--) pthread_rwlock_unlock(&g_txn_lock[i]);
+    pthread_mutex_unlock(&g_lock);
+    LOG("reset: file system: %d files and %d directories closed, %d mounts dropped (saves and temporary storage mount again; what was not committed is lost)", nf, nd, nm);
 }
 
 // ---------- Overloads from newer SDKs (SDK 16: MountRom without a cache, ReadFile without the bytes-read output / with read options, directory entry count) ----------

@@ -209,14 +209,17 @@ void hid_keys_init(void) {
 //   Look at a screen, decide, press, look again: menus whose timing moves from run to run (loading) need no blind timed script
 static void imu_env_reread(void);   // below, at the IMU state
 static void script_player(int p);   // below, at the players
+// How far the file has been read: a start of the process again (a reset's fallback, hle_reset.c) goes on from there (DM_CTL_FROM), not from the reset line again
+static _Atomic long g_ctl_off;
+long dm_ctl_offset(void) { return atomic_load(&g_ctl_off); }
 static void *ctl_main(void *arg) {
-    const char *path = arg; long off = 0; char line[1100];
+    const char *path = arg; const char *from = getenv("DM_CTL_FROM"); long off = from ? atol(from) : 0; char line[1100];
     for (;;) {
         FILE *f = fopen(path, "r");
         if (f && !fseek(f, off, SEEK_SET)) {
             while (fgets(line, sizeof line, f)) {
                 size_t n = strlen(line); if (!n || line[n - 1] != '\n') break;   // a line still being written: read it next time
-                off += (long)n; line[--n] = 0; if (n && line[n - 1] == '\r') line[--n] = 0;
+                off += (long)n; atomic_store(&g_ctl_off, off); line[--n] = 0; if (n && line[n - 1] == '\r') line[--n] = 0;
                 if (!n || line[0] == '#') continue;
                 if (!strncmp(line, "mod-on ", 7) || !strncmp(line, "mod-off ", 8)) {
                     int on = line[5] == 'n'; const char *name = line + (on ? 7 : 8), *why = "no such mod";
@@ -227,6 +230,7 @@ static void *ctl_main(void *arg) {
                 if (!strncmp(line, "amiibo ", 7)) { int dm_amiibo_scan(const char *path); dm_amiibo_scan(line + 7); continue; }
                 if (!strcmp(line, "amiibo-remove")) { void dm_amiibo_remove(void); dm_amiibo_remove(); continue; }
                 if (!strcmp(line, "dump")) { crash_dump_now("DM_CTL dump"); continue; }
+                if (!strcmp(line, "reset")) { dm_reset_request("DM_CTL reset"); continue; }   // the game's reset, as ⌘R (hle_reset.c)
                 if (!strncmp(line, "atrace ", 7)) { void probe_atrace(uint64_t lo, uint64_t n); char *e2; uint64_t a = strtoull(line + 7, &e2, 16); probe_atrace(a, strtoull(e2, NULL, 0)); continue; }   // probe.c
                 if (!strncmp(line, "shot ", 5)) { dm_gfx_shot_at(1, line + 5); LOG("DM_CTL: screenshot of the next frame → %s", line + 5); continue; }
                 if (!strncmp(line, "texlist ", 8)) { void dm_gfx_texlist(int target); dm_gfx_texlist(atoi(line + 8)); continue; }
@@ -1376,4 +1380,14 @@ HLE_FORCE("_ZN2nn3hid14GetMouseStatesEPNS0_10MouseStateEi", "mouse states: 0 ent
 HLE_FORCE("_ZN2nn3hid18InitializeKeyboardEv", "keyboard; not provided by the host", void, h_hid_InitKbd, void) {}
 HLE_FORCE("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", "keyboard state: not connected (KeyboardState 0x30 bytes zeroed)", void, h_hid_KbdState, void *s) {
     memset(s, 0, 0x30); ((int64_t *)s)[0] = atomic_fetch_add(&g_sampling, 1) + 1;
+}
+
+// A reset (hle_reset.c): what the game set in hid goes with it (the controllers it supports, the hold type, the IMU it enabled: a second EnableNpadImu would be refused), and no
+// press latched before the reset reaches the new boot. The devices, the players' slots, motion and the scripts (DM_KEYS, DM_CTL, DM_REC) are the console's and carry on
+void dm_hid_reset(void) {
+    atomic_store(&g_ids_supported, 0x3ff); atomic_store(&g_styles_supported, 0xffffffffu);
+    atomic_store(&g_benched, 0); atomic_store(&g_bench_one, 0); atomic_store(&g_single_mask, 0); g_hold_type = 0;
+    g_imu_buf = NULL; g_imu_on = 0;
+    atomic_store(&g_latch, 0); atomic_store(&g_sc_latch, 0);
+    for (int p = 0; p < DM_PLAYERS; p++) { atomic_store(&g_pad_latch[p], 0); atomic_store(&g_joy_latch[p][0], 0); atomic_store(&g_joy_latch[p][1], 0); dm_haptics_clear(p); }
 }

@@ -226,6 +226,21 @@ From an empty save: at about 45 s `A` (title), `A` (New Game), then the movie. F
   - Levitation rose about 2.9 units a second where its setting says 4, in a scene this Mac ran at 30 fps: whether it moves by frames rather than by time is unchecked.
   - After the warp, a blocky white patch showed beside the watches for about a second: probably the game's area name fading in; not compared with an entry without the warp.
 
+## Reset
+
+Game > Reset Game (⌘R) in the Mac window, or a `reset` line in `DM_CTL`'s file, starts the game again inside the running app, as Home, close the software and start it again do on a Switch: what was not saved is lost, the committed save stays, and the game boots from its first screen. The window, the shader libraries and every pipeline made stay, so there is no settings window and no prepare step ([how](../../../docs/reference/threads.md#a-reset-ends-every-guest-thread-and-starts-the-game-again)).
+
+- **Current** (2026-11-23, 16 GB M2 Pro, host built from `790338b` with the reset, the installed app's libraries and archives, headless with `DM_CTL` unless said):
+  - The game's threads stopped in 15-80 ms; the host's part took 0.18-0.43 s at the title (1 window, 6 queues, 10,061-10,063 programs, about 5,300 textures, 2,725-2,729 memory pools) and 0.63-0.67 s in Kokiri Forest (14,405 programs, about 7,930 textures, 4,488 memory pools).
+  - The game then ran its intro again and showed its title menu (Continuer / Nouvelle partie) about 20 s later, with no pipeline made. A cold start of the app takes about 14 s of the host's before the game's first frame (archives and prepare), then the same boot.
+  - Six resets in a row at the title, one in play after loading a save (Kokiri Forest, then the title, then the save again), and two each with the [practice tools](#practice-tools) on (their watches start again at the title) and with a window (present snapshots, `DM_FPS_HOLD=off`, real audio output muted): same title picture, no red line.
+  - The committed save was byte for byte the same after a reset in play; the next `MountSaveData` cloned its work directory again.
+  - The player's own play in the app rebuilt with it (2026-11-23, fullscreen on a variable-refresh screen held at 60 Hz, present snapshots, the practice tools on): 23 resets with ⌘R, at the title and in play, each 0.24-0.82 s from the key to the boot, none falling back to a start of the process; the player found everything working. The log's red lines were the known ones that come without a reset too (the replay-ahead hand-over, the texture type mismatch on `9b310b3349825e9a`, [Open](#open)).
+- **Open:**
+  - Resident memory at the title rose from 7,354 MB after the first reset to 7,391-7,400 MB after the sixth: a few MB a reset not let go, not looked into.
+  - The temporary storage (`temp/`, with `TemporaryGame.sav`) stays across a reset, as across a quit of the app; a Switch empties it when the software closes. Whether the game reads it at boot is unchecked.
+  - Not tried on purpose: a reset during the prepare step, during a save's commit or during an area load.
+
 ## Offline pipeline bundle
 
 The packaging connection uses the host's existing descriptor export and bundle reader for every NVN profile (PR #2674). Its seed list includes the iPhone's rows through 2026-11-14 06:00: 10,415 added rows, including 4,447 render rows.
@@ -548,3 +563,6 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 - [Pro Controller rumble through its rumble report](../../../docs/reference/services.md#pro-controller-rumble-through-its-rumble-report): resolved ([PR #2607](https://github.com/seedds/nxnative/pull/2607), [issue #2804](https://github.com/seedds/nxnative/issues/2804), [PR #2787](https://github.com/seedds/nxnative/pull/2787)). Switch-mode pads (8BitDo, GameSir Nova, XTRE041) stayed silent under Core Haptics and a genuine Switch Pro Controller lost stereo and dual-band HD rumble; the Mac host now drives `057E:2009` controllers through report `0x10` via `pad_jc1.h` (49 bytes over Bluetooth, 64 bytes over USB, 15 ms peak-hold pacing and 30 ms refresh). Hardware retest of the unified route remains open.
 - [The driver wires memory tens of thousands of times a second with residency sets on the queues](../../../docs/reference/frame-rate.md#the-driver-wires-memory-tens-of-thousands-of-times-a-second-with-residency-sets-on-the-queues): resolved by naming the residency sets on each command buffer; the driver's cause is open. 0 of 20 launches in the state on a 16 GB M4 and 0 of 4 on a 16 GB M2, against 10 of 20 and 5 of 5.
 - [DeviceSink fields read without a bound](../../../docs/reference/audio.md#devicesink-fields-read-without-a-bound): its sdk (22.2.8) counts the mix buffers in the command list's header (+0x10; `ClearMixBufferCommand` clears that many every frame), 78 for its renderer's 72; since `capture` moved to Rust the sink's six inputs (0 to 5) are checked against them. Current.
+- [A reset ends every guest thread and starts the game again](../../../docs/reference/threads.md#a-reset-ends-every-guest-thread-and-starts-the-game-again): the player's quick [reset](#reset) (⌘R). Current.
+- [Thousands of finalized pools each drained the deferred-release queue](../../../docs/reference/nvn-objects.md#thousands-of-finalized-pools-each-drained-the-deferred-release-queue): its 4,488 pools in Kokiri Forest took 1.3-1.7 s of a reset, 0.3 s with the fix. Resolved.
+- [Present times read by the window's own count after a reset](../../../docs/reference/frame-rate.md#present-times-read-by-the-windows-own-count-after-a-reset): found while writing the reset. Resolved.

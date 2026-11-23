@@ -162,15 +162,17 @@ HLE_FORCE("_ZN2nn2oe22PopNotificationMessageEv", "system notification queue (blo
     uint32_t m = 0;
     for (;;) {
         pthread_mutex_lock(&g_mq_lock);
-        while (!g_mqn) {
+        while (!g_mqn && !atomic_load(&dm_reset_stop)) {
             dm_thread_native_wait(1);
             pthread_cond_wait(&g_mq_cond, &g_mq_lock);
             dm_thread_native_wait(0);
         }
         pthread_mutex_unlock(&g_mq_lock);
+        if (atomic_load(&dm_reset_stop)) return 0;   // a reset (hle_reset.c): no message, and the caller's next gate ends its thread
         if (h_oe_TryPopMsg(&m)) return m;   // another thread may have taken it in between: wait again
     }
 }
+void dm_oe_reset_wake(void) { pthread_mutex_lock(&g_mq_lock); pthread_cond_broadcast(&g_mq_cond); pthread_mutex_unlock(&g_mq_lock); }   // hle_reset.c
 // bool arguments: Switch callers do not extend them, declared as unsigned and only the low 8 bits are looked at
 HLE_FORCE("_ZN2nn2oe28SetResumeNotificationEnabledEb", "resume notification switch; the host expresses resume as focus notification 15", void, h_oe_SetResumeNtf, unsigned on) { (void)on; }
 HLE_FORCE("_ZN2nn2oe42SetOperationModeChangedNotificationEnabledEb", "operation mode change notification switch", void, h_oe_SetOpModeNtf, unsigned on) { g_ntf_opmode = on & 0xff; }
@@ -183,4 +185,12 @@ HLE_FORCE("_ZN2nn2oe18GetDesiredLanguageEv", "system language query; value from 
     strncpy(code, e && *e ? e : "en-US", sizeof code - 1);
     uint64_t v; memcpy(&v, code, 8);
     return v;
+}
+
+// A reset (hle_reset.c): the notifications nobody popped, the switches and focus handling mode the game set, and the library applets it had open (a thread stopped inside one
+// never left it: the game would see itself out of focus for good) go with it; the front end's focus and operation mode are the console's and stay
+void dm_oe_reset(void) {
+    pthread_mutex_lock(&g_mq_lock); g_mqh = g_mqn = 0; pthread_mutex_unlock(&g_mq_lock);
+    atomic_store(&g_ntf_opmode, 0); atomic_store(&g_ntf_perfmode, 0); atomic_store(&g_focus_mode, -1);
+    pthread_mutex_lock(&g_seen_lock); g_applets = 0; atomic_store(&g_seen, atomic_load(&g_focus)); pthread_mutex_unlock(&g_seen_lock);
 }

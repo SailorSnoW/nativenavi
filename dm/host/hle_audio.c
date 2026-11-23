@@ -39,6 +39,7 @@ typedef struct {
     pthread_t notify_th; _Atomic int notify_run, notify_pending, notify_armed;
     dispatch_semaphore_t rel_sem;      // Host outputs only (dm_pcmout_open_sink): signaled for each release, so the in-process audio renderer blocks instead of polling (dm_pcmout_wait)
     int id;                            // open sequence number (#N in the log; tells simultaneous outputs apart)
+    void *key;                         // the object it was opened for: the game's AudioOut, or the host's own key (dm_pcmout_open_sink, sink_pcm)
     int nlog;                          // Start / Stop / Close lines logged so far (at most 32 per output)
     _Atomic uint64_t under_n, under_b; // underruns: times the pending queue was empty when the callback needed data / zero-filled bytes
     uint64_t st_calls, st_count, st_qsum, st_u0, st_ub0; uint32_t st_fmin, st_fmax;   // callback-owned accumulators
@@ -531,7 +532,7 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
     }
     aout *a = calloc(1, sizeof *a);
     const char *mute = getenv("DM_AUDIO_MUTE"); a->mute = mute && atoi(mute);
-    pthread_mutex_init(&a->m, NULL); a->event = ev; a->ch = ch; a->dev_ch = ch; a->sink_pcm = sink_pcm;
+    pthread_mutex_init(&a->m, NULL); a->event = ev; a->ch = ch; a->dev_ch = ch; a->sink_pcm = sink_pcm; a->key = g;
     atomic_init(&a->state, STATE_STOPPED);
     atomic_init(&a->q_head, 0); atomic_init(&a->q_tail, 0);
     atomic_init(&a->rel_head, 0); atomic_init(&a->rel_tail, 0);
@@ -840,6 +841,17 @@ void dm_pcmout_close(void *k) { au_close(k, NULL); free(k); }   // stop, take it
 int dm_pcmout_append(void *k, void *b) { return (int)h_au_Append(k, b); }
 void *dm_pcmout_released(void *k) { return h_au_Released(k); }
 
+// A reset (hle_reset.c), once the game's threads have ended and before its memory goes: every output still open is closed, as the end of a process closes them (the device
+// callbacks and silent sinks read the game's blocks). The audio renderer's own output is closed by its render thread on the way out (hle_audren.c); one still open is closed here
+// too. The game's OutputStreams and InputStreams are not tracked: Ocarina of Time opens none (its sound is the renderer's)
+void dm_audio_reset(void) {
+    aout *open[AOMAX]; int n = 0;
+    pthread_mutex_lock(&g_aos_lock);
+    for (int i = 0; i < AOMAX; i++) if (g_aos[i]) open[n++] = g_aos[i];
+    pthread_mutex_unlock(&g_aos_lock);
+    for (int i = 0; i < n; i++) { void *k = open[i]->key; int host = open[i]->sink_pcm; au_close(k, NULL); if (host) free(k); }
+    if (n) LOG("reset: %d audio outputs closed", n);
+}
 // Front-end lifecycle: suspend real audio output, with the silent sink taking over real-time consumption meanwhile (pacing unbroken); switch back to the AudioUnit on resume.
 // The front end calls with 1 when the window is minimized and with 0 when it comes back (front_mac.m); the graceful exit calls with 1 (hle_lifecycle.c), and DM_OE_SCRIPT's bg with both (hle_oe.c).
 void dm_audio_suspend(int on) {

@@ -34,7 +34,7 @@ void guest_thread_set_id(uint64_t id) { *(uint32_t *)((uint8_t *)pthread_getspec
 // thread's stack untouched during an SVC. Each thread holds a gate slot k: its KGATE slot points to entry.S stub k, which loads dm_gate_top[k]. A guest thread (hle_thread.c thread_main) runs
 // its guest code on the guest stack the SDK gave it, so its gate stack is the rest of its own pthread stack (1 MB), below thread_main's frame: it lives exactly as long as the thread, which
 // exits from inside an SVC (ExitThread → pthread_exit on the gate stack). The guest main thread runs its guest code on this pthread's stack, so it gets a mapped stack, never freed
-// (the process ends with it). The slot is released when the thread exits, after which another thread may take it with its own stack.
+// (the process ends with it; a reset's boot reuses it). The slot is released when the thread exits, after which another thread may take it with its own stack.
 #define GATE_SLOTS 1024                 // = entry.S .rept count and dm_gate_top size
 #define GATE_STACK_SIZE (1 << 20)       // = entry.S nesting check
 extern uint64_t dm_gate_top[GATE_SLOTS];
@@ -49,15 +49,20 @@ static void gslot_key_init(void) {
     if (pthread_key_create(&g_keygslot, gslot_release)) die("cannot create the gate slot key");
     if ((uintptr_t)dm_gate_top & 0xfff) die("gate stack table %p is not page-aligned (entry.S stubs address it with adrp alone)", (void *)dm_gate_top);
 }
+uintptr_t guest_gate_stack_top(void) { uintptr_t k = (uintptr_t)pthread_getspecific(g_keygslot); return k ? (uintptr_t)dm_gate_top[k - 1] : 0; }   // a reset's end of a worker off its gate (hle_reset.c)
 void dm_gate_nested(uint64_t sp) { die("SVC gate entered on its own gate stack (sp %#llx): a gate handler ran guest code", (unsigned long long)sp); }
 __attribute__((noinline)) void guest_gate_stack(int own_stack) {
     pthread_once(&g_gslot_once, gslot_key_init);
     uint8_t *top;
     if (own_stack) top = (uint8_t *)__builtin_frame_address(0);   // this function's frame record: everything above it is the caller's frame, everything below is free once the guest runs elsewhere
-    else {
-        uint8_t *m = mmap(NULL, GATE_STACK_SIZE + 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        if (m == MAP_FAILED || mprotect(m, 16384, PROT_NONE)) die("cannot map a gate stack (errno %d)", errno);   // guard page at the bottom
-        top = m + 16384 + GATE_STACK_SIZE;
+    else {   // the main guest thread's: mapped once, and a reset's boot (hle_reset.c) takes the same one again
+        static uint8_t *main_top;
+        if (!main_top) {
+            uint8_t *m = mmap(NULL, GATE_STACK_SIZE + 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+            if (m == MAP_FAILED || mprotect(m, 16384, PROT_NONE)) die("cannot map a gate stack (errno %d)", errno);   // guard page at the bottom
+            main_top = m + 16384 + GATE_STACK_SIZE;
+        }
+        top = main_top;
     }
     uintptr_t prev = (uintptr_t)pthread_getspecific(g_keygslot);
     int k;

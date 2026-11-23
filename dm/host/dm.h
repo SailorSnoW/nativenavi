@@ -160,3 +160,18 @@ void dm_gfx_enter(void); void dm_gfx_leave(void);   // hle_nvn.c: the gate dm_gf
 void dm_gfx_shot_at(long k, const char *path);   // graphics side: screenshot of the k-th frame after the current presented frame (nvn_mtl.m)
 void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg);   // The same, then(arg) in place of the last _exit(0) (oe::ExecuteProgram: execve of the next program)
 void dm_host_shutdown(const char *why);   // Graceful exit (hle_lifecycle.c): stop background threads and audio, stop the pipeline prewarm, drain graphics, write the pipeline archive, then _exit(0); used by SIGTERM and oe::ExecuteProgram
+// The game's reset (hle_reset.c): Home > close the software > start it again, inside this process (the Mac window's ⌘R, DM_CTL's "reset"); from any thread, once at a time
+void dm_guest_boot(void (*boot)(void));      // the main guest thread's boot (main.c), to which a reset brings it back
+void dm_reset_set_argv(char **argv);         // main.c: the host's arguments, for a start of the whole process again
+extern uintptr_t dm_reset_main_base;         // guest_main's frame (main.c)
+// Programs that do not link hle_reset.c (the unit tests) get these: no reset is ever under way there. hle_reset.c defines the host's (DM_RESET_IMPL)
+#ifndef DM_RESET_IMPL
+__attribute__((weak)) _Atomic int dm_reset_stop;   // set while the game's threads are being stopped (gate_dispatch and the guest waits look at it)
+__attribute__((weak)) void dm_reset_gate(const uint64_t *regs) { (void)regs; }   // gate_dispatch while dm_reset_stop is set: ends the calling guest thread if every frame below it is the game's
+__attribute__((weak)) int dm_reset_gate_can_end(const uint64_t *regs, int role) { (void)regs; (void)role; return 0; }   // a guest thread at this gate frame has nothing of the host's below it (role: dm_thread_reset_role)
+__attribute__((weak)) void dm_reset_entry(uintptr_t sp) { (void)sp; }   // the big host stack's entry while dm_reset_stop is set (hle_bigstack.c): the same at an entry into the host
+__attribute__((weak)) void dm_reset_request(const char *why) { (void)why; }
+#else
+extern _Atomic int dm_reset_stop;
+void dm_reset_gate(const uint64_t *regs); int dm_reset_gate_can_end(const uint64_t *regs, int role); void dm_reset_entry(uintptr_t sp); void dm_reset_request(const char *why);
+#endif

@@ -86,7 +86,7 @@ static void pic_rgba(const cv_pic *p, uint8_t *dst, int w, int h) {
     #undef CL
 }
 typedef struct { uint16_t w, h; uint32_t fmt, mode, magic; uint32_t pad[2]; } cv_pref;   // VideoDecoderImagePreference as the host fills it (returned in x8)
-typedef struct { uint32_t magic; uint16_t w, h; uint32_t fmt, count; cv_pic **img; uint8_t *mem; uint64_t size; int slot; _Atomic int native; } cv_pool;   // mem, size: the game's pool memory; native: a handle was asked for (RGBA kept in mem); slot: its place in g_cv_pools + 1
+typedef struct cv_pool { uint32_t magic; uint16_t w, h; uint32_t fmt, count; cv_pic **img; uint8_t *mem; uint64_t size; int slot; _Atomic int native; struct cv_pool *next; } cv_pool;   // mem, size: the game's pool memory; native: a handle was asked for (RGBA kept in mem); slot: its place in g_cv_pools + 1
 typedef struct { uint32_t magic, dec, idx, gen; } cv_sync;   // nn::gs::NativeSyncHandle (16 bytes)
 typedef struct { uint64_t n, ns, max, late; } cv_times;   // packets decoded, their time in all and the longest; late: pictures whose buffer was released before they were decoded
 typedef struct {
@@ -209,9 +209,11 @@ HLE_FORCE("_ZN2nn5codec31CalculateDecoderImagePoolBufferEPmS1_RKNS0_27VideoDecod
     return 0;
 }
 static cv_pool *g_cv_pools[256];   // what a native image handle names (g_cv_mu): (slot + 1) << 8 | picture
+static cv_pool *g_cv_all;          // every pool not finalized (g_cv_mu), for a reset (dm_codec_video_reset): the game's memory holds the only other pointer to it
 static Result cv_pool_init(void *t, void *mem, uint64_t size, const cv_pref *p, uint32_t n) {
     cv_pool *o = calloc(1, sizeof *o); o->magic = CV_MAGIC; o->w = p->w; o->h = p->h; o->fmt = p->fmt; o->count = n ? n : 1; o->img = calloc(o->count, sizeof *o->img); o->mem = mem; o->size = size;
     *(cv_pool **)t = o;
+    dm_host_mutex_lock(&g_cv_mu); o->next = g_cv_all; g_cv_all = o; pthread_mutex_unlock(&g_cv_mu);
     static int once; if (!once++) LOG("[codec] image pool %ux%u format %u, tiling or mode %u, %u picture(s): the host keeps the decoded pictures", p->w, p->h, p->fmt, p->mode, o->count);
     return 0;
 }
@@ -222,6 +224,7 @@ HLE_FORCE("_ZN2nn5codec24FinalizeDecoderImagePoolEPNS0_25VideoDecoderImagePoolTy
     dm_host_mutex_lock(&g_cv_mu);   // a decoder still holding a buffer of this pool keeps it, with no pool to write its picture into
     for (int k = 0; k < 16; k++) if (g_cv[k]) { dm_host_mutex_lock(&g_cv[k]->mu); for (int i = 0; i < CV_BUFS; i++) if (g_cv[k]->buf[i].pool == p) g_cv[k]->buf[i].pool = NULL; pthread_mutex_unlock(&g_cv[k]->mu); }
     if (p->slot) g_cv_pools[p->slot - 1] = NULL;
+    for (cv_pool **q = &g_cv_all; *q; q = &(*q)->next) if (*q == p) { *q = p->next; break; }
     pthread_mutex_unlock(&g_cv_mu);
     for (uint32_t i = 0; i < p->count; i++) free(p->img[i]);
     free(p->img); p->magic = 0; free(p); *(cv_pool **)t = NULL;
@@ -292,8 +295,14 @@ static Result cv_dec_init(void *t, uint16_t w, uint16_t h, uint32_t in, uint32_t
     LOG("[codec] AV1 decoder %u: %ux%u, input format %u, output format %u (%s on the host)", d->id, w, h, in, out, mav1_backend(d->av1));
     return 0;
 }
+static void cv_dec_free(cv_dec *d, int guest);
 static Result cv_dec_fin(void *t) {
     cv_dec *d = cv_of(t); if (!d) return 0;
+    cv_dec_free(d, 1); *(cv_dec **)t = NULL;
+    return 0;
+}
+// guest 0: a reset (dm_codec_video_reset), with the game gone: its submission-ready event goes with its memory, and the SDK's code is not run
+static void cv_dec_free(cv_dec *d, int guest) {
     dm_host_mutex_lock(&g_cv_mu); g_cv[d->id - 1] = NULL; dm_host_mutex_lock(&d->mu); d->quit = 1; pthread_cond_signal(&d->work); pthread_mutex_unlock(&d->mu); pthread_mutex_unlock(&g_cv_mu);   // no sync handle lookup is still inside
     movie_vt_cancel(&d->vt);
     dm_host_thread_join(d->th, NULL);   // a packet it decodes ends first (a codec cannot be stopped inside one); its pictures are dropped
@@ -306,10 +315,21 @@ static Result cv_dec_fin(void *t) {
     d->magic = 0;
     // The submission-ready event goes with the decoder, as in the SDK. Kept, it stayed in the host's bound-event table, so the next decoder initialised in the same memory found its
     // event "bound" and was not given one: the game had cleared that memory, and nn::os aborted on the uninitialised event (found on Donkey Kong Bananza's second movie)
-    static void (*destroy)(void *); if (!destroy && !(destroy = guest_sym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE"))) die("nn::os::DestroySystemEvent missing");
-    destroy(d->event);
-    pthread_cond_destroy(&d->work); pthread_mutex_destroy(&d->mu); free(d); *(cv_dec **)t = NULL;
-    return 0;
+    static void (*destroy)(void *); if (guest && !destroy && !(destroy = guest_sym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE"))) die("nn::os::DestroySystemEvent missing");
+    if (guest) destroy(d->event);
+    pthread_cond_destroy(&d->work); pthread_mutex_destroy(&d->mu); free(d);
+}
+// A reset (hle_reset.c), once the game's threads have ended and before its memory goes: each decoder's thread is stopped and joined (it writes the game's memory: armed sync
+// point events, native images' RGBA), its codec state and pictures freed, and every image pool the game did not finalize freed, as the end of a process frees them
+void dm_codec_video_reset(void) {
+    int nd = 0, np = 0;
+    for (int i = 0; i < 16; i++) { dm_host_mutex_lock(&g_cv_mu); cv_dec *d = g_cv[i]; pthread_mutex_unlock(&g_cv_mu); if (d) { cv_dec_free(d, 0); nd++; } }
+    dm_host_mutex_lock(&g_cv_mu);
+    for (cv_pool *p = g_cv_all, *n; p; p = n) { n = p->next; for (uint32_t i = 0; i < p->count; i++) free(p->img[i]); free(p->img); free(p); np++; }
+    g_cv_all = NULL; memset(g_cv_pools, 0, sizeof g_cv_pools);
+    pthread_mutex_unlock(&g_cv_mu);
+    pthread_mutex_lock(&g_spt_mu); memset(g_spt, 0, sizeof g_spt); pthread_mutex_unlock(&g_spt_mu);
+    if (nd || np) LOG("reset: video: %d decoders stopped, %d image pools freed", nd, np);
 }
 static void cv_drop_index(uint32_t *q, uint32_t *head, uint32_t *count, uint32_t cap, uint32_t i) {   // removes i from a ring of indices, keeping the others' order
     uint32_t n = 0, tmp[CV_BUFS];

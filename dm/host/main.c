@@ -16,6 +16,7 @@ static void *req(const char *n){ void *p=guest_sym(n); if(!p) die("missing symbo
 static char *g_argv[64] = {"game"}; static int g_argc = 1;
 
 static void guest_main(void) {
+    dm_reset_main_base = (uintptr_t)__builtin_frame_address(0);   // the bottom of the game's frames on this thread: a reset ends it at a gate above them (hle_reset.c)
     guest_thread_init();
     guest_gate_stack(0);   // the guest code runs on this thread's own stack: its SVCs get a stack of their own
     uint32_t hmain = svc_thread_main_init();   // Main thread handle: x0 of nnosInitialize (stored in an sdk global, used by ThreadManagerImplByHorizon); x1 = pointer to the argument area
@@ -145,10 +146,13 @@ static void *keyrace_thread(void *unused) {
     for (unsigned i = 0; i < g_race_want; i++) if (pthread_key_create(&g_race_keys[g_race_n++], NULL)) break;
     return NULL;
 }
+static void guest_entry(void) { dm_guest_boot(guest_main); }   // a reset of the game brings the main guest thread back here (hle_reset.c)
 int main(int argc, char **argv) {
+    dm_reset_set_argv(argv);
     { int mtl_pso_prebuild_tool(void); int r = mtl_pso_prebuild_tool(); if (r) return r == 2; }   // DM_PSO_PREBUILD=tool: what a first start would build, made with no game (nvn_mtl.m)
     host_load(argc, argv);
     { void dm_fps_state_apply(void); dm_fps_state_apply(); }   // the frame rate target and the dynamic resolution switch into the frame step state page (loader.c)
-    front_run(guest_main);
+    { void loader_snapshot(void); loader_snapshot(); }   // the modules' writable parts as the game first starts with them, which a reset copies back (loader.c, hle_reset.c)
+    front_run(guest_entry);
     return 0;
 }

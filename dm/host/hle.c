@@ -4,6 +4,7 @@
 #include <mach-o/ldsyms.h>
 #include <dlfcn.h>
 #include <time.h>
+#include <stdatomic.h>
 
 // ---------- Unimplemented imports: named stubs (the statically assembled stub table in entry.S, the k-th = movz x9,#k; b unimpl_entry) ----------
 #define MAX_STUB 4096                 // Matches the .rept count in entry.S
@@ -108,6 +109,8 @@ void gate_register(uint64_t ret_abs, const char *kind, int arg, uint64_t orig) {
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr);   // hle_svc.c
 
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
+    // A reset (hle_reset.c): a guest thread with nothing of the host's below it ends at its gate, before the gate does anything; one that comes back from a wait the reset ended, after it
+    if (__builtin_expect(atomic_load_explicit(&dm_reset_stop, memory_order_relaxed), 0)) dm_reset_gate(regs);
     for (unsigned i = gate_h(ret_addr);; i = (i + 1) & ((1u << GATE_BITS) - 1)) {
         const gate_t *g = &g_gate[i];
         if (g->ret == ret_addr) switch (g->kind) {
@@ -129,7 +132,9 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
                 thr_svc_enter(regs, g->orig); dm_spin_wait(ret_addr, g->orig); thr_svc_leave(); return 0; }
             default: {   // register the gate frame on SVC entry / exit: it is the context of a paused thread (hle_thread.c)
                 void thr_svc_enter(uint64_t *, uint64_t), thr_svc_leave(void);
-                thr_svc_enter(regs, g->orig); uint64_t r = svc_dispatch(g->arg, regs, g->orig); thr_svc_leave(); return r; }
+                thr_svc_enter(regs, g->orig); uint64_t r = svc_dispatch(g->arg, regs, g->orig); thr_svc_leave();
+                if (__builtin_expect(atomic_load_explicit(&dm_reset_stop, memory_order_relaxed), 0)) dm_reset_gate(regs);
+                return r; }
         }
         if (!g->ret) die("unknown gate at %#llx", ret_addr);
     }

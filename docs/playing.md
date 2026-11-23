@@ -3,6 +3,7 @@
 How to build the game's Mac app: [README](../README.md#how-to-play).
 
 - **Settings:** a window before the game starts sets frame rate, console mode (docked or handheld), language, rumble and more. Click **Play**; your choices are remembered. What each one does: [Settings](settings.md).
+- **Reset:** Game > Reset Game (⌘R) starts the game again from its first screen, as closing it and opening it again does on a Switch: progress the game has not saved is lost. It takes under a second, with no settings window and no shader preparation.
 - **Saves and logs:** the save is in `~/Library/Application Support/NativeNavi/<title ID>/save/`, the log is `~/Library/Logs/NativeNavi/<title ID>.log` (the previous run is `<title ID>.prev.log`). A save made with an nxnative build of the game, in `~/Library/Application Support/nxnative/<title ID>/`, is copied over at the first start, with that app's settings; the old copy stays. When something goes wrong, send the log.
 
 ## Controllers

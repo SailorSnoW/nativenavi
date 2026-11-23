@@ -103,3 +103,6 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
     uint32_t *o = (uint32_t *)(base + 16 + (dom ? 16 : 0)); o[0] = 0x4f434653; o[1] = ver; o[2] = RES_OK; o[3] = 0;   // "SFCO"; a domain's out-object count before it stays 0
     return RES_OK;
 }
+
+// A reset (hle_reset.c): the game's service sessions end with it (64 at most at once)
+void dm_sf_reset(void) { pthread_mutex_lock(&g_sf_mu); memset(g_sf, 0, sizeof g_sf); pthread_mutex_unlock(&g_sf_mu); }

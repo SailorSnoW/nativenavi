@@ -838,6 +838,12 @@ static DmModsMenuDelegate *g_mods_menu;
 - (void)removeAmiibo:(NSMenuItem *)it { (void)it; dm_amiibo_remove(); }
 @end
 static DmAmiiboMenuDelegate *g_amiibo_menu;
+// Game > Reset Game (⌘R): the game's reset, as Home > close the software > start it again (hle_reset.c), asked off the main thread (the request takes the audio renderers' locks)
+@interface DmResetTarget : NSObject @end
+@implementation DmResetTarget
+- (void)resetGame:(NSMenuItem *)it { (void)it; dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ dm_reset_request("Reset Game (⌘R)"); }); }
+@end
+static DmResetTarget *g_reset_target;
 void front_run(void (*guest)(void)) {
     // A game: tell macOS its work is latency-critical, so the system does not trade its frame time for power while the frame rate is capped
     static id activity; activity = [[NSProcessInfo processInfo] beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical reason:@"game"];
@@ -891,10 +897,14 @@ void front_run(void (*guest)(void)) {
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeOcclusionStateNotification object:win queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
             (void)n; static int vis = -1; int v = (win.occlusionState & NSWindowOcclusionStateVisible) != 0; if (v == vis) return; vis = v;
             if (v) { dm_fstep_settle(); LOG("front end: window visible"); } else LOG("front end: window covered (its display link fires about once a second: frame times measure nothing)"); }];
-        // Main menu: AppKit runs ⌘ shortcuts only through menu items, so ⌘Q quits and ⌃⌘F toggles fullscreen from here (AppKit shows the item as Globe-F and keeps ⌃⌘F as a hidden twin)
+        // Main menu: AppKit runs ⌘ shortcuts only through menu items, so ⌘Q quits, ⌘R resets the game and ⌃⌘F toggles fullscreen from here (AppKit shows the item as Globe-F and keeps ⌃⌘F as a hidden twin)
         NSMenu *bar = [NSMenu new], *app = [NSMenu new], *wm = [[NSMenu alloc] initWithTitle:@"Window"];
         [[bar addItemWithTitle:@"" action:nil keyEquivalent:@""] setSubmenu:app];
         [app addItemWithTitle:[@"Quit " stringByAppendingString:@(DM_GAME_NAME)] action:@selector(terminate:) keyEquivalent:@"q"];
+        g_reset_target = [DmResetTarget new];
+        NSMenu *gm = [[NSMenu alloc] initWithTitle:@"Game"];
+        NSMenuItem *rs = [gm addItemWithTitle:@"Reset Game" action:@selector(resetGame:) keyEquivalent:@"r"]; rs.target = g_reset_target;
+        [[bar addItemWithTitle:@"Game" action:nil keyEquivalent:@""] setSubmenu:gm];
         g_mods_menu = [DmModsMenuDelegate new];
         NSMenu *mm = [[NSMenu alloc] initWithTitle:@"Mods"];
         mm.delegate = g_mods_menu; mm.autoenablesItems = NO;

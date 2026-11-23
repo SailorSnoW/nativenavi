@@ -86,6 +86,16 @@ uint64_t nvn_new_serial(void) { return ++g_serial; }
 void nvn_serial_floor(uint64_t s) { uint64_t c = atomic_load(&g_serial); while (c < s && !atomic_compare_exchange_weak(&g_serial, &c, s)) {} }
 static unsigned g_nsem;                          // Number of semantic implementations (filled by nvn_init_slots)
 #define OLOG(...) do { if (g_log) LOG("[nvn] " __VA_ARGS__); } while (0)
+// The game's objects that hold host state, from their Initialize to their Finalize: a reset (dm_gfx_reset) finalizes those the game left, as the end of a process lets them go.
+// By the object's address; one initialized again is the same entry
+enum { LV_POOL, LV_TEX, LV_PROG, LV_SYNC, LV_QUEUE, LV_WIN, LV_N };
+static CFMutableSetRef g_live[LV_N]; static pthread_mutex_t g_live_mu = PTHREAD_MUTEX_INITIALIZER;
+static void live_add(int k, const void *o) { pthread_mutex_lock(&g_live_mu); if (!g_live[k]) g_live[k] = CFSetCreateMutable(NULL, 0, NULL); CFSetAddValue(g_live[k], o); pthread_mutex_unlock(&g_live_mu); }
+static void live_del(int k, const void *o) { pthread_mutex_lock(&g_live_mu); if (g_live[k]) CFSetRemoveValue(g_live[k], o); pthread_mutex_unlock(&g_live_mu); }
+static _Atomic uint64_t g_boot;   // counts the game's starts in this process (dm_gfx_reset): per-thread caches of guest addresses on a thread that outlives a reset check it
+// The presents made before the game's current start (dm_gfx_reset): the Metal side numbers presents by ticket across the whole process (mtl_presented_time), a window from its own
+// first one (win_t.presents), so a window of a later start reads its presents' times at its count plus this. Equal to that count without a reset (Ocarina of Time presents to one window)
+static uint64_t g_present_base;
 
 static void nvn_init_slots(void) {
     static int done; if (done) return; done = 1;
@@ -260,12 +270,13 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
     if (!o->mem && !(o->flags & 0x200)) LOG("[RED] MemoryPoolInitialize: non-virtual pool has no storage flags=%#x size=%#llx", o->flags, o->size);
     if (getenv("DM_NVN_VLOG")) { LOG("[nvn] MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, (unsigned long long)o->size, o->flags); void dm_backtrace(uint64_t fp); dm_backtrace((uint64_t)__builtin_frame_address(0)); }
     OLOG("MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, o->size, o->flags);
+    live_add(LV_POOL, p);
     return 1;
 }
 static void fl_add(const uint8_t *a, uint64_t n); static void fl_drop(const uint8_t *a, uint64_t n);   // flushed ranges, see nvn_flushed
 NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) {
     // Dead to the replay first (its IDs marked gone under g_rmu, the magic cleared), then torn down: a texture resolving on the submit thread must not find the page table or the storage already gone
-    mtl_alias_drop_pool(p); ((pool_t *)p)->magic = 0;
+    live_del(LV_POOL, p); mtl_alias_drop_pool(p); ((pool_t *)p)->magic = 0;
     if (((pool_t *)p)->flags & 0x200 && ((pool_t *)p)->vp) vpool_release((pool_t *)p);
     if (((pool_t *)p)->mem && !(((pool_t *)p)->flags & 0x200)) {   // A virtual pool's storage is borrowed from a physical pool; do not unregister it
  nvn_dirty_remove_range(((pool_t *)p)->mem); mtl_pool_del(((pool_t *)p)->mem); mtl_sp_phys_gone(((pool_t *)p)->mem, ((pool_t *)p)->size); fl_drop(((pool_t *)p)->mem, ((pool_t *)p)->size);
@@ -278,7 +289,8 @@ NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, 
     ft_flush(o->mem + off, n);
 }
 // A GPU address exists only once the driver has given one: here, by a buffer (nvnBufferInitialize) or by a texture (nvnTextureGetTextureAddress). Raw global memory can reach only what these name (mtl_pool_addressed)
-static void pool_mark_addressed(const pool_t *o) { vpool_taken(o); ((pool_t *)o)->asked = 1; static __thread const uint8_t *last; if (o->mem && o->mem != last) { last = o->mem; mtl_pool_addressed(o->mem, o->size); } }
+static void pool_mark_addressed(const pool_t *o) { vpool_taken(o); ((pool_t *)o)->asked = 1; static __thread const uint8_t *last; static __thread uint64_t last_boot; uint64_t boot = atomic_load_explicit(&g_boot, memory_order_relaxed);
+    if (o->mem && (o->mem != last || last_boot != boot)) { last = o->mem; last_boot = boot; mtl_pool_addressed(o->mem, o->size); } }
 // A shader-code pool's own address (NVN_MEMORY_POOL_FLAGS_SHADER_CODE, 0x40; not virtual) is asked for to place programs: nvnProgramSetShaders takes code addresses. The GPU never reads that code,
 // as the shaders run translated and their constants are copied into the host's buffers, so it does not put the pool into the raw pool table, where it would be resident and its pages wired.
 // Ocarina of Time has 223 such pools, 317 MB (docs/reference/memory.md, Shader-code pools made resident by the raw pool table). A buffer made in the pool still puts it in (nvnBufferInitialize)
@@ -616,10 +628,10 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     }
     OLOG("Texture %p %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx", (void *)t, o->d.width, o->d.height, o->d.depth,
          o->d.levels, o->d.format, o->d.target, o->d.flags, o->L.size);
-    ft_add(o);
+    ft_add(o); live_add(LV_TEX, t);
     return 1;
 }
-NVN(nvnTextureFinalize, void, NVNtexture *t) { ft_del(TX(t)->serial); mtl_tex_release(TX(t)); TX(t)->magic = 0; }
+NVN(nvnTextureFinalize, void, NVNtexture *t) { live_del(LV_TEX, t); ft_del(TX(t)->serial); mtl_tex_release(TX(t)); TX(t)->magic = 0; }
 NVN(nvnTextureGetFlags, NVNtextureFlags, const NVNtexture *t) { return (NVNtextureFlags)CTX(t)->d.flags; }
 NVN(nvnTextureGetWidth, int, const NVNtexture *t) { return (int)CTX(t)->d.width; }
 NVN(nvnTextureGetHeight, int, const NVNtexture *t) { return (int)CTX(t)->d.height; }
@@ -761,9 +773,10 @@ NVN(nvnSamplerFinalize, void, NVNsampler *s) { ((samp_t *)s)->magic = 0; }
 
 // ---------- Programs ----------
 NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) {
-    (void)d; memset(p, 0, sizeof(prog_t)); ((prog_t *)p)->magic = MAGIC('P', 'R', 'O', 'G'); return 1;
+    (void)d; memset(p, 0, sizeof(prog_t)); ((prog_t *)p)->magic = MAGIC('P', 'R', 'O', 'G'); live_add(LV_PROG, p); return 1;
 }
 NVN(nvnProgramFinalize, void, NVNprogram *p) {
+    live_del(LV_PROG, p);
     pthread_mutex_lock(&g_sub_mu); mtl_prog_forget((const prog_t *)p); mtl_prog_release((prog_t *)p); pthread_mutex_unlock(&g_sub_mu);
     ((prog_t *)p)->magic = 0;
 }
@@ -850,8 +863,8 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
 }
 
 // ---------- Sync / events ----------
-NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { (void)d; *(sync_t *)s = (sync_t){MAGIC('S', 'Y', 'N', 'C'), 0, 0}; return 1; }
-NVN(nvnSyncFinalize, void, NVNsync *s) { nvn_sync_release((sync_t *)s); ((sync_t *)s)->magic = 0; }
+NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { (void)d; *(sync_t *)s = (sync_t){MAGIC('S', 'Y', 'N', 'C'), 0, 0}; live_add(LV_SYNC, s); return 1; }
+NVN(nvnSyncFinalize, void, NVNsync *s) { live_del(LV_SYNC, s); nvn_sync_release((sync_t *)s); ((sync_t *)s)->magic = 0; }
 NVN(nvnSyncSetDebugLabel, void, NVNsync *s, const char *l) { (void)s; (void)l; }
 // Fence = "all commands previously submitted to the queue have completed": record the fence value of the most recent submit
 NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)c; (void)f; nvn_queue_fence((queue_t *)q,(sync_t *)s); }
@@ -936,9 +949,10 @@ NVN(nvnQueueInitialize, NVNboolean, NVNqueue *q, const NVNqueueBuilder *b) {
     // not rewrite that queue state (Xenoblade 2 creates its queue first).
     *(queue_t *)q = (queue_t){MAGIC('Q', 'U', 'E', 'U'), d, 0,
                             !d || ((const dev_t_ *)d)->origin == NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT, nvn_new_serial()};
-    OLOG("QueueInitialize %p", (void *)q); return 1;
+    OLOG("QueueInitialize %p", (void *)q); live_add(LV_QUEUE, q); return 1;
 }
 NVN(nvnQueueFinalize, void, NVNqueue *q) {
+    live_del(LV_QUEUE, q);
     nvn_queue_forget((queue_t *)q);
     pthread_mutex_lock(&g_sub_mu); mtl_queue_forget(((queue_t *)q)->serial); ((queue_t *)q)->magic = 0; pthread_mutex_unlock(&g_sub_mu);
 }
@@ -1866,6 +1880,7 @@ NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
     memcpy(o->tex, s->tex, sizeof o->tex);
     LOG("[nvn] WindowInitialize swap chain %d textures (%d active), interval %d, first %dx%d format %#x", o->ntex, window_active(o), o->interval,
         o->ntex && o->tex[0] ? (int)CTX(o->tex[0])->d.width : 0, o->ntex && o->tex[0] ? (int)CTX(o->tex[0])->d.height : 0, o->ntex && o->tex[0] ? CTX(o->tex[0])->d.format : 0);
+    live_add(LV_WIN, w);
     return 1;
 }
 static int window_interval(const win_t *o);
@@ -1966,7 +1981,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
 }
 // The older API (NVN 53, Super Mario 3D World + Bowser's Fury): the queue waits for the texture on the GPU and no sync object is handed out. The host replays in submission order, so later commands already come after earlier presents; the same as WindowAcquireTexture without a sync object
 NVN(nvnWindowFinalize, void, NVNwindow *w) {
-    win_t *o=(win_t *)w;
+    win_t *o=(win_t *)w; live_del(LV_WIN, w);
     for(int i=0;i<4;i++) { nvn_queue_present_release(o->ticket[i]); o->ticket[i]=0; }
 }
 NVN(nvnQueueAcquireTexture, NVNqueueAcquireTextureResult, NVNqueue *q, NVNwindow *w, int *idx) {
@@ -2546,7 +2561,7 @@ static void fstep_tick(const win_t *o, int c) {
     // A game that is slower than its hold frame after frame (not a few long frames: 12 of the last 16 started late) is late too, though the screen misses only every few frames:
     // 18.9 ms frames at hold 1 missed one refresh in 7, never three in a row, and ran at a jittering 53 fps with a payback every few frames instead of a steady 30
     if (judged && mtl_snap_on() && mtl_link_active() && !mtl_link_stalled() && o->presents > 9) {   // (frames the stall fallback drops say nothing about the game: judged by cost then)
-        uint64_t pn = o->presents - 8; double a = mtl_presented_time(pn), b = mtl_presented_time(pn - 1);
+        uint64_t pn = o->presents - 8; double a = mtl_presented_time(pn + g_present_base), b = mtl_presented_time(pn - 1 + g_present_base);
         if (a < 0) g_fs.screen = 2; else if (a > 0 && b > 0) g_fs.screen = (a - b) * 1e3 > 1.25 * pres_expect_ms(pn) ? 2 : 1;
         static uint16_t slow_bits; static int slow_k; int k = g_fs.k ? g_fs.k : kmin;
         if (k != slow_k) { slow_k = k; slow_bits = 0; }   // judged against the hold in force, not the frames before a step
@@ -2748,7 +2763,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (idx >= 0 && idx < 4) o->avail[idx] = period ? slot + period : 0;
     static uint64_t prev_slot; if (prev_slot && period) trow(f, "@display_ms", (slot - prev_slot) / 1e6); prev_slot = slot;   // display interval between two adjacent frames on screen (this is the one to look at for dropped frames)
     // Actual presentation interval (windowed mode): taken 8 presents late (the presented callback has arrived by then), as the difference between the n-th and the (n−1)-th; −1 = discarded
-    if (o->presents > 9) { uint64_t n = o->presents - 8; double a_ = mtl_presented_time(n), b_ = mtl_presented_time(n - 1);
+    if (o->presents > 9) { uint64_t n = o->presents - 8; double a_ = mtl_presented_time(n + g_present_base), b_ = mtl_presented_time(n - 1 + g_present_base);
         if (a_ < 0) trow(f - 8, "@presented_ms", -1); else if (a_ > 0 && b_ > 0) trow(f - 8, "@presented_ms", (a_ - b_) * 1e3);
         g_pres_exp[g_presn % TWIN] = g_pres_exp_last = pres_expect_ms(n);
         g_pres_iv[g_presn++ % TWIN] = a_ < 0 ? -1 : (a_ > 0 && b_ > 0 ? (a_ - b_) * 1e3 : 0);
@@ -3850,3 +3865,65 @@ int nvn_tex_level_range(const tex_t *t, unsigned level, unsigned layer, uint64_t
     return 0;
 }
 NVN(nvnTextureFlushTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }   // unified memory + dirty page tracking: nothing to flush
+
+// ---------- Reset (hle_reset.c) ----------
+// Once the game's threads have ended and before its memory goes: the NVN layer as a new process finds it, with every cache keyed by content kept (shader libraries, pipelines,
+// the pipeline archives, the Metal device and queues, the window's present path), so the game's next boot makes no pipeline again. In order: the replay drops the jobs it has not
+// run (a wait on an event the stopped game was to signal would hold a queue for good) after the replay-ahead hold ends; the graphics gate drains the GPU, so no command buffer,
+// upload or post-op reads or writes the game's memory any more; then each object the game left is finalized by its own Finalize, as the game would have (windows, queues, syncs,
+// programs, textures, then the memory pools, virtual ones first: a pool's Finalize lets its storage's Metal buffers, dirty tracking, device share and texture IDs go). Objects
+// whose magic is gone (the game freed their memory without a Finalize) are skipped, as their host state already was. What no Finalize resets follows: the descriptor pools'
+// numbering, the programs' key records, the host-lent command segments, and the Metal side's tables keyed by the game's addresses (mtl_reset_guest). Counters and serials go on
+void mtl_reset_guest(void);   // nvn_mtl.m
+void nvn_queue_reset_drop(void);   // nvn_queue.inc
+static size_t live_take(int k, const void ***out) {
+    pthread_mutex_lock(&g_live_mu);
+    size_t n = g_live[k] ? (size_t)CFSetGetCount(g_live[k]) : 0;
+    *out = n ? calloc(n, sizeof **out) : NULL;
+    if (n) { CFSetGetValues(g_live[k], (const void **)*out); CFSetRemoveAllValues(g_live[k]); }
+    pthread_mutex_unlock(&g_live_mu);
+    return n;
+}
+void dm_gfx_reset(void) {
+    uint64_t t0 = now_ns();
+    mtl_hold_drain();   // a submission stopped at a held wait for the game's signal ends first (nvn_rec.h)
+    nvn_queue_reset_drop();
+    dm_gfx_suspend(1); dm_gfx_suspend(0);
+    static const uint32_t magic[LV_N] = {MAGIC('P', 'O', 'O', 'L'), MAGIC('T', 'E', 'X', 0), MAGIC('P', 'R', 'O', 'G'), MAGIC('S', 'Y', 'N', 'C'), MAGIC('Q', 'U', 'E', 'U'), MAGIC('W', 'I', 'N', 'D')};
+    static const int order[] = {LV_WIN, LV_QUEUE, LV_SYNC, LV_PROG, LV_TEX, LV_POOL};
+    void mtl_defer_batch(int on); mtl_defer_batch(1);
+    size_t done[LV_N] = {0}, gone[LV_N] = {0}; uint64_t ms[LV_N] = {0};
+    for (unsigned oi = 0; oi < sizeof order / sizeof *order; oi++) {
+        int k = order[oi]; const void **v; size_t n = live_take(k, &v); uint64_t tk = now_ns();
+        for (int pass = 0; pass < (k == LV_POOL ? 2 : 1); pass++)   // pools: the virtual ones (their storage is a physical pool's) before the physical ones
+            for (size_t i = 0; i < n; i++) {
+                void *o = (void *)v[i]; if (!o) continue;
+                if (*(const uint32_t *)o != magic[k]) { if (!pass) gone[k]++; v[i] = NULL; continue; }
+                if (k == LV_POOL && !pass && !(((const pool_t *)o)->flags & 0x200)) continue;
+                switch (k) {
+                case LV_WIN: h_nvnWindowFinalize(o); break;
+                case LV_QUEUE: h_nvnQueueFinalize(o); break;
+                case LV_SYNC: h_nvnSyncFinalize(o); break;
+                case LV_PROG: h_nvnProgramFinalize(o); break;
+                case LV_TEX: h_nvnTextureFinalize(o); break;
+                case LV_POOL: h_nvnMemoryPoolFinalize(o); break;
+                }
+                done[k]++; v[i] = NULL;
+            }
+        free(v); ms[k] = now_ns() - tk;
+    }
+    mtl_defer_batch(0);
+    pthread_mutex_lock(&g_dpool_mu); memset(g_tpb, 0, sizeof g_tpb); memset(g_spb, 0, sizeof g_spb); g_ntpb = g_nspb = g_tnext = g_snext = g_tend = g_send = 0; pthread_mutex_unlock(&g_dpool_mu);
+    mtl_set_tex_pool_n(0); mtl_set_samp_pool_n(0);
+    pthread_mutex_lock(&g_pk_mu); if (g_pk) { CFIndex n = CFDictionaryGetCount(g_pk); const void **vals = calloc((size_t)n + 1, sizeof *vals); CFDictionaryGetKeysAndValues(g_pk, NULL, vals); for (CFIndex i = 0; i < n; i++) free((void *)vals[i]); free(vals); CFDictionaryRemoveAllValues(g_pk); } pthread_mutex_unlock(&g_pk_mu);
+    pthread_mutex_lock(&g_hostseg_mu); for (int i = 0; i < g_nhostseg; i++) free(g_hostseg[i].mem); g_nhostseg = 0; g_hostseg_bytes = 0; atomic_store(&g_hostseg_held, 0); pthread_mutex_unlock(&g_hostseg_mu);
+    pthread_mutex_lock(&g_ft_mu); size_t nft = g_nft; g_nft = 0; pthread_mutex_unlock(&g_ft_mu);
+    pthread_mutex_lock(&g_fl_mu); g_nfl = 0; pthread_mutex_unlock(&g_fl_mu);
+    pthread_mutex_lock(&g_sub_mu); mtl_reset_guest(); pthread_mutex_unlock(&g_sub_mu);
+    atomic_fetch_add(&g_boot, 1);
+    uint64_t mtl_present_tickets(void); g_present_base = mtl_present_tickets();
+    dm_fstep_settle();
+    LOG("reset: graphics: finalized %zu windows, %zu queues, %zu syncs, %zu programs (%.1f ms), %zu textures (%.1f ms), %zu memory pools (%.1f ms) (%zu objects already gone)%s in %.1f ms",
+        done[LV_WIN], done[LV_QUEUE], done[LV_SYNC], done[LV_PROG], ms[LV_PROG] / 1e6, done[LV_TEX], ms[LV_TEX] / 1e6, done[LV_POOL], ms[LV_POOL] / 1e6,
+        gone[LV_WIN] + gone[LV_QUEUE] + gone[LV_SYNC] + gone[LV_PROG] + gone[LV_TEX] + gone[LV_POOL], nft ? " (registered textures left to flush tracking)" : "", (now_ns() - t0) / 1e6);
+}

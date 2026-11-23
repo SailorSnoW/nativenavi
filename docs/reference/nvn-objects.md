@@ -222,6 +222,14 @@ A game may tell NVN objects apart by their bytes, without an NVN call. A host re
 - **Found on:** Fire Emblem Engage: it now stays at 1.2 to 1.4 GB.
 - **Note:** the `memory up to frame` line also reports `serial objects` (host objects by serial), `freed but alive` (finalized pool buffers still alive) and `shared textures` (sharing table size and evictions); growth in GPU memory with those counts flat points to an allocation outside them.
 
+### Thousands of finalized pools each drained the deferred-release queue
+
+- **Symptom:** a reset in Kokiri Forest spent 1.3-1.7 s finalizing the game's 4,488 memory pools, nearly all of it waiting for a lock in `defer_obj_at`.
+- **Cause:** a pool's buffer is queued for release behind a fence the GPU has already passed, and each such entry started a drain at once (`defer_kick`). Each drain walked the whole queue the earlier pools had filled, and the next pool's entry waited for its lock: quadratic in the pools finalized together, which no game does but [a reset](threads.md#a-reset-ends-every-guest-thread-and-starts-the-game-again) does.
+- **Fix:** `mtl_defer_batch` (`nvn_mtl.m`): while a reset finalizes the game's objects, entries are only queued, and one drain follows (`dm_gfx_reset`).
+- **Check:** the same reset: pools 297 ms, the graphics part 315 ms, the whole host part 0.67 s.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#reset)'s reset.
+
 ### Finalized pool buffers kept by a guest thread's autorelease pool
 
 - **Symptom:** the memory line's `freed but alive` count only grows, while no host table holds those buffers; "GPU allocated" is far above resident memory (Ghost Trick: Phantom Detective, 125 to 146 buffers and 6.6 to 8.7 GB of GPU allocations against 2.2 GB resident).

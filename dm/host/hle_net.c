@@ -2,6 +2,7 @@
 #include "hle.h"
 #include "hle_net.h"
 #include <pthread.h>
+#include <stdatomic.h>
 
 HLE_FORCE("_ZN2nn6socket10InitializeERKNS0_6ConfigE", "connects to the bsd socket service; offline, creates no session (cut)", Result, h_socket_Initialize, const void *cfg) { (void)cfg; return RES_OK; }
 HLE_FORCE("_ZN2nn4nifm10InitializeEv", "connects to the nifm network management service; offline (cut)", Result, h_nifm_Initialize, void) { return RES_OK; }
@@ -290,11 +291,12 @@ int dm_sk_poll(void *fds, uint64_t n, int ms) {
     // Periodically return from an endless wait, as before, so guest garbage collection/shutdown can observe a thread outside the host hook.
     int64_t limit = (ms < 0 ? 100 : (int64_t)ms) * 1000000; uint64_t start = guest_ns(); int ready;
     while (!(ready = efd_ready(p, n, open, generation))) {
-        int64_t left = limit - (int64_t)(guest_ns() - start); if (left <= 0) break;
+        int64_t left = limit - (int64_t)(guest_ns() - start); if (left <= 0 || atomic_load(&dm_reset_stop)) break;   // a reset (hle_reset.c): nothing ready, and the caller's next boundary ends its thread
         dm_guest_cond_wait_ns(&g_efd_c, &g_efd_m, dm_detclock_enabled() && left > 1000000 ? 1000000 : left);
     }
     pthread_mutex_unlock(&g_efd_m); return ready;
 }
+void dm_net_reset_wake(void) { pthread_mutex_lock(&g_efd_m); pthread_cond_broadcast(&g_efd_c); pthread_mutex_unlock(&g_efd_m); }   // hle_reset.c
 // fd_set is1024 bits; timeval is {i64 seconds, i64 microseconds}. Only this service's small descriptors can become ready.
 int dm_sk_select(int nfds, uint64_t *r, uint64_t *w, uint64_t *e, const int64_t *tv) {
     uint64_t *sets[3] = {r, w, e}; static const int16_t ask[3] = {SK_POLLIN, SK_POLLOUT, 0}; sk_pollfd p[EFD_MAX]; int np = 0;
@@ -396,3 +398,18 @@ SSC("nnsslConnectionSetNextAlpnProto", h_nssl_SetAlpn) SSC("nnsslConnectionSetOp
 SSC("nnsslConnectionSetSessionCacheMode", h_nssl_SetCache) SSC("nnsslConnectionSetSocketDescriptor", h_nssl_SetSock)
 SSC("nnsslConnectionSetVerifyOption", h_nssl_SetVerify) SSC("nnsslConnectionWrite", h_nssl_Write)
 SSC("nnsslContextDestroy", h_nssl_CtxDestroy) SSC("nnsslContextGetContextId", h_nssl_CtxGetId)
+
+// A reset (hle_reset.c), once the game's threads have ended: its sockets and event descriptors close with it, their queued packets freed; the generation keeps counting, so a
+// descriptor number given again is a new one to a poll
+void dm_net_reset(void) {
+    pthread_mutex_lock(&g_efd_m);
+    int n = 0;
+    for (int i = 0; i < EFD_MAX; i++) {
+        n += g_efd[i].used;
+        for (sk_packet *k = g_efd[i].head, *x; k; k = x) { x = k->next; free(k); }
+        uint64_t gen = g_efd[i].generation; memset(&g_efd[i], 0, sizeof g_efd[i]); g_efd[i].generation = gen;
+    }
+    pthread_cond_broadcast(&g_efd_c);
+    pthread_mutex_unlock(&g_efd_m);
+    if (n) LOG("reset: %d sockets and event descriptors closed", n);
+}

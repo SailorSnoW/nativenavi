@@ -61,6 +61,13 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Check:** `t_fstep` (held presents: the steps of the frames let through and the state kept). Headless with the practice tools on an M2 Pro, the trace of each present's step: five taps, L held 2 s and run again stepped 30 frames by 30 vsyncs in a scene at hold 2, where they stepped 60 before; with L held at the limit of 60 fps, every frame 1.000 vsync. Over 11,167 presents of three runs with the practice tools (boot, the title movie, the file select, a save load, play), presents with no frame of the game came only in the pauses; a run without them had one, at boot (present 21, in its first second), which with the next present stepped at the cap. Its game time read 0.999 of real time at the next 1,800 presents, as before.
 - **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#practice-tools) (v131072) with sloperinaGZ 0.0.9. The game's figures are in its note. Not checked: other games (the host's block runs only for a main whose stub marks the page).
 
+### Present times read by the window's own count after a reset
+
+- **Symptom:** none seen; found while writing [the reset](threads.md#a-reset-ends-every-guest-thread-and-starts-the-game-again). After one, a frame step judged by the screen (present snapshots with the display link) and the `@presented_ms` timing column would have read no time at all.
+- **Cause:** the Metal side numbers presents by ticket across the whole process (`mtl_presented_time`), a window from its own first present (`win_t.presents`), and the two were equal only while the game's first window lived. A reset's new window starts at 1 while the tickets go on.
+- **Fix:** `dm_gfx_reset` takes the tickets queued so far as `g_present_base` (`hle_nvn.c`), and both readers ask for their present at the window's count plus it; the hold ring stays by the window's count.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#reset)'s reset (a reading of the code).
+
 ### Late frames with an idle GPU stepped the hold up and unpaced holds did not probe
 
 - **Symptom:** on a warm start, Ocarina of Time stepped the frame hold 1 → 2 → 3 at presents 9 and 12 (cost 1.92 and 5.57 vsyncs, GPU 0.02 and 0.01 vsyncs) on a progress screen while the pipeline archive was written, then stayed at hold 3 (about 18 fps) for about 1,470 presents, though the scene's GPU work was 12.5 ms.
