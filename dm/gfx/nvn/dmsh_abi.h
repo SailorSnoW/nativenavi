@@ -197,3 +197,8 @@
 #define DMSH_LOOP_SLOT 28
 #define DMSH_LOOP_BYTES 16
 #define DMSH_LOOP_HIT 8
+// A compute shader in two passes (dm/gfx/tools/dmsh_ndsr.py, agl's NDSR network; the reflection's "split": fc, buffer, words): its bool function constant DMSH_SPLIT_FC is undefined
+// for the shader in one pass, false for pass 0, which writes each thread's words (u32s, at the thread's index in the whole grid) to the buffer at compute slot DMSH_SPLIT_SLOT and returns,
+// true for pass 1, which reads them. The host dispatches both on the same grid, with a barrier between (nvn_mtl.m split_dispatch)
+#define DMSH_SPLIT_FC 218
+#define DMSH_SPLIT_SLOT 29

@@ -12,7 +12,7 @@
 # Final summary: success / failure counts and the distribution of reasons; distribution of driver segment read offsets (those outside the range the replay layer can fill are listed separately);
 # a [RED] line per shader that built but lost something (shader_regressions.report_losses), which does not change the exit status
 import atexit, errno, inspect, multiprocessing, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf
-import dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_reflect, dmsh_entry, dmsh_abi as abi   # abi: the driver segment layout and the binding kinds the host shares (dm/gfx/nvn/dmsh_abi.h)
+import dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_abi as abi   # abi: the driver segment layout and the binding kinds the host shares (dm/gfx/nvn/dmsh_abi.h)
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HOME = os.path.expanduser('~')
 dm_dir, out = sys.argv[1:3]; want = set(sys.argv[3:]); cache_root = out
@@ -468,7 +468,7 @@ RULES = []   # MSL rewrite rules attached by shader name (function, applicabilit
 # dmsh_side.py is in it: dmsh_entry's fs_uint and fs_dual write main0's shared body (shared_body).
 # dmsh_fetch.py is not, but for screen_varyings (raster_facts), nor are the other side libraries' modules: they are made again from the restored MSL on every build (ps_libraries;
 # test_dmsh_code_fp.py checks this list).
-CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_chain.code_form(open(m.__file__, 'r').read()) for m in (dmsh_chain, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_reflect, dmsh_entry, dmsh_ampere, dmsh_side, abi))
+CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_chain.code_form(open(m.__file__, 'r').read()) for m in (dmsh_chain, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_ampere, dmsh_side, abi))
                          + b'\0' + inspect.getsource(dmsh_fetch.screen_varyings).encode()
                          + b'\0abi\0' + repr(sorted(abi.VALUES.items())).encode()).hexdigest()
 TOOL_FP = tool_fingerprint().encode()
@@ -642,7 +642,7 @@ def finish(key, w, j, c1):
     blend0 = 0
     if j['stage'] == 'ps': src, blend0 = dmsh_rewrite.blend_zero(src)   # a zero blend weight makes 0 of a NaN colour, as NVIDIA's blender does; before the entry points that share main0's body (see blend_zero)
     open(msl, 'w').write(src)
-    first, spill, loop_sites = [], 0, []
+    first, spill, loop_sites, ndsr = [], 0, [], None
     mesh = j.get('mesh_stage')
     if mesh:   # the kernel as the Metal object or mesh function (dmsh_meshstage.py)
         if mesh.get('refused'): return 'mesh stage failed', mesh['refused'], None
@@ -657,6 +657,8 @@ def finish(key, w, j, c1):
         try: src, loop_sites = dmsh_rewrite.compute_loops(src); open(msl, 'w').write(src)
         except ValueError as e: return 'compute loop containment failed', str(e)[:160], None
         src = dmsh_rewrite.max_threads(src, j.get('local')); open(msl, 'w').write(src)   # the local size as the kernel's thread limit, so its pipeline allows the dispatch (see max_threads)
+        src, ndsr = dmsh_ndsr.network(src, j.get('local'), spill)   # agl's NDSR network on simdgroup matrices, in two passes (dmsh_ndsr.py); last, on the MSL as the steps above left it
+        if ndsr and 'split' in ndsr: open(msl, 'w').write(src)
     if 'dmsh_raw_find' in src:
         src = dmsh_rewrite.raw_noinline(src, mesh['kind'] if mesh else j['stage']); open(msl, 'w').write(src)   # native stages were translated as cs; task and mesh searches stay inline (see raw_noinline)
     if 'spvSubgroupShuffle(' in src:
@@ -712,6 +714,7 @@ def finish(key, w, j, c1):
             **({'tg_spill': spill} if spill else {}),
             **({'tg_fence': dict(zip(('fence', 'barrier'), tgf))} if any(tgf) else {}),   # the build's report (tg_fence)
             **({'loop_sites': loop_sites} if j['stage'] == 'cs' and loop_sites else {}),
+            **({'split': ndsr['split']} if ndsr and 'split' in ndsr else {'ndsr_refused': ndsr['refused']} if ndsr else {}),   # a kernel in two passes for the host, or why a kernel with HMMA calls is not (dmsh_ndsr.network)
             'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'notes': res['notes'] + (['not in the answer table, queries use defaults'] if j.get('no_facts') else []), 'drv_reads': dr, 'drv_unfillable': dmsh_reflect.unfillable(dr, mesh['kind'] if mesh else j['stage']),
             'bindings': binds,
             'vertex_inputs': [{'location': int(m.group(3)), 'msl_type': m.group(1)} for m in dmsh_reflect.attributes(src)],
@@ -947,6 +950,10 @@ ok = [r[3] for r in res if r[1] == 'ok']
 rd = [x for x in ok if x['drv_reads']]
 print(f'shaders reading driver segments at run time {len(rd)} (c0 {sum("0" in x["drv_reads"] for x in rd)}, c2 {sum("2" in x["drv_reads"] for x in rd)}); reading what the replay layer cannot fill {sum(bool(x["drv_unfillable"]) for x in ok)}')
 for e, n in collections.Counter(u for x in ok for u in x['drv_unfillable']).most_common(15): print(f'  cannot fill {n:5d}  {e}')
+nd = [x for x in ok if x.get('split')]
+print(f'agl\'s NDSR network on simdgroup matrices in two passes (dmsh_ndsr.py): {len(nd)} kernels ({" ".join(x["dm_ctl"] for x in nd)}); '
+      f'{sum(1 for x in ok if x.get("ndsr_refused"))} other kernels with HMMA calls left as translated')
+for e, n in collections.Counter(x['ndsr_refused'] for x in ok if x.get('ndsr_refused')).most_common(6): print(f'  {n:5d}  {e}')
 tgf = [x['tg_fence'] for x in ok if x.get('tg_fence')]
 print(f'warp-synchronous shared memory (dmsh_tg_fence, dmsh_rewrite.tg_fence): {sum(t.get("fence", 0) for t in tgf)} calls left as the simdgroup fence, '
       f'{sum(t.get("barrier", 0) for t in tgf)} made a SIMD-group barrier (a kernel\'s, in uniform control flow), in {len(tgf)} shaders')
