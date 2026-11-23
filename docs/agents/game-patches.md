@@ -31,7 +31,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 | Game | Cuts | Gates | Frame-step and stub sites | Function-matched rules | Host rows | Binding |
 |---|---|---|---|---|---|---|
-| [The Legend of Zelda: Ocarina of Time](#the-legend-of-zelda-ocarina-of-time) | 0 | 0 | 2 | 3 | 0 | `game` ×5 |
+| [The Legend of Zelda: Ocarina of Time](#the-legend-of-zelda-ocarina-of-time) | 0 | 0 | 4 | 3 | 0 | `game` ×6 |
 
 ## Games
 
@@ -44,11 +44,12 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **`game`**, frame rate, at goal, checked: v131072 main: one function with each fingerprint, each with one caller, the event update that reads the frame (vtable +0x78), the timeline and sound syncs and the player's +0xc read by disassembly; the opening timed with frames forced to two vsyncs (2026-11-16): movie frame: the pictures the player has taken. The game's own movie draw functions, found by their functions' fingerprints on any build that keeps them; it is the counter the same game's player keeps, so it goes with the player's two-picture cut and has no wider binding
 - **`game`**, frame rate, at goal, checked: v131072 main: one function with this fingerprint, the site and its free registers read by disassembly (2026-11-08); the stub executed with and without a measured time (test_oot_real_speed.py, 2026-11-10): frame ratio from the host's step, or from the measured frame time when that is longer. The game's own frame-ratio division, found by its function's fingerprint on any build that keeps the function
 - **`game`**, rendering, at goal, checked: v131072 main: one function with each fingerprint (the level function a leaf, x2..x11 / x16 / x17 / s0..s2 free), its callers, the update and the controller fields read by disassembly, the fields read in play (2026-11-08); the climb run natively against a model of the update and in play to full size (2026-11-09); the threshold at 60 and 30 fps, docked and handheld, run natively in test_ocarina_drs.py (2026-11-23), in play at 30 fps on an M2 Air (upstream PR #1954, 2026-11-16): dynamic resolution: full size, or a climb on the load measured at each level. The game's own dynamic-resolution level function and update, found by their functions' fingerprints on any build that keeps both; switchable (DM_DYNAMIC_RESOLUTION)
+- **`game`**, rendering, at goal, checked: v131072 main: one function with this fingerprint (main+0x31d3200, 0xfc8 bytes, one caller main+0x31c00cc); the status ubfx at +0xce4, the store at +0xd48 (the only float store to #0xe5c in main; s0 computed from the update's w0 at +0xd34, never reread from +0xe5c) and the size loop clearing bit 3 of +0xe2c read by disassembly (2026-11-09, 2026-11-23); guard, status and store stubs executed natively on ARM64 in test_ocarina_drs.py: render scale: the 3D views at a fraction of the game's own size (DM_RENDER_SCALE). The game's own view-size update (its test of the dynamic-resolution status and its scale store), found by its function's fingerprint on any build that keeps it; the level function's stub above holds level 0 under a scale
 
 - **function-matched** (`main` of builds without CUTS): movie pictures a frame: up to 2, the constructor's value for an argument of 2 or more, whatever its caller passes (1): 1 function, 1 cut
 - **function-matched** (`main` of builds without CUTS): movie update cap: 3 pictures a frame, the frame step's largest hold, in place of the limit (2), which also sizes the decoder pipeline: 1 function, 1 cut
 - **function-matched** (`main` of builds without CUTS): movie frame: the pictures the player has taken (its +0xc), not 1 more for each frame drawn: 2 functions, 2 cuts
-- **function-matched frame step** (`main` of builds without FRAME_STEP): frame ratio from the host's step: a function of 0x9b4 bytes, `+0xe4` in it; dynamic resolution, a function of 0x294 bytes, `+0x0` in it; dynamic resolution update, a function of 0xb24 bytes,  in it; launcher capabilities: DYNAMIC_RESOLUTION
+- **function-matched frame step** (`main` of builds without FRAME_STEP): frame ratio from the host's step: a function of 0x9b4 bytes, `+0xe4` in it; dynamic resolution, a function of 0x294 bytes, `+0x0` in it; dynamic resolution update, a function of 0xb24 bytes,  in it; render scale, a function of 0xfc8 bytes, `+0xce4`, `+0xd48` in it; launcher capabilities: DYNAMIC_RESOLUTION, RENDER_SCALE
 
 ## SDK cuts
 
