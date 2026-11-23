@@ -1723,6 +1723,13 @@ The replay of NVN on Metal (`dm/gfx/nvn/nvn_mtl.m`). Each entry: symptom, cause,
 - **Fix:** a barrier with `ORDER_FRAGMENTS` or `ORDER_FRAGMENTS_TILED` now ends the open pass when a draw in it wrote an image or a storage buffer (`swrite_note` in `nvn_mtl.m`), so the next draw opens a pass behind the full consumer barrier; reflection marks an image binding written when its type has write access (`nvn_refl.m`, which left `rw` unset for images).
 - **Found on:** FINAL FANTASY TACTICS - The Ivalice Chronicles.
 
+### Draw passes without fragment order read unfinished attachments, and the damage persists
+
+- **Symptom:** a bright or purple patch grows on a still scene. Presented luma rose from 29 through 66 and 105 to 119, against 41 in a clean run. The corruption stayed in both phases of an in-run A/B (`DM_AB`).
+- **Cause:** a diagnostic switch of an nxnative build (`DM_NVN_BAR_FRAG`, in neither tree now) took the Fragment stage out of the end-of-pass barrier and turned off the `All → Fragment` barrier for aliased resources (`resource_vis()` includes `ResourceAlias`). Fragments could read an earlier pass's attachment before it was ready. Each rise in luma began with the switch on, and the frames after it carried the damaged state forward.
+- **Fix:** keep fragment ordering at both pass boundaries, as this host does: the end barrier's Fragment stage cost 5–10 µs per pass in the reported M2 comparison. Check the picture in a separate run per arm, so that damage from one arm cannot reach the other ([A/B in one run](../agents/05-debugging.md#gpu-time-on-the-device)).
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md), in Castle Town and Zora's Domain on a diagnostic build (upstream nxnative `a706ddef`). The same build with the switch off rendered correctly.
+
 ### A segment committed after a buffer → texture copy
 
 - **Symptom:** a texture copied from a staging buffer shows another texture's blocks (Catherine: Full Body's cutscene subtitle band a hard-edged dark box with a magenta stroke through it).
@@ -1823,6 +1830,14 @@ The replay of NVN on Metal (`dm/gfx/nvn/nvn_mtl.m`). Each entry: symptom, cause,
 - **Fix:** only timestamp reports are kept per submission, and the query addresses, which are kept apart, are enough for those; both tables grow (`rc_note`, `rc_occ_add`).
 - **Found on:** Splatoon Raiders: 285 ink queries a frame in its dialogue scene came before the conditional clears, and the lit scene was wiped: a black screen with only the text on it. The opening cutscene has no such queries, and the pier about 160.
 - **Check:** `make -C dm/gfx/tests GAME=<id> check_t_sbw`.
+
+### Running-write hash collisions and page-set overflow taint conditional renders
+
+- **Symptom:** random or sustained black 3D frames while the 2D HUD keeps drawing in busy or wide-view scenes, with no `[RED]` lines; `DM_NVN_ENC_THREAD=1` turns flickering into multi-second black screens, and restarting the game can change whether a session hits it.
+- **Cause:** two limits in `nvn_mtl.m`'s GPU write-hazard tables gave false `gw_live` / `g_sbw_over` hits in `rc_source()` ([A condition on a word the GPU writes](#a-condition-on-a-word-the-gpu-writes)), making `OP_RENDER_COND` treat `agl`'s CPU-written conditional-render reference word (`rec + 16`) as unknown so its `ClearColor` wiped the 3D composite target before the upscaler read it: (1) the direct-mapped running-write tables (`g_gw`, `g_gwx`, `g_gwr`) collapsed a slot's page tag to `~0ull` on any 2-page hash collision, and any later write to a single hot page in that slot while `fence > done` kept `~0ull` latched permanently until a full GPU drain (continuous with the encode thread); (2) the per-submission page set (`g_sbwp`) was fixed at 16,384 slots (and 64 wide intervals), overflowing on high-draw scenes with thousands of writable storage buffers and setting `g_sbw_over` / `g_gw_all` (which also refused `ubp_get` partial uniform shadows).
+- **Fix:** replace the direct-mapped running-write tables with 128-byte-aligned 7-way set-associative tables with an independent per-set `over_fence` that later non-overflowing writes never extend, merge `g_gw` into `g_gwx` plus a `g_um` page check (`um_page_live`), size `g_gwr` as a compact 1,024-set filter for the 4,096-entry report ring, grow `g_sbwp` / `g_sbw_list` dynamically at ≤50% load from 16,384 slots (`sbw_grow`), and widen `SBW_WN` to 256.
+- **Found on:** Donkey Kong Bananza, on this game's engine (agl), in nxnative ([issue #2699](https://github.com/seedds/nxnative/issues/2699), [PR #3185](https://github.com/seedds/nxnative/pull/3185)): Freezer / Hilltop / Canyon layers, wide camera angles, and the 3D overview map (~7,500 terrain chunks binding ~15 KB writable SSBOs per submission). Here a write of 64 pages or more stays an interval across submissions (`GW_PAGES = SBW_WPAGES`, up to 128 intervals in `g_gww`: [Inline updates of a running submission refused uniform shadows](#inline-updates-of-a-running-submission-refused-uniform-shadows), where Ocarina of Time's refusals went from about 10,400 to 0 per 300 frames), not from 4,096 pages as in upstream's change.
+- **Check:** `make -C dm/gfx/tests GAME=<id> check_t_sbw` (7-way collision without tainting an unrelated page, non-latching `over_fence` expiration, `g_um` live-page tracking outside `g_gwx`, and 24,000-page dynamic growth without `g_sbw_over` or `g_gw_all`).
 
 ### Query slots running out inside a pass
 

@@ -20,6 +20,8 @@ int front_screen_variable_refresh(void);
 // The frame rate the display link paces the game at (60, 30, 120; nvn_mtl.m link_sync): in fullscreen, a screen whose refresh rate is not a multiple of it is switched, while the game runs,
 // to a mode of the same size whose rate is, and back when the window leaves fullscreen or that screen (front_mac.m). Called from the present thread
 void front_screen_match(int fps);
+// Whether startup fullscreen or a screen mode switch is still settling, so the display link waits before starting (front_mac.m). Any thread
+int front_screen_settling(void);
 // Progress screen of the first-start prepare step (nvn_mtl.m warm_prepare: "Preparing shaders" while the pipelines of the prewarm lists are built before the game's first frame):
 // title and done of total shown over the game's view (a dark screen, the title, a bar and a count), updated on each call; title NULL hides it. Any thread; the front end switches to its main
 // thread and does not block. Nothing is shown without a window

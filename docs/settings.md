@@ -3,7 +3,7 @@
 The Mac app shows the game's settings in a [window](#the-mac-settings-window) before the game starts. A setting that only matters while another is on appears under it and disappears when that one is turned off. Click **Play** to start; the app remembers your choices for the next start. The settings are grouped under **Game**, **Controls** and **Performance**, and **Practice** in an app that carries the practice tools.
 
 - [Tested defaults](#tested-defaults)
-- [Game](#game): [Frame rate](#frame-rate), [Dynamic resolution](#dynamic-resolution), [Console mode](#console-mode), [Screen upscaling](#screen-upscaling), [3D upscaler](#3d-upscaler), [3D upscaler sharpness](#3d-upscaler-sharpness), [Game language](#game-language), [Display mode](#display-mode)
+- [Game](#game): [Frame rate](#frame-rate), [Dynamic resolution](#dynamic-resolution), [Render scale](#render-scale), [Console mode](#console-mode), [Screen upscaling](#screen-upscaling), [3D upscaler](#3d-upscaler), [3D upscaler sharpness](#3d-upscaler-sharpness), [Game language](#game-language), [Display mode](#display-mode)
 - [Controls](#controls): [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join), [Switch 2 controllers](#switch-2-controllers), [Microphone](#microphone), [Microphone gain](#microphone-gain)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [Practice](#practice): [Practice tools](#practice-tools)
@@ -27,6 +27,10 @@ The app carries the list as `Contents/Resources/dm/launcher.json`, for a front e
 ### Dynamic resolution
 
 Off, the default, keeps the 3D picture at full size. On lets the game lower its resolution when frames run heavy and raise it again when they fit: steadier frame rate, at times a softer picture. The game's note has the measurements ([Dynamic resolution](../dm/games/0400486024DEC000/README.md#dynamic-resolution)).
+
+### Render scale
+
+**1.0**, the default, renders the 3D picture at the game's own size. Below it, from **0.5**, the 3D views are drawn at that fraction of their size and upscaled as the game does, to the same output resolution: a lighter GPU load for a slower Mac, and a softer picture. While it is below 1.0 the game's dynamic resolution stays at its top level. The game's note has the measurements ([Render scale](../dm/games/0400486024DEC000/README.md#render-scale)).
 
 ### Console mode
 
@@ -234,6 +238,7 @@ A line like `DM_PRESENT_SNAP=1` in the app's `env.txt` (`~/Library/Application S
 |---|---|---|
 | Frame rate | `DM_FPS_TARGET` | `30`, `60` |
 | Dynamic resolution | `DM_DYNAMIC_RESOLUTION` | `1`, `0` |
+| Render scale | `DM_RENDER_SCALE` | `0.5` to `1.0` |
 | Console mode | `DM_OPMODE` | `1` docked, `0` handheld |
 | Screen upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | 3D upscaler | `DM_UPSCALER` | `game`, `metalfx` |

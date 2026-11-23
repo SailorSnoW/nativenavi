@@ -311,6 +311,13 @@ void dm_fps_state_apply(void) {
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
     if (t != 0 && t != 30 && t != 60) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30 or 60; using the game's own frame step", e); t = 0; }
     float f = (float)t; memcpy(dm_fps_state, &f, sizeof f);
+    // Render scale of the 3D views, which the stubs of the game's view-size update read (the RENDER_SCALE capability of the frame step stubs: Ocarina of Time's patches.py): 1.0,
+    // the default, keeps the game's own size and its dynamic resolution; a factor from 0.5 to under 1.0 renders the 3D views at that fraction of it, the dynamic resolution held at
+    // its top level (DM_RENDER_SCALE). Below the game's own resolution only: the output and the game's upscaler stay as they are. Independent of the frame step: written at target 0 too
+    const char *rs = getenv("DM_RENDER_SCALE"); float sc = 1.0f;
+    if (rs) { char *end; sc = strtof(rs, &end); if (end == rs || *end || !(sc >= 0.5f && sc <= 1.0f)) { LOG("[RED] DM_RENDER_SCALE=%s: must be 0.5 to 1.0; keeping the game's size", rs); sc = 1.0f; }
+              else if (sc < 1.0f) LOG("%s: 3D views rendered at %.2f of the game's size (DM_RENDER_SCALE)", g_fps_mod, sc); }
+    memcpy(dm_fps_state + 0x10, &sc, sizeof sc);
     // The game's own dynamic resolution, which the level function's stub reads (the DYNAMIC_RESOLUTION capability of the frame step stubs): 1 lets it run, 0 (the default) holds
     // full resolution. A build without that stub ignores the field
     const char *dr = getenv("DM_DYNAMIC_RESOLUTION"); uint32_t dyn = dr && !strcmp(dr, "1");
