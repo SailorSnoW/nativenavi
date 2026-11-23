@@ -2,9 +2,10 @@
 // demuxes and hands to nn::codec packet by packet. The SDK sends every call to a decoder service (IPC) the host does not serve. The SDK's protocol, read from its implementation
 // (sdk 20.5.19 Ounce; this game's is 22.2.8, whose names the entries below carry):
 //   - the client makes one image pool per output picture (MakeDecodeImagePreference → CalculateDecoderImagePoolBuffer → InitializeDecoderImagePool) and registers each with the
-//     decoder under an index (RegisterAv1DecoderBuffer). Registering puts the index in the decoder's queue of acquirable buffers (8 deep), with a sync handle already signalled.
-//   - Acquire takes the oldest index and its sync handle (description 3604 when the queue is empty); ReleaseAv1DecoderOutputBuffer gives the buffer to the decoder to fill and puts
-//     it back in the queue at once, with a new sync handle that signals when the decoder has written a picture into it. The client waits for that handle through a sync point
+//     decoder under an index (RegisterAv1DecoderBuffer). Registering gives the buffer to the decoder to fill and puts the index in the decoder's queue of acquirable buffers
+//     (8 deep), with a sync handle that signals when the decoder has written a picture into it.
+//   - Acquire takes the oldest index and its sync handle (description 3604 when the queue is empty); ReleaseAv1DecoderOutputBuffer gives the buffer back to the decoder to fill
+//     and puts it back in the queue at once, with a new sync handle that signals when the next picture is written into it. The client waits for that handle through a sync point
 //     event, then reads the picture's properties (description 3604 until it is filled) and the picture (ReadDecoderOutputImageNv12, the CPU route, which this game takes)
 //   - SubmitAv1DecoderInputBuffer takes one packet with its time and an end-of-stream flag; description 3603 when the decoder cannot take more (the client retries after the
 //     submission-ready event).
@@ -95,7 +96,7 @@ typedef struct {
     movie_vt_control vt;
     struct { cv_pool *pool; uint32_t pidx; int reg, filled; uint32_t gen, filled_gen; uint16_t w, h; int64_t ts; uint8_t eos; } buf[CV_BUFS];
     uint32_t fifo[8], fhead, fcount;          // acquirable indices
-    uint32_t pend[CV_BUFS], phead, pcount;    // released, waiting for a picture
+    uint32_t pend[CV_BUFS], phead, pcount;    // registered or released, waiting for a picture
     cv_pic *held[CV_HOLD]; int64_t held_ts[CV_HOLD]; uint8_t held_eos[CV_HOLD]; int nheld;
     int eos_pending;
     // The decoder's thread (cv_worker). The codec state above (av1) is its own from Initialize to Finalize: it decodes outside mu
@@ -310,11 +311,25 @@ static Result cv_dec_fin(void *t) {
     pthread_cond_destroy(&d->work); pthread_mutex_destroy(&d->mu); free(d); *(cv_dec **)t = NULL;
     return 0;
 }
+static void cv_drop_index(uint32_t *q, uint32_t *head, uint32_t *count, uint32_t cap, uint32_t i) {   // removes i from a ring of indices, keeping the others' order
+    uint32_t n = 0, tmp[CV_BUFS];
+    for (uint32_t k = 0; k < *count; k++) { uint32_t v = q[(*head + k) % cap]; if (v != i) tmp[n++] = v; }
+    for (uint32_t k = 0; k < n; k++) q[k] = tmp[k];
+    *head = 0; *count = n;
+}
+// Registering gives the buffer to the decoder (pend[]), with a generation of its own from 1: its sync handle signals once a picture is in it. The movie library registers and
+// acquires its buffers, arms sync point events on their handles and starts the decoder without a release first (subsdk0+0x3a40); a handle the host signalled at once let it read
+// an empty buffer's properties (description 3604) when Start beat the decoder's first picture
 static Result cv_dec_reg(void *t, uint32_t i, void *pool, uint32_t pidx) {
     cv_dec *d = cv_of(t); if (!d || i >= CV_BUFS) { LOG("[RED] nn::codec::RegisterAv1DecoderBuffer index %u", i); return CV_R(2004); }
     dm_host_mutex_lock(&d->mu);
-    d->buf[i].pool = pool_of(pool); d->buf[i].pidx = pidx; d->buf[i].reg = 1; d->buf[i].filled = 0; d->buf[i].gen = 0; d->buf[i].filled_gen = 0;
+    d->buf[i].pool = pool_of(pool); d->buf[i].pidx = pidx; d->buf[i].reg = 1; d->buf[i].filled = 0; d->buf[i].gen++;
+    cv_drop_index(d->pend, &d->phead, &d->pcount, CV_BUFS, i);
+    if (d->pcount < CV_BUFS) { d->pend[(d->phead + d->pcount) % CV_BUFS] = i; d->pcount++; }
+    cv_drop_index(d->fifo, &d->fhead, &d->fcount, 8, i);
     if (d->fcount < 8) { d->fifo[(d->fhead + d->fcount) % 8] = i; d->fcount++; } else LOG("[RED] nn::codec: acquirable queue full at register %u", i);
+    int before = cv_pending(d);
+    fill(d, 0); ready(d, before, 0);
     pthread_mutex_unlock(&d->mu);
     return 0;
 }
@@ -453,6 +468,7 @@ static void cv_dec_rel(void *t, uint32_t i, cv_sync sync) {
     (void)sync; cv_dec *d = cv_of(t); if (!d || i >= CV_BUFS || !d->buf[i].reg) { LOG("[RED] nn::codec::ReleaseAv1DecoderOutputBuffer index %u", i); return; }
     dm_host_mutex_lock(&d->mu);
     d->buf[i].gen++; d->buf[i].filled = 0;
+    cv_drop_index(d->pend, &d->phead, &d->pcount, CV_BUFS, i);   // an unfilled buffer may still sit in pend[] (registered, never filled)
     if (d->pcount < CV_BUFS) { d->pend[(d->phead + d->pcount) % CV_BUFS] = i; d->pcount++; }
     if (d->fcount < 8) { d->fifo[(d->fhead + d->fcount) % 8] = i; d->fcount++; } else LOG("[RED] nn::codec: acquirable queue full at release %u", i);
     int before = cv_pending(d);
@@ -505,10 +521,9 @@ CV_OTHER(vp8, "VP8", "_ZN2nn5codec36InitializeVp8DecoderByTransferMemoryEPNS0_14
 CV_OTHER(h264, "H.264", "_ZN2nn5codec37InitializeH264DecoderByTransferMemoryEPNS0_15H264DecoderTypeEPvmmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeEPKvm",
     "_ZN2nn5codec35InitializeH264DecoderByRemoteMemoryEPNS0_15H264DecoderTypeEmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeEPKvm")
 #undef CV_OTHER
-// The host's sync handles signal when their buffer holds the picture of that release; a handle the host did not make (another nn::gs user) reads as signalled
+// The host's sync handles signal when their buffer holds the picture of that registration or release; a handle the host did not make (another nn::gs user) reads as signalled
 static bool sync_reached(const cv_sync *s) {
     if (s->magic != CV_SYNC) { static int once; if (!once++ && (s->magic || s->dec)) LOG("[RED] nn::codec: a sync handle the host did not make (%#x): signalled", s->magic); return true; }
-    if (!s->gen) return true;
     dm_host_mutex_lock(&g_cv_mu);   // held until the decoder's lock is: FinalizeAv1Decoder cannot free it in between
     cv_dec *d = s->dec && s->dec <= 16 ? g_cv[s->dec - 1] : NULL;
     bool r = true;

@@ -193,18 +193,17 @@ int main(void) {
     cv_dec *d = cv_of(dec); assert(d && d->av1 && d->w == 64 && d->h == 64);
     void *ev = h_cv_av1event(dec); assert(ev == dec + CV_EVENT_OFF && g_ev[ev_slot(ev)].bound && ev_set(ev));
 
-    // Registering makes a buffer acquirable at once, its sync handle signalled; an empty queue answers 3604
+    // Registering gives each buffer to the decoder and makes it acquirable at once, its sync handle unsignalled until a picture lands; an empty queue answers 3604
     for (uint32_t i = 0; i < 2; i++) assert(!h_cv_av1reg(dec, i, pool[i], 0));
-    for (uint32_t i = 0; i < 2; i++) { assert(!h_cv_av1acq(&idx, &sync, dec) && idx == i && sync.magic == CV_SYNC && sync.gen == 0 && h_gs_trywait(&sync)); }
+    cv_sync sync0, sync1;
+    assert(!h_cv_av1acq(&idx, &sync0, dec) && idx == 0 && sync0.magic == CV_SYNC && sync0.gen == 1 && !h_gs_trywait(&sync0));
+    assert(!h_cv_av1acq(&idx, &sync1, dec) && idx == 1 && sync1.magic == CV_SYNC && sync1.gen == 1 && !h_gs_trywait(&sync1));
     assert(h_cv_av1acq(&idx, &sync, dec) == CV_NONE);
     assert(h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dec, 0) == CV_NONE);
 
-    // Released: acquirable again with a new handle that signals once a picture is in the buffer; the picture's properties and its NV12 / RGBA readback
-    h_cv_av1rel(dec, 0, sync);
-    assert(!h_cv_av1acq(&idx, &sync, dec) && idx == 0 && sync.gen == 1 && !h_gs_trywait(&sync));
-    assert(h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dec, 0) == CV_NONE);
+    // The first picture lands in registered buffer 0 without a release; its properties and its NV12 / RGBA readback
     assert(!h_cv_av1submit(&id, dec, av1, sizeof av1, 1000, false) && id == 1);
-    settle(dec); assert(h_gs_trywait(&sync));
+    settle(dec); assert(h_gs_trywait(&sync0) && !h_gs_trywait(&sync1));
     assert(!h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dec, 0) && w == 64 && h == 64 && cw == 64 && ch == 64 && ts == 1000 && !eos);
     static uint8_t nv12[64 * 64 * 3 / 2], rgba[64 * 64 * 4];   // Y 81, Cb 90, Cr 240: red (BT.601, video range)
     assert(!h_cv_nv12(pool[0], 0, 0, 0, 64, 64, nv12, 64, 4096, nv12 + 4096, 64, 2048));
@@ -223,6 +222,15 @@ int main(void) {
     }
     assert(!h_cv_rgba(pool[0], 0, 0, 0, 64, 64, rgba, 256, sizeof rgba));
     for (int i = 0; i < 64 * 64 * 4; i += 4) assert(rgba[i] >= 235 && rgba[i + 1] <= 20 && rgba[i + 2] <= 20 && rgba[i + 3] == 255);
+    // The second picture fills registered buffer 1; then a release gives buffer 0 back with a new handle (generation 2) that signals at the next picture
+    assert(!h_cv_av1submit(&id, dec, av1, sizeof av1, 1001, false) && id == 2);
+    settle(dec); assert(h_gs_trywait(&sync1) && !d->pcount);
+    h_cv_av1rel(dec, 0, sync0);
+    assert(!h_cv_av1acq(&idx, &sync, dec) && idx == 0 && sync.gen == 2 && !h_gs_trywait(&sync));
+    assert(h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dec, 0) == CV_NONE);
+    assert(!h_cv_av1submit(&id, dec, av1, sizeof av1, 1002, false) && id == 3);
+    settle(dec); assert(h_gs_trywait(&sync) && !d->pcount);
+    assert(!h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dec, 0) && ts == 1002);
 
     // No released buffer: pictures wait; the event goes down at CV_READY, with room left for a client's signal in flight, and packets are refused (3603) at CV_HOLD.
     // A packet not yet decoded counts as the picture it will give: the event and the refusal are the same whether the decoder's thread has got to it or not
@@ -249,14 +257,14 @@ int main(void) {
     settle(dec); assert(d->nheld == CV_READY - 1 && ev_set(ev));
     assert(!h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dec, 1) && ts == 2000 + CV_HOLD - CV_READY + 1);
 
-    // Sync point event: armed on an unfilled buffer, signalled when the picture lands; one armed on a filled buffer is signalled at once
+    // Sync point event: armed on an unfilled buffer, signalled when the picture lands; one armed on a filled buffer (a buffer registered while pictures wait among them) is signalled at once
     assert(!h_spt_create(spt) && g_ev[ev_slot(spt)].bound);
     h_cv_av1rel(dec, 0, sync);   // buffer 0 takes the next waiting picture at once
     assert(!h_cv_av1acq(&idx, &sync, dec) && idx == 0);
     assert(!h_spt_request(spt, &sync) && ev_set(spt) && !SPT(spt)->armed);
-    assert(!h_cv_av1reg(dec, 2, pool[2], 0) && !h_cv_av1acq(&idx, &sync, dec) && idx == 2);
-    for (int i = 0; i < 2; i++) { h_cv_av1rel(dec, (uint32_t)i, sync); assert(!h_cv_av1acq(&idx, &sync, dec)); }   // the last two waiting pictures go out
-    h_cv_av1rel(dec, 2, sync); assert(!h_cv_av1acq(&idx, &sync, dec) && idx == 2 && !h_gs_trywait(&sync));
+    assert(!h_cv_av1reg(dec, 2, pool[2], 0) && !h_cv_av1acq(&idx, &sync, dec) && idx == 2 && sync.gen == 1 && h_gs_trywait(&sync));   // takes a waiting picture at registration
+    h_cv_av1rel(dec, 0, sync); assert(!h_cv_av1acq(&idx, &sync, dec) && idx == 0 && !d->nheld);   // the last waiting picture goes out
+    h_cv_av1rel(dec, 2, sync); assert(!h_cv_av1acq(&idx, &sync, dec) && idx == 2 && sync.gen == 2 && !h_gs_trywait(&sync));
     assert(!h_spt_request(spt, &sync) && !ev_set(spt) && SPT(spt)->armed);
     assert(!h_cv_av1submit(&id, dec, av1, sizeof av1, 3000, false));
     settle(dec); assert(ev_set(spt) && !SPT(spt)->armed && h_gs_trywait(&sync));
@@ -305,6 +313,33 @@ int main(void) {
     for (int i = 0; i < 6; i++) assert(!h_cv_av1submit(&id, dec, av1, sizeof av1, 7000 + i, false));
     assert(!h_cv_av1fin(dec) && !cv_of(dec) && !g_ev[ev_slot(ev)].bound);
     for (int i = 0; i < 3; i += 2) { h_cv_poolfin(pool[i]); assert(!pool_of(pool[i])); }
+    // The movie library's start (NintendoSDK_movie, SDK 19-22; this game's subsdk0+0x3a40): RegisterVideoFrame calls Register, Acquire and RequestSyncPointEvent and returns, and
+    // Start comes at once, with no release. The event stays armed until a real picture lands (it fired at once and raced Start), and releasing an unfilled buffer does not put it
+    // twice in pend[]
+    {   _Alignas(16) static uint8_t dk[0x400], pk[0x40], mk[64 * 64 * 4], ek[0x80];
+        assert(!h_cv_pool(pk, mk, size, &pref, 1) && pool_of(pk));
+        assert(!h_cv_av1rm(dk, 0x10000, 64, 64, 1, 1, 3, 2)); cv_dec *k = cv_of(dk);
+        assert(!h_spt_create(ek));
+        assert(!h_cv_av1reg(dk, 0, pk, 0) && k->pcount == 1 && !h_cv_av1acq(&idx, &sync, dk) && idx == 0 && sync.gen == 1 && !h_gs_trywait(&sync));
+        assert(!h_spt_request(ek, &sync) && !ev_set(ek) && SPT(ek)->armed);
+        assert(h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dk, 0) == CV_NONE);
+        assert(!h_cv_av1start(dk) && !ev_set(ek) && SPT(ek)->armed);
+        assert(!h_cv_av1submit(&id, dk, av1, sizeof av1, 5000, false));
+        settle(dk); assert(ev_set(ek) && !SPT(ek)->armed && !ev_by_me(ek) && h_gs_trywait(&sync));
+        assert(!h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dk, 0) && w == 64 && h == 64 && ts == 5000 && !eos && !k->pcount);
+        // Release, Acquire, RequestSyncPointEvent, Submit for the next picture
+        h_cv_av1rel(dk, 0, sync); assert(k->pcount == 1 && !h_cv_av1acq(&idx, &sync, dk) && idx == 0 && sync.gen == 2 && !h_gs_trywait(&sync));
+        assert(!h_spt_request(ek, &sync) && !ev_set(ek) && SPT(ek)->armed);
+        // Releasing an unfilled buffer moves its generation on without a second entry in pend[]
+        h_cv_av1rel(dk, 0, sync); assert(k->pcount == 1 && !h_cv_av1acq(&idx, &sync, dk) && idx == 0 && sync.gen == 3 && !h_gs_trywait(&sync));
+        assert(!h_spt_request(ek, &sync) && !ev_set(ek) && SPT(ek)->armed);
+        assert(!h_cv_av1submit(&id, dk, av1, sizeof av1, 6000, false));
+        settle(dk); assert(ev_set(ek) && !SPT(ek)->armed && h_gs_trywait(&sync));
+        assert(!h_cv_av1props(&w, &h, &cw, &ch, &ts, &eos, dk, 0) && ts == 6000);
+        h_spt_destroy(ek);
+        assert(!h_cv_av1fin(dk));
+        h_cv_poolfin(pk);
+    }
     {   // The other initializer, by transfer memory, whose last two arguments lie on the stack (the guest's 8-byte slots), and a packet with no sequence header yet gives no picture
         uint8_t da[0x400]; memset(da, 0, sizeof da);
         assert(!h_cv_av1tm(da, NULL, 0, 0x10000, 0xabcd0080, 0xabcd0040, 1, 3, 2, 2) && cv_of(da) && cv_of(da)->w == 0x80 && cv_of(da)->h == 0x40);
