@@ -111,13 +111,27 @@ class Sources(unittest.TestCase):
 
 
 class SourceCommit(unittest.TestCase):
+    def test_a_changed_copy_has_a_commit_of_its_own(self):   # the app unpacks its sources once per commit (Setup.swift prepareSource): two copies of other changes must differ
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            (root / 'a.txt').write_text('one')
+            out = {'rev-parse': '0123456789ab\n', 'status': ' M a.txt\n'}
+            with mock.patch.object(build_gui, 'REPO', root), mock.patch.object(build_gui, 'git', lambda *a: out[a[0]]):
+                first = build_gui.commit(['a.txt'])
+                self.assertRegex(first, r'^0123456789ab\+dirty\.[0-9a-f]{8}$')
+                self.assertEqual(build_gui.commit(['a.txt']), first)
+                (root / 'a.txt').write_text('two')
+                self.assertNotEqual(build_gui.commit(['a.txt']), first)
+                out['status'] = ''
+                self.assertEqual(build_gui.commit(['a.txt']), '0123456789ab')
+
     def test_a_copy_of_the_sources_names_its_commit(self):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             (root / 'dm/mac').mkdir(parents=True)
-            (root / '.source-commit').write_text('0123456789ab+dirty\n')
+            (root / '.source-commit').write_text('0123456789ab+dirty.0a1b2c3d\n')
             with mock.patch.object(pack_app, 'HERE', root / 'dm/mac'):
-                self.assertEqual(pack_app.source_commit(), '0123456789ab+dirty')
+                self.assertEqual(pack_app.source_commit(), '0123456789ab+dirty.0a1b2c3d')
                 (root / '.source-commit').unlink()
                 self.assertIsNone(pack_app.source_commit())
 

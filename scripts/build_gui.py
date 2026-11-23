@@ -7,7 +7,8 @@
 #   Contents/Resources/setup.json      dm/gui/setup.json (the downloads, pinned by SHA-256) with this checkout's facts: its commit, the Xcode and Metal compiler the shaders were tested with
 #                                      (dm/gfx/tools/own_compilers.py XCODE_VERSION, dmsh_chain.lock metal_macosx), the Python packages' list, the host's Rust folder, and the NUP
 #                                      containers of the game the app builds from (the profile's nup.tsv: each one's SHA-256, size and what it holds; the app refuses any other file)
-#   Contents/Resources/source.tar.gz   this checkout's files as they are on disk: the tracked ones and the new ones git does not ignore (any change makes the commit <hash>+dirty).
+#   Contents/Resources/source.tar.gz   this checkout's files as they are on disk: the tracked ones and the new ones git does not ignore (any change makes the commit
+#                                      <hash>+dirty.<digest of the packed files>, so that each changed copy is a commit of its own to the app).
 #                                      The app unpacks it into ~/Library/Developer/NativeNavi/Source and builds the game from there
 #   Contents/Resources/Assets.car, AppIcon.icns   dm/gui/AppIcon.icon, compiled with actool
 #   Contents/Info.plist                the .nup type it opens, and why it asks for the folders a NUP may be in
@@ -16,6 +17,7 @@
 # Usage: python3 scripts/build_gui.py [-o <path>.app] [--sign "Developer ID Application: <name> (<team ID>)"] [--zip]   (exit code 0 on success, 1 on error, 2 for invalid arguments)
 import argparse
 import ast
+import hashlib
 import json
 import os
 import plistlib
@@ -99,9 +101,17 @@ def source_files():   # the checkout's files as the app packs them: tracked and 
     return sorted({n for n in names if n and ((REPO / n).is_file() or (REPO / n).is_symlink())})
 
 
-def commit():   # the checkout's commit, +dirty when its files differ from it
+def commit(files):   # the checkout's commit; when its files differ from it, +dirty and a digest of the files packed (their names and bytes). The app unpacks its copy once per
+    # commit (Setup.swift prepareSource) and offers to build the game again when it changes (updateAvailable): with +dirty alone, a second app of other changes kept the first one's files
     head = git('rev-parse', '--short=12', 'HEAD').strip()
-    return head + ('+dirty' if git('status', '--porcelain').strip() else '')
+    if not git('status', '--porcelain').strip(): return head
+    h = hashlib.sha256()
+    for rel in files:
+        path = REPO / rel
+        h.update(rel.encode() + b'\0')
+        h.update((b'L' + os.readlink(path).encode()) if path.is_symlink() else (b'F' + path.read_bytes()))
+        h.update(b'\0')
+    return f'{head}+dirty.{h.hexdigest()[:8]}'
 
 
 def setup(source_commit):
@@ -140,8 +150,9 @@ def pack_source(dest, files):
 def build(out, identity=None, zip_it=False, say=print):
     if out.suffix != '.app': raise Error(f'the app (-o) must end in .app: {out}')
     if not (GUI / 'AppIcon.icon').is_dir(): raise Error(f'no icon at {GUI / "AppIcon.icon"}')
-    minos, source_commit = min_os(), commit()
-    if source_commit.endswith('+dirty'): say(f'note: the checkout has changes; the app packs its files as they are on disk ({source_commit})')
+    minos, files = min_os(), source_files()
+    source_commit = commit(files)
+    if '+dirty' in source_commit: say(f'note: the checkout has changes; the app packs its files as they are on disk ({source_commit})')
     swiftc = run(['xcrun', '--find', 'swiftc']).strip()
     sdk = run(['xcrun', '--sdk', 'macosx', '--show-sdk-path']).strip()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +167,6 @@ def build(out, identity=None, zip_it=False, say=print):
              '-module-cache-path', tmp / 'module-cache', '-o', macos / NAME, *sorted(GUI.glob('*.swift'))])
         run(['xcrun', 'actool', GUI / 'AppIcon.icon', '--compile', res, '--platform', 'macosx', '--minimum-deployment-target', minos, '--app-icon', 'AppIcon',
              '--output-partial-info-plist', tmp / 'icon.plist', '--output-format', 'human-readable-text'])
-    files = source_files()
     say(f'packing the sources: {len(files):,} files of {source_commit}')
     pack_source(res / 'source.tar.gz', files)
     (res / 'setup.json').write_text(json.dumps(setup(source_commit), indent=2) + '\n')
