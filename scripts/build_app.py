@@ -2,7 +2,7 @@
 # The Legend of Zelda: Ocarina of Time (game profile dm/games/0400486024DEC000) from its NUP to a build that runs on this Mac: unpack the NUP (scripts/pack_nup.py: the code modules, one RomFS
 #   image per version, the DLC) → rewrite the code modules (patch_nso.py) → split out the shaders and check them against the profile's tables (shader_split.py) → the Mac shader libraries
 #   (dmsh_build.py) → the Mac host and its fonts → the practice tools (practice_tools) → the pipeline archive and the prewarm pipelines → the Mac app (dm/mac/pack_app.py).
-# PLATFORM = 'mac-app' / --platform mac-app (the default): a self-contained, double-clickable Mac app of the game beside the build folder, <game name>.app (OUT_APP / -o names another path):
+# PLATFORM = 'mac-app' / --platform mac-app (the default): a self-contained, double-clickable Mac app of the game beside the build folder, <game name>.app (OUT_APP / -o names another path, or a folder to put it in):
 #   the launcher dm/mac/launcher.c, the Mac host, the RomFS (APFS clones on the build's volume), the Mac shader libraries, the DLC and the rewritten modules inside it; the save in
 #   ~/Library/Application Support/NativeNavi/<title ID>/, the log in ~/Library/Logs/NativeNavi/<title ID>.log. Signed ad-hoc, or with MAC_SIGN / --mac-sign; no hardened runtime, no notarization.
 # PLATFORM = 'mac' / --platform mac is the development build: the same steps up to the Mac host, then the pipeline prebuild; no app. Its last line is the command that runs the game in the
@@ -54,7 +54,7 @@ import pack_nup   # the game's NUP container
 NUP = ''                                # the game's .nup file, or the folder that holds it (empty = ask at run time)
 PACKAGE = ''                            # version built (empty = the newest in the NUP; 'v131072', or 'v0' for the base game)
 WORK_DIR = ''                           # the build folder (empty = <title ID>_build in the NUP's folder); the unpacked files, shader cache and temporary files live there, and the app goes beside it unless OUT_APP names it
-OUT_APP = ''                            # PLATFORM 'mac-app': the output app (empty = <game name>.app beside the build folder)
+OUT_APP = ''                            # PLATFORM 'mac-app': the output app, or an existing folder to put <game name>.app in (empty = <game name>.app beside the build folder)
 APP_NAME = ''                           # the app's name (empty = the game name in the NUP's control data, else the profile's)
 BUNDLE_ID = ''                          # the app's bundle ID (empty = org.nativenavi.<title ID in lowercase>)
 ICON = ''                               # the app icon, a JPEG or PNG of any size (empty = the game's icon from its control data; a NUP may have none)
@@ -1804,7 +1804,7 @@ def parse_args(argv):
         epilog='example: python3 scripts/build_app.py ~/games/oot/"Ocarina of Time [0400486024dec000][v131072].nup"')
     ap.add_argument('nup', nargs='?', help='the game\'s NUP container (a .nup file), or the folder that holds it (default: the NUP setting, else asked)')
     ap.add_argument('-p', '--package', help='version built, e.g. v131072, or v0 for the base game (default: the newest in the NUP)')
-    ap.add_argument('-o', '--out', help='--platform mac-app: the output app, a path ending in .app (default: <game name>.app beside the build folder)')
+    ap.add_argument('-o', '--out', help='--platform mac-app: the output app, a path ending in .app, or an existing folder to put <game name>.app in, such as /Applications (default: <game name>.app beside the build folder)')
     ap.add_argument('--app-name', help='the app\'s name (default: the game name in the NUP\'s control data, else the profile\'s)')
     ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: org.nativenavi.<title ID in lowercase>)')
     ap.add_argument('--platform', choices=('mac', 'mac-app'), help='mac-app = a self-contained, double-clickable Mac app of the game (<game name>.app beside the build folder, -o names another); '
@@ -1962,7 +1962,9 @@ def main(args=None):
     versions = [pkg_ver] if derived else need + ([pkg_ver] if pkg_ver not in need else [])
     work = build_folder(args, nup_dir, g.id); BUILD_FOLDERS.add(work)
     out_app = Path(os.path.expanduser(args.out or OUT_APP)).resolve() if mac_pack and (args.out or OUT_APP) else None   # by default beside the build folder, named after the game (below)
-    if out_app and out_app.suffix != '.app': raise BuildError(f'the Mac app (-o / OUT_APP) must end in .app: {out_app}')
+    out_dir = out_app if out_app and out_app.suffix != '.app' and out_app.is_dir() else None   # a folder: the app goes in it, named after the game (a front end knows no name before the unpack)
+    if out_dir: out_app = None
+    if out_app and out_app.suffix != '.app': raise BuildError(f'the Mac app (-o / OUT_APP) must end in .app, or be a folder that exists: {out_app}')
     say('Mac app: the Mac shaders and the Mac host, packed into a Mac app' if mac_pack else 'development build: the Mac shaders and the Mac host, then the command that runs the game')
     say(f'build folder (the unpacked game files in extract/, kept for the next build): {work}')
     xlate = repo / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate'
@@ -2006,7 +2008,7 @@ def main(args=None):
     app_version = app_display_version(game, base, g, pkg_ver)
     icon, stand_in = app_icon(user_icon, spare_icon, game, base)
     if mac_pack:
-        out_app = out_app or work.parent / f'{mac_app_name(app_name)}.app'
+        out_app = out_app or (out_dir or work.parent) / f'{mac_app_name(app_name)}.app'
         if stand_in: say(f'no game icon: the app takes the fallback icon {spare_icon} (--fallback-icon / FALLBACK_ICON)')
         say_game(app, app_name, app_version or '1.0', bundle_id, out_app, icon)
     # the game language: Horizon gives the game one of the languages its control data lists (the built version's, which an update may extend), so the one built in must be among them

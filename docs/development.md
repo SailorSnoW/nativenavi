@@ -296,6 +296,9 @@ python3 scripts/build_app.py ~/games/oot/game.nup
 # the same from the folder that holds the .nup, written to the Desktop under your own name
 python3 scripts/build_app.py ~/games/oot -o ~/Desktop/Ocarina.app --app-name "Ocarina of Time"
 
+# the app in Applications, under the game's name
+python3 scripts/build_app.py ~/games/oot -o /Applications
+
 # build another version than the newest in the NUP (v0 is the base game)
 python3 scripts/build_app.py ~/games/oot -p v0
 

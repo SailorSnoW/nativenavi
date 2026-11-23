@@ -24,7 +24,7 @@ Render conditions, which the host evaluates for every game ([Conditional renderi
 
 ## Files
 
-One [NUP container](../../../docs/development.md#the-packing-script-in-detail) of 25.6 GB: `scripts/pack_nup.py` unpacks it to `extract/v131072/`. The RomFS keeps most files as zstd with dictionaries from `Pack/ZsDic.pack.zs`. The movies are AV1.
+One [NUP container](../../../docs/development.md#the-packing-script-in-detail) of 25.6 GB: `scripts/pack_nup.py` unpacks it to `extract/v131072/`. The containers the NativeNavi app accepts are listed by SHA-256 in [`nup.tsv`](nup.tsv) ([The game files it accepts](../../../docs/gui.md#the-game-files-it-accepts)). The RomFS keeps most files as zstd with dictionaries from `Pack/ZsDic.pack.zs`. The movies are AV1.
 
 ## Shaders
 

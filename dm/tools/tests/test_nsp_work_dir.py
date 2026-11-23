@@ -62,8 +62,10 @@ class WorkDir(unittest.TestCase):
              mock.patch.object(nsp, 'scan_nup', return_value=(TID, {'base': None, 'updates': [(VER, types.SimpleNamespace(name='update'))], 'dlc': [], 'nup': None})), \
              mock.patch.object(nsp, 'check_prereqs', side_effect=Stop), mock.patch.object(nsp, 'say'):
             with self.assertRaises(nsp.BuildError) as e: nsp.main(nsp.parse_args([str(self.nup), '-o', str(self.tmp / 'x.ipa')]))
-            self.assertIn('must end in .app', str(e.exception))
+            self.assertIn('must end in .app, or be a folder that exists', str(e.exception))
             with self.assertRaises(Stop): nsp.main(nsp.parse_args([str(self.nup), '-o', str(self.tmp / 'x.app')]))
+            with self.assertRaises(Stop): nsp.main(nsp.parse_args([str(self.nup), '-o', str(self.nups)]))   # a folder that exists: the app goes in it, named after the game
+            with self.assertRaises(nsp.BuildError): nsp.main(nsp.parse_args([str(self.nup), '-o', str(self.tmp / 'no such folder')]))
             with self.assertRaises(Stop): nsp.main(nsp.parse_args([str(self.nup), '--platform', 'mac', '-o', str(self.tmp / 'x.ipa')]))   # a development build makes no app: not looked at
 
     def test_another_game_stops(self):

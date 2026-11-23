@@ -141,12 +141,14 @@ def info_plist(a, minos, icon):
     return p
 
 
-def source_commit():   # DMCommit: the checkout that packed the app, short hash, +dirty with uncommitted changes to tracked files; None outside a checkout
-    repo = HERE.parent.parent
+def source_commit():   # DMCommit: the checkout that packed the app, short hash, +dirty with uncommitted changes to tracked files; outside a checkout, the commit a copy of the sources
+    repo = HERE.parent.parent   # names in .source-commit (the NativeNavi app's copy, scripts/build_gui.py), else None
     try:
         head = subprocess.run(['git', '-C', repo, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
         dirty = subprocess.run(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'], capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError): return None
+    except (OSError, subprocess.CalledProcessError):
+        try: return (repo / '.source-commit').read_text().strip() or None
+        except OSError: return None
     return head + ('+dirty' if dirty else '') if head else None
 
 

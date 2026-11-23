@@ -24,6 +24,10 @@ The game's movies are AV1. A Mac with an M3 chip or later decodes them in hardwa
 
 ## How to play
 
+**Without Terminal**: [the NativeNavi app](docs/gui.md) does the steps below for you: drop your `.nup` file on it and click Build. It downloads Python and Rust into a folder of its own, and needs Xcode 27.2 installed.
+
+**In Terminal**:
+
 **1. Install the tools** (only once), in Terminal. The shaders are built with the Metal compiler of Xcode 27.2: select it first with `sudo xcode-select -s /Applications/Xcode.app` (with several versions installed, name this one `Xcode-27.2.app` and select that).
 
 ```
