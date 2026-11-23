@@ -46,6 +46,19 @@ static inline float nvn_fdelta_next(nvn_fdelta *f, uint64_t now_ns) {
     return mean * 60 < 1.01 ? 0.0f : (float)fmin(mean, 4.0 / 60);
 }
 
+// Presents the game made no frame for. Its stub adds each frame's step to a count (state +0x30), so a present after which the count has not moved, though the last one handed a
+// step, was made while the game's thread was held: the practice tools' frame advance holds the game in its frame and presents the last frame itself, at the hold's pace, for as
+// long as the player likes (hle_practice.c); at boot the game made one now and then too. Those presents are no frames of the game, and a frame let through between them is no rate either, so judged is 1 only for a
+// present whose frame followed a frame of the game. The others go neither to the frame step nor to the frame time, and the frame after one steps at the cap (kmin vsyncs, no
+// measured time), the game's own ratio at its rate: one tap is 1/60 s at 60 fps, as on the console, whatever the hold was. Judged, a tap stepped 2/60 s where this Mac ran
+// the scene at 30 fps, and frames played while the button is held 1.06 to 1.08 vsyncs by the mean of their intervals (the game's note, Practice tools)
+typedef struct { uint64_t stepped; int armed, held; } nvn_fheld;
+static inline int nvn_fheld_judged(nvn_fheld *h, uint64_t stepped) {
+    int held = h->armed && stepped == h->stepped, judged = !held && !h->held;
+    h->stepped = stepped; h->held = held; h->armed = 1;
+    return judged;
+}
+
 #define FSTEP_MAX 3           // the largest step: both games' own interval logic uses 1–3 (BotW clamps to [2, 3], TOTK picks 2 or 3), so their integer readers never see 4
 #define FSTEP_LATE 0.1        // a frame is late when it or its GPU work took this many vsyncs (1.7 ms) more than k: 53 fps is not 60 (start-to-start jitter on time is well below)
 #define FSTEP_SHORT_MAX 2.0  // a frame counts at most this many vsyncs past its hold toward the average (a load's stall is one long frame, not a rate)

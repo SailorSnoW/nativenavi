@@ -151,7 +151,8 @@ From an empty save: at about 45 s `A` (title), `A` (New Game), then the movie. F
   - [a rewrite of a module without unwind entries](../../../docs/reference/rewriter.md#a-module-without-unwind-entries);
   - [the counter frequency through the gate](../../../docs/reference/rewriter.md#the-counter-frequency-read-raw);
   - [add-on takeovers](../../../docs/reference/services.md#an-add-on-module-calls-sdk-functions-the-game-never-makes) for the SD card and the hid detail readers;
-  - [the check of a mod's code past the text](../../../docs/reference/services.md#a-mods-code-written-past-the-end-of-the-text-was-not-checked).
+  - [the check of a mod's code past the text](../../../docs/reference/services.md#a-mods-code-written-past-the-end-of-the-text-was-not-checked);
+  - [frame advance stepped at the cap](../../../docs/reference/frame-rate.md#frame-advance-stepped-by-the-hold-and-the-measured-frame-time), not at the frame step's hold.
 - **Current** (2026-11-22, M2 Pro, headless, release 0.0.9: zip sha256 `6f25fdfb17dc14b62f9271c308181cbe3ebdf8482e9db382b04959c7680f9e2c`):
   - It loads, its 11 patches of main apply and 5 of its imports bind to add-on takeovers.
   - Its log says `running on game 1.1.1 (patch v4)`, `gpu drawing ready` and `drawing on screen: scale 48/16 on 2560x1440`.
@@ -160,7 +161,6 @@ From an empty save: at about 45 s `A` (title), `A` (New Game), then the movie. F
 - **Packing** (current, 2026-11-22): [`practice.tsv`](practice.tsv) pins release 0.0.9 by that digest. The packing script's practice tools stage ([step 9](../../../docs/development.md#the-packing-script-in-detail), on unless `--no-practice`) downloads the zip once into the build folder, rewrites its `subsdk9` into `patched_<version>/practice/` with the IPS of main's build and the license, and has the host check them before they go into the app's `Resources/dm/practice/`. On the M2 Pro, with the game's v131072 modules: 2.4 s, the download included; the host applied the 11 patches with no red line; the output was the same bytes as the folder played above; the next run reused it. A full app pack with it has not been run.
 - **Launcher** (current, 2026-11-23): an app that carries them has a Practice section in its settings window, with [Practice tools](../../../docs/settings.md#practice-tools) (`DM_PRACTICE`, off by default) among the first settings. `settings.py` lists the row only when the rewritten modules' `practice/` has a module and an IPS, as the packing script's stage leaves it, and `pack_app.py` refuses a list with the row for an app packed without `--practice`.
 - **Open:**
-  - Frame advance holds the game's thread and presents on its own, while the frame step measures the time between presents (`DM_FRAME_DELTA`, `nvn_fstep.h`). Whether one tap steps 1/60 s is unchecked.
   - Its save backups stay off: they look for the sdk module through the address of an import, which binds to the host, and find none (sloperina's `savebackup.c`). That is safe. Chained to the sdk's own `CommitSaveData`, they would go around the host's save transactions.
   - The gameplay features (warps, inventory, levitation, watches in play) are not tried yet.
 
@@ -261,6 +261,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 - [A module without unwind entries](../../../docs/reference/rewriter.md#a-module-without-unwind-entries): the [practice tools](#practice-tools)' `subsdk9` stopped the rewriter with `KeyError: 0`. Resolved.
 - [The counter frequency read raw](../../../docs/reference/rewriter.md#the-counter-frequency-read-raw): its timers would have run 1.3 times too fast on an M2 Pro. Resolved.
+- [Frame advance stepped by the hold and the measured frame time](../../../docs/reference/frame-rate.md#frame-advance-stepped-by-the-hold-and-the-measured-frame-time): one tap of the [practice tools](#practice-tools)' frame advance played 2/60 s where the Mac ran the scene at 30 fps. Resolved.
 - [An add-on module calls SDK functions the game never makes](../../../docs/reference/services.md#an-add-on-module-calls-sdk-functions-the-game-never-makes): its SD card and its own input. Resolved.
 - [A mod's code written past the end of the text was not checked](../../../docs/reference/services.md#a-mods-code-written-past-the-end-of-the-text-was-not-checked): its IPS's code cave. Resolved.
 - [`nn::codec` AV1 decoder taken over](../../../docs/reference/movies.md#nncodec-av1-decoder-taken-over): its 26 movies (`Event/Movie/*.webm`) are all AV1 with no sound track, so the host decodes AV1 only and refuses the VP9, VP8 and H.264 decoders its movie library imports and never calls. Current.

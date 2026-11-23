@@ -564,6 +564,27 @@ int main(void) {
             check(fabs(game - real) < 2.5 && s.paid >= c[q].paid_min && s.paid <= c[q].paid_max, c[q].name);
         }
     }
+    {   // Presents the game made no frame for (nvn_fheld_judged), as hle_nvn.c fstep_tick takes them: the practice tools' frame advance holds the game's thread and presents its last
+        // frame itself at the hold's pace. Each present hands a step; a frame of the game adds the step the present before it handed to the count its stub keeps (state +0x30)
+        nvn_fstep s = {0}; nvn_fheld h = {0}; uint64_t stepped = 0; int handed = 0, judged_all = 1, steps1 = 1;
+        #define PRESENT(frame, shown, cost) do { if (frame) stepped += (uint64_t)handed; int j_ = nvn_fheld_judged(&h, stepped); judged_all &= j_; \
+                                                 handed = j_ ? nvn_fstep_next(&s, shown, cost, 1, 3, 0, 0) : 1; } while (0)
+        for (int i = 0; i < 300; i++) PRESENT(1, 2.0, 1.3);
+        check(judged_all && s.k == 2, "held presents: a running game's every present is judged (a scene at 30 fps: hold 2)");
+        int k = s.k; uint64_t ups = s.ups, downs = s.downs; double debt = s.debt;
+        PRESENT(1, 2.0, 1.3);   // the frame that plays after the first tap
+        for (int t = 0; t < 10; t++) {
+            for (int i = 0; i < 30; i++) PRESENT(0, 2.0, 1.0);   // held: the last frame presented again
+            uint64_t was = stepped; PRESENT(1, 2.0, 1.3); steps1 &= stepped - was == 1;   // a tap: one frame let through
+        }
+        for (int i = 0; i < 6; i++) { for (int j = 0; j < 3; j++) PRESENT(0, 1.0, 1.0); uint64_t was = stepped; PRESENT(1, 1.0, 1.4); steps1 &= stepped - was == 1; }   // the button held: a frame every 66 ms
+        check(steps1, "held presents: each frame let through steps the cap's 1 vsync, not the hold's 2");
+        check(s.k == k && s.ups == ups && s.downs == downs && s.debt == debt, "held presents: the frame step keeps its state while the game is held");
+        uint64_t was = stepped; PRESENT(1, 2.0, 1.3); int first = (int)(stepped - was);   // run again: this frame read what the let-through frame's present handed
+        was = stepped; for (int i = 0; i < 4; i++) PRESENT(1, 2.0, 1.3);
+        check(first == 1 && stepped - was == 8 && s.k == 2, "held presents: run again, the first frame steps 1 and then the hold of 2 goes on");
+        #undef PRESENT
+    }
     {   // A drain of standing frames (nvn_fstep_drain_cut), in ms against a 16.7 ms hold
         uint64_t pw = 20; check(nvn_fstep_drain_cut(33, 17, 16, 0, &pw) == 17 && pw == 4, "a drain of one tick: the frame shows its hold, the pacing wait loses the tick");
         pw = 10; check(nvn_fstep_drain_cut(17, 17, 6, 0, &pw) == 17 && pw == 10, "a drain inside the hold is pacing: nothing cut");
