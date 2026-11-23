@@ -51,7 +51,7 @@ def frame_step(ctx):
 # an M4 Pro, yet at 683x384 the extrapolation put 1536x864 at about 300 units against the 83 it allows, so the controller sat at its floor for good (game note, Dynamic resolution).
 # The stub replaces the level function. With DM_DYNAMIC_RESOLUTION 0 (the default; state +0x40 0) it returns 0: full resolution. With 1 it climbs on what was measured at each
 # level, with no model of how the cost grows: one level down when the load (+0x8) has been over the threshold for 8 calls in a row, and that level is marked as not fitting; one level
-# up when the load fits and the level above was never measured, fitted when it was last measured, or was measured more than 600 calls (about 10 s) ago; else the current level
+# up when the load fits and the level above was never measured, fitted when it was last measured, or was measured more than 600 calls (about 10 s at 60 fps, 20 s at 30) ago; else the current level
 # (+0x174). Nothing is decided or recorded until a level has held 8 calls: the load is read a few frames late, so before that it may be the previous level's. The 8 calls over in a
 # row keep a single slow frame, or the first frames at a new size (its render targets), from marking a level that fits (on the full library at level 1: one burst to 90 against loads
 # of 77-80 at levels 2 and 1). The game's counters still pace the steps (down after ReduceCounterMax frames, up after IncreaseCounterMax); its level count (+0x1a0) is the floor.
@@ -59,8 +59,10 @@ def frame_step(ctx):
 # +0x250 the call it was measured at (0 = never). Run against a model of the update (a level moves after the stub asked 5 times up or 2 times down; the load two frames late): a load
 # of 70 at every level climbs from the floor to full size in 9 steps, as does Ocarina's measured 72-80 with a spike every 37 frames and a burst after each change; a load that grows
 # with the pixel count settles at the highest level that fits and tries the one above once per 600 calls; a scene that gets lighter climbs again, a heavier one steps down.
-# The threshold is the game's, at most one frame of the host's target rate: 5000 / target fps units (state +0, an integer division: 83 at 60 fps), none at target 0 (the game's own
-# frame step). The update makes the game's from LoadThreshold (+0xc, or its override at +0x14 when set) plus an offset for the mode in its argument (+0x44: -3, -12 or -16):
+# The threshold is the game's at 60 fps, scaled by 60 / the host's target fps (state +0: 83 -> 166 at 30, the GPU time a frame of that rate has), and at most one frame of the target
+# rate: 5000 / target fps units (an integer division: 83 at 60 fps, 166 at 30); at target 0 (the game's own frame step) the game's alone. Without the scaling a player's 30 fps cap kept
+# the docked 83 and the controller sat at its 854x480 floor wherever the full size took over 16.4 ms but fitted 30 fps (upstream nxnative c12000da, PR #1954; an M2 Air in handheld
+# mode at 30 fps: 100% of frames at 1440x810, load 134 under 166). The update makes the game's from LoadThreshold (+0xc, or its override at +0x14 when set) plus an offset for the mode in its argument (+0x44: -3, -12 or -16):
 # 83 docked, one 60 Hz frame, and 105 in handheld mode (read in play), 21 ms, which a screen with a variable refresh rate can show as it comes. The host keeps every frame
 # for whole vsyncs (nvn_fstep.h), so a level that fits 105 and not 83 holds 30 fps: on a 16 GB M2 Pro the handheld game stayed at the full 1440x810 with loads of 90-104 and
 # 31 fps, and with the cap it settles at levels 2 to 4 with loads of 77-82 and holds 60 (game note, Dynamic resolution).
@@ -68,7 +70,8 @@ def frame_step(ctx):
 # decision read). The update's fingerprint is required too: +0x8 and +0x174 are its fields
 drs_controller = (   # drs_stub.s, assembled with clang; x0 the controller, x16 the state page (the ADRP before it)
     0xb9404211, 0x35000071, 0x2a1f03e0, 0xd65f03c0,                                                   # off (state +0x40 0): level 0
-    0xbd400800, 0xbd401001, 0xbd400202, 0x1e380049, 0x340000a9, 0x5282710a, 0x1ac90949, 0x1e230122, 0x1e227821,   # load; threshold, at most 5000 / target fps (target 0: the game's)
+    0xbd401001, 0xbd400202, 0x1e380049, 0x34000129, 0x52a84e0a, 0x1e270140, 0x1e200821, 0x1e221821,   # threshold × 60 / target fps (state +0; target 0: the game's)
+    0x5282710a, 0x1ac90949, 0x1e230122, 0x1e227821, 0xbd400800,                                       # at most 5000 / target fps; then the load
     0xb9417402, 0xb941a003, 0x7100005f, 0x1a9fa042, 0x528001e9, 0x6b09005f,                           # level (0..15), count
     0x1a89d042, 0xb9420204, 0x11000484, 0xb9020204, 0xb9420605, 0xb9420a06, 0x6b0200bf, 0x1a8617e6,   # calls + 1; calls at this level
     0xb9020602, 0xb9020a06, 0x35000046, 0xb9020e1f, 0x91084207, 0x91094208, 0x710020df, 0x5400040b,   # a new level: none over; under 8 calls: stay
@@ -148,5 +151,5 @@ BINDING = [
      'checked': 'v131072 main: one function with this fingerprint, the site and its free registers read by disassembly (2026-11-08); the stub executed with and without a measured time (test_oot_real_speed.py, 2026-11-10)'},
     {'what': 'dynamic resolution: full size, or a climb on the load measured at each level', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
      'why': "the game's own dynamic-resolution level function and update, found by their functions' fingerprints on any build that keeps both; switchable (DM_DYNAMIC_RESOLUTION)",
-     'checked': 'v131072 main: one function with each fingerprint (the level function a leaf, x2..x11 / x16 / x17 / s0..s2 free), its callers, the update and the controller fields read by disassembly, the fields read in play (2026-11-08); the climb run natively against a model of the update and in play to full size (2026-11-09)'},
+     'checked': 'v131072 main: one function with each fingerprint (the level function a leaf, x2..x11 / x16 / x17 / s0..s2 free), its callers, the update and the controller fields read by disassembly, the fields read in play (2026-11-08); the climb run natively against a model of the update and in play to full size (2026-11-09); the threshold at 60 and 30 fps, docked and handheld, run natively in test_ocarina_drs.py (2026-11-23), in play at 30 fps on an M2 Air (upstream PR #1954, 2026-11-16)'},
 ]
