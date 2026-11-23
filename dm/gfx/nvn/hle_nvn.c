@@ -279,7 +279,14 @@ NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, 
 }
 // A GPU address exists only once the driver has given one: here, by a buffer (nvnBufferInitialize) or by a texture (nvnTextureGetTextureAddress). Raw global memory can reach only what these name (mtl_pool_addressed)
 static void pool_mark_addressed(const pool_t *o) { vpool_taken(o); static __thread const uint8_t *last; if (o->mem && o->mem != last) { last = o->mem; mtl_pool_addressed(o->mem, o->size); } }
-NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { pool_mark_addressed((const pool_t *)p); return (NVNbufferAddress)((const pool_t *)p)->mem; }
+// A shader-code pool's own address (NVN_MEMORY_POOL_FLAGS_SHADER_CODE, 0x40; not virtual) is asked for to place programs: nvnProgramSetShaders takes code addresses. The GPU never reads that code,
+// as the shaders run translated and their constants are copied into the host's buffers, so it does not put the pool into the raw pool table, where it would be resident and its pages wired.
+// Ocarina of Time has 223 such pools, 317 MB (docs/reference/memory.md, Shader-code pools made resident by the raw pool table). A buffer made in the pool still puts it in (nvnBufferInitialize)
+NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) {
+    const pool_t *o = (const pool_t *)p;
+    if ((o->flags & (NVN_MEMORY_POOL_FLAGS_VIRTUAL | NVN_MEMORY_POOL_FLAGS_SHADER_CODE)) != NVN_MEMORY_POOL_FLAGS_SHADER_CODE) pool_mark_addressed(o);
+    return (NVNbufferAddress)o->mem;
+}
 
 // ---------- Descriptor pools ----------
 // One ID space per pool. In NVN a texture or sampler ID indexes the pool the command buffer has bound (SetTexturePool / SetSamplerPool), and two pools may use the same IDs. The replay keeps
