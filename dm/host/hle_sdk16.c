@@ -248,7 +248,7 @@ static void nfp_today(uint8_t *out) {
     uint16_t y = (uint16_t)(tm.tm_year + 1900); memcpy(out, &y, 2); out[2] = (uint8_t)(tm.tm_mon + 1); out[3] = (uint8_t)tm.tm_mday;
 }
 static void nfp_register_info(uint8_t *out) {
-    memset(out, 0, 0x100); dm_mii_default_charinfo(out); nfp_today(out + 0x58); strcpy((char *)out + 0x5C, "nxnative");
+    memset(out, 0, 0x100); dm_mii_default_charinfo(out); nfp_today(out + 0x58); strcpy((char *)out + 0x5C, "NativeNavi");   // the amiibo nickname: 10 characters at most
 }
 
 HLE_FORCE("_ZN2nn3nfp10InitializeEv", "amiibo library init; the host has one NFC device, which finds the amiibo file the player scans", void, h_nfp_Init, void) {

@@ -3,7 +3,7 @@
 How to build the game's Mac app: [README](../README.md#how-to-play).
 
 - **Settings:** a window before the game starts sets frame rate, console mode (docked or handheld), language, rumble and more. Click **Play**; your choices are remembered. What each one does: [Settings](settings.md).
-- **Saves and logs:** the save is in `~/Library/Application Support/nxnative/<title ID>/save/`, the log is `~/Library/Logs/nxnative/<title ID>.log` (the previous run is `<title ID>.prev.log`). When something goes wrong, send the log.
+- **Saves and logs:** the save is in `~/Library/Application Support/NativeNavi/<title ID>/save/`, the log is `~/Library/Logs/NativeNavi/<title ID>.log` (the previous run is `<title ID>.prev.log`). A save made with an nxnative build of the game, in `~/Library/Application Support/nxnative/<title ID>/`, is copied over at the first start, with that app's settings; the old copy stays. When something goes wrong, send the log.
 
 ## Controllers
 
@@ -46,11 +46,11 @@ English by default. Pick another when packing with `--language` (`-l`), by code 
 
 ## Settings in a file
 
-Lines like `DM_OPMODE=0` (handheld mode: lower resolution) in `~/Library/Application Support/nxnative/<title ID>/env.txt` win over the settings window, which then shows them greyed out ([the full list](settings.md#settings-in-a-file)). `DM_FPS_TARGET=30` runs the game at 30 fps instead of 60, which uses less power. `DM_LAUNCHER=0` skips the settings window.
+Lines like `DM_OPMODE=0` (handheld mode: lower resolution) in `~/Library/Application Support/NativeNavi/<title ID>/env.txt` win over the settings window, which then shows them greyed out ([the full list](settings.md#settings-in-a-file)). `DM_FPS_TARGET=30` runs the game at 30 fps instead of 60, which uses less power. `DM_LAUNCHER=0` skips the settings window.
 
 ## Console files
 
-The host ships no console data. The one console file it reads is your console's Mii database, when you copy it from your own console to `~/Library/Application Support/nxnative/system/save/8000000000000030/MiiDatabase.dat`: a game that looks a Mii up there finds it. The file is only read; without it the database is empty.
+The host ships no console data. The one console file it reads is your console's Mii database, when you copy it from your own console to `~/Library/Application Support/NativeNavi/system/save/8000000000000030/MiiDatabase.dat`: a game that looks a Mii up there finds it. The file is only read; without it the database is empty.
 
 ## Shaders on first sight
 

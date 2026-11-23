@@ -220,7 +220,7 @@ Shown in an app that carries the practice tools: the packing script puts them in
 
 ### Practice tools
 
-**Off** by default. On, the game starts with sloperinaGZ, PracticeROM's practice menu for speedrunners ([the game's note](../dm/games/0400486024DEC000/README.md#practice-tools)): in the game, hold **R** and push the **right stick down** to open or close it. While it is open, the game does not see your controller. It keeps its own settings and log in `~/Library/Application Support/nxnative/<title ID>/sdcard/sloperinaGZ/`. Off, none of it is loaded: the game runs as in an app without the practice tools. In an `env.txt`: `DM_PRACTICE=1`.
+**Off** by default. On, the game starts with sloperinaGZ, PracticeROM's practice menu for speedrunners ([the game's note](../dm/games/0400486024DEC000/README.md#practice-tools)): in the game, hold **R** and push the **right stick down** to open or close it. While it is open, the game does not see your controller. It keeps its own settings and log in `~/Library/Application Support/NativeNavi/<title ID>/sdcard/sloperinaGZ/`. Off, none of it is loaded: the game runs as in an app without the practice tools. In an `env.txt`: `DM_PRACTICE=1`.
 
 ## The Mac settings window
 
@@ -232,7 +232,7 @@ Turn off **Show this window at launch** to start the game at once with your choi
 
 ## Settings in a file
 
-A line like `DM_PRESENT_SNAP=1` in the app's `env.txt` (`~/Library/Application Support/nxnative/<title ID>/env.txt`) sets a setting from the file: the settings window shows it greyed out, and the file wins over your choice and the game's default. Quit and reopen the app after editing the file. The variables:
+A line like `DM_PRESENT_SNAP=1` in the app's `env.txt` (`~/Library/Application Support/NativeNavi/<title ID>/env.txt`) sets a setting from the file: the settings window shows it greyed out, and the file wins over your choice and the game's default. Quit and reopen the app after editing the file. The variables:
 
 | Setting | Variable | Values |
 |---|---|---|

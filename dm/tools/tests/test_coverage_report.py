@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as cr
 
-ROOT = '/work/nxnative'
+ROOT = '/work/nativenavi'
 # llvm-cov export -format=lcov for
 #   1 int f(int x){
 #   2  if(x>1)

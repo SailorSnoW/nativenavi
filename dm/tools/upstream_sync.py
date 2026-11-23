@@ -8,7 +8,7 @@
 #        upstream_sync.py pick    <sha> [path ...] [--mirror DIR] [--tree DIR]
 #        upstream_sync.py summary <log.txt> [--frames N,N]
 #        upstream_sync.py record  <sha> <verdict> [--local SHA[,SHA]] [--why TEXT] [--mirror DIR]
-# The mirror is $OOT_UPSTREAM_MIRROR, else ~/.cache/oot-silicon/nxnative.git. `list` shows upstream main's commits after the ledger's base (the nxnative commit this repository
+# The mirror is $NATIVENAVI_UPSTREAM_MIRROR, else ~/.cache/nativenavi/nxnative.git. `list` shows upstream main's commits after the ledger's base (the nxnative commit this repository
 # was imported from) that the ledger has no row for, or has as deferred, each with tags: gone (a file this tree does not have: removed by the fork, or added upstream after the
 # import), add (a file the commit adds), oot (this game's profile), game:<id> (another game's profile, which this fork does not have), ios / gl / vk (platforms and layers the fork
 # removed), chain (a file of the shader chain, dm/gfx/tools/dmsh_chain.py FILES: porting it changes DMSH_CHAIN and every shader is translated again). A commit whose every file
@@ -32,7 +32,7 @@ GAMES_TABLE = 'dm/games/README.md'   # the table of the games nxnative has: this
 
 
 def mirror_dir(arg: str | None) -> Path:
-    return Path(arg or os.environ.get('OOT_UPSTREAM_MIRROR') or Path.home() / '.cache/oot-silicon/nxnative.git')
+    return Path(arg or os.environ.get('NATIVENAVI_UPSTREAM_MIRROR') or Path.home() / '.cache/nativenavi/nxnative.git')
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:

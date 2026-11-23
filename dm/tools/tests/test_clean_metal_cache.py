@@ -46,7 +46,7 @@ class CleanTest(unittest.TestCase):
 
     def test_app_folder_lock(self):   # a built app's folder: kept while a copy of the app holds the lock beside it (nvn_mtl.m ga_claim), cleaned once none does
         with tempfile.TemporaryDirectory() as td:
-            app = Path(td) / 'org.nxnative.0100a5c00d162000'; root = app / 'com.apple.gpuarchiver'; root.mkdir(parents=True)
+            app = Path(td) / 'org.nativenavi.0100a5c00d162000'; root = app / 'com.apple.gpuarchiver'; root.mkdir(parents=True)
             d = folder(root, 'gpuarchiver-aaaaaa', NOW - 5 * 3600)
             with open(app / 'gpuarchiver.lock', 'a') as held:
                 fcntl.flock(held, fcntl.LOCK_SH)   # a running copy
@@ -59,10 +59,10 @@ class CleanTest(unittest.TestCase):
     def test_default_folders(self):   # the shared folder and each built app's, nobody else's
         with tempfile.TemporaryDirectory() as td:
             c = Path(td)
-            for n in ('org.nxnative.0100a5c00d162000', 'org.nxnative.0400486024dec000', 'com.google.Chrome.helper'): (c / n / 'com.apple.gpuarchiver').mkdir(parents=True)
+            for n in ('org.nativenavi.0100a5c00d162000', 'org.nativenavi.0400486024dec000', 'com.google.Chrome.helper'): (c / n / 'com.apple.gpuarchiver').mkdir(parents=True)
             with mock.patch.object(cmc.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=f'{td}/\n', stderr='')):
-                self.assertEqual(cmc.cache_dirs(), [c / 'com.apple.gpuarchiver', c / 'org.nxnative.0100a5c00d162000/com.apple.gpuarchiver',
-                                                    c / 'org.nxnative.0400486024dec000/com.apple.gpuarchiver'])
+                self.assertEqual(cmc.cache_dirs(), [c / 'com.apple.gpuarchiver', c / 'org.nativenavi.0100a5c00d162000/com.apple.gpuarchiver',
+                                                    c / 'org.nativenavi.0400486024dec000/com.apple.gpuarchiver'])
 
     def test_missing_folder(self):
         self.assertEqual(cmc.clean('/nonexistent/com.apple.gpuarchiver', now=NOW, starts=[]), (0, 0, 0, 0))

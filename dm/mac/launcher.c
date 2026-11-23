@@ -2,8 +2,8 @@
 // The host is not exec'ed: macOS privacy checks (TCC) attribute a child's file access to the app that launched it, while a launcher that hands its process over (a shell script exec'ing
 // dmhost) gets EPERM on every open on a removable volume, with no prompt, signed or not. The launcher forwards SIGTERM / SIGINT / SIGHUP to the host and returns its exit code.
 // Bundle layout: Resources/romfs.img (the game's RomFS image; legacy romfs/ also supported), Resources/msl/<b-chain.img> (the Mac shader library), Resources/aoc/<index> (DLC), Resources/pso (the pipeline archive made
-// offline, handed to the host as DM_PSO_BUNDLE), Resources/dm (the rewritten modules, the shader tables and pairs, font/, env.txt); romfs.img, msl, aoc and pso are links into the signed data bundles in Contents/PlugIns (pack_app.py). Saves, the pipeline list and temporary files go to ~/Library/Application Support/nxnative/<title ID>/, the host's output to ~/Library/Logs/nxnative/<title ID>.log
-// (the previous run's kept as <title ID>.prev.log). Environment switches: one KEY=VALUE per line in <Application Support folder>/env.txt, then Resources/dm/env.txt (the first one wins; neither
+// offline, handed to the host as DM_PSO_BUNDLE), Resources/dm (the rewritten modules, the shader tables and pairs, font/, env.txt); romfs.img, msl, aoc and pso are links into the signed data bundles in Contents/PlugIns (pack_app.py). Saves, the pipeline list and temporary files go to ~/Library/Application Support/NativeNavi/<title ID>/, the host's output to ~/Library/Logs/NativeNavi/<title ID>.log
+// (the previous run's kept as <title ID>.prev.log). An app with no Application Support folder of its own yet takes the one an nxnative build of the game left (take_nxnative). Environment switches: one KEY=VALUE per line in <Application Support folder>/env.txt, then Resources/dm/env.txt (the first one wins; neither
 // replaces a variable already set). Then the player's saved choices: launcher.<VAR> strings in the app's preferences domain (its bundle ID), which a
 // front end or a settings window writes, each checked against the bundle's settings (Info.plist DMSettings, from launcher.json) and used only for a variable still unset; DM_SAVED_CHOICES=0 ignores them.
 // So the order is: the launch environment, the player's env.txt, the bundle's, saved choices, the host's tested defaults (docs/frontends.md, Saved choices).
@@ -11,11 +11,13 @@
 // what the launch environment and the env files set (DM_ENV_LAUNCH_KEYS, DM_ENV_FILE_KEYS). DM_LAUNCHER=0 or --no-launcher (open <app> --args --no-launcher) starts the game without the window,
 // with the saved choices; so does "Show this window at launch" turned off.
 #include <CoreFoundation/CoreFoundation.h>
+#include <copyfile.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <mach-o/dyld.h>
+#include <removefile.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
@@ -71,6 +73,53 @@ static void mkdirs(const char *path) {   // mkdir -p
     char p[PATH_MAX]; snprintf(p, sizeof p, "%s", path);
     for (char *s = p + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(p, 0755); *s = '/'; }
     mkdir(p, 0755);
+}
+
+// Before this repository was named NativeNavi, an app kept its folder and saved choices under nxnative's names (~/Library/Application Support/nxnative/<title ID>, the
+// preferences domain org.nxnative.<title ID>), as nxnative's own builds still do. A first start with no folder of its own takes a clone of that folder (APFS: no space until
+// one copy changes), made under another name and renamed when whole, and the old domain's keys that the app's own does not have. The old folder and domain stay as they are
+static int take_folder(const char *old, const char *now) {   // 1 when `now` was made from `old`
+    struct stat st; char part[PATH_MAX];
+    if (!lstat(now, &st) || stat(old, &st) || !S_ISDIR(st.st_mode)) return 0;
+    snprintf(part, sizeof part, "%s.partial", now);
+    removefile(part, NULL, REMOVEFILE_RECURSIVE);   // what a start stopped while copying left
+    if (copyfile(old, part, NULL, COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_CLONE) || rename(part, now)) {
+        fprintf(stderr, "[RED] launcher: cannot copy %s to %s: %s; this app starts without it\n", old, now, strerror(errno));
+        removefile(part, NULL, REMOVEFILE_RECURSIVE); return 0;
+    }
+    fprintf(stderr, "launcher: %s taken from %s (a copy: the old folder stays)\n", now, old);
+    return 1;
+}
+
+static void take_choices(void) {   // the app's bundle ID org.nativenavi.<x>: the keys of org.nxnative.<x> that its domain has not
+    CFStringRef now = CFBundleGetIdentifier(CFBundleGetMainBundle());
+    if (!now || !CFStringHasPrefix(now, CFSTR("org.nativenavi."))) return;   // packed with another bundle ID (--bundle-id): no old domain to name
+    CFStringRef rest = CFStringCreateWithSubstring(NULL, now, CFRangeMake(15, CFStringGetLength(now) - 15));
+    CFStringRef old = CFStringCreateWithFormat(NULL, NULL, CFSTR("org.nxnative.%@"), rest); CFRelease(rest);
+    CFArrayRef keys = CFPreferencesCopyKeyList(old, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFIndex taken = 0;
+    for (CFIndex i = 0; keys && i < CFArrayGetCount(keys); i++) {
+        CFStringRef key = CFArrayGetValueAtIndex(keys, i);
+        CFPropertyListRef have = CFPreferencesCopyAppValue(key, now);
+        if (have) { CFRelease(have); continue; }
+        CFPropertyListRef v = CFPreferencesCopyAppValue(key, old);
+        if (v) { CFPreferencesSetAppValue(key, v, now); CFRelease(v); taken++; }
+    }
+    char name[256] = "";
+    CFStringGetCString(old, name, sizeof name, kCFStringEncodingUTF8);
+    if (taken && CFPreferencesAppSynchronize(now)) fprintf(stderr, "launcher: %ld saved choices taken from %s\n", (long)taken, name);
+    else if (taken) fprintf(stderr, "[RED] launcher: the saved choices of %s could not be written to this app's preferences\n", name);
+    if (keys) CFRelease(keys);
+    CFRelease(old);
+}
+
+static void take_nxnative(const char *home, const char *id, const char *sup) {
+    char base[PATH_MAX], old[PATH_MAX], now[PATH_MAX];
+    snprintf(base, sizeof base, "%s/Library/Application Support/NativeNavi", home); mkdirs(base);
+    snprintf(old, sizeof old, "%s/Library/Application Support/nxnative/%s", home, id);
+    if (take_folder(old, sup)) take_choices();
+    snprintf(old, sizeof old, "%s/Library/Application Support/nxnative/system", home); snprintf(now, sizeof now, "%s/system", base);
+    take_folder(old, now);   // the player's console files (DM_SYSTEM_DIR below)
 }
 
 static void env_file(const char *path) {   // KEY=VALUE lines, # starts a comment; a variable already set stays
@@ -163,8 +212,8 @@ int main(int argc, char **argv) {
     snprintf(contents, sizeof contents, "%s", exe); *strrchr(contents, '/') = 0; *strrchr(contents, '/') = 0;   // .../Contents/MacOS/<launcher> → .../Contents
     snprintf(res, sizeof res, "%s/Resources", contents); snprintf(host, sizeof host, "%s/MacOS/dmhost", contents);
     snprintf(dm, sizeof dm, "%s/dm", res); snprintf(romfs, sizeof romfs, "%s/romfs", res);
-    char name[256] = "nxnative", id[64] = "", marker[512] = "", lang[32] = "";
-    if (!info_string("CFBundleName", name, sizeof name)) snprintf(name, sizeof name, "nxnative");
+    char name[256] = "NativeNavi", id[64] = "", marker[512] = "", lang[32] = "";
+    if (!info_string("CFBundleName", name, sizeof name)) snprintf(name, sizeof name, "NativeNavi");
     info_string("DMRomfsMarker", marker, sizeof marker); info_string("DMLanguage", lang, sizeof lang);
     if (!info_string("DMTitleID", id, sizeof id) || strchr(id, '/')) { alert(name, "This app has no title ID in its Info.plist (DMTitleID): pack it again with build_app.py --platform mac-app."); return 1; }
     struct stat st; snprintf(p, sizeof p, "%s/romfs.img", res);
@@ -179,15 +228,17 @@ int main(int argc, char **argv) {
     }
     const char *home = getenv("HOME"); if (!home || !*home) return 1;
     char sup[PATH_MAX], save[PATH_MAX], temp[PATH_MAX], logs[PATH_MAX], log[PATH_MAX], prev[PATH_MAX];
-    snprintf(sup, sizeof sup, "%s/Library/Application Support/nxnative/%s", home, id);
+    snprintf(sup, sizeof sup, "%s/Library/Application Support/NativeNavi/%s", home, id);
     snprintf(save, sizeof save, "%s/save", sup); snprintf(temp, sizeof temp, "%s/temp", sup);
-    snprintf(logs, sizeof logs, "%s/Library/Logs/nxnative", home);
+    snprintf(logs, sizeof logs, "%s/Library/Logs/NativeNavi", home);
     snprintf(log, sizeof log, "%s/%s.log", logs, id); snprintf(prev, sizeof prev, "%s/%s.prev.log", logs, id);
-    mkdirs(save); mkdirs(temp); mkdirs(logs);
+    mkdirs(logs);
     rename(log, prev);
     int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); setvbuf(stdout, NULL, _IOLBF, 0); }
     fprintf(stderr, "launcher: %s (%s), host %s\n", name, id, host);
+    take_nxnative(home, id, sup);   // before anything makes the folder
+    mkdirs(save); mkdirs(temp);
     CFArrayRef rules = setting_rules();   // the settings the launch environment already set: the window shows them, fixed
     for (CFIndex i = 0; rules && i < CFArrayGetCount(rules); i++) { char env[128]; if (rule_env(CFArrayGetValueAtIndex(rules, i), env, sizeof env) && getenv(env)) add_key(&g_launch_keys, env); }
     snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p);
@@ -203,7 +254,7 @@ int main(int argc, char **argv) {
     if (shown == 2) saved_choices();
     microphone_at_launch();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_TEMP", temp, 0);
-    snprintf(p, sizeof p, "%s/Library/Application Support/nxnative/system", home); setenv("DM_SYSTEM_DIR", p, 0);   // the player's own console files, for every game
+    snprintf(p, sizeof p, "%s/Library/Application Support/NativeNavi/system", home); setenv("DM_SYSTEM_DIR", p, 0);   // the player's own console files, for every game
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);
     snprintf(p, sizeof p, "%s/font", dm); setenv("DM_FONT_DIR", p, 0);
     snprintf(p, sizeof p, "%s/shader_map.tsv", dm); if (!stat(p, &st)) setenv("DM_NVN_SHMAP", p, 0);

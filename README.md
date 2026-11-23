@@ -1,4 +1,4 @@
-# oot-silicon
+# NativeNavi
 
 Play your own copy of The Legend of Zelda: Ocarina of Time (Nintendo Switch 2) natively on an Apple silicon Mac. One script packs the game into a Mac app.
 
@@ -42,7 +42,7 @@ python3 scripts/build_app.py ~/Games/OcarinaOfTime.nup
 
 The script unpacks the game into `0400486024DEC000_build` beside the NUP, rewrites its code for macOS, translates and compiles its shaders (about 42,850, the long part of a first build), and packs the app, which appears beside the build folder. Building again reuses everything that did not change. All options: [The packing script in detail](docs/development.md#the-packing-script-in-detail).
 
-**3. Play**: open the app from Finder. Controls, saves and settings: [Playing](docs/playing.md) and [Settings](docs/settings.md). The log of a run is `~/Library/Logs/nxnative/0400486024DEC000.log`.
+**3. Play**: open the app from Finder. Controls, saves and settings: [Playing](docs/playing.md) and [Settings](docs/settings.md). The log of a run is `~/Library/Logs/NativeNavi/0400486024DEC000.log`.
 
 ## For developers
 

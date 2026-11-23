@@ -50,7 +50,7 @@
 # 3. Baselines: `baseline` records the runs of a revision in <game folder>/<id>-work/regress/baselines/<commit>/; `check` compares with the one of the baseline revision and records it first when there is none.
 #
 # report.json (beside report.md, in --out, default <root>/reports/<date-time>-<command>/):
-#   {"schema": "nxnative-regress/1", "command", "mode": "quick"|"full", "status", "exit", "started", "secs", "machine": {model, gpu, macos, xcode},
+#   {"schema": "nativenavi-regress/1", "command", "mode": "quick"|"full", "status", "exit", "started", "secs", "machine": {model, gpu, macos, xcode},
 #    "baseline": {"rev", "sha"}, "candidate": {"rev", "sha", "dirty"},
 #    "games": {<title ID>: {"name", "status", "reasons": [text], "known": [text], "secs": {"chain", "smoke"},
 #       "chain": {"kind": "nvn", "baseline": BUILD, "candidate": BUILD, "newly_failing": [{"key", "status", "error"}], "added_failing": [same],
@@ -1465,7 +1465,7 @@ def machine():
 
 
 def new_report(a, command, baseline, candidate):
-    return {'schema': 'nxnative-regress/1', 'command': command, 'mode': 'static' if command == 'chain' else 'quick' if a.quick else 'full', 'started': datetime.datetime.now().isoformat(timespec='seconds'),
+    return {'schema': 'nativenavi-regress/1', 'command': command, 'mode': 'static' if command == 'chain' else 'quick' if a.quick else 'full', 'started': datetime.datetime.now().isoformat(timespec='seconds'),
             't0': time.time(), 'machine': machine(), 'baseline': baseline.describe() if baseline else None, 'candidate': candidate.describe() if candidate else None,
             'tolerances': TOL, 'games': {}}
 

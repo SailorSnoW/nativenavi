@@ -32,7 +32,7 @@ MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ 
 # app makes no pulling bases, a hybrid draw has no stand-in and a new pipeline compiles on the submit thread
 TABLES = ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv')
 PSO_FILES = ('*.mtl4a', '*-prewarm-*.keys', 'prebuilt.tsv', 'rest_pairs.tsv', 'archive.tsv', 'prewarm.tsv')   # what the app takes of pso_offline.py's output folder
-EXE = 'nxnative'   # the launcher's file name (Contents/MacOS/nxnative)
+EXE = 'nativenavi'   # the launcher's file name (Contents/MacOS/nativenavi)
 ICON_SIZES = (16, 32, 128, 256, 512)
 DETRITUS = ('.DS_Store',)   # Finder leftovers beside the AppleDouble "._name" files, see detritus() and strip_detritus()
 
@@ -127,7 +127,7 @@ def settings_rules(listed):   # DMSettings: what the launcher accepts as each se
 
 def info_plist(a, minos, icon):
     # LSSupportsGameMode off: macOS's Game Mode holds the GPU at its lowest clock while it is busy (docs/reference/frame-rate.md, macOS Game Mode holds the GPU at its lowest clock)
-    p = {'CFBundleName': a.name, 'CFBundleDisplayName': a.name, 'CFBundleIdentifier': a.bundle_id or f'org.nxnative.{a.title_id.lower()}',
+    p = {'CFBundleName': a.name, 'CFBundleDisplayName': a.name, 'CFBundleIdentifier': a.bundle_id or f'org.nativenavi.{a.title_id.lower()}',
          'CFBundleVersion': a.version or '1.0', 'CFBundleShortVersionString': a.version or '1.0', 'CFBundlePackageType': 'APPL', 'CFBundleExecutable': EXE,
          'CFBundleInfoDictionaryVersion': '6.0', 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
          'NSBluetoothAlwaysUsageDescription': 'Connect Switch 2 Joy-Con and Pro Controllers over Bluetooth.',
@@ -191,7 +191,7 @@ def sign(app, identity, codesign, nested=()):   # the new data bundles and the i
 # recorded for it (seals): the one its bundle's signature holds (CodeResources, which codesign wrote from the bytes it read), and their own for the few small files that names none. Its bytes are
 # then the ones packed (the shader libraries' 6.7 GB: 3 s); a file with no recorded digest, or with other bytes, makes the bundle anew as before. The build folder's large files are
 # taken the same way (as_packed, the record's sources): the system moves their change times too
-DATA_FORMAT = 'nxnative data bundle 1'
+DATA_FORMAT = 'NativeNavi data bundle 1'
 SEAL_READ = 1 << 20   # a data bundle's files that its signature does not name are read for their digest when the key is written, up to this size
 
 
@@ -475,7 +475,7 @@ def pack(a):
         data[name] = hashlib.sha256(json.dumps(common + [name, top, inputs], sort_keys=True).encode()).hexdigest()
         if data_reused(old_app, previous, name, data[name], b): step(f'{label} (reused, signed)')
         else:
-            step(label); data_shell(b, name, a.bundle_id or f'org.nxnative.{a.title_id.lower()}'); (b / 'Contents/Resources' / top).parent.mkdir(parents=True, exist_ok=True)
+            step(label); data_shell(b, name, a.bundle_id or f'org.nativenavi.{a.title_id.lower()}'); (b / 'Contents/Resources' / top).parent.mkdir(parents=True, exist_ok=True)
             fill(b / 'Contents/Resources' / top); fresh.append(b)
         link.parent.mkdir(parents=True, exist_ok=True); link.symlink_to(os.path.relpath(b / 'Contents/Resources' / top, link.parent))
     image = msls[0] if is_chain_library(msl) and len(msls) == 1 and msls[0].suffix == '.img' else None   # the shader chain's library as one file: the app's is another file, cut from it

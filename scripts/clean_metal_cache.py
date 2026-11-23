@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Remove the build folders Metal leaves in the user cache folder (`getconf DARWIN_USER_CACHE_DIR`, then com.apple.gpuarchiver/gpuarchiver-*, and the built apps'
-# org.nxnative.*/com.apple.gpuarchiver/gpuarchiver-*). The Metal 4 serializer makes them for the host's pipeline archive flushes and never removes them. A host from a build shares
+# org.nativenavi.*/com.apple.gpuarchiver/gpuarchiver-*). The Metal 4 serializer makes them for the host's pipeline archive flushes and never removes them. A host from a build shares
 # the first folder with every other program and must not remove from it: Metal does not say which folder is its own, and a folder of another live compiler went with the former
 # cleanup (docs/reference/shaders.md, "Metal's build folders left by pipeline archive flushes"). A built app removes its own earlier runs' folders at its next start; this covers
 # the apps not started again. They grow without bound, up to about 127 MB each.
@@ -14,11 +14,11 @@ from pathlib import Path
 HOSTS = {'dmhost'}   # the programs whose folders are spared while they run (the Mac app's launcher starts the host under this name too)
 
 
-def cache_dirs():   # the shared folder, then each built app's (bundle ID org.nxnative.<title ID>, pack_app.py)
+def cache_dirs():   # the shared folder, then each built app's (bundle ID org.nativenavi.<title ID>, pack_app.py)
     r = subprocess.run(['getconf', 'DARWIN_USER_CACHE_DIR'], capture_output=True, text=True)
     if r.returncode or not r.stdout.strip(): return []
     c = Path(r.stdout.strip())
-    return [c / 'com.apple.gpuarchiver'] + sorted(c.glob('org.nxnative.*/com.apple.gpuarchiver'))
+    return [c / 'com.apple.gpuarchiver'] + sorted(c.glob('org.nativenavi.*/com.apple.gpuarchiver'))
 
 
 def etime_s(s):   # ps's elapsed time, [[dd-]hh:]mm:ss

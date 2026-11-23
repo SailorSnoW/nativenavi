@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
 assert spec and spec.loader
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
-TEST_ROOT = Path(os.environ.get('NXNATIVE_TEST_ROOT', tempfile.gettempdir()))
+TEST_ROOT = Path(os.environ.get('NATIVENAVI_TEST_ROOT', tempfile.gettempdir()))
 BID = 'e0f3ccfaf50065ae4ea01eb5aeb13b1a'   # main's build ID as build_id reads it: the first 16 of the 20 bytes the IPS names
 IPS, OTHER = 'E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348.ips', '33FA6C2C23848282A77E8B88A0A93F4887C55920.ips'
 

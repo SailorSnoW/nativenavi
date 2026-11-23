@@ -4,7 +4,7 @@ This page says how a change gets in; what the code does and where things are is 
 
 ## Reporting a problem
 
-Say what a problem is traced with: the commit, the shader chain version (`DMSH_CHAIN` in `dm/gfx/nvn/dmsh_chain.h`), the game's version, the Mac and its macOS, how the game was built and run, the settings changed and environment overrides, and the whole log of the run. A Mac app writes `~/Library/Logs/nxnative/0400486024DEC000.log`; a development build writes where its command says.
+Say what a problem is traced with: the commit, the shader chain version (`DMSH_CHAIN` in `dm/gfx/nvn/dmsh_chain.h`), the game's version, the Mac and its macOS, how the game was built and run, the settings changed and environment overrides, and the whole log of the run. A Mac app writes `~/Library/Logs/NativeNavi/0400486024DEC000.log`; a development build writes where its command says.
 
 ## Never game files or keys
 

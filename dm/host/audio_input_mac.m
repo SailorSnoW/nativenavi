@@ -141,7 +141,7 @@ static OSStatus input_proc(void *ctx, AudioUnitRenderActionFlags *flags, const A
 static void input_listen(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        dispatch_queue_t queue = dispatch_queue_create("org.nxnative.audio-input.route", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_t queue = dispatch_queue_create("org.nativenavi.audio-input.route", DISPATCH_QUEUE_SERIAL);
         AudioObjectPropertyListenerBlock change = ^(UInt32 count, const AudioObjectPropertyAddress *addresses) {
             (void)count; (void)addresses;
             dm_audio_input_route_changed();

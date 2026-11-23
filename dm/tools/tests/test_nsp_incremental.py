@@ -554,7 +554,7 @@ class MacApp(Base):
         with mock.patch.object(nsp, 'run', side_effect=pack):
             for i in range(2):
                 result = nsp.mac_app(sys.executable, REPO, out, TID, t, self.ex, t / 'patched', t / 'host', t / 'font', t / 'shader', None, 'en-US',
-                                     game.Game(self.src), 'Game', '1.0.0', 'org.nxnative.test', None, '', {}, t)
+                                     game.Game(self.src), 'Game', '1.0.0', 'org.nativenavi.test', None, '', {}, t)
                 self.assertIsNone(result)
                 if i: nsp.PROG.end.assert_called_with('Game.app, reused (inputs unchanged)')
                 else: nsp.PROG.set.assert_called_with(step='launcher and host (clones of the game files)')

@@ -50,7 +50,7 @@ One row per profile; the note is the profile's `README.md`.
 | Key | Meaning |
 |---|---|
 | `title_id`, `program_id` | Identity. `program_id` is what `svcGetInfo(ProgramId)` reports |
-| `name` | The game's name: a label for `game.py list`, error messages, the Mac window's title and its quit prompt. The Mac app's name is the game name in the NUP's control data, else this one, and its bundle ID is `org.nxnative.<title ID in lowercase>`; the packing script's `--app-name` / `APP_NAME` and `--bundle-id` / `BUNDLE_ID` override them |
+| `name` | The game's name: a label for `game.py list`, error messages, the Mac window's title and its quit prompt. The Mac app's name is the game name in the NUP's control data, else this one, and its bundle ID is `org.nativenavi.<title ID in lowercase>`; the packing script's `--app-name` / `APP_NAME` and `--bundle-id` / `BUNDLE_ID` override them |
 | `app_category` | The Mac app's App Store category (`LSApplicationCategoryType`) |
 | `build <ver> <display version> <module>=<build ID>…` | One row per version the game was brought up on. The packing script builds any version (the base game alone, any update): a registered one from the profile as it is, any other from a profile derived from it ([A new version of the game](#a-new-version-of-the-game)). The host reports the display version by `main`'s build ID |
 | `package` | The version the profile's tables, prewarm list and notes were made on. No tool reads it from the repository profile; a derived profile carries the version it was made for. The packing script packs the newest version in the NUP (`-p` / `PACKAGE` picks another) |

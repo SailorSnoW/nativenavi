@@ -155,7 +155,7 @@ static void invalid_descriptors(NvProg *p) {
         pso_key k = {.dfmt = cases[i][0], .sfmt = cases[i][1], .samples = 1}; k.cfmt[0] = 70;
         NSError *error = nil;
         CHECK(!pso_build_ex(pso_desc(&k, p->sh[0], p->sh[1], nil, 0), 0, &error, compile), "invalid descriptor is rejected before either Metal compiler path");
-        CHECK(error.code == 1 && [error.domain isEqual:@"nxnative.NVN.Pipeline"], "invalid descriptor reports an explicit input error");
+        CHECK(error.code == 1 && [error.domain isEqual:@"nativenavi.NVN.Pipeline"], "invalid descriptor reports an explicit input error");
     }
 }
 

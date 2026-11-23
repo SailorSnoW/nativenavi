@@ -32,7 +32,7 @@ nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 spec = importlib.util.spec_from_file_location('pack_app', REPO / 'dm/mac/pack_app.py')
 pack_app = importlib.util.module_from_spec(spec); spec.loader.exec_module(pack_app)
 TID = '01008CF01BAAC000'
-TEST_ROOT = Path(os.environ.get('NXNATIVE_TEST_ROOT', tempfile.gettempdir()))
+TEST_ROOT = Path(os.environ.get('NATIVENAVI_TEST_ROOT', tempfile.gettempdir()))
 
 def module_with_import(name, defined=False):
     """Minimal rewritten module with one dynamic symbol for packer capability checks."""
@@ -286,7 +286,7 @@ class PackReuse(unittest.TestCase):
         c = next(c for c in self.commands if Path(c[0]).name == 'clang' and '-o' in c)
         s = next(c for c in self.commands if Path(c[0]).name == 'swiftc' and '-o' in c)
         self.assertIn('-c', c); self.assertIn('-parse-as-library', s)
-        self.assertEqual(s[s.index('-o') + 1], str(Path(self.args.out).resolve().with_name('Game.app.partial') / 'Contents/MacOS/nxnative'))
+        self.assertEqual(s[s.index('-o') + 1], str(Path(self.args.out).resolve().with_name('Game.app.partial') / 'Contents/MacOS/nativenavi'))
         self.assertIn(c[c.index('-o') + 1], s)   # launcher.c's object, with its main
         self.assertEqual([Path(x).name for x in s if x.endswith('.swift')], ['Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift'])
 
@@ -304,7 +304,7 @@ class PackReuse(unittest.TestCase):
 
     def test_finder_detritus_is_not_an_input_and_never_reaches_the_bundle(self):
         # An exFAT build folder (an external drive) keeps a file's extended attributes in a "._name" file beside it: taken as an input they would be packed as a module or a
-        # shader, and left in the bundle they fail codesign ("code object is not signed at all", In subcomponent: Contents/MacOS/._nxnative).
+        # shader, and left in the bundle they fail codesign ("code object is not signed at all", In subcomponent: Contents/MacOS/._nativenavi).
         for name in ('patched/._main.patched.bin', 'msl/._k.metallib', 'font/._nintendo_ext.ttf', 'pso/._gpu.mtl4a', 'romfs/._marker'):
             (self.tmp / name).write_bytes(b'appledouble')
         (self.tmp / 'romfs/.DS_Store').write_bytes(b'finder')
@@ -333,7 +333,7 @@ class PackReuse(unittest.TestCase):
 
     def test_output_missing_modified_mode_time_path_and_directory_invalidate(self):
         self.pack()
-        launcher = Path(self.args.out) / 'Contents/MacOS/nxnative'
+        launcher = Path(self.args.out) / 'Contents/MacOS/nativenavi'
         launcher.chmod(0o644); self.assert_repacked()
         launcher.unlink(); self.assert_repacked()
         launcher.write_bytes(b'broken'); self.assert_repacked()
@@ -681,7 +681,7 @@ class App(unittest.TestCase):
         home = self.tmp / 'home'
         e = dict(HOME=str(home), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin', **{'DM_LAUNCHER': '0', **env})   # never the settings window in a test
         if wait: e['STANDIN_WAIT'] = '1'
-        return subprocess.Popen([(app or self.app) / 'Contents/MacOS/nxnative', *args], env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return subprocess.Popen([(app or self.app) / 'Contents/MacOS/nativenavi', *args], env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
     def host_run(self):
         out = {}
@@ -692,7 +692,7 @@ class App(unittest.TestCase):
     def test_layout(self):
         c = self.app / 'Contents'
         self.assertFalse(self.app.with_name(self.app.name + '.partial').exists())
-        self.assertEqual(sorted(p.name for p in (c / 'MacOS').iterdir()), ['dmhost', 'nxnative'])
+        self.assertEqual(sorted(p.name for p in (c / 'MacOS').iterdir()), ['dmhost', 'nativenavi'])
         self.assertEqual(sorted(p.name for p in (c / 'Resources/dm').iterdir()),
                          ['c1_full.tsv', 'env.txt', 'font', 'launcher.json', 'main.changed.tsv', 'main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin', 'practice', 'pso_manifest.tsv', 'pso_pairs.tsv',
                           'shader_map.tsv', 'shader_pairs.tsv'])   # the shader pairs: the pipeline prebuild's, without which hybrid draws have no stand-in
@@ -726,7 +726,7 @@ class App(unittest.TestCase):
 
     def test_info_plist(self):
         p = plistlib.loads((self.app / 'Contents/Info.plist').read_bytes())
-        self.assertEqual((p['CFBundleExecutable'], p['CFBundleName'], p['CFBundleIdentifier'], p['CFBundleShortVersionString']), ('nxnative', 'Game: Test', 'org.nxnative.01008cf01baac000', '1.0.1'))
+        self.assertEqual((p['CFBundleExecutable'], p['CFBundleName'], p['CFBundleIdentifier'], p['CFBundleShortVersionString']), ('nativenavi', 'Game: Test', 'org.nativenavi.01008cf01baac000', '1.0.1'))
         self.assertEqual((p['DMTitleID'], p['DMLanguage'], p['DMRomfsMarker'], p['CFBundleIconFile']), (TID, 'fr', 'region_common/audio/edward.bfsar', 'AppIcon'))
         self.assertIs(p['LSSupportsGameMode'], False)   # macOS's Game Mode holds the GPU at its lowest clock (frame-rate.md)
         self.assertEqual(p['DMSettings'], [])   # launcher.json's settings, as the saved choices they accept: none here
@@ -762,7 +762,7 @@ class App(unittest.TestCase):
     def test_saved_choices(self):
         """launcher.<VAR> in the app's preferences domain, as a front end or a settings window saves it: used from Finder or the Dock, checked against this build's settings,
         after the launch environment, the player's env.txt and the bundle's, and ignored with DM_SAVED_CHOICES=0"""
-        domain = f'org.nxnative.test.{uuid.uuid4().hex}'   # never a real game's domain
+        domain = f'org.nativenavi.test.{uuid.uuid4().hex}'   # never a real game's domain
         listed = {'schema': 1, 'game': TID, 'settings': [
             {'env': 'DM_FPS_TARGET', 'kind': 'choice', 'section': 'Game', 'label': 'Frame rate', 'note': '', 'default': '60', 'options': [['30', '30 fps'], ['60', '60 fps']]},
             {'env': 'DM_RUMBLE_GAIN', 'kind': 'range', 'section': 'Game', 'label': 'Rumble strength', 'note': '', 'default': '1.0', 'min': 0.5, 'max': 1.0, 'step': 0.05},
@@ -770,7 +770,7 @@ class App(unittest.TestCase):
             {'env': 'DM_LANG', 'kind': 'choice', 'section': 'Game', 'label': 'Language', 'note': '', 'default': 'fr', 'options': [['fr', 'French'], ['ja', 'Japanese']]},
             {'env': 'DM_BOTH', 'kind': 'choice', 'section': 'Game', 'label': 'Both', 'note': '', 'default': 'bundle', 'options': [['bundle', 'b'], ['player', 'p'], ['saved', 's']]},
             {'env': 'DM_BAKED', 'kind': 'toggle', 'section': 'Game', 'label': 'Baked', 'note': '', 'default': '1', 'on': '1', 'off': '0'}]}
-        sup = self.tmp / f'home/Library/Application Support/nxnative/{TID}'; sup.mkdir(parents=True, exist_ok=True); (sup / 'env.txt').write_text('DM_BOTH=player\n')
+        sup = self.tmp / f'home/Library/Application Support/NativeNavi/{TID}'; sup.mkdir(parents=True, exist_ok=True); (sup / 'env.txt').write_text('DM_BOTH=player\n')
 
         def pack(name, settings):
             (self.tmp / f'{name}.json').write_text(json.dumps(settings))
@@ -813,10 +813,43 @@ class App(unittest.TestCase):
             listed['settings'][0]['options'] = [['60', '60 fps']]; listed['settings'][0]['default'] = '60'   # a rebuild that no longer offers 30 fps
             r = run(pack('Rebuilt', listed))
             self.assertEqual((r.get('DM_FPS_TARGET'), r['DM_LANG']), (None, 'ja'))   # the host's tested default; the other saved choices still hold
-            self.assertIn('saved choice DM_FPS_TARGET=30 ignored', (self.tmp / f'home/Library/Logs/nxnative/{TID}.log').read_text())
+            self.assertIn('saved choice DM_FPS_TARGET=30 ignored', (self.tmp / f'home/Library/Logs/NativeNavi/{TID}.log').read_text())
         finally:
             subprocess.run(['defaults', 'delete', domain], capture_output=True)
             Path(os.path.expanduser(f'~/Library/Preferences/{domain}.plist')).unlink(missing_ok=True)
+
+    def test_takes_nxnative_folder(self):
+        """A first start with no Application Support folder of its own takes a copy of the one an nxnative build of the game left, its console files and the old
+        domain's saved choices; the old ones stay, and a later start keeps the folder it has"""
+        tag = uuid.uuid4().hex; domain, old_domain = f'org.nativenavi.test.{tag}', f'org.nxnative.test.{tag}'   # never a real game's domain
+        sup_root = self.tmp / 'home/Library/Application Support'; sup, old = sup_root / f'NativeNavi/{TID}', sup_root / f'nxnative/{TID}'
+        for d in (sup, sup_root / 'NativeNavi/system', sup_root / 'nxnative'): shutil.rmtree(d, ignore_errors=True)
+        (old / 'save').mkdir(parents=True); (old / 'save/progress.bin').write_bytes(b'link'); (old / 'env.txt').write_text('DM_BOTH=player\n')
+        (sup_root / 'nxnative/system').mkdir(); (sup_root / 'nxnative/system/MiiDatabase.dat').write_bytes(b'mii')
+        a = types.SimpleNamespace(**vars(self.args)); a.out = str(self.tmp / 'Taken.app'); a.icon = None; a.bundle_id = domain
+
+        def read(dom, key): return subprocess.run(['defaults', 'read', dom, key], capture_output=True, text=True).stdout.strip()
+        try:
+            with mock.patch.object(pack_app, 'sign', lambda *x: None), mock.patch('sys.stdout'): pack_app.pack(a)
+            for key, value in [('launcher.DM_FPS_TARGET', '30'), ('window.advanced', '1')]: subprocess.run(['defaults', 'write', old_domain, key, '-string', value], check=True)
+            subprocess.run(['defaults', 'write', domain, 'window.advanced', '-string', '0'], check=True)   # a key the app already has keeps its value
+            p = self.launch(app=Path(a.out)); out = p.communicate(timeout=30)[0].decode(); self.assertEqual(p.returncode, 7, out)
+            self.assertEqual((sup / 'save/progress.bin').read_bytes(), b'link'); self.assertEqual((sup_root / 'NativeNavi/system/MiiDatabase.dat').read_bytes(), b'mii')
+            r = self.host_run(); self.assertEqual((r['DM_BOTH'], r['DM_SAVE']), ('player', str(sup / 'save')))   # the old env.txt applies
+            self.assertEqual((read(domain, 'launcher.DM_FPS_TARGET'), read(domain, 'window.advanced')), ('30', '0'))
+            self.assertTrue((old / 'save/progress.bin').is_file()); self.assertEqual(read(old_domain, 'launcher.DM_FPS_TARGET'), '30')   # left for nxnative's build
+            self.assertFalse(sup.with_name(sup.name + '.partial').exists())
+            log = (self.tmp / f'home/Library/Logs/NativeNavi/{TID}.log').read_text()
+            self.assertIn(f'{sup} taken from {old}', log); self.assertIn(f'1 saved choices taken from {old_domain}', log)
+            (old / 'env.txt').write_text('DM_BOTH=saved\n')
+            p = self.launch(app=Path(a.out)); p.communicate(timeout=30)
+            self.assertEqual(self.host_run()['DM_BOTH'], 'player')   # a later start: the app's own folder, not the old one again
+            self.assertNotIn('taken from', (self.tmp / f'home/Library/Logs/NativeNavi/{TID}.log').read_text())
+        finally:
+            for d in (domain, old_domain):
+                subprocess.run(['defaults', 'delete', d], capture_output=True)
+                Path(os.path.expanduser(f'~/Library/Preferences/{d}.plist')).unlink(missing_ok=True)
+            shutil.rmtree(sup_root / 'nxnative', ignore_errors=True)
 
     def test_signed(self):   # ad-hoc, both the host and the bundle, never the hardened runtime (it refuses the executable memory the host makes for the game's code)
         for target in (self.app, self.app / 'Contents/MacOS/dmhost'):
@@ -825,7 +858,7 @@ class App(unittest.TestCase):
             self.assertIn('Signature=adhoc', d); self.assertNotIn('runtime', d.split('CodeDirectory', 1)[1].split('\n')[0])
 
     def test_launch(self):
-        home = self.tmp / 'home'; sup = home / f'Library/Application Support/nxnative/{TID}'; logs = home / 'Library/Logs/nxnative'
+        home = self.tmp / 'home'; sup = home / f'Library/Application Support/NativeNavi/{TID}'; logs = home / 'Library/Logs/NativeNavi'
         sup.mkdir(parents=True, exist_ok=True); (sup / 'env.txt').write_text('DM_BOTH=player\n')
         p = self.launch(DM_LANG='ja'); p.communicate(timeout=30)
         self.assertEqual(p.returncode, 7)   # the host's exit code
@@ -858,7 +891,7 @@ class App(unittest.TestCase):
         r = broken / 'Contents/Resources/romfs'
         shutil.rmtree(r.resolve() if r.is_symlink() else r)   # the data itself: in its data bundle, behind the link
         (self.tmp / 'home/alert.txt').unlink(missing_ok=True)
-        p = subprocess.run([broken / 'Contents/MacOS/nxnative'], env=dict(HOME=str(self.tmp / 'home'), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin'), capture_output=True, text=True, timeout=30)
+        p = subprocess.run([broken / 'Contents/MacOS/nativenavi'], env=dict(HOME=str(self.tmp / 'home'), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin'), capture_output=True, text=True, timeout=30)
         self.assertEqual(p.returncode, 1)
         self.assertIn('game data inside this app is missing', (self.tmp / 'home/alert.txt').read_text())
 
@@ -924,7 +957,7 @@ class App(unittest.TestCase):
                 for name in missing: (broken / 'Contents/Resources/dm' / name).unlink()
                 home = self.tmp / 'home'
                 for name in ('alert.txt', 'host_run.txt'): (home / name).unlink(missing_ok=True)
-                p = subprocess.run([broken / 'Contents/MacOS/nxnative'], env=dict(HOME=str(home), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin'),
+                p = subprocess.run([broken / 'Contents/MacOS/nativenavi'], env=dict(HOME=str(home), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin'),
                                    capture_output=True, text=True, timeout=30)
                 self.assertEqual(p.returncode, 1)
                 self.assertFalse((home / 'host_run.txt').exists())
@@ -938,7 +971,7 @@ class App(unittest.TestCase):
         shutil.rmtree(broken / 'Contents/Resources/romfs')
         home = self.tmp / 'home'
         (home / 'alert.scpt').unlink(missing_ok=True)
-        p = subprocess.run([broken / 'Contents/MacOS/nxnative'], env=dict(HOME=str(home), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin'),
+        p = subprocess.run([broken / 'Contents/MacOS/nativenavi'], env=dict(HOME=str(home), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin'),
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(p.returncode, 1)
         self.assertTrue((home / 'alert.scpt').exists(), (home / 'alert.error').read_text())
@@ -953,7 +986,7 @@ class App(unittest.TestCase):
             hidden = self.tmp.with_name(self.tmp.name + '.unavailable')
             try:
                 self.tmp.rename(hidden)
-                p = subprocess.run([moved / 'Contents/MacOS/nxnative'], env=dict(HOME=str(home), PATH='/usr/bin:/bin'), capture_output=True, timeout=30)
+                p = subprocess.run([moved / 'Contents/MacOS/nativenavi'], env=dict(HOME=str(home), PATH='/usr/bin:/bin'), capture_output=True, timeout=30)
                 self.assertEqual(p.returncode, 7)
                 ran = (home / 'host_run.txt').read_text()
                 self.assertIn(f'argv1={moved}/Contents/Resources/dm\n', ran)
@@ -1026,7 +1059,7 @@ class Script(unittest.TestCase):
 
     def test_app_name(self):
         self.assertEqual(nsp.mac_app_name('The Legend of Zelda: Echoes of Wisdom'), 'The Legend of Zelda - Echoes of Wisdom')
-        self.assertEqual(nsp.mac_app_name('AC/DC'), 'AC - DC'); self.assertEqual(nsp.mac_app_name(':'), 'nxnative')
+        self.assertEqual(nsp.mac_app_name('AC/DC'), 'AC - DC'); self.assertEqual(nsp.mac_app_name(':'), 'NativeNavi')
 
     def pack_cmd(self, **kw):
         ran, tmp = [], Path(tempfile.mkdtemp(dir=TEST_ROOT)); self.addCleanup(shutil.rmtree, tmp); self.said = []; self.settings_env = {}; self.metal_tt = []; self.stage_seen: list[str] = []
@@ -1070,7 +1103,7 @@ class Script(unittest.TestCase):
         with mock.patch.object(nsp, 'run', fake_run), mock.patch.object(nsp, 'PROG', self.prog), mock.patch.object(subprocess, 'run', sw_vers), mock.patch.object(nsp, 'chain_of', lambda repo: '0123456789ab'), \
              mock.patch.object(nsp, 'mac_gpu_arch', lambda *a: 'applegpu_g14s'), mock.patch.object(nsp, 'say', self.said.append):
             nsp.mac_app(sys.executable, REPO, out, 0x01008CF01BAAC000, tmp, tmp / 'ex', tmp / 'patched', tmp / 'dmhost', tmp / 'font', tmp / 'shader/cache',
-                        kw.get('aoc'), 'en-US', g, 'Game', '1.0.0', 'org.nxnative.01008cf01baac000', None, kw.get('sign', ''), {}, tmp, gpus=kw.get('gpus', ''), prebake=kw.get('prebake', False),
+                        kw.get('aoc'), 'en-US', g, 'Game', '1.0.0', 'org.nativenavi.01008cf01baac000', None, kw.get('sign', ''), {}, tmp, gpus=kw.get('gpus', ''), prebake=kw.get('prebake', False),
                         practice=kw.get('practice'))
         self.pso_cmd = next((c for c in ran if len(c) > 1 and c[1].endswith('pso_offline.py')), None)   # before the packer
         self.settings_cmd = next(c for c in ran if len(c) > 1 and c[1].endswith('dm/games/settings.py'))
@@ -1357,7 +1390,7 @@ class SeenShaders(unittest.TestCase):   # --seen-shaders: the keys, the partial 
 
     def test_logs_read(self):
         with mock.patch.dict(os.environ, {'HOME': '/h'}):
-            self.assertEqual(nsp.seen_logs(Path('/w'), 0x0400A3A01EE4C000), (Path('/w/run/host.log'), Path('/h/Library/Logs/nxnative/0400A3A01EE4C000.log'), Path('/h/Library/Logs/nxnative/0400A3A01EE4C000.prev.log')))
+            self.assertEqual(nsp.seen_logs(Path('/w'), 0x0400A3A01EE4C000), (Path('/w/run/host.log'), Path('/h/Library/Logs/NativeNavi/0400A3A01EE4C000.log'), Path('/h/Library/Logs/NativeNavi/0400A3A01EE4C000.prev.log')))
 
     def test_partial_library(self):
         a, b = self.keys('a', 'b')

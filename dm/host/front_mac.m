@@ -389,7 +389,7 @@ static void pads_changed(GCController *gone) {
 static id g_display_activity;
 static void display_awake(int on) {
     if (on && !g_display_activity)
-        g_display_activity = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityIdleDisplaySleepDisabled reason:@"NxNative active game window"];
+        g_display_activity = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityIdleDisplaySleepDisabled reason:@"NativeNavi active game window"];
     else if (!on && g_display_activity) { [NSProcessInfo.processInfo endActivity:g_display_activity]; g_display_activity = nil; }
 }
 // Focus: a window that is no longer key sees no key-up or controller release, so whatever is held when it loses focus (another app, minimized) would

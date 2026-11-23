@@ -3,9 +3,9 @@ name: upstream-port
 description: Fetch the new commits of upstream nxnative (github.com/seedds/nxnative), sort out which ones help Ocarina of Time on a Mac in this fork, and port them the way this repository ports them (three-way merge, adaptation to what the fork removed, per-commit checks and commits, game runs, merge into main). Use it whenever the user mentions upstream, nxnative, seedds, "nouveaux commits", syncing or comparing with the fork (SailorSnoW/nxnative), cherry-picking or taking changes from nxnative, or asks what upstream did lately, even if they only want an analysis and no port yet.
 ---
 
-# Porting upstream nxnative commits into oot-silicon
+# Porting upstream nxnative commits into NativeNavi
 
-oot-silicon is a hard fork of nxnative. It runs one game (Ocarina of Time,
+NativeNavi is a hard fork of nxnative. It runs one game (Ocarina of Time,
 profile `dm/games/0400486024DEC000`), on Mac only, with iOS, Vulkan, OpenGL,
 the other games and many subsystems removed (see [AGENTS.md](../../../AGENTS.md)).
 Upstream keeps moving, and a few of its commits each day help this game. This

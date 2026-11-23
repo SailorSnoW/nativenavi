@@ -752,7 +752,7 @@ static void repeated_archive_miss(void) {
 static void app_folder_claim(void) {
     EXPECT("app folder: a host without a bundle shares Metal's folder", 0, ga_own());
     EXPECT("app folder: Metal's folder", 1, [ga_dir() hasSuffix:@"/com.apple.gpuarchiver"]);
-    NSString *dir = [@(archive_cache_root) stringByAppendingPathComponent:@"org.nxnative.test/com.apple.gpuarchiver"];
+    NSString *dir = [@(archive_cache_root) stringByAppendingPathComponent:@"org.nativenavi.test/com.apple.gpuarchiver"];
     for (NSString *n in @[@"gpuarchiver-aaaaaa", @"gpuarchiver-bbbbbb"]) [NSFileManager.defaultManager createDirectoryAtPath:[dir stringByAppendingPathComponent:n] withIntermediateDirectories:YES attributes:nil error:nil];
     [@"x" writeToFile:[dir stringByAppendingPathComponent:@"other"] atomically:NO encoding:NSUTF8StringEncoding error:nil];
     int a, b, c, d;

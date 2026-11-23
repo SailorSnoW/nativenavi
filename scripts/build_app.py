@@ -4,7 +4,7 @@
 #   (dmsh_build.py) → the Mac host and its fonts → the practice tools (practice_tools) → the pipeline archive and the prewarm pipelines → the Mac app (dm/mac/pack_app.py).
 # PLATFORM = 'mac-app' / --platform mac-app (the default): a self-contained, double-clickable Mac app of the game beside the build folder, <game name>.app (OUT_APP / -o names another path):
 #   the launcher dm/mac/launcher.c, the Mac host, the RomFS (APFS clones on the build's volume), the Mac shader libraries, the DLC and the rewritten modules inside it; the save in
-#   ~/Library/Application Support/nxnative/<title ID>/, the log in ~/Library/Logs/nxnative/<title ID>.log. Signed ad-hoc, or with MAC_SIGN / --mac-sign; no hardened runtime, no notarization.
+#   ~/Library/Application Support/NativeNavi/<title ID>/, the log in ~/Library/Logs/NativeNavi/<title ID>.log. Signed ad-hoc, or with MAC_SIGN / --mac-sign; no hardened runtime, no notarization.
 # PLATFORM = 'mac' / --platform mac is the development build: the same steps up to the Mac host, then the pipeline prebuild; no app. Its last line is the command that runs the game in the
 #   Mac host from the build folder, its save in <build folder>/run/save.
 # SEEN_SHADERS / --seen-shaders: only the shaders the profile's shader_seen.tsv lists and the last runs' logs reported missing, in minutes instead of hours; the rest do not draw (build_shaders).
@@ -56,7 +56,7 @@ PACKAGE = ''                            # version built (empty = the newest in t
 WORK_DIR = ''                           # the build folder (empty = <title ID>_build in the NUP's folder); the unpacked files, shader cache and temporary files live there, and the app goes beside it unless OUT_APP names it
 OUT_APP = ''                            # PLATFORM 'mac-app': the output app (empty = <game name>.app beside the build folder)
 APP_NAME = ''                           # the app's name (empty = the game name in the NUP's control data, else the profile's)
-BUNDLE_ID = ''                          # the app's bundle ID (empty = org.nxnative.<title ID in lowercase>)
+BUNDLE_ID = ''                          # the app's bundle ID (empty = org.nativenavi.<title ID in lowercase>)
 ICON = ''                               # the app icon, a JPEG or PNG of any size (empty = the game's icon from its control data; a NUP may have none)
 FALLBACK_ICON = ''                      # the app icon only when ICON is empty and the NUP carries none; empty = such an app's icon is blank
 PLATFORM = 'mac-app'                    # 'mac-app' = a double-clickable Mac app of the game; 'mac' = development: the Mac shaders and the Mac host, then the command that runs the game from the build folder
@@ -1197,7 +1197,7 @@ def seen_listed(g):   # the keys of the profile's shader_seen.tsv
 
 
 def seen_logs(work, app):   # the logs a --seen-shaders build reads: the run command's, the app's and the one before it (only opening the app and quitting in its settings window starts a new log)
-    logs = Path(os.path.expanduser('~/Library/Logs/nxnative'))
+    logs = Path(os.path.expanduser('~/Library/Logs/NativeNavi'))
     return work / 'run/host.log', logs / f'{app:016X}.log', logs / f'{app:016X}.prev.log'
 
 
@@ -1756,7 +1756,7 @@ def other_gpu_prewarm(repo, out, arch, others, logs, lib_dir, env):
 
 
 def mac_app_name(name):   # the app's file name: the game name with the characters Finder shows otherwise (':' and '/') as ' - '
-    return re.sub(r'\s*[:/]\s*', ' - ', name).strip(' .-') or 'nxnative'
+    return re.sub(r'\s*[:/]\s*', ' - ', name).strip(' .-') or 'NativeNavi'
 
 
 def mac_app(py, repo, out, app, work, game, patched, host, font, msl, aoc, lang, g, name, version, bundle_id, icon, sign, env, logs, env_file='', gpus='', control=None, prebake=False, practice=None):
@@ -1806,7 +1806,7 @@ def parse_args(argv):
     ap.add_argument('-p', '--package', help='version built, e.g. v131072, or v0 for the base game (default: the newest in the NUP)')
     ap.add_argument('-o', '--out', help='--platform mac-app: the output app, a path ending in .app (default: <game name>.app beside the build folder)')
     ap.add_argument('--app-name', help='the app\'s name (default: the game name in the NUP\'s control data, else the profile\'s)')
-    ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: org.nxnative.<title ID in lowercase>)')
+    ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: org.nativenavi.<title ID in lowercase>)')
     ap.add_argument('--platform', choices=('mac', 'mac-app'), help='mac-app = a self-contained, double-clickable Mac app of the game (<game name>.app beside the build folder, -o names another); '
                     'mac = for development: the Mac shaders and the Mac host, then the command that runs the game from the build folder (default: the PLATFORM setting, mac-app)')
     ap.add_argument('--icon', help='the app icon, a JPEG or PNG of any size (default: the ICON setting, else the game\'s icon from its control data; a NUP may have none)')
@@ -2002,7 +2002,7 @@ def main(args=None):
     # the app name comes from the game's control data (a NUP may carry none: the profile's name then), the bundle ID from its title ID; a setting / the command line overrides them
     app_name = args.app_name or APP_NAME or nacp.name(base / 'control.nacp') or g.get('name', '')
     if not app_name and mac_pack: raise BuildError(f'no game name in the NUP\'s control data ({base / "control.nacp"}) or the profile: give --app-name')
-    bundle_id = args.bundle_id or BUNDLE_ID or f'org.nxnative.{app:016x}'
+    bundle_id = args.bundle_id or BUNDLE_ID or f'org.nativenavi.{app:016x}'
     app_version = app_display_version(game, base, g, pkg_ver)
     icon, stand_in = app_icon(user_icon, spare_icon, game, base)
     if mac_pack:
@@ -2045,7 +2045,7 @@ def main(args=None):
                 (args.gpu or PSO_GPUS).strip(), control, PREBAKE if args.prebake is None else args.prebake, practice)
         rmtree(work / 'tmp')
         say(f'done: {out_app} ({tree_size(out_app)[1] / 2**30:.1f} GB); '
-            f'open it from Finder. Its save is in ~/Library/Application Support/nxnative/{app:016X}/, its log in ~/Library/Logs/nxnative/{app:016X}.log')
+            f'open it from Finder. Its save is in ~/Library/Application Support/NativeNavi/{app:016X}/, its log in ~/Library/Logs/NativeNavi/{app:016X}.log')
         if practice: say('practice tools: in the app, off until Practice tools in its settings window turns them on')
         if practice_red: say(practice_red)
         if seen_shaders: say('a partial shader library: where a shader is missing, the log says so in red and the draw goes without it. Run this script again with --seen-shaders to add what the log names, or without it for the whole map')

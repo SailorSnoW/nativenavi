@@ -10885,7 +10885,7 @@ static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, i
     // Do not send conflicting or non-renderable aspect formats to Metal, which can
     // abort instead of returning an NSError (also on the MTLDevice fallback).
     if (!pso_ds_valid((uint32_t)d.depthAttachmentPixelFormat, (uint32_t)d.stencilAttachmentPixelFormat)) {
-        if (e) *e = [NSError errorWithDomain:@"nxnative.NVN.Pipeline" code:1
+        if (e) *e = [NSError errorWithDomain:@"nativenavi.NVN.Pipeline" code:1
             userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"invalid depth/stencil pipeline formats %lu/%lu (compile=%d)",
                 (unsigned long)d.depthAttachmentPixelFormat, (unsigned long)d.stencilAttachmentPixelFormat, compile]}];
         return nil;
@@ -10896,7 +10896,7 @@ static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, i
     // the base's code for all of them), and with its colour output going where the encoder's colour attachment map sends it, which only a Metal 4 descriptor can ask for. None otherwise
     if (rast && [d.label isEqualToString:PSO_FACE]) {
         MTL4RenderPipelineDescriptor *whole = g_comp4 ? pso_desc4(d, 0, off) : nil;
-        if (!whole) { if (compile && e) *e = [NSError errorWithDomain:@"nxnative.NVN.Pipeline" code:2 userInfo:@{NSLocalizedDescriptionKey: @"a colour-mapped pipeline needs the Metal 4 compiler and function descriptors"}]; return nil; }
+        if (!whole) { if (compile && e) *e = [NSError errorWithDomain:@"nativenavi.NVN.Pipeline" code:2 userInfo:@{NSLocalizedDescriptionKey: @"a colour-mapped pipeline needs the Metal 4 compiler and function descriptors"}]; return nil; }
         if (!compile) return nil;
         whole.colorAttachmentMappingState = MTL4LogicalToPhysicalColorAttachmentMappingStateInherited;
         return [g_comp4 newRenderPipelineStateWithDescriptor:whole compilerTaskOptions:nil error:e];

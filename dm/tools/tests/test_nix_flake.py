@@ -46,7 +46,7 @@ class Flake(unittest.TestCase):
 
     def test_fuzz_shell_installs_the_documented_atheris(self):
         self.assertRegex((REPO / '.github/requirements/fuzz.txt').read_text(), r'(?m)^atheris==')
-        self.assertIn('NXNATIVE_PIP_SKIP = "atheris"', self.flake)
+        self.assertIn('NATIVENAVI_PIP_SKIP = "atheris"', self.flake)
         commit = re.search(r'git\+https://github\.com/google/atheris@([0-9a-f]{40})', self.flake)
         if commit is None: self.fail('flake.nix names no atheris commit')
         self.assertIn(f'github.com/google/atheris@{commit[1]}', (REPO / 'docs/development.md').read_text(), 'flake.nix and docs/development.md name other atheris commits')
@@ -64,8 +64,8 @@ class Flake(unittest.TestCase):
         bash = shutil.which('bash')
         if bash is None: self.skipTest('no bash')
         with tempfile.TemporaryDirectory() as d:
-            env = {'PATH': '/usr/bin:/bin', 'HOME': d, 'NXNATIVE_SHELL': 'miri', 'NXNATIVE_REQUIREMENTS': '', 'NXNATIVE_NO_XCODE_CHECK': '1', 'NXNATIVE_TOOLS': '',
-                   'NXNATIVE_STDENV_PATH': '', 'NXNATIVE_PYTHON': sys.executable, 'NXNATIVE_VENVS': d}
+            env = {'PATH': '/usr/bin:/bin', 'HOME': d, 'NATIVENAVI_SHELL': 'miri', 'NATIVENAVI_REQUIREMENTS': '', 'NATIVENAVI_NO_XCODE_CHECK': '1', 'NATIVENAVI_TOOLS': '',
+                   'NATIVENAVI_STDENV_PATH': '', 'NATIVENAVI_PYTHON': sys.executable, 'NATIVENAVI_VENVS': d}
             p = subprocess.Popen([bash, '-c', f'source {REPO / "dm/nix/shell_hook.sh"}; printf "%s\\n" "$CARGO_HOME"'], cwd=REPO, env=env, text=True,
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)   # stdin stays open: a read of it would hang
             assert p.stdin and p.stdout and p.stderr   # all three are pipes (communicate would close stdin before the wait)

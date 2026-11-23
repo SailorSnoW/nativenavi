@@ -83,7 +83,7 @@ int main(void) {
         CHECK(mount(&h, 0, 3) == RES_OK && device_state(&h) == NFP_STATE_MOUNTED, "mount");
         CHECK(model_info(out, &h) == RES_OK && !memcmp(out, "\x01\x00\x00\x00\x4B\x03\x09", 7), "model info: the model number in host byte order");
         CHECK(common(out, &h) == RES_OK && out[4] == 0x02 && out[5] == 0x01 && out[8] == 0xD8, "common info: the write counter and the application area size");
-        CHECK(reg(out, &h) == RES_OK && !strcmp((char *)out + 0x5C, "nxnative"), "register info: the host's owner");
+        CHECK(reg(out, &h) == RES_OK && !strcmp((char *)out + 0x5C, "NativeNavi"), "register info: the host's owner");
         CHECK(open_area(&h, 0x1019C800) == NFP_RES_AREA_NOT_CREATED, "a fresh amiibo has no application area");
         uint8_t info[0x48] = {0}, data[4] = {1, 2, 3, 4}; uint32_t id = 0x1019C800, size = 4; const void *dp = data;
         memcpy(info, &id, 4); memcpy(info + 8, &dp, 8); memcpy(info + 0x10, &size, 4);

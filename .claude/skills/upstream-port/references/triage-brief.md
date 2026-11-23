@@ -8,7 +8,7 @@ You are analysing upstream commits of nxnative for a hard fork of it. READ-ONLY 
 (another session may have uncommitted work there). Write scratch files only under <scratchpad>.
 
 ## Context
-- <repo> ("oot-silicon") is a hard fork of nxnative (Switch games run natively on Apple silicon: Horizon SVCs and services in dm/host, NVN on
+- <repo> ("NativeNavi") is a hard fork of nxnative (Switch games run natively on Apple silicon: Horizon SVCs and services in dm/host, NVN on
   Metal in dm/gfx/nvn, the shader translator chain in dm/gfx/tools, the module rewriter dm/tools/patch_nso.py) reduced to ONE game: The Legend of
   Zelda: Ocarina of Time for Switch 2 (title 0400486024DEC000, profile dm/games/0400486024DEC000/: game.tsv, patches.py, README.md = the game
   note), Mac only. Read its AGENTS.md first.
@@ -24,7 +24,7 @@ You are analysing upstream commits of nxnative for a hard fork of it. READ-ONLY 
   `python3 <repo>/dm/tools/upstream_sync.py list` tags their files (gone = not in this tree).
 - Already reviewed: <repo>/dm/tools/upstream_ledger.tsv (some commits build on ones listed there, or on ones never taken: say which).
 - Game files, for evidence (read only, write nothing there): <build folder> (shader libraries, extracted modules, logs); the run log
-  ~/Library/Logs/nxnative/0400486024DEC000.log.
+  ~/Library/Logs/NativeNavi/0400486024DEC000.log.
 
 ## Your commits (<area>)
 <sha subject, one per line, with what to look at for each: "does the game use X?", "is Y still in this tree?">

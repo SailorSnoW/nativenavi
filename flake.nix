@@ -1,5 +1,5 @@
 {
-  description = "nxnative development shells for Apple silicon Macs";
+  description = "NativeNavi development shells for Apple silicon Macs";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   # The official Rust builds, by version: the host's Rust library is built with the one dm/host/rust/rust-toolchain.toml names
@@ -98,13 +98,13 @@
             }:
             pkgs.mkShellNoCC (
               {
-                name = "nxnative-${name}";
+                name = "nativenavi-${name}";
                 packages = tools;
-                NXNATIVE_SHELL = name;
-                NXNATIVE_TOOLS = lib.makeBinPath tools;
-                NXNATIVE_STDENV_PATH = lib.makeBinPath pkgs.stdenvNoCC.initialPath;
-                NXNATIVE_PYTHON = python.interpreter;
-                NXNATIVE_REQUIREMENTS = lib.concatMapStringsSep " " (r: ".github/requirements/${r}") requirements;
+                NATIVENAVI_SHELL = name;
+                NATIVENAVI_TOOLS = lib.makeBinPath tools;
+                NATIVENAVI_STDENV_PATH = lib.makeBinPath pkgs.stdenvNoCC.initialPath;
+                NATIVENAVI_PYTHON = python.interpreter;
+                NATIVENAVI_REQUIREMENTS = lib.concatMapStringsSep " " (r: ".github/requirements/${r}") requirements;
                 shellHook = "source ${./dm/nix/shell_hook.sh}";
               }
               // env
@@ -152,9 +152,9 @@
             tools = [ python ];
             requirements = [ "fuzz.txt" ];
             env = {
-              NXNATIVE_PIP_SKIP = "atheris";
-              NXNATIVE_PIP_EXTRA = atheris;
-              NXNATIVE_PIP_ENV = "CLANG_BIN=${own.llvm}/bin/clang CC=${own.llvm}/bin/clang CXX=${own.llvm}/bin/clang++";
+              NATIVENAVI_PIP_SKIP = "atheris";
+              NATIVENAVI_PIP_EXTRA = atheris;
+              NATIVENAVI_PIP_ENV = "CLANG_BIN=${own.llvm}/bin/clang CC=${own.llvm}/bin/clang CXX=${own.llvm}/bin/clang++";
             };
           };
         }
