@@ -35,7 +35,7 @@ def metallib(funcs):
     pm = b''
     for _, const in funcs:
         names = const if isinstance(const, tuple) else ('spvLinearTextureAlignmentOverride',) if const else ()
-        cnst = struct.pack('<H', len(names)) + b''.join(n.encode() + b'\0\x35' + struct.pack('<H', 216 if n == 'dm_border_off' else 0xffff) + b'\0' for n in names)
+        cnst = struct.pack('<H', len(names)) + b''.join(n.encode() + b'\0\x35' + struct.pack('<H', {'dm_border_off': 216, 'dm_ndsr_p1': 218}.get(n, 0xffff)) + b'\0' for n in names)
         body = (tag(b'CNST', cnst) if names else b'') + b'ENDT'
         pm += struct.pack('<I', len(body)) + body
     fo = 0x58; po_ = fo + len(fl)
@@ -253,6 +253,20 @@ class Compute(unittest.TestCase):
         j = po.script(self.d, [], pipes)
         self.assertEqual(j['pipeline_descriptors']['compute_pipeline_descriptors'], [{'compute_function_descriptor': 'fnd:kb_b.main0.host'}])
         self.assertEqual(j['function_descriptors']['specialized_function_descriptors'][0]['constant_values'][0]['id'], {'data': 216})
+
+    def test_a_kernel_in_two_passes_gets_both(self):   # dmsh_ndsr.py's split: the one pass, and its passes 0 and 1 as split_pipes looks them up (cps_new_b, off | FN_SPLIT0 / FN_SPLIT1)
+        split = {'fc': po.abi.SPLIT_FC, 'buffer': po.abi.SPLIT_SLOT, 'words': 8}
+        self.shader('ks', {'stage': 'cs', 'split': split}, {'_b': [('main0', ('dm_border_off', 'dm_ndsr_p1'))]})
+        self.shader('kn', {'stage': 'cs'}, {'_b': [('main0', ('dm_border_off', 'dm_ndsr_p1'))]})   # the constant with no split in the reflection: the device's
+        pipes, left = po.plan_compute(self.d, CHAIN, ['ks_b', 'kn_b'])
+        self.assertEqual(pipes, [('ks_b', 'main0'), ('ks_b', 'main0', 'split0'), ('ks_b', 'main0', 'split1')]); self.assertEqual(left['constants'], 1)
+        j = po.script(self.d, [], pipes)
+        self.assertEqual([x['compute_function_descriptor'] for x in j['pipeline_descriptors']['compute_pipeline_descriptors']],
+                         ['fnd:ks_b.main0.host', 'fnd:ks_b.main0.host.split0', 'fnd:ks_b.main0.host.split1'])
+        specs = {x['label']: [(c['id']['data'], c['value']['data']) for c in x['constant_values']] for x in j['function_descriptors']['specialized_function_descriptors']}
+        self.assertEqual(specs, {'ks_b.main0.host': [(216, True)], 'ks_b.main0.host.split0': [(216, True), (po.abi.SPLIT_FC, False)],
+                                 'ks_b.main0.host.split1': [(216, True), (po.abi.SPLIT_FC, True)]})
+        self.assertEqual(po.library_digest(self.d, [], pipes), po.library_digest(self.d, [], pipes[:1]))   # one library for the three
 
     def test_pipelines_from_a_library_image(self):   # one-file libraries (b-<chain>.img, shader_lib.py), as dmsh_build.py writes them: read in place, as plan reads the bases
         self.shader('c1', {'stage': 'cs'}, {'_b': [('main0', False)]})

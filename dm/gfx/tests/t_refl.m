@@ -52,6 +52,16 @@ int main(void) { @autoreleasepool {
             check("ordinary 2D offset metadata rejected", 1, nvn_refl_from_json(j, &r, err, sizeof err) != 0);
         }
     }
+    {   // a kernel in two passes (dmsh_ndsr.py): its words a thread, with this host's function constant and buffer only
+        NSMutableDictionary *sp = [@{@"fc": @(DMSH_SPLIT_FC), @"buffer": @(DMSH_SPLIT_SLOT), @"words": @8} mutableCopy];
+        NSDictionary *j = @{@"route": @"B", @"bindings": @[], @"split": sp};
+        check("split: conversion", 0, nvn_refl_from_json(j, &r, err, sizeof err)); check("split: words", 8, r.split_words);
+        check("split: none without it", 0, (nvn_refl_from_json(@{@"route": @"B", @"bindings": @[]}, &r, err, sizeof err), r.split_words));
+        for (NSString *k in @[@"fc", @"buffer", @"words"]) {
+            NSMutableDictionary *bad = [sp mutableCopy]; bad[k] = @([sp[k] intValue] + 100);
+            check("split: another ABI rejected", 1, nvn_refl_from_json(@{@"route": @"B", @"bindings": @[], @"split": bad}, &r, err, sizeof err) != 0);
+        }
+    }
     {   // native image atomics (dmsh_atomic.py): one read_write image, marked atomic by the build; an image the shader only stores to is not
         NSDictionary *j = @{@"route": @"B", @"bindings": @[
             @{@"kind": @"img", @"reg": @2, @"arg_id": @0, @"msl_name": @"cp_i_cb2_4C_r32ui", @"msl_type": @"texture_buffer<uint, access::read_write>", @"atomic": @YES},

@@ -6885,6 +6885,7 @@ static void shmap_read(void) {
     uint8_t mesh_kind, mesh_notask; uint16_t mesh_threads, mesh_payload;   // an NVN2 task (1) or mesh (2) shader, a mesh shader with no task, its workgroup's threads, its payload's bytes (dmsh_meshstage.py)
     id<MTLFunction> mesh_obj;   // a mesh shader with no task: the object function that launches its workgroups in blocks of DMSH_MESH_GRID (dmsh_meshstage.py main0_o)
     int cps_failed;   // Metal refused this compute shader's pipeline (dispatch): its dispatches are skipped without asking again
+    int split_failed;   // a pass of a kernel in two passes did not build (split_pipes): it runs in one pass for the rest of the run
     uint64_t loop_sub, loop_gpu; _Atomic int loop_reported;   // this submission's per-kernel cap-hit state; feedback logs at most once per loaded kernel
     uint8_t up_mfx;   // a compute shader that is the game's own upscaler (DM_GAME_UPSCALER_KEYS, from the shader map): 0 not decided, 1 drawn by MetalFX when DM_UPSCALER=metalfx, 2 not one or one its colour keeps (up_mfx_wanted)
     uint8_t up_color;   // such a shader's colour, from its code at load with DM_UPSCALER=metalfx (up_mfx_color; UP_COLOR_UNREAD otherwise)
@@ -6912,7 +6913,7 @@ typedef struct { int8_t fx[32]; uint8_t fbmask, lmap[8]; } bf_key;
 @interface NvProg : NSObject { @public NvShader *sh[6]; NvProg *mesh_raster; int8_t c_sw, c_iw, c_img; } @end   // c_sw / c_iw / c_img: prog_swrites, udc_note_draw's image write, image_prepare's written image slots; + 1 once known (the shaders are fixed once made)   // sh: by host stage (0 vertex, 1 pixel, 3 task, 4 mesh, 5 compute; 2, the geometry stage, stays empty); mesh_raster: a task / mesh program\'s pixel stage alone (mesh_tasks_draw)
 @implementation NvProg @end
 // Warm-up entry: built in the background, waiting to be taken by the submit thread. vs / fs are strong references (in pso they are only raw pointers, and the background dictionary is released when the task ends)
-@interface WarmItem : NSObject { @public int kind, record, pull; NSString *key, *vs_key, *fs_key, *ts_key; NvShader *shader, *vs, *fs, *ts; pso_key pso; id<MTLFunction> fsfn; id object; } @end   // record: a prefetched library, written to the prewarm lists when claimed (shader_get's lines)
+@interface WarmItem : NSObject { @public int kind, record, pull, cps_off; NSString *key, *vs_key, *fs_key, *ts_key; NvShader *shader, *vs, *fs, *ts; pso_key pso; id<MTLFunction> fsfn; id object; } @end   // record: a prefetched library, written to the prewarm lists when claimed (shader_get's lines)
 @implementation WarmItem @end
 static NSMutableDictionary<NSString *, NvShader *> *g_shcache;
 
@@ -7122,15 +7123,20 @@ static id<MTLFunction> fn_dev(id<MTLFunction> f) {
 // cached by that descriptor. nil: f has no variant (no library descriptor, or its entry point does not declare the constant), and off builds what on builds
 @interface FnOff : NSObject { @public MTL4FunctionDescriptor *d4; MTLFunctionConstantValues *cv; id<MTLFunction> dev; int none, dev_failed; } @end
 @implementation FnOff @end
-// off is a bitmask: FN_OFF_BORDER (border corrections off, DMSH_BORDER_FC) and FN_OFF_BLEND (blend fix-up off, DMSH_BLEND_OFF_FC, for a pipeline whose blend words are both 0).
+// off is a bitmask: FN_OFF_BORDER (border corrections off, DMSH_BORDER_FC) and FN_OFF_BLEND (blend fix-up off, DMSH_BLEND_OFF_FC, for a pipeline whose blend words are both 0),
+// and for a kernel in two passes (dmsh_ndsr.py) FN_SPLIT0 / FN_SPLIT1, its DMSH_SPLIT_FC false or true (split_dispatch).
 // One FnOff per descriptor and mask; a mask whose constants f's entry point does not declare is none (it builds as on)
-enum { FN_OFF_BORDER = 1, FN_OFF_BLEND = 2 };
-@interface FnOffSet : NSObject { @public FnOff *m[4]; } @end
+enum { FN_OFF_BORDER = 1, FN_OFF_BLEND = 2, FN_SPLIT0 = 4, FN_SPLIT1 = 8, FN_MASKS = 16 };
+static int fc_index(NSDictionary *fc, NSUInteger index) {   // the entry point declares a function constant at that index (by its index, whatever the MSL calls it)
+    for (MTLFunctionConstant *c in fc.allValues) if (c.index == index) return 1;
+    return 0;
+}
+@interface FnOffSet : NSObject { @public FnOff *m[FN_MASKS]; } @end
 @implementation FnOffSet @end
 static os_unfair_lock g_fn_off_lock = OS_UNFAIR_LOCK_INIT;
 static NSMapTable *g_fn_off;   // MTL4FunctionDescriptor (fn4_of) → FnOffSet
 static FnOff *fn_off(id<MTLFunction> f, int mask) {
-    mask &= 3; if (!mask) return nil;
+    mask &= FN_MASKS - 1; if (!mask || (mask & FN_SPLIT0 && mask & FN_SPLIT1)) return nil;
     MTL4FunctionDescriptor *fd = fn4_of(f);
     if (!fd) return nil;   // no library to specialize from (diagnostic overrides)
     os_unfair_lock_lock(&g_fn_off_lock);
@@ -7149,10 +7155,11 @@ static FnOff *fn_off(id<MTLFunction> f, int mask) {
         MTL4LibraryFunctionDescriptor *ld = [fd isKindOfClass:MTL4LibraryFunctionDescriptor.class] ? (MTL4LibraryFunctionDescriptor *)fd : nil;
         // NOLINTNEXTLINE(clang-analyzer-nullability.NullablePassedToNonnull): the descriptor's name is set when it is made (fn4_note refuses a nil name, pre_fn takes the name its function was made from) and never changed
         NSDictionary *fc = ld ? [ld.library newFunctionWithName:ld.name].functionConstantsDictionary : nil;   // the entry's, not f's: a specialized f lists no constants
-        int border = (mask & FN_OFF_BORDER) && fc[@"dm_border_off"], blend = (mask & FN_OFF_BLEND) && fc[@"dm_blend_off"];
-        if (!border && !blend) { o->none = 1; return nil; }
+        int border = (mask & FN_OFF_BORDER) && fc[@"dm_border_off"], blend = (mask & FN_OFF_BLEND) && fc[@"dm_blend_off"], split = (mask & (FN_SPLIT0 | FN_SPLIT1)) && fc_index(fc, DMSH_SPLIT_FC);
+        if (!border && !blend && !split) { o->none = 1; return nil; }
         if (!cv) cv = [MTLFunctionConstantValues new];
         BOOL yes = YES; if (border) [cv setConstantValue:&yes type:MTLDataTypeBool atIndex:DMSH_BORDER_FC]; if (blend) [cv setConstantValue:&yes type:MTLDataTypeBool atIndex:DMSH_BLEND_OFF_FC];
+        if (split) { BOOL p1 = (mask & FN_SPLIT1) != 0; [cv setConstantValue:&p1 type:MTLDataTypeBool atIndex:DMSH_SPLIT_FC]; }
         MTL4SpecializedFunctionDescriptor *sd = [MTL4SpecializedFunctionDescriptor new]; sd.functionDescriptor = ld; sd.constantValues = cv;
         o->cv = cv; o->d4 = sd;
         return o;
@@ -7169,7 +7176,7 @@ static id<MTLFunction> fn_dev_b(id<MTLFunction> f, int off) {
             MTL4LibraryFunctionDescriptor *ld = (MTL4LibraryFunctionDescriptor *)((MTL4SpecializedFunctionDescriptor *)o->d4).functionDescriptor;
             // NOLINTNEXTLINE(clang-analyzer-nullability.NullablePassedToNonnull): fn_off made o->d4 from this ld after looking its name up; names are never nil (fn4_note, pre_fn)
             NSError *e = nil; o->dev = dev_fn(ld.library, ld.name, o->cv, &e);
-            if (!o->dev) { o->dev_failed = 1; MLOG("[RED] function %s: specializing it without the border corrections or the blend fix-up (mask %d) failed: %s (its pipelines keep them)", f.name.UTF8String, off, e.localizedDescription.UTF8String); }
+            if (!o->dev) { o->dev_failed = 1; MLOG("[RED] function %s: specializing it (mask %d: 1 border corrections off, 2 blend fix-up off, 4 / 8 a split's pass 0 / 1) failed: %s (its pipelines are the unspecialized one's)", f.name.UTF8String, off, e.localizedDescription.UTF8String); }
         }
         if (o->dev) return o->dev;
     }
@@ -10606,7 +10613,7 @@ static int fd_border_fc(MTL4FunctionDescriptor *fd) {
 static id<MTLComputePipelineState> cps_new_b(id<MTLFunction> f, int off, NSError **e) {   // off: without the border corrections (fn_off), the common dispatch's
     pso4_init();
     MTL4FunctionDescriptor *fd = fn4_of_b(f, off); MTL4ComputePipelineDescriptor *d = nil; id<MTLComputePipelineState> ps = nil; uint64_t t0 = bp_now();
-    if ([fd isKindOfClass:MTL4LibraryFunctionDescriptor.class] || fd_border_fc(fd)) {   // a specialized one: fn_spec's or fn_off's, of a function with the border constant
+    if ([fd isKindOfClass:MTL4LibraryFunctionDescriptor.class] || fd_border_fc(fd) || (off & (FN_SPLIT0 | FN_SPLIT1))) {   // a specialized one: fn_spec's or fn_off's, of a function with the border constant, or a split's pass (pso_offline.py holds both)
         d = [MTL4ComputePipelineDescriptor new]; d.computeFunctionDescriptor = fd;
         if (g_arch_bundle && (ps = [g_arch_bundle newComputePipelineStateWithDescriptor:d error:nil])) atomic_fetch_add(&g_cps_arch, 1);
         else { int from_run = 0; if ((ps = arch_lookup(d, 1, &from_run))) {   // arch_capture_cs writes them to plain files only
@@ -11811,7 +11818,11 @@ static void warm_task(WarmTask *t) {
             NvShader *cs = warm_shader(t->key, 5); NSError *e = nil; id ps = cs ? cps_new_b(cs->fn, 1, &e) : nil;   // the common pipeline (g_cps)
             if (cs && !ps) MLOG("[RED] background compute pipeline creation failed: %s", e.localizedDescription.UTF8String);
             if (ps && g_pre_tool) g_warm_cps++;   // the prebuild tool: captured for the archive, nothing kept
-            else if (ps) { WarmItem *item = [WarmItem new]; item->kind = 2; item->key = t->key; item->shader = cs; item->object = ps; warm_enqueue(item); g_warm_cps++; }
+            else if (ps) { WarmItem *item = [WarmItem new]; item->kind = 2; item->key = t->key; item->shader = cs; item->object = ps; item->cps_off = 1; warm_enqueue(item); g_warm_cps++; }
+            for (int pass = 0; ps && cs->rf.split_words && pass < 2; pass++) {   // a kernel in two passes: both passes' pipelines too (split_dispatch)
+                int off = 1 | (pass ? FN_SPLIT1 : FN_SPLIT0); id sp = fn_off(cs->fn, off) ? cps_new_b(cs->fn, off, &e) : nil;
+                if (sp && !g_pre_tool) { WarmItem *item = [WarmItem new]; item->kind = 2; item->key = t->key; item->shader = cs; item->object = sp; item->cps_off = off; warm_enqueue(item); }
+            }
             g_warm_done++; return;
         }
         pso_skey sk; [t->rs[0] getBytes:&sk length:sizeof sk];
@@ -16479,7 +16490,7 @@ static void warm_claim(void) {
         } else {
             NvShader *cs = g_shcache[item->key];
             if (!cs) { cs = item->shader; if (!g_shcache) g_shcache = [NSMutableDictionary dictionary]; g_shcache[item->key] = cs; }
-            cps_key key = {(__bridge const void *)cs, 1};   // warm_task built the common function, without the border corrections
+            cps_key key = {(__bridge const void *)cs, (uintptr_t)item->cps_off};   // warm_task built the common function, without the border corrections, and a split's passes
             if (!hm_get_id(&g_cps, &key)) { hm_put_id(&g_cps, &key, item->object); g_warm_claim_cps++; }
         }
     }
@@ -16693,6 +16704,41 @@ static id<MTLComputePipelineState> dispatch_cps(NvShader *cs, int off, const cps
     hm_put_id(&g_cps, k, ps);
     return ps;
 }
+// A kernel in two passes (dm/gfx/tools/dmsh_ndsr.py, the reflection's split: agl's NDSR upscaler network): pass 0 (DMSH_SPLIT_FC false) runs the network and writes each thread's
+// words to the buffer at DMSH_SPLIT_SLOT, pass 1 (true) reads them and runs the shader's epilogue, whose registers no longer cap the network's threads (shaders.md, "agl's NDSR network
+// on simdgroup matrices, in two passes"). Their pipelines sit beside the common one in g_cps (off | FN_SPLIT0 / FN_SPLIT1), the prewarm builds them with it, and the offline archive
+// holds them (pso_offline.py). Both or none: a pass that does not build leaves the shader in one pass for the run. DM_NVN_SPLIT=0 runs the one pass (the kernel unspecialized)
+static int split_on(void) { static int m = -1; if (m < 0) m = sw_mode("DM_NVN_SPLIT", 1); return sw_on(m); }
+static int split_pipes(NvShader *cs, int off, const p_dispatch *dp, id<MTLComputePipelineState> __strong sp[2]) {
+    if (cs->split_failed) return 0;
+    if (dp->ind) { static int once; if (!once++) MLOG("compute shader %s: an indirect dispatch runs in one pass (its words' scratch needs the grid)", cs->key); return 0; }
+    const NSUInteger want = (NSUInteger)MAX(cs->rf.tg[0], 1) * MAX(cs->rf.tg[1], 1) * MAX(cs->rf.tg[2], 1);
+    for (int p = 0; p < 2; p++) {
+        cps_key k = {(__bridge const void *)cs, (uintptr_t)(off | (p ? FN_SPLIT1 : FN_SPLIT0))};
+        if ((sp[p] = hm_get_id(&g_cps, &k))) continue;
+        NSError *e = nil; uint64_t bt = bp_now();
+        sp[p] = fn_off(cs->fn, (int)k.off) ? cps_new_b(cs->fn, (int)k.off, &e) : nil;
+        g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
+        if (!sp[p] || sp[p].maxTotalThreadsPerThreadgroup < want) {
+            MLOG("[RED] compute shader %s: pass %d of its two does not build (%s): it runs in one pass", cs->key, p,
+                 sp[p] ? "fewer threads a threadgroup than its local size" : e ? e.localizedDescription.UTF8String : "the library has no such specialization");
+            cs->split_failed = 1; sp[0] = sp[1] = nil; return 0;
+        }
+        hm_put_id(&g_cps, &k, sp[p]);
+    }
+    return 1;
+}
+static void split_dispatch(id ce, NvShader *cs, id<MTLComputePipelineState> __strong sp[2], const p_dispatch *dp, const uint16_t *tg) {
+    const uint64_t groups = (uint64_t)dp->x * dp->y * dp->z, threads = (uint64_t)tg[0] * tg[1] * tg[2];
+    __strong id<MTLBuffer> wb = nil; size_t wo = arena_alloc((size_t)(groups * threads * cs->rf.split_words * 4), &wb);   // frame scratch: the submission keeps it until the GPU is done
+    enc_c_args(ce, wb.gpuAddress + wo, DMSH_SPLIT_SLOT);
+    const MTLSize n = MTLSizeMake(dp->x, dp->y, dp->z), t = MTLSizeMake(tg[0], tg[1], tg[2]);
+    enc_c_pso(ce, sp[0]); enc_c_dispatch(ce, n, t);
+    [(id<MTL4ComputeCommandEncoder>)ce barrierAfterEncoderStages:MTLStageDispatch beforeEncoderStages:MTLStageDispatch visibilityOptions:resource_vis()];   // pass 1 reads what pass 0 wrote
+    enc_c_pso(ce, sp[1]); enc_c_dispatch(ce, n, t);
+    static int once; if (!once++) MLOG("compute shader %s: in two passes, %u words a thread between them (%.1f MB of frame scratch a dispatch; DM_NVN_SPLIT=0 runs one pass)", cs->key, cs->rf.split_words,
+                                       groups * threads * cs->rf.split_words * 4 / 1048576.0);
+}
 static void dispatch_(const p_dispatch *dp) {
     // An empty direct grid invokes no shader and changes no resources. Metal
     // rejects it; indirect counts belong to the GPU and are left untouched.
@@ -16734,6 +16780,8 @@ static void dispatch_(const p_dispatch *dp) {
     if (up_chain_dispatch(cs, dp->ind != 0)) return;
     if (up_mfx_wanted(cs) && !dp->ind && up_mfx_encode(cs)) return;   // the game's upscaler, drawn by MetalFX instead (DM_UPSCALER=metalfx)
     if (!ps && !(ps = dispatch_cps(cs, off, &k))) return;   // the host left it to the shader (later, above)
+    id<MTLComputePipelineState> sp[2] = {nil, nil};   // a kernel in two passes (split_dispatch)
+    if (cs->rf.split_words && split_on() && !cs->rf.tg_spill) split_pipes(cs, off, dp, sp);
     // Threadgroup memory past Metal's 32 KB, in a device buffer (dmsh_rewrite.py tg_spill): a slice for every workgroup of the grid. An indirect dispatch's grid is in GPU memory, written earlier
     // in the frame: the replay waits for the GPU (as an indirect-count multi-draw does, mdi_wait) and reads it. Mario Kart World's spilled dispatches are all direct, of 1 to 3 workgroups
     uint64_t tg_groups = 0;
@@ -16770,7 +16818,8 @@ static void dispatch_(const p_dispatch *dp) {
             [(id<MTL4ComputeCommandEncoder>)ce copyFromBuffer:(__bridge id<MTLBuffer>)ib sourceOffset:io toBuffer:g_c0_dim_buf destinationOffset:g_c0_dim_off - DMSH_C0_DISPATCH + DMSH_C0_DISPATCH_NVN2 size:12];
             [(id<MTL4ComputeCommandEncoder>)ce barrierAfterEncoderStages:MTLStageBlit beforeEncoderStages:MTLStageDispatch visibilityOptions:resource_vis()]; }
         enc_c_dispatch_indirect(ce, ig, MTLSizeMake(tg[0], tg[1], tg[2]));
-    } else enc_c_dispatch(ce, MTLSizeMake(dp->x, dp->y, dp->z), MTLSizeMake(tg[0], tg[1], tg[2]));
+    } else if (sp[1]) split_dispatch(ce, cs, sp, dp, tg);
+    else enc_c_dispatch(ce, MTLSizeMake(dp->x, dp->y, dp->z), MTLSizeMake(tg[0], tg[1], tg[2]));
     bufsnap_after(cs, ce);
     if (own) enc_c_end(ce);
 }

@@ -57,6 +57,9 @@ import vol_space   # the space metal-tt may write, with what APFS frees on deman
 # dm_blend_off is false so one pulling base in the pair archive serves both blend_live = 0 and 1 draws as hybrid stand-ins (hybrid_get), while steady-state pipelines specialize it true
 # when both blend words are 0. A pair whose functions declare another constant is left to the device (rest_pairs.tsv)
 HOST_CONSTANTS = {'dm_border_off': (abi.BORDER_FC, True), 'dm_blend_off': (abi.BLEND_OFF_FC, False)}
+# A kernel in two passes (dmsh_ndsr.py; its reflection's split) declares one more constant, at DMSH_SPLIT_FC, which the host leaves undefined for the one pass and sets false and true
+# for the two (nvn_mtl.m split_pipes): it gets three compute pipelines, (library, entry), (library, entry, 'split0') and (library, entry, 'split1')
+SPLIT_PASSES = {'split0': False, 'split1': True}
 
 PLATFORM, SDK = 'macos', 'macosx'   # the platform as the archive keys and archive.tsv name it and as metal-tt's -macos-version-min takes it, and the SDK whose metal-tt and metal-pack run
 
@@ -111,18 +114,26 @@ def functions(path):
     return {k: bool(v) for k, v in constants(path).items()}
 
 
-def _constant_names(cnst):
-    """The names in a CNST tag: a 16-bit count, then per constant its name (NUL-terminated), a type byte, a 16-bit index and a byte"""
+def _constant_entries(cnst):
+    """The constants in a CNST tag, ((name, index), ...): a 16-bit count, then per constant its name (NUL-terminated), a type byte, a 16-bit index and a byte"""
     n, p, out = struct.unpack_from('<H', cnst, 0)[0], 2, []
     for _ in range(n):
-        end = cnst.index(b'\0', p); out.append(cnst[p:end].decode()); p = end + 1 + 4
-    if p > len(cnst): raise ValueError('a truncated CNST tag')
+        end = cnst.index(b'\0', p)
+        if end + 4 > len(cnst): raise ValueError('a truncated CNST tag')
+        out.append((cnst[p:end].decode(), struct.unpack_from('<H', cnst, end + 2)[0])); p = end + 1 + 4
     return tuple(out)
 
 
-def constants(path):
+def _constant_names(cnst): return tuple(n for n, _ in _constant_entries(cnst))
+
+
+def split_constant(path, entry):   # the name of the constant at DMSH_SPLIT_FC that entry declares, None for none
+    return next((n for n, i in constants(path, indices=True).get(entry, ()) if i == abi.SPLIT_FC), None)
+
+
+def constants(path, indices=False):
     """{entry name: the names of the function constants it declares, a tuple, empty for none} of a .metallib, from its header: the function list (NAME tags) and each function's public
-    metadata (a CNST tag lists its constants). Raises ValueError on a file it cannot read"""
+    metadata (a CNST tag lists its constants); with indices, (name, index) pairs. Raises ValueError on a file it cannot read"""
     with romfs.open(path, 'rb') as f: b = f.read(1 << 20)
     if b[:4] != b'MTLB' or len(b) < 0x58: raise ValueError(f'{path}: not a Metal library')
     fo, _, po, ps = struct.unpack_from('<QQQQ', b, 0x18)
@@ -139,7 +150,7 @@ def constants(path):
             size = struct.unpack_from('<I', b, p)[0]; names.append(tags(p + 4, p + size)[b'NAME'].rstrip(b'\0').decode()); p += size
         consts, p = [], po
         for _ in range(count):   # each entry: its size (not counting the size field), then tags
-            size = struct.unpack_from('<I', b, p)[0]; t = tags(p + 4, p + 4 + size); consts.append(_constant_names(t[b'CNST']) if b'CNST' in t else ()); p += 4 + size
+            size = struct.unpack_from('<I', b, p)[0]; t = tags(p + 4, p + 4 + size); consts.append((_constant_entries if indices else _constant_names)(t[b'CNST']) if b'CNST' in t else ()); p += 4 + size
         if p != po + ps: raise ValueError(f'{path}: public metadata does not match the function list')
     except (struct.error, KeyError, UnicodeDecodeError) as e: raise ValueError(f'{path}: unreadable function list ({e})') from e
     return dict(zip(names, consts))
@@ -199,8 +210,10 @@ def plan_compute(lib_dir, chain, shaders):
         try: fs = constants(lib_dir / f'{pc}.metallib')
         except (OSError, ValueError): left['library'] += 1; continue
         if entry not in fs: left['entry'] += 1; continue
-        if any(c not in HOST_CONSTANTS for c in fs[entry]): left['constants'] += 1; continue   # script specializes HOST_CONSTANTS, as cps_new_b looks the pipeline up
-        if (pc, entry) not in seen: seen.add((pc, entry)); pipes.append((pc, entry))
+        split = j.get('split') if isinstance(j.get('split'), dict) and j['split'].get('fc') == abi.SPLIT_FC else None
+        if any(c not in HOST_CONSTANTS and not (split and c == split_constant(lib_dir / f'{pc}.metallib', entry)) for c in fs[entry]): left['constants'] += 1; continue   # script specializes HOST_CONSTANTS, as cps_new_b looks the pipeline up
+        for p in [(pc, entry)] + ([(pc, entry, x) for x in SPLIT_PASSES] if split else []):
+            if p not in seen: seen.add(p); pipes.append(p)
     return pipes, left
 
 
@@ -218,7 +231,7 @@ def cut_name(lib, entry): return f'{lib}@{entry}'
 
 def cut_entries(lib_dir, bases, computes=()):
     """The functions script specializes from a library of their own (needs_cut): {(library, entry)}"""
-    want, found = {(lib, e) for vl, ve, fl, fe in bases for lib, e in ((vl, ve), (fl, fe))} | set(computes), set()
+    want, found = {(lib, e) for vl, ve, fl, fe in bases for lib, e in ((vl, ve), (fl, fe))} | {tuple(c[:2]) for c in computes}, set()
     declared = {}
     for lib, entry in want:
         if lib not in declared:
@@ -234,7 +247,7 @@ def script(lib_dir, bases, computes=()):
     A function that declares constants is named through its specialization by HOST_CONSTANTS (a pair with other constants is not among the bases: plan), from a library of its
     own when it is not its library's first function (needs_cut)"""
     libs, fns, specs, declared, pipes = {}, {}, {}, {}, []
-    def fd(lib, entry):
+    def fd(lib, entry, split=None):   # split: a pass of a kernel in two (SPLIT_PASSES), its constant set as split_pipes sets it
         if lib not in declared:
             try: declared[lib] = constants(romfs.Path(lib_dir) / f'{lib}.metallib')
             except (OSError, ValueError): declared[lib] = {}   # plan read every base's libraries; one it could not read is not among them
@@ -244,16 +257,17 @@ def script(lib_dir, bases, computes=()):
         label = f'{lib}.{entry}'
         if label not in fns: fns[label] = {'label': label, 'library': f'lib:{source}', 'name': entry}
         if not cs: return f'fnd:{label}'
-        if label not in specs:
-            specs[label] = {'label': f'{label}.host', 'function_descriptor': f'fnd:{label}',
-                            'constant_values': [{'id_type': 'FunctionConstantIndex', 'id': {'data': i}, 'value_type': 'ConstantBool', 'value': {'data': v}}
-                                                for i, v in sorted(HOST_CONSTANTS[c] for c in cs if c in HOST_CONSTANTS)]}
-        return f'fnd:{label}.host'
+        spec = f'{label}.host' + (f'.{split}' if split else '')
+        if spec not in specs:
+            values = sorted([HOST_CONSTANTS[c] for c in cs if c in HOST_CONSTANTS] + ([(abi.SPLIT_FC, SPLIT_PASSES[split])] if split else []))
+            specs[spec] = {'label': spec, 'function_descriptor': f'fnd:{label}',
+                           'constant_values': [{'id_type': 'FunctionConstantIndex', 'id': {'data': i}, 'value_type': 'ConstantBool', 'value': {'data': v}} for i, v in values]}
+        return f'fnd:{spec}'
     for vl, ve, fl, fe in bases:
         pipes.append({'vertex_function_descriptor': fd(vl, ve), 'fragment_function_descriptor': fd(fl, fe),
                       'color_attachments': [dict.fromkeys(COLOUR, 'Unspecialized') for _ in range(8)]})
     descriptors = {'render_pipeline_descriptors': pipes}
-    if computes: descriptors['compute_pipeline_descriptors'] = [{'compute_function_descriptor': fd(lib, entry)} for lib, entry in computes]   # none: the script of bases alone, without the key
+    if computes: descriptors['compute_pipeline_descriptors'] = [{'compute_function_descriptor': fd(*c)} for c in computes]   # none: the script of bases alone, without the key
     functions_ = {'library_function_descriptors': list(fns.values())}
     if specs: functions_['specialized_function_descriptors'] = list(specs.values())   # none: the script without the key, so the archive keys of scripts that specialize nothing hold
     return {'libraries': list(libs.values()), 'function_descriptors': functions_, 'pipeline_descriptors': descriptors}
@@ -321,7 +335,7 @@ def library_digest(lib_dir, bases, computes=()):
         with romfs.open(os.path.join(lib_dir, f'{name}.metallib'), 'rb') as f:
             while chunk := f.read(1 << 20): lib.update(chunk)
         return lib.digest()
-    names = sorted({lib for vl, _, fl, _ in bases for lib in (vl, fl)} | {lib for lib, _ in computes})
+    names = sorted({lib for vl, _, fl, _ in bases for lib in (vl, fl)} | {c[0] for c in computes})
     h = hashlib.sha256()
     with concurrent.futures.ThreadPoolExecutor(8) as pool:   # the libraries read and hashed on a few threads, their digests taken in order: the same key
         for name, d in zip(names, pool.map(digest, names)): h.update(name.encode() + b'\0'); h.update(d)
@@ -423,7 +437,7 @@ def compile_isolating(lib_dir, bases, computes, js, part, work, arch, osmin):
     try: bad = isolate(items, run)
     except IsolateFailed as e: sys.exit(str(e))
     for (kind, x), why in bad:
-        what = f'the base of {" + ".join(pair_of(x))} ({x[0]}.{x[1]}, {x[2]}.{x[3]})' if kind == 'b' else f'the compute pipeline of {x[0]}.{x[1]}'
+        what = f'the base of {" + ".join(pair_of(x))} ({x[0]}.{x[1]}, {x[2]}.{x[3]})' if kind == 'b' else f'the compute pipeline of {".".join(x)}'
         print(f'[RED] pso_offline: {arch}: metal-tt cannot compile {what} ({compiler_line(why)}): left out of the archive, the device builds it', flush=True)
     return [x for (k, x), _ in bad if k == 'b'], [x for (k, x), _ in bad if k == 'c']
 
@@ -472,7 +486,7 @@ def real_libraries(lib_dir, bases, work, computes=()):
     folder = os.path.isdir(lib_dir)
     if folder and not cuts: return lib_dir
     real = Path(work) / 'libraries'; shutil.rmtree(real, ignore_errors=True); real.mkdir(parents=True)
-    for name in sorted({lib for vl, _, fl, _ in bases for lib in (vl, fl)} | {lib for lib, _ in computes}):
+    for name in sorted({lib for vl, _, fl, _ in bases for lib in (vl, fl)} | {c[0] for c in computes}):
         if folder: (real / f'{name}.metallib').symlink_to(Path(lib_dir).resolve() / f'{name}.metallib'); continue
         with romfs.open(os.path.join(lib_dir, f'{name}.metallib'), 'rb') as f, open(real / f'{name}.metallib', 'wb') as o: shutil.copyfileobj(f, o)
     for lib, entry in sorted(cuts):   # a function specialized from a library of its own (needs_cut)

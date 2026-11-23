@@ -232,6 +232,13 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
         if ([tg isKindOfClass:[NSArray class]] && tg.count == 3) for (int i = 0; i < 3; i++) o->tg[i] = (uint16_t)[tg[i] intValue];
         o->tg_spill = (uint32_t)[j[@"tg_spill"] unsignedIntValue];
         o->loop_sites = (uint32_t)[j[@"loop_sites"] count];
+        NSDictionary *sp = j[@"split"];
+        if (sp) {   // its function constant and buffer must be this host's (dmsh_abi.h): a library of another ABI would write the words where nothing reads them
+            if (![sp isKindOfClass:[NSDictionary class]]) FAIL("split: not an object");
+            int fc = [sp[@"fc"] intValue], buf = [sp[@"buffer"] intValue], w = [sp[@"words"] intValue];
+            if (fc != DMSH_SPLIT_FC || buf != DMSH_SPLIT_SLOT || w < 1 || w > 64) FAIL("split: function constant %d, buffer %d, %d words (this host: constant %d, buffer %d, 1 to 64 words)", fc, buf, w, DMSH_SPLIT_FC, DMSH_SPLIT_SLOT);
+            o->split_words = (uint8_t)w;
+        }
         o->mesh_spill = [j[@"mesh_spill"] boolValue];
         for (NSDictionary *u in j[@"first_store"]) { if (o->nfirst >= 4) FAIL("more than 4 first-invocation stores");
             int reg = [u[@"reg"] intValue]; if (reg < 0 || reg >= 16) FAIL("first-invocation store to storage slot %d", reg);
