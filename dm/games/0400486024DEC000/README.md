@@ -152,6 +152,13 @@ The corrected predictor already landed in `9d3a5836`. Its control is the same cu
 
   At the game's own size the GPU's p95 sat just over a vsync on that Mac, so the frame step held 2 vsyncs for stretches of the route; at 0.75 it held 60 fps. The pictures stayed clean at both scales. Open: measurements on this host's tier 0 (1920x1080 docked) and in handheld mode.
 
+## Blend fix-up specialized away
+
+Pipelines whose zero-weight and rounding words are both 0 for every target are built without the guard every pixel shader calls before it returns ([mechanism](../../../docs/reference/shaders.md#a-nan-colour-under-a-zero-blend-weight); upstream nxnative `3cf75061`, PR #3176, in chain `cfa56b0a15ed`). Upstream measured it on this game on an M2 Air: -0.87 ms on the main pass, -4.6 % GPU cycles.
+
+- Current on a 16 GB M2 Pro (2026-11-23, headless, the title, the file and a walk in a Castle Town house, two runs a side, chain `cfa56b0a15ed` against `dd154ebc7bd0`): no difference shown. GPU p50 per 300 frames in the house 19.2-20.7 ms with each, on the title 10.25-10.40 ms against 10.33-10.50 ms (12.2 ms in one run of the new chain, which compiled its pipelines there), residency set 3.7-3.8 GB with each. The pipeline archive bundled with the app was built for the previous chain, so the new chain's runs found none of its pipelines and compiled them as the file loaded (frames of 7.5-14.8 s, about 40 s in all, two `an event wait has held it 7.2 s` lines in one run while the submit thread compiled); an app rebuilt with the chain does not. The picture at the end of the walk is the same: the HUD identical, the rest differing at edges by the camera's position as between two runs of one host.
+- Open: an A/B with the pipeline archive of this chain, in a scene where the main pass is most of the frame.
+
 ## Memory
 
 - **Not reached on the Mac.** In nxnative, with a 4 GiB alias region (an iPhone's, the profile's `mem_alias`), the first Master Sword sequence stays solid white after Ganondorf walks into the light: the SDK's `VammManager::AllocateAddressRegion` hit its no-fit branch at `sdk+0x16bc9c` and returned `0x1803` for a 50.03 MiB request with 2 MiB alignment from `main+0x7ed630`; with 8 GiB the request was placed at alias +0x10aa00000 and the Chamber of Sages was reached ([issue #3103](https://github.com/seedds/nxnative/issues/3103), upstream `f7ae8a3a`, which raised the profile to `mem_alias 0x200000000`). The Mac's alias region is the Switch's 64 GiB whatever the profile says (`mem_init_once`, `dm/host/hle_svc.c`; the log's `alias region 64.00 GB`), and the player's own runs mapped up to +13.25 GB of it, so this fork keeps the profile's 4 GiB, which only sets the heap's size. `DM_ALIAS_SIZE=0x100000000` would bring the failure back.
