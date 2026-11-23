@@ -60,36 +60,54 @@ func runTool(_ exe: URL, _ args: [String], env: [String: String], cwd: URL? = ni
     Log.shared.write("$ " + ([exe.path] + args).map { $0.contains(" ") ? "'\($0)'" : $0 }.joined(separator: " "))
     try p.run()
     let running = Running(p)
+    // tasks of their own, not the caller's: a cancel ends the cancelled task's iteration of an AsyncStream, and after one the reads go on to the end (the tool is stopping and its
+    // last lines say why) and the exit status still comes
+    let readers = [Task { await pump(out.fileHandleForReading, .out, line) }, Task { await pump(err.fileHandleForReading, .err, line) }]
+    let ended = Task { () -> Int32 in
+        for await s in exit { return s }
+        return -1
+    }
     await withTaskCancellationHandler {
-        await withTaskGroup(of: Void.self) { g in
-            g.addTask { await pump(out.fileHandleForReading, .out, line) }
-            g.addTask { await pump(err.fileHandleForReading, .err, line) }
-        }
+        for r in readers { await r.value }
     } onCancel: {
         running.stop()
     }
-    var status: Int32 = -1
-    for await s in exit { status = s }
+    let status = await ended.value
     Log.shared.write("exit status \(status)")
     return status
 }
 
-private func pump(_ handle: FileHandle, _ kind: Output, _ line: @escaping @MainActor @Sendable (Output, String) -> Void) async {
-    var bytes = handle.bytes.makeAsyncIterator()   // read to the end even after a cancel: the tool is stopping and its last lines say why
-    var buffer = [UInt8]()
-    while true {
-        let b: UInt8?
-        do { b = try await bytes.next() } catch { break }
-        guard let b else { break }
-        if b == 0x0A || b == 0x0D {   // \r too: rustup and xcodebuild redraw their progress line with it
-            if !buffer.isEmpty {
-                let text = String(decoding: buffer, as: UTF8.self)
-                buffer.removeAll(keepingCapacity: true)
-                if kind == .err || !text.hasPrefix("{") { Log.shared.write(text) }
-                await line(kind, text)
+/// What a pipe's reading end gets until every writer has closed it, a dispatch source for each handle (readabilityHandler). Not FileHandle.bytes: it reads every handle through one
+/// serial queue with a blocking read(), so while it waited on a quiet stderr the tool's stdout was not read, and the packing script blocked once that pipe was full (docs/gui.md)
+private func chunks(_ handle: FileHandle) -> AsyncStream<[UInt8]> {
+    AsyncStream { c in
+        handle.readabilityHandler = { h in
+            var buf = [UInt8](repeating: 0, count: 1 << 16)
+            let n = read(h.fileDescriptor, &buf, buf.count)
+            if n > 0 {
+                c.yield(Array(buf[..<n]))
+            } else if n == 0 || (errno != EINTR && errno != EAGAIN) {   // the end, or an error, which ends it too
+                h.readabilityHandler = nil
+                c.finish()
             }
-        } else {
-            buffer.append(b)
+        }
+    }
+}
+
+private func pump(_ handle: FileHandle, _ kind: Output, _ line: @escaping @MainActor @Sendable (Output, String) -> Void) async {
+    var buffer = [UInt8]()
+    for await chunk in chunks(handle) {
+        for b in chunk {
+            if b == 0x0A || b == 0x0D {   // \r too: rustup and xcodebuild redraw their progress line with it
+                if !buffer.isEmpty {
+                    let text = String(decoding: buffer, as: UTF8.self)
+                    buffer.removeAll(keepingCapacity: true)
+                    if kind == .err || !text.hasPrefix("{") { Log.shared.write(text) }
+                    await line(kind, text)
+                }
+            } else {
+                buffer.append(b)
+            }
         }
     }
     if !buffer.isEmpty {

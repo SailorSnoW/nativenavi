@@ -94,4 +94,6 @@ with `PATH` starting with its own Python and Rust, `DEVELOPER_DIR`, `RUSTUP_HOME
 
 For development, `NATIVENAVI_SOURCE=<checkout>` makes the app build from that checkout instead of its own copy (run its executable from Terminal: `NATIVENAVI_SOURCE=$PWD "dist/NativeNavi.app/Contents/MacOS/NativeNavi"`).
 
-Open: no build has been run through the app yet. The pinned downloads' SHA-256 and the packages' wheels for Python 3.14 on arm64 were checked; the installs themselves, a first build of an empty Mac (no Python, no Rust, no Metal toolchain) and the App Management prompt on replacing the game's app were not.
+It reads the tool's two pipes independently, each with a dispatch source of its own: `FileHandle.bytes` reads one handle at a time, and the packing script's quiet stderr held back its events ([NativeNavi stays on Installing the Rust compiler while the game builds](reference/packing.md#nativenavi-stays-on-installing-the-rust-compiler-while-the-game-builds)).
+
+Open: a first build through the app on a Mac without the app's Python or Rust ran its installs (Python, the packages, rustup, the host's Rust) and the packing script up to the shader step, where it found the reader above. With the reader fixed, builds through the app ran to their end on 2026-11-23: one of 68 minutes, then an Update of 8 min 21 s that reused the shaders and the pipeline archive and replaced the game's app. The Metal toolchain's download (an Xcode without it) and the App Management prompt on replacing the game's app have not been seen.

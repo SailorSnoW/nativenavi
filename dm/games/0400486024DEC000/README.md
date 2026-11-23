@@ -337,6 +337,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [NativeNavi stays on Installing the Rust compiler while the game builds](../../../docs/reference/packing.md#nativenavi-stays-on-installing-the-rust-compiler-while-the-game-builds): its first build through the app stopped showing progress after the Rust step and would have blocked after the shader step. Resolved.
 - [An app packed without control data says version 1.0](../../../docs/reference/packing.md#an-app-packed-without-control-data-says-version-10): its NUP carries no NACP; the profile's v131072 row now says 1.1.1, for the app and for the game's own version query.
 - [Shader-code pools made resident by the raw pool table](../../../docs/reference/memory.md#shader-code-pools-made-resident-by-the-raw-pool-table): its 223 shader-code pools, 317 MB; 321 MB less in the residency set on the Mac ([Memory](#memory)).
 - [GPU-only render-target physical pool wired whole by texture addresses and small lookups](../../../docs/reference/memory.md#gpu-only-render-target-physical-pool-wired-whole-by-texture-addresses-and-small-lookups): its 305 MB render-target pool; 265 MB less on the Mac ([Memory](#memory)).
