@@ -1,0 +1,77 @@
+# The upstream nxnative commits reviewed for this fork, one row each: sha, upstream date, verdict, the local commits that took it, subject, why
+# (dm/tools/upstream_sync.py record writes it; the upstream-port skill). Verdicts: ported, partial, docs, no-op, skip, deferred
+# base	2edad182
+# url	https://github.com/seedds/nxnative.git
+f7ae8a3a4c2c	2026-11-21	no-op	dd9f163	game: Ocarina of Time increases the alias region to 8 GiB	the Mac's alias region is already the Switch's 64 GiB whatever mem_alias says (hle_svc.c mem_init_once): the 4 GiB failure (#3103) is an iPhone's; recorded in the note
+0c39549c1a80	2026-11-22	skip	-	docs/nba-2k26: record the player lighting prototype	another game (NBA 2K26)
+0cf3a70298dc	2026-11-22	skip	-	nvn/geometry: order deferred updates before mesh-stage buffer use (PR #3120)	geometry-as-mesh draws: the geometry stage was removed
+131bd01328d9	2026-11-22	skip	-	packing/shader_split: read wide MVGL archives and NXVS/NXFS/NXCS containers	MVGL / NXVS archives
+15f8f6fb567a	2026-11-22	skip	-	docs/ocarina: document the Xcode install fallback	iPhone install fallback
+17454fc314f9	2026-11-22	skip	-	rewriter/layout: give module data a 16 KB page of its own (PR #3138)	the game's modules already have data on pages of their own (no relayout)
+194da5fb021f	2026-11-22	ported	ff948e3	nvn/submit: track segment commits with shared event and encode-thread gating	segment cuts by the shared event, held on the encode thread; A/B on the headless route inconclusive
+22222648be8d	2026-11-22	skip	-	packing/unreal: decode Zstandard pak blocks directly	Unreal pak archives
+22d84b1230db	2026-11-22	skip	-	docs: record Ocarina of Time peak-memory diagnosis	measures de348580 (autorelease pools), a commit this fork has not taken
+32ff5eef7b18	2026-11-22	docs	8bdec50	docs/ocarina: document save fields and live game data	save fields and live game data
+4cc27d101a4c	2026-11-22	skip	-	ci/tests: update SDK patch and NVN opcode checks	tests of the old_vamm SDK rule and rt_api, not in this tree
+584b10a9c28a	2026-11-22	skip	-	docs/games: list frame-rate targets and modes	the games table's frame-rate column (one game here)
+5b315037047e	2026-11-22	skip	-	docs: list nxnative Easy and record an iPhone archive rejection	iOS front end and an iPhone archive rejection
+602ad87df8c6	2026-11-22	skip	-	game: FINAL FANTASY VIII Remastered runs on Mac (PR #3139)	another game (FINAL FANTASY VIII)
+692c8047a940	2026-11-22	docs	8bdec50	docs/games: record Mario Kart World and base M4 Ocarina results	base M4 Mac mini measurements (Ocarina part only)
+6dc276325e16	2026-11-22	docs	8bdec50	chain/mesh: pass subgroup inputs by value (PR #3169)	Apple's by-reference subgroup miscompile noted beside shuffle_literal; this tree keeps helpers inline
+6e12b9f8471c	2026-11-22	docs	8bdec50	docs/ocarina: record Saria cutscene GPU hang tests	Saria cutscene GPU hangs on an M2 Air
+73f23d411b01	2026-11-22	skip	-	docs: clarify game build and reporting instructions	the multi-game README
+74c9b1fd3144	2026-11-22	skip	-	opengl/framebuffer: honor sRGB conversion on the window	OpenGL
+74c9fd7cfc06	2026-11-22	docs	8bdec50	docs/playing: explain Xbox button remapping on Mac	Xbox button remapping on the Mac
+90dab9b82cda	2026-11-22	skip	-	docs/rendering: record an iPhone residency commit freeze	an iPhone residency freeze on another game
+930e91958616	2026-11-22	skip	-	packing/shader_split: read Falcom .pkg/.pka archives and Phyre RYHP GLSLC shaders	Falcom archives
+930fbff2b6a5	2026-11-22	ported	6ab5204	nvn/mem: keep sparse memory reports in long sessions	memory reports every 3,000 frames after their first 400
+983a9ab2b28b	2026-11-22	docs	8bdec50	docs/frame-rate: record fixed-rate fullscreen stutter	fixed-rate external fullscreen stutter, DM_PRESENT_LINK=0
+a41f027064fc	2026-11-22	ported	0049a94	host/codec: queue registered video decoder buffers until filled	registered decoder buffers queued until a picture lands; hand port to the AV1-only decoder
+a67583a4f730	2026-11-22	ported	5ed7bdc	nvn/gw: make running-write tables set-associative and grow sbw	set-associative running-write tables, growable sbw; merged with the perf branch's 64-page wide intervals (GWW_N 128)
+a706ddef76a5	2026-11-22	docs	8bdec50	docs/ocarina: record debugging and save findings	saves, fragment ordering at pass ends, spindump recipe
+ae7c10239efe	2026-11-22	docs	8bdec50	host/mac: revert fullscreen hard-hide of the menu bar (PR #2850)	the menu bar entry; the code it reverts (18a96b32) was never in this tree
+b4588a5396cb	2026-11-22	skip	-	nvn/vconv: index cached index ranges by page for GPU write invalidation	vconv index ranges: vconv_range is off for this game
+b768913fd08f	2026-11-22	skip	-	host/streamplay: serve the supported HID feature query (PR #3162)	nn::streamplay: main and subsdk0 reference none
+c5d9c7ebb2df	2026-11-22	partial	1c0dd1b	ci/lint: restore the C and Objective-C lint ratchet	the code's null checks and types; upstream's lint baseline rows are its own
+c8d312c00dbd	2026-11-22	docs	8bdec50	docs/ocarina: record base M4 and M1 Max benchmarks	M1 Max and base M4 measurements
+cb126758411b	2026-11-22	skip	-	docs/pragmata: record the iPhone startup and memory results	another game, iPhone
+d0556e77a14d	2026-11-22	skip	-	docs/guides: correct CI Xcode and Pro Controller gyro guidance	already covered in development.md and playing.md
+d294f3a585c5	2026-11-22	skip	-	rewriter: fix Pikmin 4 cutscene fade timing	another game (Pikmin 4)
+da242230e221	2026-11-22	ported	e73eda0	nvn/textures: partition packaged-texture and CPU-written tables by pool	per-pool packaged-texture and CPU-written tables: loads slower over a session (upstream on this game)
+f41613f7879e	2026-11-22	skip	-	packing/shaders: keep registered sources across RomFS files	registered-source selection across RomFS files: not in this fork's shader_split.py
+fa59a0a79086	2026-11-22	skip	-	gfx/nvn: resolve mismatched-size MSAA Downsample and add Time Stranger profile	MSAA downsample between sizes: the game has no multisampled pipelines (17,694 of 17,696 keys at 1 sample)
+033793f0ba39	2026-11-23	skip	-	chain/vertex: share dm_vs_body_o with capture entry main0_gs (PR #3186)	the geometry stage's capture entry: no geometry shader
+12c98ed06a9c	2026-11-23	skip	-	ci/tests: supply Xcode fixture capture-table paths	iOS tests
+184847c51117	2026-11-23	skip	-	host/gates: grow the dispatch index during module preload (PR #3121)	the game has 182 gates, the table 8,192
+1a1d512475df	2026-11-23	skip	-	game: port BRAVELY DEFAULT II 1.0.0	another game (BRAVELY DEFAULT II)
+1ed3e12a6c7b	2026-11-23	skip	-	chain/atomics: translate RED.ADD.F16x2, the half-pair atomic add (PR #3200)	RED.ADD.F16x2: none of the game's shaders use it
+36c09285632e	2026-11-23	ported	276d0bc	host/haptics: drive Switch Pro Controllers through their HD rumble report (PR #2607)	Pro Controller HD rumble report; untested on hardware here
+388befdf6c21	2026-11-23	skip	-	ios/rotation: add Rotation setting (DM_ROTATION) to launcher and in-game menu	iOS rotation
+38a787a07aa1	2026-11-23	skip	-	host/save-sync: ask before sending over a missing cloud save (PR #3197)	iCloud save sync (removed)
+3c4e06aa2f6b	2026-11-23	skip	-	game: port Ultra Street Fighter II 1.1.1	another game (Street Fighter II)
+3dd1f7a65525	2026-11-23	ported	6776527	gfx/nvn: keep CPU_NO_ACCESS texture pools out of gmem_map and chunk from 256 MB	CPU_NO_ACCESS render-target pools out of gmem_map, chunks from 256 MB (265 MB less resident here)
+3f852b8cb718	2026-11-23	skip	-	ci/coverage: install SPIRV-Tools for Vulkan tests	Vulkan CI
+58272b4a1d27	2026-11-23	skip	-	ci/lint: fix FFT replay and matcher test typing	another game's lint fixes
+5e098c8c2422	2026-11-23	skip	-	rewriter/fft: match job-pool wake-up stub across updates	another game (FINAL FANTASY TACTICS)
+65dfeb337877	2026-11-23	skip	-	rewriter/layout: preserve read-only jump table offsets	follows 17454fc3's relayout
+6ef18a1fd706	2026-11-23	ported	672d70a	nvn/fstep: ignore pauses and window switches for hold steps and payback (PR #3174)	stalls and named pauses in the frame step; also skips the measured frame time across a pause
+7ff0aef4e202	2026-11-23	ported	6835337	gfx/nvn: publish coherent presentation-time and display-link history snapshots (PR #2194)	presentation history behind a lock
+8cc63cc9a917	2026-11-23	skip	-	packing/shaders: accept mutable NXSH input	NXSH input: other games' containers
+8d888054ff67	2026-11-23	ported	a33e9ce	host/nvn: freeze guest clock and park clock reads during prepare and archive open	guest clock frozen during the prepare step and archive open (a safeguard here)
+9143b6ff6217	2026-11-23	partial	133c5dd,2c3835d,007feb3	nvn: keep shader-code pools out of gmem_map, pre-wire guest files, and pace late 30 fps frames (PR #1971)	(a) shader-code pools out of gmem_map (321 MB less resident here), (d) idle-GPU late frames and unpaced holds, the smoke route; not (b) guest files (removed), (c) screen shape (removed), (e) the 30 fps cap's 60 Hz link (a Mac window already runs it)
+977f5cab3a13	2026-11-23	skip	-	host/friends: hook blocked-user availability, no-Uid forms, and cut-object methods	nn::friends: main and subsdk0 reference none
+9c2ad51218cc	2026-11-23	skip	-	ci/opengl: size uniform readback buffers for matrices	OpenGL CI
+a3d58526bc7d	2026-11-23	ported	cc21624	gfx/nvn: verify kernel writability before claiming PG_NONE faults	dirty tracker declines a PG_NONE page the kernel holds read-only
+a95c91f4e0bd	2026-11-23	skip	-	game/digimon: select 60 fps in Time Stranger startup	another game (Digimon)
+acbb26c37bf6	2026-11-23	skip	-	chain/meshstage: spill task payloads past Metal's 16 KB through a device buffer (PR #2264)	task payloads past 16 KB: the game's largest is 3,200 bytes
+b2d41ac57593	2026-11-23	skip	-	host/audren: leave explicit CPU/manual renderers to the game (issue #3212)	the game asks device 0 mode 0, which the host drives
+b3d287fec5d0	2026-11-23	ported	3a5ed05	games/0400486024DEC000: support launcher Render scale (DM_RENDER_SCALE)	Render scale 0.5-1.0 at the user's request, below native only; RENDER_SCALE capability instead of ctx.render_scale
+b3e0d8c5275e	2026-11-23	skip	-	packing/uepak: use raw size for single-block Unreal pak entries	Unreal pak archives
+c12000da28ed	2026-11-23	ported	1f4201a	games/ocarina: scale dynamic-resolution threshold to target fps (PR #1954)	merged with eccf3e24: threshold = min(game x 60 / target, 5000 / target)
+c36551c390f5	2026-11-23	ported	b644990	host/front_mac: guard fullscreen mode switches against re-entry and bounces, and settle before display link	fullscreen mode switch re-entry guard, bounces, link waits for the screen; g_screen_id replaced by the NSScreen's number
+d08d7da62390	2026-11-23	ported	4df7cc9	gfx/nvn: trim on memory pressure and evict idle spares and uploaded textures	memory pressure trims (critical on the Mac), idle spares and uploads; iOS branches out; fixed: view cache entries taken by texture address, t_pkg_evict waited one submission too early
+e3f2d21fd9c4	2026-11-23	ported	d267381,1fbafb0	chain/shader_lib: clean up partial outputs and stop cleanly on a full drive (PR #2610)	shader_lib / shader_cache cleanup, then dmsh_build.py's full-drive stop (chain dd154ebc7bd0)
+e531be818c03	2026-11-23	ported	533596c	tools/regress: run each revision's pso_offline.py in its own process (PR #3190)	regress.py runs each revision's pso_offline.py in its own process; the Vulkan test beside it left out
+ef393b7ead46	2026-11-23	partial	bfbc68e	games/pragmata: reserve a 40 GiB iOS alias region and note the entitlement on failure	the reserve error's size and errno only; the iOS alias region of another game not taken
+f75a85aac739	2026-11-23	skip	-	opengl/shaders: promote desktop GLSL 1.10-1.30, honor layout(binding) and swizzle, and recover GL capture	OpenGL
+fbee62f11b37	2026-11-23	skip	-	ci/tests: account for Ocarina render-scale hooks	adjusts test_ocarina_screen_shape.py, which comes with 47578ded (not taken)
