@@ -15,6 +15,7 @@
 // Its size is the profile's mem_reserve, with the alias region in use in place of the profile's mem_alias (g_reserve, mem_init_once). In nxnative Super Mario Bros. Wonder's profile
 // had 5 GB, sized for an iPhone: without the "extended virtual addressing" entitlement a single reservation there could be at most 6 GB (read on a real device: 6 GB succeeded, 7 GB failed).
 #define RESERVE DM_GAME_MEM_RESERVE   // game profile mem_reserve
+#define QUERY_VA_END (1ull << 47)     // past every user address of the host (arm64 macOS: under 128 TB); QueryMemory reports what lies past it as inaccessible
 static uint8_t *g_as;              // ASLR region base = the whole block
 static size_t g_reserve;           // its size: RESERVE less the profile's alias region plus the one in use (mem_init_once)
 static uint8_t *g_heap; static _Atomic size_t g_heap_cur; static size_t g_heap_cap;
@@ -592,8 +593,25 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
             // so the main thread stack was recorded as one page. Whether the sp at init and a later sp share a page depends on the absolute position of the host stack top, which moves with the total length of environment variables / launch arguments (a different environment occasionally aborts at startup).
             uint64_t top = (uint64_t)pthread_get_stackaddr_np(pthread_self()), ssz = pthread_get_stacksize_np(pthread_self());
             if (addr < top && addr >= top - ssz) { base = top - ssz; size = ssz; state = 0xB/*Stack*/; perm = 3; }
-            // Other host memory: report "free, no permissions" (the 4 KiB page around it) as Horizon does for unmapped addresses. It used to report Code+RX, and GetExceptionInfo walking back from main merged on through host memory down to 0
-            else { base=addr & ~0xFFFull; size=0x1000; state=0/*Free*/; perm=0; } }
+            // Other host memory: free, no permissions, as Horizon reports an unmapped range: from the end of the region the guest sees below it to the start of the one above it (the
+            // guest address space, the modules with their patch areas, the maps, this thread's stack). It used to report Code+RX, and GetExceptionInfo walking back from main merged on
+            // through host memory down to 0. It then reported the 4 KiB page around the address, and a walk of the address space from 0, region by region, took 4 KiB steps: the
+            // practice tools' search for Link's record (sloperinaGZ's sys_regions, which stops after 100,000 regions) ended at 400 MB, far below the heap at 0x7a5e998000, and found
+            // no heap region. Past the top of the host's user addresses the range is inaccessible to the end, as Horizon reports what lies past its address space, which ends such a walk
+            else if (addr >= QUERY_VA_END) { base = QUERY_VA_END; size = 0 - QUERY_VA_END; state = 0x10/*Inaccessible*/; perm = 0; }
+            else {
+                uint64_t lo = 0, hi = QUERY_VA_END;
+                #define QUERY_EDGE(b, e) do { uint64_t b_ = (b), e_ = (e); if (e_ <= addr && e_ > lo) lo = e_; if (b_ > addr && b_ < hi) hi = b_; } while (0)
+                QUERY_EDGE((uint64_t)g_as, (uint64_t)g_as + g_reserve);
+                for (int i = 0; i < g_nmod; i++) {
+                    uint64_t mb = (uint64_t)g_mod[i].base; QUERY_EDGE(mb, mb + g_mod[i].size);
+                    if (g_mod[i].patch_off < 0) QUERY_EDGE(mb + (uint64_t)g_mod[i].patch_off, mb + (uint64_t)g_mod[i].patch_off + g_mod[i].patch_len);
+                }
+                for (int i = 0; i < g_nmap; i++) QUERY_EDGE(g_map[i].base, g_map[i].base + g_map[i].size);
+                QUERY_EDGE(top - ssz, top);
+                #undef QUERY_EDGE
+                base = lo; size = hi - lo; state = 0/*Free*/; perm = 0;
+            } }
         map_source_query(addr, &base, &size, &attr, &perm);
         pthread_mutex_unlock(&g_map_lock);
         if (mi) {

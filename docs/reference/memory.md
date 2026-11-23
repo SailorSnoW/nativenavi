@@ -137,6 +137,14 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Fix:** the host reports each loaded module's real layout and reports other host memory as free (`hle_svc.c`).
 - **Found on:** Fire Emblem Engage (its note lists it among the host changes first needed there). IL2CPP throws a C++ exception for every managed exception, so Unity games need this; Mario (Super Mario Bros. Wonder) never threw.
 
+### A walk of the address space from 0 took 4 KiB steps through host memory
+
+- **Symptom:** the practice tools' levitation says `levitate: Link's position not found, try again`, and their log `scanning 0 heap regions for Link's record` ([the game's note](../../dm/games/0400486024DEC000/README.md#practice-tools)).
+- **Cause:** sloperinaGZ finds Link's physics record by walking the address space from 0 with `svcQueryMemory`, region by region, and keeping the read-write regions of state Normal (heap) (`sys_regions`, which stops after 100,000 regions). The host answered an address outside what the guest sees (host memory below and between the modules and the guest address space) with the 4 KiB page around it, so the walk took 4 KiB steps and gave up at 400 MB, far below the heap (`0x7a5e998000` in that run). Horizon reports an unmapped range as one region, up to the next mapping.
+- **Fix:** such an address is one free region from the end of what the guest sees below it to the start of what it sees above it: the guest address space, each module with a patch area before it, the maps and the querying thread's stack (`hle_svc.c`, QueryMemory). Past the host's user addresses (`QUERY_VA_END`, 2^47) the range is Inaccessible to the end of the address space, as Horizon reports what lies past its own, which ends such a walk. The SDK's unwinder still stops at the free region below and above each module ([`svcQueryMemory` must report each module's real layout](#svcquerymemory-must-report-each-modules-real-layout)).
+- **Check:** `t_svc_memory` (`region_walk`: the walk from 0 reaches the heap and a module in fewer than 100 regions, each starting where the last ended, and ends). Headless with the practice tools: `scanning 4579 heap regions`, Link's record found in 2.7 s, and Link rose from y 97.4 to 103.8 with X held.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#practice-tools) (v131072) with sloperinaGZ 0.0.9.
+
 ### `MapPhysicalMemory` in 16 KB host pages
 
 - **Symptom:** `MapPhysicalMemory` faults on part of a page.

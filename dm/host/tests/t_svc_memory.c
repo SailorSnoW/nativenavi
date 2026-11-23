@@ -258,7 +258,7 @@ static void ownership(void) {
     assert(!pages(1, alias + 15 * P, 2 * P));
     expect(alias + P, alias + P, 2 * P, 5, 1, 0);
     assert(*(uint8_t *)(alias + P) == 0x34);
-    expect(UINTPTR_MAX, UINTPTR_MAX - P + 1, P, 0, 0, 0);
+    expect(UINTPTR_MAX, QUERY_VA_END, 0 - QUERY_VA_END, 0x10, 0, 0);   // past the host's user addresses: inaccessible to the end, as Horizon reports what lies past its address space
     assert(call(2, alias + P, P, 3) == BAD && call(3, alias + P, P, 0) == BAD);
     assert(unmap(stack + P, alias + P, P) == BAD);
     assert(unmap(stack + P, alias + 4 * P, 2 * P) == BAD);
@@ -570,6 +570,30 @@ static void layout_order(void) {
     assert(info(I_AliasAddr) + info(I_AliasSize) == info(I_AslrAddr) + info(I_AslrSize));
     assert(info(I_AslrAddr) == (uint64_t)(uintptr_t)g_as && info(I_AslrSize) == g_reserve);
 }
+// A walk of the address space from 0, region by region, as the practice tools make it (sloperinaGZ's sys_regions, which stops after 100,000 regions): host memory outside what the
+// guest sees is one free region up to the next thing it sees, so the walk reaches the heap in a few steps, each region starting where the last ended, and ends past the host's
+// user addresses, inaccessible to the end. It took 4 KiB steps before, and gave up 400 MB in
+static void region_walk(void) {
+    static _Alignas(0x4000) uint8_t image[0x8000];
+    g_nmod = 1; g_mod[0] = (module_t){.base = image, .size = sizeof image};
+    assert(!resize(0x200000));
+    memory_info below = query((uintptr_t)image - 1);
+    assert(below.state == 0 && !below.perm && below.base + below.size == (uintptr_t)image);   // free up to the module, not one page
+    memory_info past = query(QUERY_VA_END + 0x5000);
+    assert(past.state == 0x10 && past.base == QUERY_VA_END && past.base + past.size == 0);
+    int n = 0, heap_seen = 0, module_seen = 0, ended = 0;
+    for (uint64_t addr = 0; n < 1000; n++) {
+        memory_info m = query(addr);
+        assert(m.base == addr);   // each region starts where the last one ended
+        heap_seen |= m.state == 5 && m.base <= heap && heap - m.base < m.size;
+        module_seen |= m.base == (uintptr_t)image && m.state == 4;
+        uint64_t next = m.base + m.size;
+        if (next <= addr) { ended = 1; break; }
+        addr = next;
+    }
+    assert(ended && heap_seen && module_seen && n < 100);
+    assert(!resize(0)); g_nmod = 0;
+}
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--heap-probe")) {
         mem_init();
@@ -592,7 +616,7 @@ int main(int argc, char **argv) {
     if (!getenv("DM_ALIAS_SIZE")) assert(info(I_AliasSize) == SWITCH_ALIAS);   // the Mac's alias region is a Switch's; DM_ALIAS_SIZE=<mem_alias> runs these tests on a smaller one
     layout_order(); shared_memory_refused(); transfer_memory_setup();
     lazy_commit(); alias_lifecycle(); device_shared_refused(); ownership(); module_sources(); module_back_patch(); failures(); release_fallback(); heap_regrow(); concurrency(); fragmented_queries();
-    guest_helper();
+    guest_helper(); region_walk();
     if (!DM_GAME_MEM_MAP_LIMIT) metadata_limit();
 #ifdef TEST_REAL_DIRTY
     dirty_integration();
