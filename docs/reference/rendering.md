@@ -1723,6 +1723,13 @@ The replay of NVN on Metal (`dm/gfx/nvn/nvn_mtl.m`). Each entry: symptom, cause,
 - **Fix:** a barrier with `ORDER_FRAGMENTS` or `ORDER_FRAGMENTS_TILED` now ends the open pass when a draw in it wrote an image or a storage buffer (`swrite_note` in `nvn_mtl.m`), so the next draw opens a pass behind the full consumer barrier; reflection marks an image binding written when its type has write access (`nvn_refl.m`, which left `rw` unset for images).
 - **Found on:** FINAL FANTASY TACTICS - The Ivalice Chronicles.
 
+### Draw passes without fragment order read unfinished attachments, and the damage persists
+
+- **Symptom:** a bright or purple patch grows on a still scene. Presented luma rose from 29 through 66 and 105 to 119, against 41 in a clean run. The corruption stayed in both phases of an in-run A/B (`DM_AB`).
+- **Cause:** a diagnostic switch of an nxnative build (`DM_NVN_BAR_FRAG`, in neither tree now) took the Fragment stage out of the end-of-pass barrier and turned off the `All → Fragment` barrier for aliased resources (`resource_vis()` includes `ResourceAlias`). Fragments could read an earlier pass's attachment before it was ready. Each rise in luma began with the switch on, and the frames after it carried the damaged state forward.
+- **Fix:** keep fragment ordering at both pass boundaries, as this host does: the end barrier's Fragment stage cost 5–10 µs per pass in the reported M2 comparison. Check the picture in a separate run per arm, so that damage from one arm cannot reach the other ([A/B in one run](../agents/05-debugging.md#gpu-time-on-the-device)).
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md), in Castle Town and Zora's Domain on a diagnostic build (upstream nxnative `a706ddef`). The same build with the switch off rendered correctly.
+
 ### A segment committed after a buffer → texture copy
 
 - **Symptom:** a texture copied from a staging buffer shows another texture's blocks (Catherine: Full Body's cutscene subtitle band a hard-edged dark box with a magenta stroke through it).

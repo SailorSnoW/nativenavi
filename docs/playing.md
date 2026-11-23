@@ -19,6 +19,8 @@ To quit with a controller, hold its Home button (the logo button on an Xbox or P
 
 The mouse pointer hides when you press a key or a controller button, or move a stick, while it is over the game picture. Moving the mouse shows it again, as does switching to another window or app.
 
+**Match the labels on an Xbox controller.** The game uses the Switch's button positions, so an Xbox pad's right-hand B presses the game's A. To play by the printed Xbox letters, connect the controller, open **System Settings → Game Controllers**, select it, and in its button settings map **A to B**, **B to A**, **X to Y** and **Y to X**, leaving the other buttons on **Standard**. The change applies to other apps too. The Home quit prompt reads macOS's own A and B, so its buttons may differ from the game's. [Apple's controller settings guide](https://support.apple.com/en-us/111099)
+
 ## Switch 2 controllers
 
 Joy-Con 2 and the Pro Controller 2 do not appear in macOS's Bluetooth settings: they speak Nintendo's own Bluetooth LE protocol. Turn on **Switch 2 controllers** in the game's settings window ([Switch 2 controllers](settings.md#switch-2-controllers)), then:
