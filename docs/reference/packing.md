@@ -27,6 +27,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Check:** `test_nsp_nup` Read.test_folder_cycle_refused: a folder made its own parent, then a cycle of two folders, each with the TOC hash fixed up, are refused, and the script exits 1 with no traceback. Without the check the container opens.
 - **Found on:** a code audit; no damaged NUP of this kind is known.
 
+### An app packed without control data says version 1.0
+
+- **Symptom:** Finder shows `Version 1.0` for a Mac app whose game is at another version (this game's NUP holds update v131072, 1.1.1), and the game asks the host for its version (`nn::oe::GetDisplayVersion`) and gets `v131072`.
+- **Cause:** the packer took the app's version from the game's NACP only, and a NUP (this game's) can carry none, so the bundle got its default. The profile's build row had `v131072` as its display version, which the host answers the game's version query with (`hle_sdk16.c`, `DM_GAME_DISPLAY_VERSIONS`, by main build ID).
+- **Fix:** `scripts/build_app.py` `app_display_version`: the packed version's NACP first, then the numeric display version of the packed build's profile row, then the base game's NACP (which can describe an older release); with none, `1.0`. The profile registers `1.1.1` for its v131072 build (`main` build ID `e0f3ccfa…`, the one upstream registers as 1.1.1), which gives both the app and the host's answer.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md), upstream nxnative `742e959e` ([PR #2822](https://github.com/seedds/nxnative/pull/2822)), ported here by hand: upstream's packer is another script.
+- **Check:** `dm/tools/tests/test_app_version.py` (the order of the sources, a row that is no number, and the profile's 1.1.1).
+
 ## Build tools
 
 ### Stopping a build left its tools running

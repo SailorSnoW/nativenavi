@@ -1854,6 +1854,14 @@ def app_icon(given, spare, *dirs):
     return given or own or spare, bool(spare and not (given or own))
 
 
+def app_display_version(game, base, g, pkg_ver):
+    """The app's version: the packed version's control data, else the display version the profile registers for its build (a NUP update may carry no control data:
+    Ocarina of Time's v131072 is 1.1.1, which the host also answers the game's GetDisplayVersion with, from the same row), else the base game's control data, which can
+    describe an older release (upstream nxnative 742e959e); '' when none has one (the app then says 1.0)"""
+    registered = re.match(r'\d+(\.\d+){0,2}$', g.builds().get(pkg_ver, {}).get('display', '') or '')
+    return nacp.version(game / 'control.nacp') or (registered.group() if registered else '') or nacp.version(base / 'control.nacp')
+
+
 def say_game(app, name, version, bundle_id, out, icon):
     """Which game the app is, once its name, version and bundle ID are settled (before the shader stages): the event game for a front end (json mode; the title ID as DMTitleID has it,
     out = the Mac app; icon = the image the app is given: --icon / ICON, else the unpacked icon.jpg, else --fallback-icon / FALLBACK_ICON; None without one), then the message for people"""
@@ -1995,8 +2003,7 @@ def main(args=None):
     app_name = args.app_name or APP_NAME or nacp.name(base / 'control.nacp') or g.get('name', '')
     if not app_name and mac_pack: raise BuildError(f'no game name in the NUP\'s control data ({base / "control.nacp"}) or the profile: give --app-name')
     bundle_id = args.bundle_id or BUNDLE_ID or f'org.nxnative.{app:016x}'
-    # the app version is the built game's display version: the update's control data when an update is built, else the base game's
-    app_version = nacp.version(game / 'control.nacp') or nacp.version(base / 'control.nacp')
+    app_version = app_display_version(game, base, g, pkg_ver)
     icon, stand_in = app_icon(user_icon, spare_icon, game, base)
     if mac_pack:
         out_app = out_app or work.parent / f'{mac_app_name(app_name)}.app'

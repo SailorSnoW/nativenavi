@@ -2,6 +2,7 @@
 # (dm/tools/upstream_sync.py record writes it; the upstream-port skill). Verdicts: ported, partial, docs, no-op, skip, deferred
 # base	2edad182
 # url	https://github.com/seedds/nxnative.git
+742e959e5fd3	2026-11-21	ported	9ac9256	packing/nup: prefer the selected build's display version	the app's version from the profile's build row when the NUP has no NACP; game.tsv v131072 = 1.1.1 (also the host's GetDisplayVersion); ported by hand to build_app.py
 f7ae8a3a4c2c	2026-11-21	no-op	dd9f163	game: Ocarina of Time increases the alias region to 8 GiB	the Mac's alias region is already the Switch's 64 GiB whatever mem_alias says (hle_svc.c mem_init_once): the 4 GiB failure (#3103) is an iPhone's; recorded in the note
 0c39549c1a80	2026-11-22	skip	-	docs/nba-2k26: record the player lighting prototype	another game (NBA 2K26)
 0cf3a70298dc	2026-11-22	skip	-	nvn/geometry: order deferred updates before mesh-stage buffer use (PR #3120)	geometry-as-mesh draws: the geometry stage was removed

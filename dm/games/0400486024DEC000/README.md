@@ -1,6 +1,6 @@
 # The Legend of Zelda: Ocarina of Time (`0400486024DEC000`)
 
-A Switch 2 game: update v131072, SDK 22.2.8 (`Ounce`). Nintendo EPD's engine (sead, agl, gsys, Havok, CRIWARE; project `Owl`, with Tears of the Kingdom's file layout) on NVN2. Modules `main`, `subsdk0` (NintendoSDK_movie) and `sdk`; the rewriter's patches are a frame-step stub and three cuts in `main` ([`patches.py`](patches.py)) and one function-matched rule in `sdk`, the address region manager's node area (`dm/tools/sdk_patches.py`). Status: plays on the Mac through the title, the opening, a new file's first scene, Link's house and Kokiri Forest, with saves, at about 59 fps with the picture close to console video. Mac only.
+A Switch 2 game: update 1.1.1 (v131072), SDK 22.2.8 (`Ounce`). Nintendo EPD's engine (sead, agl, gsys, Havok, CRIWARE; project `Owl`, with Tears of the Kingdom's file layout) on NVN2. Modules `main`, `subsdk0` (NintendoSDK_movie) and `sdk`; the rewriter's patches are a frame-step stub and three cuts in `main` ([`patches.py`](patches.py)) and one function-matched rule in `sdk`, the address region manager's node area (`dm/tools/sdk_patches.py`). Status: plays on the Mac through the title, the opening, a new file's first scene, Link's house and Kokiri Forest, with saves, at about 59 fps with the picture close to console video. Mac only.
 
 ## What it needs
 
@@ -312,6 +312,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [An app packed without control data says version 1.0](../../../docs/reference/packing.md#an-app-packed-without-control-data-says-version-10): its NUP carries no NACP; the profile's v131072 row now says 1.1.1, for the app and for the game's own version query.
 - [Shader-code pools made resident by the raw pool table](../../../docs/reference/memory.md#shader-code-pools-made-resident-by-the-raw-pool-table): its 223 shader-code pools, 317 MB; 321 MB less in the residency set on the Mac ([Memory](#memory)).
 - [GPU-only render-target physical pool wired whole by texture addresses and small lookups](../../../docs/reference/memory.md#gpu-only-render-target-physical-pool-wired-whole-by-texture-addresses-and-small-lookups): its 305 MB render-target pool; 265 MB less on the Mac ([Memory](#memory)).
 - [Idle uploaded textures, re-upload spares, and memory-pressure trims](../../../docs/reference/memory.md#idle-uploaded-textures-re-upload-spares-and-memory-pressure-trims): the copies of areas it has left and its re-upload spares.
