@@ -76,18 +76,41 @@ def bit0_mask(msl):
 
 TG_FENCE = 'atomic_thread_fence(mem_flags::mem_threadgroup, memory_order_seq_cst, thread_scope_simdgroup);'
 TG_FENCE_FN = re.compile(r'\bvoid dmsh_tg_fence\(\)\s*\{')   # tg_fence looks for the name 'dmsh_tg_fence' before it runs this: a change of the name here is one there too
-def tg_fence(src):
+TG_FENCE_CALL = re.compile(r'^    dmsh_tg_fence\(\);$', re.M)   # a call as a statement of its own at the kernel body's indentation (spirv-cross writes every block in braces, 4 spaces a level)
+TG_BARRIER = 'simdgroup_barrier(mem_flags::mem_threadgroup);   // dmsh_tg_fence() in uniform control flow (tg_fence)'
+TG_KERNEL = re.compile(r'\bkernel\s+void\s+main0\s*\(')
+TG_LEFT = re.compile(r'\breturn\b|\bdiscard_fragment\b')
+def tg_fence(src, kernel=False):
     """Warp-synchronous shared memory. Ampere code relies on lockstep warps and leaves the barrier out of small scans (Unreal's GPU radix sort downsweep d032ce5090303e01
     at 0x2eb0: STS / LDS [x-4] / STS / LDS [x-8]); for one thread the load and the earlier store do not alias, so Metal moves the load above the store and reads another
     lane's old value (Orbitals: Niagara's sorted index list wrong every frame, PR #1775). The translator calls dmsh_tg_fence() before each shared memory load that some path
     reaches from a shared memory store with no barrier between (SharedMemoryFence.cs). Its body there is a memory barrier at workgroup scope, which SPIRV-Cross prints as a
     threadgroup-scope fence on every memory (MSL 3.2); here it becomes a simdgroup-scope fence on threadgroup memory, which is the order a warp needs and, not being
     an execution barrier, safe in divergent code. A kernel whose arrays spill to device memory gets the device scope too (tg_spill, after this). The text rule before it put a
-    fence after every threadgroup store: 25,108 in 699 of Ocarina of Time's shaders, and Apple's compiler crashed on a foliage mesh pipeline on an M2 (GitHub issue #2481)"""
+    fence after every threadgroup store: 25,108 in 699 of Ocarina of Time's shaders, and Apple's compiler crashed on a foliage mesh pipeline on an M2 (GitHub issue #2481).
+    A fence orders this thread's own accesses; on Apple's GPUs it does not make another lane's store visible to this lane's load: agl's NDSR upscaler network
+    fa3033d05c0a41d6 exchanges its last tile through shared memory behind one such call, and 0.1 % of its output pixels came out different from one run to the next
+    on the same input (a threadgroup-scope fence the same), none with a SIMD-group barrier. So with kernel (a compute shader's main0; not a task or mesh shader, whose body
+    dmsh_meshstage wraps later) a call at the top level of main0's body, with no return before it, is that barrier: every lane of the SIMD-group reaches it. A call
+    in a branch, a loop or a helper function, or after a return, keeps the fence"""
     if 'dmsh_tg_fence' not in src: return src   # every helper match needs its name; let the pattern check its declaration
     m = TG_FENCE_FN.search(src)
     if not m: return src
-    return src[:m.end()] + '\n    ' + TG_FENCE + '\n' + src[block_end(src, m.end() - 1):]
+    src = src[:m.end()] + '\n    ' + TG_FENCE + '\n' + src[block_end(src, m.end() - 1):]
+    k = TG_KERNEL.search(src) if kernel else None
+    if not k: return src
+    open_at = src.find('\n{\n', k.end())
+    if open_at < 0: return src
+    open_at += 1; body_end = block_end(src, open_at)
+    edits = []
+    for c in TG_FENCE_CALL.finditer(src, open_at, body_end):
+        depth = sum(1 if b.group() == '{' else -1 for b in BRACE.finditer(src, open_at, c.start()))
+        if depth == 1 and not TG_LEFT.search(src, open_at, c.start()): edits.append(c.span())
+    for a, b in reversed(edits): src = src[:a] + '    ' + TG_BARRIER + src[b:]
+    return src
+
+def tg_fence_counts(src):   # the build's report: the calls left as the fence, and those made the barrier (tg_fence)
+    return len(re.findall(r'\bdmsh_tg_fence\(\);', src)), src.count(TG_BARRIER.split('   ')[1])
 
 # A float add to storage memory whose result nothing reads (RED.F32, InstEmitMemory EmitAtomicAddF32) reaches the MSL as a compare-and-swap loop on the word. Metal has
 # atomic_float on device memory (MSL 3.0, which the Mac's deployment target compiles at), but the translator cannot ask for it: its storage buffers are uint arrays,

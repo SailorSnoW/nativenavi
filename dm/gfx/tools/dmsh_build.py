@@ -634,7 +634,7 @@ def finish(key, w, j, c1):
     read_only = {i for i, b in enumerate(sorted(res['sbufs'], key=lambda b: b['binding']))
                  if not b['flags'] & 1 and b['cb_slot'] != abi.GMEM_MAP_CB_SLOT}   # BufferUsageFlags.Write (includes atomics)
     src = dmsh_wide.constant_reads(src, read_only, dmsh_chain.storage_constant_mode())
-    src = dmsh_rewrite.tg_fence(src)   # warp-synchronous shared memory: the translator's dmsh_tg_fence() as a simdgroup-scope fence (see tg_fence)
+    src = dmsh_rewrite.tg_fence(src, kernel=j['stage'] == 'cs' and not j.get('mesh_stage'))   # warp-synchronous shared memory: the translator's dmsh_tg_fence() as a simdgroup-scope fence, a compute kernel's in uniform control flow a SIMD-group barrier (see tg_fence)
     src = dmsh_rewrite.border_emu(src)   # border colours Metal lacks (see border_emu)
     if j['stage'] == 'ps': src = dmsh_rewrite.frag_z_snap(src)[0]   # gl_FragCoord.z against a depth of its own surface (see frag_z_snap)
     try: src = dmsh_rewrite.uniform_tests(src)   # a uniform word tested against constants read by a volatile load per test, so the front end folds no switch (see uniform_tests)
@@ -700,6 +700,7 @@ def finish(key, w, j, c1):
     clone(msl, os.path.join(out, key + '_b.metal'))
     entry = re.search(r'(vertex|fragment|kernel)\s+\S+\s+(\w+)\s*\(', src)
     dr = dmsh_reflect.drv_reads(src)
+    tgf = dmsh_rewrite.tg_fence_counts(src)
     refl = {'key': key + '_b', 'route': 'B', 'chain': CHAIN, 'dm_ctl': key, 'source': f'{name}#{k}', 'pc_paired': pc_of[key], 'stage': mesh['kind'] if mesh else j['stage'],
             **({'mesh_stage': {'kind': mesh['kind'], 'threads': mesh['threads'], 'payload': mesh['payload'], 'task': mesh.get('task', True)}, **({'entry_z': 'main0_z'} if mesh['kind'] == 'ms' else {}),
                **({'entry_object': 'main0_o'} if mesh['kind'] == 'ms' and not mesh.get('task', True) else {})} if mesh else {}),
@@ -709,6 +710,7 @@ def finish(key, w, j, c1):
             **({'entry_u': 'main0_u', **{f'entry_u_{k}': True for k, v in dmsh_entry.typed_ops(fu).items() if v}} if fu else {}), **({'entry_d': 'main0_d'} if fd else {}), **({'blend_zero': True} if blend0 else {}), **({'entries_lost': lost} if lost else {}),
             **({'first_store': [{'reg': next(b['reg'] for b in binds if b['msl_name'] == n), 'word': w, 'value': v} for n, w, v in first]} if first else {}),
             **({'tg_spill': spill} if spill else {}),
+            **({'tg_fence': dict(zip(('fence', 'barrier'), tgf))} if any(tgf) else {}),   # the build's report (tg_fence)
             **({'loop_sites': loop_sites} if j['stage'] == 'cs' and loop_sites else {}),
             'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'notes': res['notes'] + (['not in the answer table, queries use defaults'] if j.get('no_facts') else []), 'drv_reads': dr, 'drv_unfillable': dmsh_reflect.unfillable(dr, mesh['kind'] if mesh else j['stage']),
             'bindings': binds,
@@ -945,6 +947,9 @@ ok = [r[3] for r in res if r[1] == 'ok']
 rd = [x for x in ok if x['drv_reads']]
 print(f'shaders reading driver segments at run time {len(rd)} (c0 {sum("0" in x["drv_reads"] for x in rd)}, c2 {sum("2" in x["drv_reads"] for x in rd)}); reading what the replay layer cannot fill {sum(bool(x["drv_unfillable"]) for x in ok)}')
 for e, n in collections.Counter(u for x in ok for u in x['drv_unfillable']).most_common(15): print(f'  cannot fill {n:5d}  {e}')
+tgf = [x['tg_fence'] for x in ok if x.get('tg_fence')]
+print(f'warp-synchronous shared memory (dmsh_tg_fence, dmsh_rewrite.tg_fence): {sum(t.get("fence", 0) for t in tgf)} calls left as the simdgroup fence, '
+      f'{sum(t.get("barrier", 0) for t in tgf)} made a SIMD-group barrier (a kernel\'s, in uniform control flow), in {len(tgf)} shaders')
 f1 = [b for x in ok for b in x['bindings'] if b.get('fetch1d')]
 print(f'1D integer fetches read as 2D rows of 16384 texels (a texture buffer there is bound as rows, nvn_mtl.m tbuf_as_2d): {len(f1)} bindings in {sum(any(b.get("fetch1d") for b in x["bindings"]) for x in ok)} shaders, '
       f'{sum(1 for b in f1 if b.get("fetch1d_size"))} of them also size-queried')

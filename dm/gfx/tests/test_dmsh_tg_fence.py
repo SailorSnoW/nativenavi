@@ -1,7 +1,8 @@
 """Warp-synchronous shared memory: Ampere compilers drop the barrier in small scans whose lanes run in lockstep (Unreal's GPU radix sort downsweep, Orbitals' d032ce5090303e01:
 STS, then LDS of the neighbouring lane's word, then STS). For one thread such a load and its own earlier store do not alias, so Metal may move the load above the store.
 The translator (SharedMemoryFence.cs) calls dmsh_tg_fence() before each shared memory load that some path reaches from a store with no barrier between, and dmsh_rewrite.py
-tg_fence makes the helper's body a simdgroup-scope memory fence (not an execution barrier). The rewrite is tested on its own; the placement needs DMSH_TEST_XLATE (the translator)
+tg_fence makes the helper's body a simdgroup-scope memory fence (not an execution barrier), and in a compute kernel a call at the top level of main0 with no return before it a
+SIMD-group barrier (a fence does not make another lane's store visible on Apple's GPUs). The rewrite is tested on its own; the placement needs DMSH_TEST_XLATE (the translator)
 like the other translator tests. When the Metal compiler is installed, the result is compiled as the build compiles it (dmsh_chain.py MAC_METAL), and a kernel whose array
 spills to device memory (tg_spill, after tg_fence) gets a fence that orders device memory as well."""
 from pathlib import Path
@@ -93,15 +94,47 @@ class Rewrite(unittest.TestCase):
         self.assertNotIn('dmsh_tg_fence();', src)
         self.assertEqual(helper_body(tg_fence(src)), FENCE)
 
+    def test_a_kernel_call_in_uniform_control_flow_becomes_a_simdgroup_barrier(self):   # agl's NDSR network fa3033d05c0a41d6: a fence left 0.1 % of its pixels racing
+        out = tg_fence(SCAN % 64, kernel=True)
+        self.assertNotIn('dmsh_tg_fence();', out)
+        self.assertEqual(out.count(dmsh_rewrite.TG_BARRIER), 2)
+        self.assertEqual(helper_body(out), FENCE)   # the helper stays a fence, for the calls that keep it
+        self.assertEqual(dmsh_rewrite.tg_fence_counts(out), (0, 2))
+        self.assertEqual(dmsh_rewrite.tg_fence_counts(tg_fence(SCAN % 64)), (2, 0))   # a task or mesh shader's (kernel false) keeps every fence
+
+    def test_a_call_in_divergent_code_or_after_a_return_keeps_the_fence(self):
+        loads = '    uint _11 = _39[_10 - 1u] + _39[_10];\n'
+        shapes = {
+            'branch': ('    dmsh_tg_fence();\n' + loads, '    if (_10 > 3u)\n    {\n        dmsh_tg_fence();\n        uint _11 = _39[_10 - 1u] + _39[_10];\n        _39[_10] = _11;\n    }\n    uint _11 = 0u;\n'),
+            'loop': ('    dmsh_tg_fence();\n' + loads, '    for (uint _12 = 0u; _12 < _10; _12++)\n    {\n        dmsh_tg_fence();\n        _39[_10] = _39[_10 - 1u];\n    }\n    uint _11 = 0u;\n'),
+            'return': ('    dmsh_tg_fence();\n' + loads, '    if (_10 == 0u)\n    {\n        return;\n    }\n    dmsh_tg_fence();\n' + loads),
+        }
+        for name, (old, new) in shapes.items():
+            with self.subTest(name):
+                src = (SCAN % 64).replace(old, new, 1)
+                self.assertNotEqual(src, SCAN % 64)
+                out = tg_fence(src, kernel=True)
+                if name == 'return': self.assertEqual(dmsh_rewrite.tg_fence_counts(out), (2, 0))   # both calls come after it
+                else:   # that call keeps the fence; the last one, at the top level with no return before it, is the barrier
+                    self.assertEqual(dmsh_rewrite.tg_fence_counts(out), (1, 1))
+                    self.assertIn('dmsh_tg_fence();', out[:out.index(dmsh_rewrite.TG_BARRIER)])
+
+    def test_a_helper_function_keeps_the_fence(self):   # only main0's own body is the kernel's control flow
+        src = (SCAN % 64).replace('kernel void main0', 'static inline __attribute__((always_inline))\nvoid dm_step(threadgroup spvUnsafeArray<uint, 64>& _39, uint _10)\n{\n'
+                                  '    _39[_10] = _10;\n    dmsh_tg_fence();\n    _39[_10] = _39[_10 - 1u];\n}\n\nkernel void main0', 1)
+        self.assertEqual(dmsh_rewrite.tg_fence_counts(tg_fence(src, kernel=True)), (1, 2))
+
     def test_spilled_arrays_get_device_fences(self):   # tg_spill runs after tg_fence: an array past abi.TG_MAX moves to device memory, and so must the fence's scope
         n = abi.TG_MAX // 4 + 1024
         src, spill = tg_spill(tg_fence(SCAN % n))
         self.assertGreater(spill, abi.TG_MAX)
         self.assertEqual(helper_body(src), 'atomic_thread_fence(mem_flags::mem_device | mem_flags::mem_threadgroup, memory_order_seq_cst, thread_scope_simdgroup);')
+        src, _ = tg_spill(tg_fence(SCAN % n, kernel=True))   # and the barriers' memory
+        self.assertEqual(src.count('simdgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);'), 2)
 
     @unittest.skipUnless(shutil.which('xcrun') and subprocess.run(['xcrun', '-sdk', 'macosx', '-f', 'metal'], capture_output=True).returncode == 0, 'no Metal compiler')
     def test_compiles(self):
-        for src in (tg_fence(SCAN % 64), tg_spill(tg_fence(SCAN % (abi.TG_MAX // 4 + 1024)))[0]):
+        for src in (tg_fence(SCAN % 64), tg_fence(SCAN % 64, kernel=True), tg_spill(tg_fence(SCAN % (abi.TG_MAX // 4 + 1024)))[0], tg_spill(tg_fence(SCAN % (abi.TG_MAX // 4 + 1024), kernel=True))[0]):
             with tempfile.TemporaryDirectory() as d:
                 p = Path(d) / 'k.metal'
                 p.write_text(src)
