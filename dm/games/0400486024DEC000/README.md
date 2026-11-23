@@ -261,6 +261,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [A pause or a window switch steps the hold up or pays back fast](../../../docs/reference/frame-rate.md#a-pause-or-a-window-switch-steps-the-hold-up-or-pays-back-fast): 15 vsyncs paid back after each pause and 20 or 30 fps for a moment after a fullscreen switch; the measured frame time skips the pause too.
 - [Late frames with an idle GPU stepped the hold up and unpaced holds did not probe](../../../docs/reference/frame-rate.md#late-frames-with-an-idle-gpu-stepped-the-hold-up-and-unpaced-holds-did-not-probe): a warm start's progress screen took the hold to 3 (18 fps) for about 1,470 presents.
 - [A module without unwind entries](../../../docs/reference/rewriter.md#a-module-without-unwind-entries): the [practice tools](#practice-tools)' `subsdk9` stopped the rewriter with `KeyError: 0`. Resolved.
 - [The counter frequency read raw](../../../docs/reference/rewriter.md#the-counter-frequency-read-raw): its timers would have run 1.3 times too fast on an M2 Pro. Resolved.

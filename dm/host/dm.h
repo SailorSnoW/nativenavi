@@ -112,6 +112,7 @@ int guest_clock_pinned(void);  // the guest clock is frozen or DM_DETCLOCK's: gu
 uint64_t guest_ticks(void);           // The guest's system counter on that clock: the Switch 2's 31.25 MHz (hle_os.c)
 uint64_t guest_tick_hz(void);         // That counter's rate, what a rewritten mrs cntfrq_el0 reads (hle_os.c)
 int dm_detclock_enabled(void);
+void dm_fstep_settle(void);   // hle_nvn.c: the window changed size, visibility, screen or fullscreen state, or graphics resumed (nvn_fstep.h settle)
 void guest_clock_freeze_for(int reason, int on);   // Freeze by reason (0 tick hold, 1 background, 2 system keyboard, 3 NVN prepare, 4 NVN archive init); see hle_os.c
 void guest_clock_read_wait(void);     // A guest read of the system counter: counts it in dm_clock_reads and waits while backgrounded or preparing (hle_os.c)
 extern __thread uint64_t dm_clock_reads;   // the calling thread's guest reads of the system counter (hle_os.c; thr_yield tells clock waits by them)
