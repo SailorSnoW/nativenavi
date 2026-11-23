@@ -261,6 +261,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [Late frames with an idle GPU stepped the hold up and unpaced holds did not probe](../../../docs/reference/frame-rate.md#late-frames-with-an-idle-gpu-stepped-the-hold-up-and-unpaced-holds-did-not-probe): a warm start's progress screen took the hold to 3 (18 fps) for about 1,470 presents.
 - [A module without unwind entries](../../../docs/reference/rewriter.md#a-module-without-unwind-entries): the [practice tools](#practice-tools)' `subsdk9` stopped the rewriter with `KeyError: 0`. Resolved.
 - [The counter frequency read raw](../../../docs/reference/rewriter.md#the-counter-frequency-read-raw): its timers would have run 1.3 times too fast on an M2 Pro. Resolved.
 - [An add-on module calls SDK functions the game never makes](../../../docs/reference/services.md#an-add-on-module-calls-sdk-functions-the-game-never-makes): its SD card and its own input. Resolved.

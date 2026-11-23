@@ -573,6 +573,33 @@ int main(void) {
         pw = 3; check(nvn_fstep_drain_cut(40, 17, 9, 0, &pw) == 37 && pw == 0, "a drain counted no larger than the pacing wait it was part of");
         pw = 0; check(nvn_fstep_drain_cut(0, 17, 0, 5, &pw) == 0, "the first frame (no previous start): nothing to cut");
     }
+    {   // Idle-GPU late frames (#1942): a warm-start progress screen (GPU 0.02 vsyncs) with 10 late frames does not step up, while FSTEP_RUN (30) late frames in a row still step up
+        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0);
+        for (int i = 0; i < 10; i++) { m.s.gpu_on = 1; m.s.gpu = 0.02; run(&m, 1, 2.5, 1, 3, 0); }
+        check(m.s.k == 1 && m.s.ups == 0, "idle GPU (0.02 vsyncs): 10 late frames on a progress screen keep hold 1");
+        for (int i = 0; i < FSTEP_RUN; i++) { m.s.gpu_on = 1; m.s.gpu = 0.02; run(&m, 1, 2.5, 1, 3, 0); }
+        check(m.s.k > 1 && m.s.ups == 1 && m.s.up_idle == 1, "idle GPU: FSTEP_RUN late frames in a row still step up (CPU-heavy scene)");
+    }
+    {   // Unpaced hold probe (#1942): a game that waits outside acquire shows cost == shown == hold at hold 3 while GPU fits k - 1 (0.75 vsyncs); probe brings it back to hold 1
+        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0);
+        for (int i = 0; i < 10; i++) { m.s.gpu_on = 1; m.s.gpu = 2.5; run(&m, 1, 2.5, 1, 3, 0); }
+        int at3 = m.s.k == 3;
+        for (int i = 0; i < 300; i++) {
+            double k = m.s.k; double w = k == 1 ? 0.75 : k;   // at hold 3, game's own wait makes cost == shown == 3, GPU 0.75
+            m.s.gpu_on = 1; m.s.gpu = 0.75; run(&m, 1, w, 1, 3, 0);
+        }
+        check(at3 && m.s.k == 1 && m.s.probes >= 1 && m.s.failed == 0, "unpaced hold at hold 3 with GPU 0.75: unpaced probe returns to hold 1");
+    }
+    {   // Unpaced hold probe on a genuinely CPU-bound game (CPU needs hold 2 even when probed): uhold backs off up to FSTEP_UHOLD_MAX (60 s)
+        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0);
+        for (int i = 0; i < 10; i++) { m.s.gpu_on = 1; m.s.gpu = 0.5; run(&m, 1, 1.8, 1, 3, 0); }
+        int at2 = m.s.k == 2;
+        for (int i = 0; i < 6000; i++) {
+            double w = m.s.k == 1 ? 1.8 : 2.0;   // CPU really needs 1.8 vsyncs, GPU is only 0.5
+            m.s.gpu_on = 1; m.s.gpu = 0.5; run(&m, 1, w, 1, 3, 0);
+        }
+        check(at2 && m.s.k == 2 && m.s.failed >= 2 && m.s.uhold > FSTEP_HOLD_MAX, "unpaced probe when CPU really needs hold 2: uhold doubles past 8 s toward 60 s");
+    }
     printf("== %d checks, %d failed ==\n", checks, fail);
     return fail != 0;
 }
