@@ -1,6 +1,7 @@
 """The packing script's practice tools stage (scripts/build_app.py practice_tools; the game's note, "Practice tools"): the release the profile pins in practice.tsv, taken from
 the build folder or downloaded (curl, here from a file:// URL) and refused with other bytes; its module rewritten, the IPS of main's build alone and the license in
-<rewritten modules>/practice; the host's check (DM_MODS_CHECK with DM_PRACTICE=1, no mods folder) before they go in, a refusal or a red line leaving the build without them;
+<rewritten modules>/practice; the host's check (DM_MODS_CHECK with DM_PRACTICE=1, no mods folder) before they go in, a refusal or a red line the same check with DM_PRACTICE=0
+does not log leaving the build without them (the game's own red lines do not);
 reuse while the inputs are unchanged; off with --no-practice. No game files: a stand-in rewriter and a stand-in host (shell scripts) record what they were given."""
 import hashlib
 import importlib.util
@@ -26,9 +27,12 @@ REWRITER = '''#!/bin/sh
 echo rewrite >> "$CALLS"
 printf 'code' > "$3/$4.patched.bin"; printf 'fixups' > "$3/$4.fixups.tsv"; printf 'gates' > "$3/$4.gates.tsv"; printf 'sites' > "$3/$4.sites.tsv"
 '''
-# the host's stand-in: answers DM_MODS_CHECK with the verdict $VERDICT on the practice folder's IPS, as hle_mods.c does; $RED prints a red line; $RC is its exit code
+# the host's stand-in: answers DM_MODS_CHECK with the verdict $VERDICT on the practice folder's IPS, as hle_mods.c does; $RED prints a red line with the practice tools on, $GAME_RED
+# one in either run (the game's own); $RC is its exit code
 HOST = '''#!/bin/sh
 echo "host $1 practice=$DM_PRACTICE mods=$DM_MODS window=${DM_WINDOW-unset}" >> "$CALLS"
+[ -n "$GAME_RED" ] && echo "[dm] [RED] $GAME_RED at 0x$$"
+[ "$DM_PRACTICE" = 1 ] || { echo "[dm] mods: DM_MODS_CHECK: the patch files' verdicts are written, the game is not started"; exit ${RC-0}; }
 [ -f "$1/practice/subsdk9.fixups.tsv" ] || { echo "[dm] [RED] practice tools: none"; exit 0; }
 for f in "$1"/practice/*.ips; do printf 'file\\tmain\\t%s\\t%s\\tpractice tools\\t%s\\tsha\\t%s\\n' "$BID" "${VERDICT-applied}" "$f" "${WHY--}" >> "$DM_MODS_CHECK"; done
 [ -n "$RED" ] && echo "[dm] [RED] $RED"
@@ -77,10 +81,11 @@ class Stage(unittest.TestCase):
         self.assertEqual((out / IPS).read_bytes(), b'PATCH this build')   # the patches folder's IPS of main's build, not the other build's nor a copy elsewhere in the zip
         self.assertEqual((out / 'LICENSE').read_bytes(), b'GPL-3.0')
         self.assertTrue((self.work / 'practice/sloperinaGZ-9.9.9.zip').is_file())   # downloaded once into the build folder
-        rewrite, host = self.ran()
+        rewrite, host, base = self.ran()
         self.assertEqual(rewrite, 'rewrite')
         chk = self.work / 'tmp/practice-check'
         self.assertEqual(host, f'host {chk} practice=1 mods={self.work / "tmp/practice-no-mods"} window=unset')   # the player's mods are not the check's; no window
+        self.assertEqual(base, f'host {chk} practice=0 mods={self.work / "tmp/practice-no-mods"} window=unset')   # the same check without them: the game's own red lines
         self.assertFalse((self.work / 'tmp/practice-no-mods').exists())
         self.assertEqual(sorted(p.name for p in chk.iterdir()), ['main.fixups.tsv', 'main.patched.bin', 'practice', 'sdk.fixups.tsv', 'sdk.patched.bin'])
         self.assertFalse((self.patched / 'practice.partial').exists())
@@ -89,7 +94,7 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.ran(), [])   # reused: nothing rewritten or checked again
         (self.host).write_text(HOST + '\n')   # another host checks them again
         self.assertEqual(self.stage(), (out, None))
-        self.assertEqual(len(self.ran()), 2)
+        self.assertEqual(len(self.ran()), 3)
 
     def test_the_zip_in_the_build_folder_is_taken(self):   # no download: the pin's file:// URL is gone, the zip is where the build keeps it
         (self.work / 'practice').mkdir(); shutil.copy(self.zip, self.work / 'practice')
@@ -120,7 +125,7 @@ class Stage(unittest.TestCase):
     def test_the_hosts_refusal_or_red_line_leaves_them_out(self):
         out, _ = self.stage()
         for env, why in (({'VERDICT': 'refused', 'WHY': 'replaces an instruction the rewriter already moved out of line'}, f'the host refused {IPS} (refused: replaces an instruction'),
-                         ({'RED': 'sdk: something'}, 'the host\'s check logged 1 red line(s), the first: [dm] [RED] sdk: something'),
+                         ({'RED': 'sdk: something'}, 'the host\'s check logged 1 red line(s) the game without the practice tools does not, the first: [dm] [RED] sdk: something'),
                          ({'RC': '3'}, 'the host\'s check failed (exit code 3')):
             with self.subTest(env=env):
                 self.host.write_text(HOST + f'# {env}\n')   # a new host: checked again
@@ -128,6 +133,13 @@ class Stage(unittest.TestCase):
                 self.assertIsNone(out); self.assertIn(why, red)
                 self.assertFalse((self.patched / 'practice').exists()); self.assertFalse((self.patched / 'practice.key').exists())
                 self.assertFalse((self.patched / 'practice.partial').exists())
+
+    def test_the_games_own_red_lines_do_not(self):   # 1.0.0: the host's forced takeovers its main references none of, in the check with the practice tools and without
+        out, red = self.stage(env={'GAME_RED': 'forced takeover entry no module references: _ZN2nn3aoc17CountAddOnContentEv'})
+        self.assertEqual((out, red), (self.patched / 'practice', None))
+        self.host.write_text(HOST + '# again\n')
+        out, red = self.stage(env={'GAME_RED': 'aoc', 'RC': '0'})
+        self.assertIsNone(red)
 
     def test_no_patch_for_this_main(self):   # another version of the game: no red line, no folder
         (self.game / 'ExeFS/main').write_bytes(b'NSO0'.ljust(0x40, b'\0') + bytes(32))

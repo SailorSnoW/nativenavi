@@ -386,6 +386,22 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Found on:** Mario Kart World 1.0.0 (`0400C3F00006E000`, a base-game dump: `main`, `subsdk0` and `sdk`), packed from a profile for 1.8.0, whose `subsdk1` is the C library module the update added ([PR #1081](https://github.com/seedds/nxnative/pull/1081)). With it the rewrite, the shader split (11,561 shaders) and the Mac host built, and the game drew its first course on the Mac.
 - **Check:** `test_nsp_incremental` (`test_a_module_the_version_does_not_ship_is_left_out`: the module left out with its comment and its build row, then kept once the version ships it).
 
+### A derived profile's prewarm list names another version's shaders
+
+- **Symptom:** an app of a version the profile was not brought up on prepares far fewer shaders before its first frame (the progress screen's Preparing shaders, the log's `pipeline prewarm list … lines` and `shader keys not in the shader map (another game version)`) and compiles more of them while it plays.
+- **Cause:** `derive_profile` copies the profile's `pso_manifest.tsv`, which names shaders by their keys on the version it was recorded on. An update that recompiles shaders gives them other keys, and the host takes only the rows whose keys its shader map has.
+- **Fix:** after the shader split, `scripts/build_app.py` writes the derived profile's list with `dm/tools/pso_carry.py`, which finds each shader again by its place in the game's files (the shader maps' source column): the keys both versions share anchor the order of the containers, file by file; between two anchors containers pair in order only when both versions have as many; what is in a container is carried only when both hold as many keys and no anchor in it moved; a file whose name differs only in its numbers pairs with its one twin. A pipeline row is kept only when its carried shader pair is one of the new version's pairs (`shader_pairs.tsv`, `pso_pairs.tsv`). Rows it cannot carry are left out, as the host would skip them.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#shaders) 1.0.0, from the list recorded on 1.1.1 (2026-11-24): 16,912 of 1.0.0's 42,816 keys are 1.1.1's, so about 12,500 of the 69,417 rows applied; carried, 34,390. With a fifth of the shared keys held back from the anchors, 3,321 of 3,382 found their own key again, 4 another and 57 none.
+- **Check:** `test_pso_carry.py` (anchors, containers between them, a renamed file, renumbered variations and a moved anchor left out, the pair test, a file round trip).
+
+### The practice tools' check failed on the game's own red lines
+
+- **Symptom:** an app of Ocarina of Time 1.0.0 has no Practice section in its settings window; the packing script said `[RED] practice tools: … is not in this build: the host's check logged 4 red line(s), the first: [dm] [RED] forced takeover entry no module references: …`.
+- **Cause:** the practice tools stage ran the host's `DM_MODS_CHECK` with the tools on and refused them at any red line. 1.0.0's `main` references none of four SDK entries the host takes over for 1.1.1 (`nn::aoc` Count / List, `nn::pctl::CheckAgcPermissionUnderMinimumAge`, `nn::nifm::SubmitNetworkRequestAndWait`), so its loader logs four red lines in every run, with or without the tools.
+- **Fix:** `practice_check` runs the same check with `DM_PRACTICE=0` (`logs/practice_check_base.log`) and refuses only red lines that one lacks, addresses aside.
+- **Found on:** Ocarina of Time 1.0.0 (2026-11-24); 1.1.1 logs no red line either way.
+- **Check:** `test_nsp_practice.py` (`test_the_games_own_red_lines_do_not`, and a red line of the tools' own still leaving them out).
+
 ## Damaged packages
 
 ### A build that allows damaged files splits and restores every shader again

@@ -13,6 +13,7 @@ import tree_tar
 import shader_lib
 import shader_cache
 import vol_space
+import pso_carry
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pack_nup
 
@@ -1349,8 +1350,14 @@ def practice_check(host, patched, tmp, ips, work, env, logs):
     mine = [r for r in rows if r[1] == 'main' and Path(r[5]).name == ips]
     if not mine: return f'the host did not apply {ips} to main ({log})'
     if mine[0][3] != 'applied': return f'the host refused {ips} ({mine[0][3]}: {mine[0][7]})'
-    reds = [l.strip() for l in log.read_text(errors='replace').splitlines() if '[RED]' in l]
-    if reds: return f'the host\'s check logged {len(reds)} red line(s), the first: {reds[0]} ({log})'
+    # the game's own red lines are not the practice tools' (1.0.0's main references none of four SDK entries the host takes over): only those the same check without them lacks
+    base_log, base_verdicts = logs / 'practice_check_base.log', work / 'tmp/practice-check-base.tsv'
+    rc = run([host, chk], base_log, env=dict(cenv, DM_PRACTICE='0', DM_MODS_CHECK=str(base_verdicts)), cwd=work / 'tmp', fatal=False)
+    rmtree(base_verdicts)
+    if rc: return f'the host\'s check without the practice tools failed (exit code {rc}, {base_log})'
+    def reds(p): return [re.sub(r'0x[0-9a-f]+', '0x?', l.strip()) for l in p.read_text(errors='replace').splitlines() if '[RED]' in l]
+    known = set(reds(base_log))
+    if new := [l for l in reds(log) if l not in known]: return f'the host\'s check logged {len(new)} red line(s) the game without the practice tools does not, the first: {new[0]} ({log})'
     return None
 
 
@@ -1829,6 +1836,10 @@ def main(args=None):
         return g
     pkey = split_shaders(py, repo, [rfs.source(dirs[v]) for v in sv], [dirs[v] / 'ExeFS/main' for v in sv], sh / 'pkg', env, logs, g,
                          bool(derived), dlc_roms, None if derived else derive_shader_tables)
+    if derived and g.dir != reg.dir and reg.table('pso_manifest.tsv').is_file():   # another version's list names its shaders by their keys there
+        note = pso_carry.carry_file(str(reg.table('shader_map.tsv')), str(g.table('shader_map.tsv')), str(reg.table('pso_manifest.tsv')), str(g.table('pso_manifest.tsv')),
+                                    [str(g.table('shader_pairs.tsv')), str(g.table('pso_pairs.tsv'))], f'game profile {reg.id}\'s list for {", ".join(reg.words("shader_versions"))}')
+        say(f'prewarm list: {note}')
     seen = seen_keys(g, sh, seen_logs(work, app)) if seen_shaders else None
     msl = build_shaders(py, repo, sh, xlate, env, logs, g, pkey, seen)
     motion = MOTION if args.motion is None else args.motion
