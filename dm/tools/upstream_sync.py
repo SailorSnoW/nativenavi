@@ -1,21 +1,13 @@
 #!/usr/bin/env python3
-# Upstream nxnative's commits for this fork, for the agents that port them (.claude/skills/upstream-port/SKILL.md): a blobless mirror of upstream's main, the commits not
-# reviewed yet with what each one touches here, a commit's message and diff, a three-way merge of a commit's files into a checkout, a summary of a host run's log, and the
-# ledger of verdicts (dm/tools/upstream_ledger.tsv), so that no commit is reviewed twice. Needs git only (the mirror fetches file contents from GitHub as they are read).
+# Upstream nxnative's commits for the agents that port them (.claude/skills/upstream-port/SKILL.md) and the ledger of verdicts (upstream_ledger.tsv).
 # Usage: upstream_sync.py fetch   [--mirror DIR] [--url URL]
 #        upstream_sync.py list    [--mirror DIR] [--tree DIR] [--since REF] [--all] [--tsv]
 #        upstream_sync.py show    <sha> [--mirror DIR] [path ...]
 #        upstream_sync.py pick    <sha> [path ...] [--mirror DIR] [--tree DIR]
 #        upstream_sync.py summary <log.txt> [--frames N,N]
 #        upstream_sync.py record  <sha> <verdict> [--local SHA[,SHA]] [--why TEXT] [--mirror DIR]
-# The mirror is $NATIVENAVI_UPSTREAM_MIRROR, else ~/.cache/nativenavi/nxnative.git. `list` shows upstream main's commits after the ledger's base (the nxnative commit this repository
-# was imported from) that the ledger has no row for, or has as deferred, each with tags: gone (a file this tree does not have: removed by the fork, or added upstream after the
-# import), add (a file the commit adds), oot (this game's profile), game:<id> (another game's profile, which this fork does not have), ios / gl / vk (platforms and layers the fork
-# removed), chain (a file of the shader chain, dm/gfx/tools/dmsh_chain.py FILES: porting it changes DMSH_CHAIN and every shader is translated again). A commit whose every file
-# is gone, another game's, or iOS / GL / Vulkan is marked skip? (still to be read: a commit can carry a host fix inside another game's port). `pick` merges each file the commit
-# changes as `git merge-file` does (base: the commit's parent, theirs: the commit, ours: the checkout), writes a file it adds, and lists the files the checkout does not have; exit
-# 1 when a merge left conflict markers; a generated file (symptom and patch indexes, dmsh_chain.h) is named with the command that writes it, not merged. Verdicts: ported, partial (the why says which parts), docs (the finding recorded, no code), no-op (does nothing for this fork: why),
-# skip (another game, iOS, a removed subsystem, a path the game never reaches: why), deferred (wanted, waits for something: why; listed again).
+# The mirror (blobless) is $NATIVENAVI_UPSTREAM_MIRROR, else ~/.cache/nativenavi/nxnative.git. pick merges three ways; exit 1 on conflict markers.
+# Verdicts: ported, partial, docs, no-op, skip, deferred.
 import argparse, collections, importlib.util, os, re, subprocess, sys, tempfile
 from pathlib import Path
 
@@ -25,10 +17,10 @@ GAME_ID = '0400486024DEC000'
 URL = 'https://github.com/seedds/nxnative.git'
 VERDICTS = ('ported', 'partial', 'docs', 'no-op', 'skip', 'deferred')
 REMOVED = (('dm/ios/', 'ios'), ('dm/gfx/gl/', 'gl'), ('dm/gfx/vk/', 'vk'), ('dm/gfx/vulkan/', 'vk'))
-# Files a tool writes: regenerated after a port, never merged (their conflicts are only the other side's rows)
+# regenerated after a port, never merged
 GENERATED = {'docs/agents/symptoms.md': 'python3 dm/tools/docs_symptoms.py', 'docs/agents/game-patches.md': 'python3 dm/tools/docs_patches.py',
              'dm/gfx/nvn/dmsh_chain.h': 'python3 dm/gfx/tools/dmsh_chain.py --header'}
-GAMES_TABLE = 'dm/games/README.md'   # the table of the games nxnative has: this fork's has one row
+GAMES_TABLE = 'dm/games/README.md'   # one row here
 
 
 def mirror_dir(arg: str | None) -> Path:
@@ -41,17 +33,18 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
     return r.stdout
 
 
-def blob(repo: Path, rev: str, path: str) -> bytes | None:   # the file at rev, None when it is not there
+def blob(repo: Path, rev: str, path: str) -> bytes | None:
     r = subprocess.run(['git', '-C', str(repo), 'show', f'{rev}:{path}'], capture_output=True)
     return r.stdout if r.returncode == 0 else None
 
 
-# ---- The ledger: '# key<TAB>value' rows (url, base), then sha, date, verdict, local commits, subject, why ----
+# The ledger: '# key<TAB>value' rows (url, base), then sha, date, verdict, local commits, subject, why
 Row = collections.namedtuple('Row', 'sha date verdict local subject why')
 
 
 def read_ledger(path: Path = LEDGER) -> tuple[dict[str, str], list[Row]]:
-    meta: dict[str, str] = {}; rows: list[Row] = []
+    meta: dict[str, str] = {}
+    rows: list[Row] = []
     if not path.is_file(): return meta, rows
     for line in path.read_text().splitlines():
         if not line.strip(): continue
@@ -76,8 +69,7 @@ def reviewed(rows: list[Row], sha: str) -> Row | None:
     return next((r for r in rows if sha.startswith(r.sha) or r.sha.startswith(sha)), None)
 
 
-# ---- What a commit touches here ----
-def chain_files() -> set[str]:   # repo paths of the shader chain's files (dmsh_chain.FILES are relative to dm/gfx)
+def chain_files() -> set[str]:   # ledger: '# key<TAB>value' rows (url, base), then sha, date, verdict, local commits, subject, why
     spec = importlib.util.spec_from_file_location('dmsh_chain_files', REPO / 'dm/gfx/tools/dmsh_chain.py')
     if spec is None or spec.loader is None: return set()
     m = importlib.util.module_from_spec(spec)
@@ -127,11 +119,13 @@ def cmd_fetch(a: argparse.Namespace) -> None:
 
 
 def cmd_list(a: argparse.Namespace) -> None:
-    m = mirror_dir(a.mirror); meta, rows = read_ledger()
+    m = mirror_dir(a.mirror)
+    meta, rows = read_ledger()
     base = a.since or meta.get('base')
     if not base: sys.exit('[RED] no base: the ledger has no "# base" row and --since names none')
     shas = git(m, 'rev-list', '--reverse', f'{base}..main').split()
-    chain = chain_files(); tree = Path(a.tree).resolve()
+    chain = chain_files()
+    tree = Path(a.tree).resolve()
     todo = []
     for s in shas:
         r = reviewed(rows, s)
@@ -140,7 +134,9 @@ def cmd_list(a: argparse.Namespace) -> None:
     print(f'upstream main has {len(shas)} commits after {base}; {len(todo)} to review' + ('' if a.all else ' (the ledger has the others)'), file=sys.stderr)
     for s, r in todo:
         date, subject = git(m, 'log', '-1', '--format=%ad\t%s', '--date=short', s).strip().split('\t', 1)
-        t = triage(m, s, tree, chain); files = t['files']; hints = t['hints']
+        t = triage(m, s, tree, chain)
+        files = t['files']
+        hints = t['hints']
         assert isinstance(files, list) and isinstance(hints, list)
         mark = f' [ledger: {r.verdict}]' if r else ''
         if a.tsv:
@@ -158,26 +154,49 @@ def cmd_show(a: argparse.Namespace) -> None:
 
 
 def cmd_pick(a: argparse.Namespace) -> None:
-    m = mirror_dir(a.mirror); tree = Path(a.tree).resolve(); conflicts = 0
+    m = mirror_dir(a.mirror)
+    tree = Path(a.tree).resolve()
+    conflicts = 0
     for st, p in commit_files(m, a.sha):
         if a.paths and not any(p == q or p.startswith(q.rstrip('/') + '/') for q in a.paths): continue
         dst = tree / p
-        if p in GENERATED: print(f'REGENERATE  {p} ({GENERATED[p]})'); continue
+        if p in GENERATED:
+            print(f'REGENERATE  {p} ({GENERATED[p]})')
+            continue
         if st == 'A':
-            if dst.exists(): print(f'EXISTS-ADD  {p}'); continue
+            if dst.exists():
+                print(f'EXISTS-ADD  {p}')
+                continue
             data = blob(m, a.sha, p)
-            if data is None: print(f'?           {p}'); continue
-            dst.parent.mkdir(parents=True, exist_ok=True); dst.write_bytes(data); print(f'added       {p}'); continue
-        if st == 'D': print(('UPSTREAM-DELETES ' if dst.exists() else 'gone        ') + p); continue
-        if not dst.exists(): print(f'MISSING     {p}'); continue
+            if data is None:
+                print(f'?           {p}')
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(data)
+            print(f'added       {p}')
+            continue
+        if st == 'D':
+            print(('UPSTREAM-DELETES ' if dst.exists() else 'gone        ') + p)
+            continue
+        if not dst.exists():
+            print(f'MISSING     {p}')
+            continue
         base, theirs = blob(m, f'{a.sha}^', p), blob(m, a.sha, p)
-        if base is None or theirs is None: print(f'?           {p}'); continue
-        if b'\0' in base[:8192] or b'\0' in theirs[:8192]: print(f'BINARY      {p} (not merged)'); continue
+        if base is None or theirs is None:
+            print(f'?           {p}')
+            continue
+        if b'\0' in base[:8192] or b'\0' in theirs[:8192]:
+            print(f'BINARY      {p} (not merged)')
+            continue
         with tempfile.TemporaryDirectory() as td:
-            bp, tp = Path(td) / 'base', Path(td) / 'theirs'; bp.write_bytes(base); tp.write_bytes(theirs)
+            bp, tp = Path(td) / 'base', Path(td) / 'theirs'
+            bp.write_bytes(base)
+            tp.write_bytes(theirs)
             r = subprocess.run(['git', 'merge-file', '-L', 'ours', '-L', 'base', '-L', 'upstream', str(dst), str(bp), str(tp)], capture_output=True, text=True)
         if r.returncode == 0: print(f'merged      {p}')
-        elif r.returncode > 0: conflicts += 1; print(f'CONFLICT({r.returncode}) {p}')
+        elif r.returncode > 0:
+            conflicts += 1
+            print(f'CONFLICT({r.returncode}) {p}')
         else: sys.exit(f'[RED] git merge-file {p}: {r.stderr.strip()}')
     if conflicts: sys.exit(1)
 
@@ -214,13 +233,15 @@ def cmd_summary(a: argparse.Namespace) -> None:
 
 def cmd_record(a: argparse.Namespace) -> None:
     if a.verdict not in VERDICTS: sys.exit(f'[RED] verdict {a.verdict}: one of {", ".join(VERDICTS)}')
-    m = mirror_dir(a.mirror); meta, rows = read_ledger()
+    m = mirror_dir(a.mirror)
+    meta, rows = read_ledger()
     full = git(m, 'rev-parse', a.sha).strip()
     date, subject = git(m, 'log', '-1', '--format=%ad\t%s', '--date=short', full).strip().split('\t', 1)
     why = (a.why or '').replace('\t', ' ').replace('\n', ' ')
     rows = [r for r in rows if not (full.startswith(r.sha) or r.sha.startswith(full))]
     rows.append(Row(full[:12], date, a.verdict, a.local or '-', subject.replace('\t', ' '), why))
-    meta.setdefault('url', URL); write_ledger(meta, rows)
+    meta.setdefault('url', URL)
+    write_ledger(meta, rows)
     print(f'{full[:12]} {a.verdict}: {subject}')
 
 
@@ -228,13 +249,37 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description='upstream nxnative commits for this fork')
     sub = ap.add_subparsers(dest='cmd', required=True)
     def add(name: str) -> argparse.ArgumentParser:
-        p = sub.add_parser(name); p.add_argument('--mirror'); return p
-    p = add('fetch'); p.add_argument('--url', default=URL); p.set_defaults(fn=cmd_fetch)
-    p = add('list'); p.add_argument('--tree', default=str(REPO)); p.add_argument('--since'); p.add_argument('--all', action='store_true'); p.add_argument('--tsv', action='store_true'); p.set_defaults(fn=cmd_list)
-    p = add('show'); p.add_argument('sha'); p.add_argument('paths', nargs='*'); p.set_defaults(fn=cmd_show)
-    p = add('pick'); p.add_argument('sha'); p.add_argument('paths', nargs='*'); p.add_argument('--tree', default=str(REPO)); p.set_defaults(fn=cmd_pick)
-    p = sub.add_parser('summary'); p.add_argument('log'); p.add_argument('--frames', default=''); p.set_defaults(fn=cmd_summary)
-    p = add('record'); p.add_argument('sha'); p.add_argument('verdict'); p.add_argument('--local'); p.add_argument('--why'); p.set_defaults(fn=cmd_record)
+        p = sub.add_parser(name)
+        p.add_argument('--mirror')
+        return p
+    p = add('fetch')
+    p.add_argument('--url', default=URL)
+    p.set_defaults(fn=cmd_fetch)
+    p = add('list')
+    p.add_argument('--tree', default=str(REPO))
+    p.add_argument('--since')
+    p.add_argument('--all', action='store_true')
+    p.add_argument('--tsv', action='store_true')
+    p.set_defaults(fn=cmd_list)
+    p = add('show')
+    p.add_argument('sha')
+    p.add_argument('paths', nargs='*')
+    p.set_defaults(fn=cmd_show)
+    p = add('pick')
+    p.add_argument('sha')
+    p.add_argument('paths', nargs='*')
+    p.add_argument('--tree', default=str(REPO))
+    p.set_defaults(fn=cmd_pick)
+    p = sub.add_parser('summary')
+    p.add_argument('log')
+    p.add_argument('--frames', default='')
+    p.set_defaults(fn=cmd_summary)
+    p = add('record')
+    p.add_argument('sha')
+    p.add_argument('verdict')
+    p.add_argument('--local')
+    p.add_argument('--why')
+    p.set_defaults(fn=cmd_record)
     a = ap.parse_args(argv)
     a.fn(a)
 

@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
-"""Check the host's multichannel output end to end on a real loopback device.
-
-The probe (dm/host/tests/t_audio_live.c, built by `make -C dm/host/tests GAME=<id> audio-live`) plays a test signal through the host's
-AudioOut on the named device and captures that device's input in the same process (DM_AUDIO_CAPTURE), so what it measures is what the
-device received from the host.
-
-Six channels (a six-channel device such as BlackHole 16ch): channels 1..6 must carry the tones 440, 660, 880, 60, 1320, 1760 Hz
-(front-left, front-right, center, LFE, back-left, back-right), each at least 12 dB above the others.
-Stereo (a two-channel device such as BlackHole 2ch, the six-channel guest downmixed by the host): left carries 440 Hz at 1.0, 880 Hz and 1320 Hz
-at 0.707 (center and back-left), 60 Hz at 0.251 (LFE); right the same with 660 and 1760 Hz. Each within 1.5 dB.
+"""Checks the host's multichannel output on a loopback device: t_audio_live.c (make -C dm/host/tests GAME=<id> audio-live) plays tones through
+AudioOut and captures the device's input (DM_AUDIO_CAPTURE).
 
 Usage: audio_channel_check.py [--device "BlackHole 16ch"] [--stereo] [--seconds 4]
 Exit status 0 when every check passes, 1 when one fails, 2 when the probe is missing or the capture is unusable.
@@ -16,9 +8,9 @@ Exit status 0 when every check passes, 1 when one fails, 2 when the probe is mis
 import argparse, array, math, os, shutil, subprocess, sys, tempfile
 
 RATE = 48000
-TONES = [440.0, 660.0, 880.0, 60.0, 1320.0, 1760.0]   # front-left, front-right, center, LFE, back-left, back-right
+TONES = [440.0, 660.0, 880.0, 60.0, 1320.0, 1760.0]   # FL, FR, C, LFE, BL, BR
 SIX_ORDER = ['front-left', 'front-right', 'center', 'LFE', 'back-left', 'back-right']
-# The host's downmix (hle_audio.c pull_device, hle_audren.c): L = FL + 0.707 C + 0.251 LFE + 0.707 BL, R = FR + 0.707 C + 0.251 LFE + 0.707 BR
+# the host's downmix (hle_audio.c pull_device, hle_audren.c)
 STEREO_EXPECT = {
     'L': {440.0: 1.0, 880.0: 0.707, 60.0: 0.251, 1320.0: 0.707},
     'R': {660.0: 1.0, 880.0: 0.707, 60.0: 0.251, 1760.0: 0.707},
@@ -29,18 +21,19 @@ PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'host', '
 
 
 def amplitude(x, rate, start, n, f):
-    """Amplitude of a sine at exactly f in x[start:start+n]: Hann-windowed correlation (the window's leakage at the test tones' 220 Hz spacing is negligible)."""
+    """Hann-windowed correlation: its leakage at the tones' 220 Hz spacing is negligible."""
     re = im = wsum = 0.0
     for i in range(n):
         w = 0.5 - 0.5 * math.cos(2 * math.pi * i / n)
         v = x[start + i] * w
         a = 2 * math.pi * f * i / rate
-        re += v * math.cos(a); im -= v * math.sin(a); wsum += w
+        re += v * math.cos(a)
+        im -= v * math.sin(a)
+        wsum += w
     return 2 * math.hypot(re, im) / wsum
 
 
 def steady_window(chans, rate, start_offset=0.3, length=1.0, block_ms=10):
-    """(start, n) of a `length`-second window that starts `start_offset` after the first signal and has signal in every channel, or None."""
     block = max(1, rate * block_ms // 1000)
     nb = min(len(c) for c in chans) // block
     rms = [[math.sqrt(sum(v * v for v in c[i * block:(i + 1) * block]) / block) for i in range(nb)] for c in chans]
@@ -55,7 +48,7 @@ def steady_window(chans, rate, start_offset=0.3, length=1.0, block_ms=10):
 
 
 def levels(rate, x, start, n, part=0.25):
-    """Amplitude of each test tone over the window: the median over quarter-second parts."""
+    """The median over quarter-second parts."""
     m = max(1, int(part * rate))
     per = [{f: amplitude(x, rate, start + k * m, m, f) for f in TONES} for k in range(n // m)]
     return {f: sorted(p[f] for p in per)[len(per) // 2] for f in TONES}
@@ -66,11 +59,11 @@ def db(a, b):
 
 
 def check_six(chan_levels):
-    """chan_levels: six dicts (tone -> amplitude), one per channel. Returns a list of (ok, message)."""
     out = []
     for c, lv in enumerate(chan_levels):
         if lv is None:
-            out.append((False, 'channel %d: no signal' % (c + 1))); continue
+            out.append((False, 'channel %d: no signal' % (c + 1)))
+            continue
         want = TONES[c]
         others = max(v for f, v in lv.items() if f != want)
         sep = db(lv[want], others)
@@ -80,11 +73,11 @@ def check_six(chan_levels):
 
 
 def check_stereo(chan_levels):
-    """chan_levels: [left, right] dicts. Returns a list of (ok, message)."""
     out = []
     for name, lv, expect, unit_f in zip(('L', 'R'), chan_levels, (STEREO_EXPECT['L'], STEREO_EXPECT['R']), (440.0, 660.0)):
         if lv is None:
-            out.append((False, '%s: no signal' % name)); continue
+            out.append((False, '%s: no signal' % name))
+            continue
         unit = lv[unit_f]
         for f, rel in expect.items():
             if f == unit_f:
@@ -111,7 +104,7 @@ def unusable(msg):
 
 
 def run(device, stereo, seconds):
-    """Returns the result lines' pass state, or None when the capture is unusable."""
+    """None when the capture is unusable."""
     if not os.path.exists(PROBE):
         unusable('missing %s: make -C dm/host/tests GAME=<id> audio-live' % PROBE)
     nch = 2 if stereo else 6

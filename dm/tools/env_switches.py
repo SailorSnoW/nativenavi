@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""The DM_* environment switches the code reads, as one table: docs/env_switches.tsv (name, class, meaning; class and meaning kept by hand, docs/development.md says what
-the classes are).
-  env_switches.py           write the table: a new switch gets a row with a guessed class and no meaning, a switch nothing reads any more loses its row
-  env_switches.py --check   exit 1 when the table does not list exactly the switches the sources read, or a row has no meaning or an unknown class
-Either prints the names the docs quote that nothing reads (a removed switch a doc may still describe as working)."""
+"""docs/env_switches.tsv: the DM_* switches the code reads (class and meaning kept by hand).
+Usage: env_switches.py [--check]   (--check: exit 1 when the table and the sources disagree, or a row lacks a meaning or a known class)"""
 from pathlib import Path
 import re
 import subprocess
@@ -15,7 +12,7 @@ HEAD = 'name\tclass\tmeaning\n'
 CLASSES = ('player', 'path', 'switch', 'diagnostic', 'test')
 CODE = ('.c', '.m', '.h', '.inc', '.swift', '.py', '.sh', '.S')
 NAME = r'DM_[A-Z0-9_]*[A-Z0-9]'
-READ = r'(?:getenv\(|environ(?:\.get\(|\[))\s*["\'](' + NAME + r')["\']'   # a literal name in getenv(…), os.environ.get(…) or os.environ[…]
+READ = r'(?:getenv\(|environ(?:\.get\(|\[))\s*["\'](' + NAME + r')["\']'
 
 
 def tracked():
@@ -24,7 +21,6 @@ def tracked():
 
 
 def scan():
-    """({switch: files that read it}, {name quoted in the docs: docs})"""
     reads, docs, macros, direct = {}, {}, set(), set()
     for p in tracked():
         path = REPO / p
@@ -34,21 +30,22 @@ def scan():
             for n in set(re.findall(r'`(' + NAME + r')', text)): docs.setdefault(n, set()).add(p)
             continue
         if not p.endswith(CODE) and not p.startswith('scripts/'): continue
-        # names the code defines as preprocessor macros (the generated profile header's DM_GAME_*, host constants) are not switches, unless something also reads
-        # them from the environment (DM_GAME_ENV, which overrides the profile's macro of that name)
+        # macros (the profile header's DM_GAME_*) are not switches unless something also reads them from the environment (DM_GAME_ENV)
         macros |= set(re.findall(r'#\s*define\s+(' + NAME + r')', text))
-        for body in re.findall(r'\benum\s*\w*\s*\{([^}]*)\}', text): macros |= set(re.findall(r'\b(' + NAME + r')\s*=', body))   # enum constants too (dm.h DM_QUIT_ARCH_MS)
+        for body in re.findall(r'\benum\s*\w*\s*\{([^}]*)\}', text): macros |= set(re.findall(r'\b(' + NAME + r')\s*=', body))
         if '/tests/' in p:   # a test's own switches only; the names in its fixtures are data
             found = re.findall(READ, text)
         elif p.endswith('.sh'): found = re.findall(r'\$\{?(' + NAME + r')\b', text) + re.findall(r'["\'](' + NAME + r')["\']', text)
-        else: found = re.findall(r'["\'](' + NAME + r')=?["\']', text)   # any quoted name: helpers such as envdir("DM_TEMP", …) read it for their caller
+        else: found = re.findall(r'["\'](' + NAME + r')=?["\']', text)   # any quoted name: a helper such as envdir() reads it for its caller
         direct |= set(re.findall(READ, text))
         for n in set(found): reads.setdefault(n, set()).add(p)
-    for n in macros - direct: reads.pop(n, None); docs.pop(n, None)
+    for n in macros - direct:
+        reads.pop(n, None)
+        docs.pop(n, None)
     return reads, docs
 
 
-def guess(name, files, player):   # a new row's class, for whoever writes its meaning to correct
+def guess(name, files, player):
     if name in player: return 'player'
     if all('/tests/' in f for f in files): return 'test'
     if re.search(r'_(DIR|PATH|FILE|ROOT)$', name): return 'path'
@@ -56,7 +53,6 @@ def guess(name, files, player):   # a new row's class, for whoever writes its me
 
 
 def rows():
-    """(table text, rows without a meaning or with an unknown class, names the docs quote that nothing reads)"""
     reads, docs = scan()
     player = {l.split('\t')[0] for l in (REPO / 'dm/games/settings.tsv').read_text().split('\n') if l.startswith('DM_')}
     kept = {}

@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-# Writes docs/agents/symptoms.md, the symptom index, from the subsystem references in docs/reference: one line per entry that has a "- **Symptom:**" bullet (the text of that
-# bullet, links reduced to their text) with a link to the entry's heading, grouped by reference file in the order docs/reference/README.md lists them. Run it after adding or
-# changing an entry; --check only reports whether the index is current (dm/tools/tests/test_docs.py runs it).
+# Writes docs/agents/symptoms.md from the "- **Symptom:**" bullets of docs/reference, grouped in docs/reference/README.md's order.
 # Usage: docs_symptoms.py [--check]
 import re, sys, pathlib, unicodedata
 
@@ -10,24 +8,25 @@ REF = REPO / 'docs' / 'reference'
 OUT = REPO / 'docs' / 'agents' / 'symptoms.md'
 
 def slug(h):
-    # GitHub's heading anchor: lower case, punctuation dropped except - and _, spaces to -
+    # GitHub's heading anchor
     h = re.sub(r'<[^>]+>', '', h).strip().lower()
     h = ''.join(c for c in h if c in ' -_' or unicodedata.category(c)[0] in 'LN')
     return h.replace(' ', '-')
 
 def ref_files():
-    # the reference files in the order of the table in docs/reference/README.md
     return [REF / m for m in re.findall(r'^\| \[[^\]]+\]\(([a-z-]+\.md)\)', (REF / 'README.md').read_text(), re.M)]
 
 def entries(path):
-    # (heading, anchor, symptom) of each ### entry with a Symptom bullet; anchors numbered as GitHub numbers repeated headings
+    # anchors numbered as GitHub numbers repeated headings
     seen, head, fence, out = {}, None, False, []
     for line in path.read_text().split('\n'):
         if line.startswith('```'): fence = not fence
         if fence: continue
         m = re.match(r'(#{1,6}) (.*?)\s*#*$', line)
         if m:
-            s = slug(m.group(2)); n = seen.get(s, 0); seen[s] = n + 1
+            s = slug(m.group(2))
+            n = seen.get(s, 0)
+            seen[s] = n + 1
             head = (m.group(2), s if n == 0 else f'{s}-{n}') if len(m.group(1)) == 3 else None
             continue
         m = re.match(r'- \*\*Symptom:\*\* (.*)', line)

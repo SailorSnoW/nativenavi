@@ -1,32 +1,23 @@
 #!/usr/bin/env python3
-# A game's NVN shader libraries as one file: b-<chain>.img beside the folder b-<chain>/ that dmsh_build.py writes. One file per shader variant is what made a build folder slow to copy or
-# delete (Skyward Sword HD: 12,064 files for 2,470 shaders; 28,669 shaders in Tears of the Kingdom), and each regress.py chain build held another set. Nothing is unpacked to use it: the host
-# (dm/gfx/nvn/msl_image.h) and the tools (romfs.py) read a shader in place through the index.
-# The format is the RomFS image's (romfs_image.py), one flat folder, with each file's data aligned to ALIGN bytes: Metal is handed a pointer into the mapped file.
-# A folder and an image may lie side by side, and each file comes from the folder first:
-#   folder with a stamp (inputs.tsv)      a finished full build: the image, if any, is older and pack replaces it
-#   folder without a stamp, and an image  a partial dmsh_build.py run (given keys) over a packed library, or a stopped build: the folder holds only what it rebuilt, and pack keeps the image's other files
-#   folder alone                          a partial build, or a build in progress: used as it is
-# pack writes the image, then removes the folder, so every file is in one or the other at each moment, and a host running from the folder goes on from the image. A pack that fails
-# (a full drive) is one [RED] line, not an error: the build is done, and the folder works.
-# Not part of the translation chain: it decides no output (dmsh_chain.py). dmsh_build.py writes the image itself (write, from the outputs it staged in the shader cache), and its folder holds
-# only the shaders in flight; pack is for the folder a partial build (given keys) or a build stopped before that leaves.
+# A game's NVN shader libraries as one file, b-<chain>.img (RomFS image format), read in place by the host (msl_image.h) and romfs.py.
+# Each file comes from the folder b-<chain>/ first: with a stamp it is a finished full build (pack replaces the older image); without one beside an
+# image, a partial or stopped build (pack keeps the image's other files); alone, used as it is. A failed pack is one [RED] line.
 # Usage: shader_lib.py pack <lib>                      the folder into the image
 #        shader_lib.py path <lib>                      what to read: the folder or the image
 #        shader_lib.py has <lib>                       exit status 0 when it holds a shader's library (<key>_b.metallib)
 #        shader_lib.py cat <lib> <name>                one file's bytes on standard output
-#        shader_lib.py subset <lib> <out.img>          a new image without .metal sources and build reports, as the Mac app carries it (dm/mac/pack_app.py)
+#        shader_lib.py subset <lib> <out.img>          without .metal sources and build reports, as the Mac app carries it
 # <lib> is the path b-<chain>, with or without .img.
 import argparse, builtins, collections, concurrent.futures, contextlib, os, shutil, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import romfs
 
-ALIGN = 16   # of each file's data: the file is mapped by pages, so its first byte's alignment is its offset's in the image
-STAMP = 'inputs.tsv'   # dmsh_chain.py STAMP
-APP_SUFFIXES = ('.metallib', '.json', '.tsv')   # what the host reads (not the Mac build's .metal sources)
-APP_LEAVE_OUT = ('_b_build.json',)   # dmsh_build.py's report, for the tools
-READERS = 8   # threads that call ahead the sources write is given as functions (dmsh_build.py's outputs, read from the shader cache), a few entries before the writer takes them
+ALIGN = 16   # Metal is handed a pointer into the mapped file
+STAMP = 'inputs.tsv'
+APP_SUFFIXES = ('.metallib', '.json', '.tsv')
+APP_LEAVE_OUT = ('_b_build.json',)
+READERS = 8
 
 
 def folder_of(lib):
@@ -35,11 +26,11 @@ def folder_of(lib):
 
 
 def image_of(lib): return folder_of(lib) + '.img'
-def name_of(lib): return os.path.basename(os.path.normpath(folder_of(lib)))   # b-<chain>, as the headers of c1_full.tsv and cb_extent.tsv name it
+def name_of(lib): return os.path.basename(os.path.normpath(folder_of(lib)))
 
 
 def view(lib):
-    """lib as a romfs.Path to read from (the state table at the top of this file). A path that does not exist gives the folder's, whose glob is empty and whose reads fail as they did"""
+    """The state table at the top of this file. A missing path gives the folder's, whose glob is empty and whose reads fail"""
     folder, image = folder_of(lib), image_of(lib)
     if os.path.isfile(image) and not os.path.isfile(os.path.join(folder, STAMP)): return romfs.Path(image)
     return romfs.Path(folder)
@@ -48,46 +39,47 @@ def view(lib):
 def exists(lib): return os.path.isdir(folder_of(lib)) or os.path.isfile(image_of(lib))
 
 
-def read_stamp(lib):   # {'game': title ID, 'inputs': digest} of a library, a folder or its image (dmsh_chain.py write_stamp writes it); {} when it has none
+def read_stamp(lib):
     try: return dict(l.split('\t', 1) for l in (view(lib) / STAMP).read_text().splitlines() if '\t' in l and not l.startswith('#'))
     except OSError: return {}
 
 
-def table_head(lib):   # the header c1_full.tsv / cb_extent.tsv start with: the library's chain version (the folder's name, for an image too) and its inputs ("none" with no stamp, which nothing takes)
+def table_head(lib):
     return f'# chain {name_of(lib)} inputs {read_stamp(lib).get("inputs", "none")}'
 
 
 def _names(folder):
-    """{name: (size, mtime)} of the files in a library folder. A file name starting with a dot is detritus (an AppleDouble ._x on an exFAT or FAT drive, .DS_Store), and so is what a stopped dmsh_build.py left (<name>.tmp-<pid>-<thread>)"""
+    """Dot files (AppleDouble ._x, .DS_Store) and a stopped dmsh_build.py's <name>.tmp-<pid>-<thread> are detritus"""
     out = {}
     with os.scandir(folder) as it:
         for e in it:
             if e.name.startswith('.') or '.tmp' in e.name: continue
             if e.is_dir(follow_symlinks=False): raise ValueError(f'{e.path} is a folder: a shader library holds only files')
-            st = e.stat(); out[e.name] = (st.st_size, st.st_mtime_ns)
+            st = e.stat()
+            out[e.name] = (st.st_size, st.st_mtime_ns)
     return out
 
 
 def write(files, dst):
-    """files: {name: path to read (a romfs path may name a file inside an image), the bytes, or a function returning them (read only when its file is written: dmsh_build.py's outputs staged in the
-    shader cache, so that no library is held in memory whole)} → the image dst, by way of dst.part. A failed write removes its .part, so a full drive gets its space back; a killed one leaves
-    only the .part. An image is whole or absent"""
+    """files: {name: path, bytes, or a function called only when its file is written, so no library is held in memory whole}.
+    Written by way of dst.part, removed on failure so a full drive gets its space back: an image is whole or absent"""
     part = dst + '.part'
-    try: _write_part(files, part); os.replace(part, dst)
+    try:
+        _write_part(files, part)
+        os.replace(part, dst)
     except BaseException:
         try: os.unlink(part)
         except OSError: pass
         raise
 
 
-def _write_part(files, part):   # write()'s image, at part
+def _write_part(files, part):
     names = sorted((n.encode() for n in files))
     ents, off = [], romfs.HEAD.size
-    # The sources given as functions are called on a few threads, up to 4 * READERS entries ahead of the writer, which takes them in order: one after the other, the 300,000 outputs of
-    # Ocarina of Time's shader build came out of its cache file at 190 MB/s, a minute for its 10.7 GB image (shader_cache.py reads on a connection of each thread's own then)
+    # called one after the other, the sources held a library's write to the cache file's read speed
     readers = concurrent.futures.ThreadPoolExecutor(READERS) if any(callable(v) for v in files.values()) else None
     ahead, todo = collections.deque(), iter(names)
-    def sources():   # (name, source) in order, each function among them already called, or being called
+    def sources():
         while True:
             while len(ahead) < (4 * READERS if readers else 1) and (name := next(todo, None)) is not None:
                 source = files[name.decode()]
@@ -103,35 +95,46 @@ def _write_part(files, part):   # write()'s image, at part
             out.seek(off)
             n = 0
             if source is None: raise OSError(f'{name.decode()}: no bytes to write')
-            if isinstance(source, bytes): out.write(source); n = len(source)
+            if isinstance(source, bytes):
+                out.write(source)
+                n = len(source)
             elif not isinstance(source, (str, os.PathLike)): raise TypeError(f'{name.decode()}: {type(source).__name__} is not a path, bytes or a function')
             else:
                 with romfs.open(source, 'rb') as f:
-                    while b := f.read(8 << 20): out.write(b); n += len(b)
-            ents.append((name, off, n)); off += n
+                    while b := f.read(8 << 20):
+                        out.write(b)
+                        n += len(b)
+            ents.append((name, off, n))
+            off += n
         out.seek(off)
-        pool, idx = bytearray(), bytearray(romfs.ENT.pack(1, len(names), 0, 0, 0, 0))   # entry 0, the root: its children are every other entry
+        pool, idx = bytearray(), bytearray(romfs.ENT.pack(1, len(names), 0, 0, 0, 0))
         for name, a, b in ents:
-            idx += romfs.ENT.pack(a, b, len(pool), len(name), 1, 0); pool += name
-        out.write(idx); out.write(pool)
-        out.seek(0); out.write(romfs.HEAD.pack(romfs.MAGIC, off, len(idx) + len(pool), len(names) + 1))
-    romfs.Image(part)   # a read of it, as the host's check: nothing is published that a reader refuses
+            idx += romfs.ENT.pack(a, b, len(pool), len(name), 1, 0)
+            pool += name
+        out.write(idx)
+        out.write(pool)
+        out.seek(0)
+        out.write(romfs.HEAD.pack(romfs.MAGIC, off, len(idx) + len(pool), len(names) + 1))
+    romfs.Image(part)   # as the host's check: nothing is published that a reader refuses
 
 
 def pack(lib, say=print):
-    """The folder into the image, and the folder removed. Returns whether an image now stands for the library. Without a folder there is nothing to do"""
+    """Returns whether an image now stands for the library"""
     folder, image = folder_of(lib), image_of(lib)
     try:
         before = _names(folder) if os.path.isdir(folder) else None
-        if before is not None and not before: os.rmdir(folder); before = None
+        if before is not None and not before:
+            os.rmdir(folder)
+            before = None
         if before is None: return os.path.isfile(image)
         files = {n: os.path.join(folder, n) for n in before}
-        if os.path.isfile(image) and STAMP not in before:   # a partial build over a packed library
+        if os.path.isfile(image) and STAMP not in before:
             with romfs.scandir(image) as it:
                 for e in it: files.setdefault(e.name, e.path)
         write(files, image)
-        if _names(folder) != before:   # a build wrote to it meanwhile: the folder is the newer one, and the next pack takes it
-            say(f'{folder} changed while it was packed: it stays a folder'); return True
+        if _names(folder) != before:   # a build wrote to it meanwhile: the folder is the newer one
+            say(f'{folder} changed while it was packed: it stays a folder')
+            return True
         shutil.rmtree(folder)
     except (OSError, ValueError) as e:
         say(f'[RED] could not pack {folder}, it stays a folder: {e}')
@@ -139,35 +142,36 @@ def pack(lib, say=print):
     return True
 
 
-def remove_image(lib):   # before a full build: its folder replaces the library, and a stopped build must not take old shaders for the ones it had not reached
+def remove_image(lib):   # a stopped full build must not take old shaders for the ones it had not reached
     for p in (image_of(lib), image_of(lib) + '.part'):
         try: os.unlink(p)
         except FileNotFoundError: pass
 
 
 def expand(lib):
-    """The image back into a folder and the image removed: the state a stopped build or a build by hand leaves, which the packing script's tests start from. No build or run needs it"""
+    """The state a stopped build leaves, which the packing script's tests start from; no build or run needs it"""
     folder, image = folder_of(lib), image_of(lib)
     if not os.path.isfile(image): return
     work = folder + '.expand'
-    shutil.rmtree(work, ignore_errors=True); os.makedirs(work)
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work)
     for p in romfs.Path(image).iterdir():
         with builtins.open(os.path.join(work, p.name), 'wb') as out: out.write(p.read_bytes())
-    if os.path.isdir(folder):   # what a partial build made wins, as in pack
+    if os.path.isdir(folder):
         for n in _names(folder): os.replace(os.path.join(folder, n), os.path.join(work, n))
         shutil.rmtree(folder)
-    os.rename(work, folder); os.unlink(image)
+    os.rename(work, folder)
+    os.unlink(image)
 
 
 def app_files(lib):
-    """{name: path} of what an app carries of the library: what the host reads"""
     return {p.name: str(p) for p in view(lib).iterdir() if p.name.endswith(APP_SUFFIXES) and p.name not in APP_LEAVE_OUT and not p.name.startswith('.') and '.tmp' not in p.name}
 
 
-def subset(lib, dst):   # → the number of files in the image dst
+def subset(lib, dst):
     files = app_files(lib)
     if not any(n.endswith('.metallib') for n in files): raise ValueError(f'no shader libraries at {lib}')
-    def whole(path):   # a file's bytes, read by one of write's threads: one after the other, the 130,000 files an app takes of Ocarina of Time's library were 25 s of each pack that made it
+    def whole(path):
         with romfs.open(path, 'rb') as f: return f.read()
     write({n: (lambda p=p: whole(p)) for n, p in files.items()}, os.fspath(dst))
     return len(files)
@@ -179,10 +183,13 @@ def has_library(lib): return next(view(lib).glob('*_b.metallib'), None) is not N
 def main():
     ap = argparse.ArgumentParser(description='A game\'s shader libraries as one file, read in place')
     ap.add_argument('cmd', choices=('pack', 'path', 'has', 'cat', 'subset'))
-    ap.add_argument('lib'); ap.add_argument('arg', nargs='?')
+    ap.add_argument('lib')
+    ap.add_argument('arg', nargs='?')
     a = ap.parse_args()
     if a.cmd == 'pack': return 0 if pack(a.lib) else 1
-    if a.cmd == 'path': print(view(a.lib)); return 0
+    if a.cmd == 'path':
+        print(view(a.lib))
+        return 0
     if a.cmd == 'has': return 0 if has_library(a.lib) else 1
     if a.cmd == 'cat':
         try: sys.stdout.buffer.write((view(a.lib) / a.arg).read_bytes())

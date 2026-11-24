@@ -1,16 +1,13 @@
-# The Legend of Zelda: Ocarina of Time (0400486024DEC000): the rewriter's patches of this game's own code. dm/tools/patch_nso.py loads every profile's patches.py;
-# MATCH_FRAME_STEP as described there ("Registered patches"). Patches of Nintendo SDK module builds are in dm/tools/sdk_patches.py
+# Ocarina of Time (0400486024DEC000): the rewriter's patches of the game's own modules, in the format of dm/tools/patch_nso.py ("Registered patches").
 from nso_asm import ADRP, B
 
-# The game's frame ratio. Once a frame the function at main+0x6e6be0 (v131072) divides its base rate (60.0, or 30.0 while bit 0 of [x21+0x24f] is set) by the int frame rate at
-# [x21+0x2c8] (fdiv s8,s1,s0 at +0xe4) and hands the result to the time object (main+0x3b4e300: ratio at +0x10, 1 / ratio at +0x14, round(60 / ratio) at +0x1c), which the game
-# steps by; the frame's own time never enters it, so a frame that takes two vsyncs at rate 60 plays at half speed. The stub gives the ratio the host's step instead: step × base / 60
-# (the division's value when the host keeps frames 60 / rate vsyncs), and counts the vsyncs stepped. Until the host has decided a step, and at fps_target 0, the division runs.
-# Below the target the frames are not whole vsyncs long (55-59.7 fps in the heavy areas of a GPU-bound Mac), so the stub then takes the larger of that ratio and base x the measured
-# frame time (state +0x38, float seconds, 0 = at the target; hle_nvn.c fstep_tick, which pays back no whole vsync beside it). It marks state +0x3c so the host measures only for a
-# main that reads the value (found by gunvalk, zortos293/Lichii PR #216; DM_FRAME_DELTA=0 leaves +0x38 at 0).
-# s0 and x16 / x17 are free there (s0 is written again on every path before it is read; the function uses neither x16 nor x17); s1 keeps the base rate.
-# Lichii (a GPL emulator; only the fact was taken) found the division (its notes: main+0x6E6CC4, 60 / [x21+0x2C8])
+# Frame ratio. Once a frame main+0x6e6be0 (v131072) divides its base rate (60.0, or 30.0 while bit 0 of [x21+0x24f] is set) by the int frame rate at [x21+0x2c8]
+# (fdiv s8,s1,s0 at +0xe4) and steps the game's time by the result, whatever the frame took: a frame of two vsyncs at rate 60 plays at half speed.
+# The stub makes the ratio the host's step × base / 60, and counts the vsyncs stepped. Below the target frames are not whole vsyncs long, so it takes the larger of that
+# and base × the measured frame time (state +0x38, float seconds, 0 = at the target; hle_nvn.c fstep_tick; DM_FRAME_DELTA=0 leaves it 0). It marks state +0x3c so
+# the host measures only for a main that reads the value. Until the host has decided a step, and at fps_target 0, the division runs.
+# s0 is written again on every path before it is read and the function uses neither x16 nor x17; s1 keeps the base rate.
+# The division's site came from Lichii's notes (a GPL emulator; only the fact was taken).
 def frame_step(ctx):
     here, emit, fs_site, fs_put, FS_STATE_OFF, base = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state, ctx.base
     site = base + 0xe4
@@ -31,7 +28,7 @@ def frame_step(ctx):
               0x1e270200,   # fmov s0,w16
               0x1e201908):  # fdiv s8,s8,s0          / 60
         emit(w)
-    emit(ADRP(16, here(), FS_STATE_OFF))   # the page again: x17, a scratch register, need not survive the store above (seedds/nxnative PR #1543: a fault at x17 + 0x3c with x17 = 0)
+    emit(ADRP(16, here(), FS_STATE_OFF))   # the page again: x17, a scratch register, need not survive the store above
     for w in (0xbd403a00,   # ldr s0,[x16,#0x38]     seconds; 0 = at the target
               0x52800031,   # mov w17,#1
               0xb9003e11,   # str w17,[x16,#0x3c]    this main reads the frame time
@@ -44,32 +41,23 @@ def frame_step(ctx):
     dynamic_resolution(ctx)
     render_scale(ctx)
 
-# The game's dynamic resolution (game__gfx__DynamicResolutionParam: LoadThreshold, ReduceCounterMax, IncreaseCounterMax and a list of levels, each a ResolutionReduceScale and a
-# Priority; on v131072 levels 0..9 at 0.75..0.333 of 2048x1152, 1536x864 to 683x384). Its update (main+0x805aa0) reads the frame's GPU load (about 0.2 ms a unit) into +0x8, subtracts
-# its small model of the fixed costs and divides the rest by the square of the current scale: it takes the rest of the frame's cost to grow with the pixel count, as on the Switch 2
-# its constants were tuned for. The level function (main+0x8065e0) adds that back times each level's scale squared and returns the best level under the threshold (+0x10, 83 = about
-# 16.4 ms). On Apple GPUs this game's cost hardly depends on the resolution (mesh, compute and the upscaler's fixed 2048x1152 dominate): 683x384 cost 14.3 ms and 1536x864 14.7 ms on
-# an M4 Pro, yet at 683x384 the extrapolation put 1536x864 at about 300 units against the 83 it allows, so the controller sat at its floor for good (game note, Dynamic resolution).
-# The stub replaces the level function. With DM_DYNAMIC_RESOLUTION 0 (the default; state +0x40 0) it returns 0: full resolution. With 1 it climbs on what was measured at each
-# level, with no model of how the cost grows: one level down when the load (+0x8) has been over the threshold for 8 calls in a row, and that level is marked as not fitting; one level
-# up when the load fits and the level above was never measured, fitted when it was last measured, or was measured more than 600 calls (about 10 s at 60 fps, 20 s at 30) ago; else the current level
-# (+0x174). Nothing is decided or recorded until a level has held 8 calls: the load is read a few frames late, so before that it may be the previous level's. The 8 calls over in a
-# row keep a single slow frame, or the first frames at a new size (its render targets), from marking a level that fits (on the full library at level 1: one burst to 90 against loads
-# of 77-80 at levels 2 and 1). The game's counters still pace the steps (down after ReduceCounterMax frames, up after IncreaseCounterMax); its level count (+0x1a0) is the floor.
-# The memory is in the state page: +0x200 calls, +0x204 the last call's level, +0x208 calls at it, +0x20c calls over in a row, +0x210 the load measured at each level (16 floats),
-# +0x250 the call it was measured at (0 = never). Run against a model of the update (a level moves after the stub asked 5 times up or 2 times down; the load two frames late): a load
-# of 70 at every level climbs from the floor to full size in 9 steps, as does Ocarina's measured 72-80 with a spike every 37 frames and a burst after each change; a load that grows
-# with the pixel count settles at the highest level that fits and tries the one above once per 600 calls; a scene that gets lighter climbs again, a heavier one steps down.
-# The threshold is the game's at 60 fps, scaled by 60 / the host's target fps (state +0: 83 -> 166 at 30, the GPU time a frame of that rate has), and at most one frame of the target
-# rate: 5000 / target fps units (an integer division: 83 at 60 fps, 166 at 30); at target 0 (the game's own frame step) the game's alone. Without the scaling a player's 30 fps cap kept
-# the docked 83 and the controller sat at its 854x480 floor wherever the full size took over 16.4 ms but fitted 30 fps (upstream nxnative c12000da, PR #1954; an M2 Air in handheld
-# mode at 30 fps: 100% of frames at 1440x810, load 134 under 166). The update makes the game's from LoadThreshold (+0xc, or its override at +0x14 when set) plus an offset for the mode in its argument (+0x44: -3, -12 or -16):
-# 83 docked, one 60 Hz frame, and 105 in handheld mode (read in play), 21 ms, which a screen with a variable refresh rate can show as it comes. The host keeps every frame
-# for whole vsyncs (nvn_fstep.h), so a level that fits 105 and not 83 holds 30 fps: on a 16 GB M2 Pro the handheld game stayed at the full 1440x810 with loads of 90-104 and
-# 31 fps, and with the cap it settles at levels 2 to 4 with loads of 77-82 and holds 60 (game note, Dynamic resolution).
-# The function is a leaf: x2..x11, x16, x17 and s0..s2 are free, w0 its only result (the original also stores its predicted cost at +0x18, which only it and the update's own
-# decision read). The update's fingerprint is required too: +0x8 and +0x174 are its fields
-drs_controller = (   # drs_stub.s, assembled with clang; x0 the controller, x16 the state page (the ADRP before it)
+# Dynamic resolution (game note, "Dynamic resolution"). The update (main+0x805aa0 on v131072) reads the frame's GPU load (about 0.2 ms a unit) into +0x8, takes off its
+# small fixed-cost model and divides the rest by the current scale squared; the level function (main+0x8065e0) multiplies that back by each level's scale squared and
+# returns the best level under the threshold (+0x10, 83 = about 16.4 ms). This game's cost on Apple GPUs hardly follows the resolution, so that model held the controller
+# at its floor for good.
+# The stub replaces the level function. With DM_DYNAMIC_RESOLUTION 0 (state +0x40 0, the default) it returns 0: full resolution. With 1 it climbs on the load measured at
+# each level, with no model of how the cost grows: one level down when the load (+0x8) has been over the threshold for 8 calls in a row, and that level is marked as not
+# fitting; one level up when the load fits and the level above was never measured, fitted when it was last measured, or was measured more than 600 calls ago; else the
+# current level (+0x174). Nothing is decided or recorded until a level has held 8 calls: the load is read a few frames late. The 8 calls over in a row keep a single slow
+# frame, or the first frames at a new size, from marking a level that fits. The game's counters still pace the steps; its level count (+0x1a0) is the floor.
+# The memory is in the state page: +0x200 calls, +0x204 the last call's level, +0x208 calls at it, +0x20c calls over in a row, +0x210 the load measured at each level
+# (16 floats), +0x250 the call it was measured at (0 = never).
+# The threshold is the game's at 60 fps (LoadThreshold +0xc, or its override +0x14, plus the mode's offset: 83 docked, 105 handheld), scaled by 60 / the host's target
+# fps (state +0) and at most one frame of the target rate, 5000 / target fps units (an integer division); at target 0 the game's alone. The host keeps every frame for
+# whole vsyncs, so a level that fits 105 and not 83 would hold 30 fps.
+# The function is a leaf: x2..x11, x16, x17 and s0..s2 are free, w0 its only result (the original also stores its predicted cost at +0x18, which only it and the update's
+# own decision read). The update's fingerprint is required too: +0x8 and +0x174 are its fields
+drs_controller = (   # x0 the controller, x16 the state page (the ADRP before it)
     0xb9404211, 0x35000071, 0x2a1f03e0, 0xd65f03c0,                                                   # off (state +0x40 0): level 0
     0xbd401001, 0xbd400202, 0x1e380049, 0x34000129, 0x52a84e0a, 0x1e270140, 0x1e200821, 0x1e221821,   # threshold × 60 / target fps (state +0; target 0: the game's)
     0x5282710a, 0x1ac90949, 0x1e230122, 0x1e227821, 0xbd400800,                                       # at most 5000 / target fps; then the load
@@ -81,8 +69,8 @@ drs_controller = (   # drs_stub.s, assembled with clang; x0 the controller, x16 
     0xb9020e1f, 0xbc2258e0, 0xb8225904, 0x34000182, 0x51000449, 0xb869590a, 0x340000ea, 0x4b0a008a,   # fits: record it; at 0 stay; the level above's record
     0x7109615f, 0x54000088, 0xbc6958e2, 0x1e212040, 0x540000aa, 0x2a0903e0, 0xd65f03c0,               # never, stale or fitting: up one
     0x2a1f03e0, 0xd65f03c0, 0x2a0203e0, 0xd65f03c0)                                                   # 0; or stay
-# Under a host render scale below 1.0 (state +0x10, float bits in 1..0x3f7fffff), return level 0 (the game's full size, which render_scale then multiplies) so
-# DM_DYNAMIC_RESOLUTION=1 does not fight DM_RENDER_SCALE. Self-contained (no jump into drs_controller), emitted only when render_scale also matches
+# Under a host render scale below 1.0 (state +0x10, float bits in 1..0x3f7fffff), level 0 (the game's full size, which render_scale then multiplies), so that
+# DM_DYNAMIC_RESOLUTION=1 does not fight DM_RENDER_SCALE. Emitted only when render_scale also matches
 drs_render_scale_guard = (   # x16 the state page; w17, w2 free (same leaf contract as drs_controller)
     0xb9401211,   # ldr w17, [x16, #0x10]   the host render scale's bits (1.0 = the game's own size)
     0x340000d1,   # cbz w17, +6             unset (0): fall through to drs_controller
@@ -107,15 +95,14 @@ def dynamic_resolution(ctx):
            ', or with state +0x40 (DM_DYNAMIC_RESOLUTION) a climb on the load measured at each level, against the game\'s threshold or one frame of the target rate, whichever is lower')
     ctx.capabilities.add('DYNAMIC_RESOLUTION')
 
-# Render scale (DM_RENDER_SCALE, state +0x10, dm/host/loader.c): the 3D views at that fraction of the game's own size, the dynamic resolution held at its top level (as Tears of the
-# Kingdom's and Breath of the Wild's). The views' sizes come from the scale the engine stores at +0xd48 of its view-size update (str s0,[x20,#0xe5c]; v131072 main+0x31d3200, found by
-# its fingerprint; the only float store to #0xe5c in main): the level's ResolutionReduceScale (0.75 at the top level) normalized by [x20+0xe58]/[x20+0xe50]. That store and the size
-# loop after it (+0xdd8, which clears the "scale changed" bit 3 of [x20+0xe2c]) run only in a frame where the dynamic-resolution update (main+0x805aa0, which always returns the
-# level's float scale in w0) answers status 0, a new scale: at a steady frame rate it answers status 2, so a stub at the store alone changes nothing until the game comes under load.
-# Two stubs: at the update's answer (+0xce4, ubfx of its status byte) a host scale in (0.0, 1.0) whose last stored value (state +0x290, private area after drs_controller) does not
-# match [x20+0xe5c] makes any non-1 status 0 so that frame recomputes the sizes (and re-applies if [x20+0xe5c] is ever reset); at the store (+0xd48) the freshly computed s0 is
-# multiplied by the host's scale and recorded at state +0x290. The level stub above returns level 0 under such a scale, so the size is fixed; 1.0 (the loader's default) runs the
-# game's own code. Registers and flags are preserved except x8 (the status read next) and s0 (stored, dead after +0xd48: reloaded at +0xd84)
+# Render scale (DM_RENDER_SCALE, state +0x10, written by dm/host/loader.c): the 3D views at that fraction of the game's own size, the dynamic resolution held at its top
+# level. The view-size update (main+0x31d3200 on v131072) stores the views' scale at +0xd48 (str s0,[x20,#0xe5c], the only float store to #0xe5c in main): the level's
+# ResolutionReduceScale normalized by [x20+0xe58]/[x20+0xe50]. That store and the size loop after it (+0xdd8, which clears the "scale changed" bit 3 of [x20+0xe2c]) run
+# only in a frame where the dynamic-resolution update (main+0x805aa0) answers status 0, a new scale: at a steady frame rate it answers 2, so a stub at the store alone
+# would change nothing until the game came under load. Two stubs: at the update's answer (+0xce4, ubfx of its status byte) a host scale in (0.0, 1.0) whose last stored
+# value (state +0x290) does not match [x20+0xe5c] makes any non-1 status 0, so that frame recomputes the sizes (again if [x20+0xe5c] is ever reset); at the store (+0xd48)
+# s0 is multiplied by the host's scale and recorded at state +0x290. The level stub returns level 0 under such a scale; 1.0 (the loader's default) runs the game's own code.
+# Registers and flags are preserved except x8 (the status read next) and s0 (stored, dead after +0xd48: reloaded at +0xd84)
 def _bcond(frm, to, cond): return 0x54000000 | (((to - frm) >> 2) & 0x7ffff) << 5 | cond
 def _cbz_w(frm, to, rt): return 0x34000000 | (((to - frm) >> 2) & 0x7ffff) << 5 | rt
 
@@ -189,32 +176,21 @@ MATCH_FRAME_STEP = {'main': [
                 'render scale': {'size': 0xfc8, 'fingerprints': ['2c1804f08798ceee012ae30a1ba6b177a6b6a61ce732185bad28e9989d05e165']}}},   # main+0x31d3200, the 3D view size update
 ]}
 
-# The movie player's pictures per frame. Once a frame the player's update (main+0x3b5ca60 on v131072) adds the frame's time (the time object's +0x18, the frame ratio / 60 s, times
-# 60) to a count at +0x8, takes its whole pictures (the movie's rate at the player's +0x324; the title's and the opening's are 60 fps) and advances that many (main+0x3b61ea0 pops them from its
-# queue and shows the last), but never more than the player's +0x20 (csel at main+0x3b5cb2c), and the count keeps what was left. The constructor (main+0x3b5cec0) sets +0x20 to
-# 1, or to 2 when its last argument is 2 or more (cmp w27, #2; cinc w8, w28, ge at +0x1c4, w28 = 1), and the queue's size at +0x50 to twice that; the game's one caller passes 1
-# (main+0x3b5c55c). So a frame of two vsyncs shows one picture where the movie had two, the picture falls behind for good (the count only grows), and the movie's sound, a stream of
-# the sound engine on real time, runs ahead and ends before the picture: at a 30 fps frame step a movie played at exactly 0.500 of its speed (58.00 s of movie in 115.95 s) with
-# the count at 1,350 pictures after 45 s. The console holds one vsync a frame in its movies, so the limit never shows there; here the frame step hands the game steps of 2 and 3.
-# The cut gives the constructor's own value for 2 (+0x20 = 2, +0x50 = 4), so a frame of two vsyncs shows every second picture and a movie that fell behind catches up at two
-# pictures a frame: at the 30 fps frame step 1.000 (95.00 s in 94.97 s).
+# Movie pictures a frame (docs/reference/movies.md#a-player-limited-to-one-picture-a-frame-falls-behind-its-sound). The player's update (main+0x3b5ca60 on v131072)
+# adds each frame's time to a count of pictures due (+0x8) and advances that many, at most the player's +0x20 (csel at main+0x3b5cb2c). The constructor (main+0x3b5cec0)
+# sets +0x20 to 1, or to 2 when its last argument is 2 or more (cmp w27, #2; cinc w8, w28, ge at +0x1c4, w28 = 1), and the queue's size at +0x50 to twice that; the game's
+# one caller passes 1. So a frame of two vsyncs showed one picture where the movie had two, and the picture fell behind the movie's sound for good. The cut gives the
+# constructor's own value for 2 (+0x20 = 2, +0x50 = 4): a movie that fell behind catches up at two pictures a frame.
 movie_pictures = 'movie pictures a frame: up to 2, the constructor\'s value for an argument of 2 or more, whatever its caller passes (1)'
-# The update's cap, 3. The constructor's limit also sizes the decoder's pipeline: the picture pool is twice it (video-frame-count, registered from a four-slot array at the player's
-# +0x168, which the teardown frees slot by slot) and the inputs in flight are as many as it (their buffers two slots at +0x188 and +0x190: main+0x3b5ff30 takes slot 0 for an id of
-# 2 or more). So 3 cannot be the limit: with the game's pool of 6 the registration wrote over the two input buffers (the game stopped at the movie's start with a copy to a null
-# pointer in sdk), and with the pool kept at 4 the third input reused slot 0 while in flight (a VideoToolbox decode error after 150 pictures of the title movie). The frame step's
-# largest hold is 3 vsyncs, and with a cap of 2 each such frame left the picture one behind for as long as the step stayed at 2. The update reads the limit only for its cap
-# (ldr w9, [x0, #0x20] at +0xc0, before the csel); the cut puts 3 there and leaves the limit, the pool and the inputs at the constructor's 2. The advance pops up to that many from
-# its own queue and stops when the queue is empty, so a frame takes a third picture only when the decoder has one.
+# The update's cap, 3: the frame step's largest hold. The limit itself cannot be 3, as it also sizes the decoder's pipeline: a picture pool of twice it (registered from a
+# four-slot array at the player's +0x168) and as many inputs in flight (two slots at +0x188 and +0x190). The update reads the limit only for its cap (ldr w9, [x0, #0x20]
+# at +0xc0, before the csel), so the cut puts 3 there and leaves the limit, the pool and the inputs at 2. The advance stops when its queue is empty, so a frame takes a
+# third picture only when the decoder has one.
 movie_cap = 'movie update cap: 3 pictures a frame, the frame step\'s largest hold, in place of the limit (2), which also sizes the decoder pipeline'
-# The movie's frame, which its event follows. The event that plays a movie (its update main+0x3b3e9a0 on v131072) reads the movie's frame (its vtable's +0x78, main+0x3b3ec10: the
-# movie object's int at +0x2f8) and moves its timeline up to it when the timeline is behind (main+0x122d520), then measures the movie's sound stream against it (main+0x3b3ea50).
-# The opening's timeline carries its subtitles, the narrator's voice lines (EventFlowMsg/Dm_Kokiri_0000, played with them), its rumble and the title logo
-# (EventOpenOpeningTitle). The movie's draw (main+0x3b5c710, and main+0x3b5c870 for its first draw) adds 1 to that frame each frame a picture is on screen (ldr, add #1,
-# str at +0xb4 and +0x98), so the frame counts frames drawn, not pictures shown: the same while the player takes one picture a frame, half of them when it takes two. With the
-# cut above, a frame of two vsyncs showed the picture in real time but the subtitles and voice at half speed, and the logo, due after the movie's end, never showed. The cut
-# sets the frame to the pictures the player has taken (the player's +0xc: its update adds what it advances each frame; reset when a movie starts, as +0x2f8 is), so the
-# timeline follows the picture whatever the frame takes. The player is the object at +0x10, already read by both draws (main+0x3b5ce80 on it) just before.
+# The movie's frame (docs/reference/movies.md#a-movies-frame-counts-frames-drawn-not-pictures). The event that plays a movie (main+0x3b3e9a0 on v131072) moves its
+# timeline (subtitles, the narrator's voice, rumble, the title logo) up to the movie's frame (vtable +0x78: the movie object's int at +0x2f8). The movie's draws
+# (main+0x3b5c710, and main+0x3b5c870 for its first draw) add 1 to it each frame a picture is on screen, so it counts frames drawn, not pictures. The cut sets it to
+# the pictures the player has taken (the player's +0xc, reset when a movie starts, as +0x2f8 is). The player is the object at +0x10, which both draws have just read.
 movie_frame = 'movie frame: the pictures the player has taken (its +0xc), not 1 more for each frame drawn'
 MATCH_CUTS = {'main': [
     {'name': movie_pictures, 'size': 828, 'fingerprints': ['f61ad468b6b4e1d574fe8678f5a12dfc60e1aab71be7375142a4b48b0d73ce19'],   # v131072 main+0x3b5cec0

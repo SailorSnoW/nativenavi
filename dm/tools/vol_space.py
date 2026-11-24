@@ -1,9 +1,5 @@
-"""The space on a path's volume that a write the user started can use, for the checks that stop a build before it writes (the packing script, pack_app.py, pso_offline.py).
-
-statvfs (shutil.disk_usage) counts only unallocated blocks. On APFS, space held by purgeable data (local Time Machine snapshots, caches the system deletes on demand)
-is not in it, and macOS frees that space while the build writes: Finder showed 68 GB available where statvfs showed 18.8 GB, and a build wrote 92 GB there. macOS
-reports that figure as kCFURLVolumeAvailableCapacityForImportantUsageKey, the capacity for writes a user asked for. free_bytes takes it, never less than statvfs's
-figure, so no check becomes stricter. Housekeeping nobody asked for (tree_tar.pack_quiet) and a failure's diagnosis (what was really left) keep statvfs."""
+"""The space a write the user started can use on a path's volume. statvfs counts only unallocated blocks; on APFS macOS frees purgeable space as
+the build writes, and reports it as kCFURLVolumeAvailableCapacityForImportantUsageKey. free_bytes takes that, never less than statvfs."""
 import ctypes, functools, os, shutil, sys
 from pathlib import Path
 
@@ -12,7 +8,7 @@ K_CF_NUMBER_SINT64 = 4   # kCFNumberSInt64Type
 
 
 @functools.cache
-def _cf():   # CoreFoundation and the key, loaded once; None off macOS or when it cannot be loaded
+def _cf():   # None off macOS or when it cannot be loaded
     if sys.platform != 'darwin': return None
     try:
         cf = ctypes.CDLL(CF_PATH)
@@ -29,7 +25,7 @@ def _cf():   # CoreFoundation and the key, loaded once; None off macOS or when i
 
 
 def important_bytes(path):
-    """macOS's capacity for important usage on the volume of path (an existing path), in bytes; None where macOS does not give one (another system, a volume without it)"""
+    """None where macOS gives none"""
     lib = _cf()
     if not lib: return None
     cf, key = lib
@@ -45,7 +41,7 @@ def important_bytes(path):
 
 
 def free_bytes(path):
-    """The bytes a build may write on the volume of path, which need not exist yet (its nearest existing parent is asked)"""
+    """path need not exist yet: its nearest existing parent is asked"""
     p = Path(path)
     while not p.exists() and p != p.parent: p = p.parent
     raw = shutil.disk_usage(p).free

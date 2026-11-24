@@ -1,23 +1,14 @@
 #!/usr/bin/env python3
-"""The one loader of the game's code modules: an NSO (ExeFS) → its memory image of text + ro + data, bss not included.
-Every tool that reads a module's code goes through load(). It accepts what Horizon accepts and checks it the same way, before anything the header claims is allocated; a damaged or
-truncated file raises Error (a ValueError):
-  · NSO, as Horizon's loader (Atmosphere's ldr_process_creation.cpp, ValidateNsoHeaders, LoadAutoLoadModuleSegment, CheckSegmentHash): memory offsets on pages, text at 0, then ro,
-    then data, none overlapping (a gap is allowed); sizes below 2 GiB; an uncompressed segment is read at its size, a compressed one is no larger stored than loaded and must
-    decompress to exactly its size (a short LZ4 stream decompresses without an error, and the image came out shorter or with the later segments shifted); a segment whose
-    check-hash flag is set (every retail module: 93 of 93 surveyed, all 279 hashes matching) must match its SHA-256 in the header, so damaged bytes of the right size are caught too.
-    A module with the flags cleared (a modified main) is not checked, as on the Switch.
-  · Beyond Horizon, so a small file cannot claim gigabytes: a compressed segment can be no more than LZ4 produces from its stored bytes (255 bytes per byte; zstd has no such
-    bound, so a ZBIC segment is held only to its own size), and the image, gaps included, no more than that of the whole file.
-  · Compression: LZ4, and ZBIC (NSO flag bit 7, system 22.0.0 on: Nintendo's zstd variant, its own magic and entropy-table coding, which stock zstd cannot read) through the zbic
-    package, as lz4.block is used.
-bss is only a size: the image never includes it (patch_nso.py lays it out; this script's output file gets it as a sparse tail).
-Usage on its own: nso.py <module> <out.bin> (the whole memory image, bss included, for nso_fnmap.py and analysis)"""
+"""The one loader of the game's code modules: an NSO → its memory image of text + ro + data (bss is only a size).
+Checks what Horizon's loader checks (Atmosphere's ldr_process_creation.cpp), before anything the header claims is allocated, and raises Error on a damaged
+file: a short LZ4 stream decompresses without an error, so a segment must decompress to exactly its size, and with the check-hash flag its SHA-256 must match.
+A compressed segment can claim no more than LZ4 produces from its stored bytes. ZBIC (flag bit 7, system 22.0.0+) is Nintendo's zstd variant.
+Usage on its own: nso.py <module> <out.bin> (the whole memory image, bss included)"""
 import hashlib, struct, sys
 from typing import NamedTuple
 
 PAGE = 0x1000
-LZ4_MAX_RATIO = 255   # an LZ4 block produces at most 255 bytes per stored byte (a match length extension byte)
+LZ4_MAX_RATIO = 255   # a match length extension byte per stored byte
 SIZE_MAX = 0x7FFFFFFF   # Horizon reads segment sizes as s32
 NSO_ZSTD = 1 << 7
 NAMES = ('text', 'ro', 'data')
@@ -28,14 +19,13 @@ class Error(ValueError):
 
 
 def zstd_segment(raw, size, what):
-    """A ZBIC segment (NSO flag bit 7, system 22.0.0 on) decompressed to size: zbic.decompress decodes Nintendo's zstd variant, and its own
-    checks catch a damaged stream, so its messages are passed on; a wrong length still gets this loader's own Error, as a short LZ4 stream does"""
+    """zbic's own checks catch a damaged stream; a wrong length still gets this loader's Error"""
     try:
-        import zbic   # imported here: an optional package (tools.txt), only a system 22.0.0+ module's ZBIC segments need it
+        import zbic   # optional (tools.txt): only system 22.0.0+ modules' ZBIC segments need it
     except ImportError:
         raise Error(f'{what}: ZBIC (zstd) segments need the zbic package (python3 -m pip install zbic)') from None
     try:
-        out = zbic.decompress(bytes(raw))   # bytes: a caller may hand over the bytearray it built the module in
+        out = zbic.decompress(bytes(raw))
     except Exception as e:
         raise Error(f'{what}: ZBIC does not decompress ({e})') from None
     if len(out) != size: raise Error(f'{what}: ZBIC decompresses to {len(out):#x} bytes, not the {size:#x} of the header: the file is damaged')
@@ -43,22 +33,21 @@ def zstd_segment(raw, size, what):
 
 
 class Module(NamedTuple):
-    image: bytearray    # text + ro + data at their memory offsets
-    segments: tuple     # ((memory offset, size),) of text, ro and data
+    image: bytearray
+    segments: tuple
     bss: int
-    build_id: bytes     # 0x20 bytes; the build ID tools key on is its first 0x10
+    build_id: bytes     # the build ID tools key on is its first 0x10
 
     @property
     def text_end(self): return self.segments[0][1]
 
 
 def load(d, name='module'):
-    """Module of the file's bytes d (NSO0); name goes into the Error messages"""
     if d[:4] == b'NSO0':
         if len(d) < 0x100: raise Error(f'{name}: the NSO header is cut short ({len(d)} bytes)')
         flags = struct.unpack_from('<I', d, 0xc)[0]
-        stored = [struct.unpack_from('<III', d, 0x10 + i * 0x10) for i in range(3)]   # (file offset, memory offset, size)
-        csz = [c if flags >> i & 1 else sz for i, ((_, _, sz), c) in enumerate(zip(stored, struct.unpack_from('<III', d, 0x60)))]   # bytes in the file
+        stored = [struct.unpack_from('<III', d, 0x10 + i * 0x10) for i in range(3)]
+        csz = [c if flags >> i & 1 else sz for i, ((_, _, sz), c) in enumerate(zip(stored, struct.unpack_from('<III', d, 0x60)))]
         bss, build_id = struct.unpack_from('<I', d, 0x3c)[0], bytes(d[0x40:0x60])
         for i, ((fo, mo, sz), c) in enumerate(zip(stored, csz)):
             what = f'{name}: {NAMES[i]} segment'
@@ -92,12 +81,11 @@ def load(d, name='module'):
 
 
 def read(path):
-    """load() of a file by path; Error carries the path"""
     with open(path, 'rb') as f: return load(f.read(), str(path))
 
 
 def cli_read(path):
-    """read() for a script's own command line: a damaged module stops it with a [RED] line, not a traceback"""
+    """A damaged module stops the script with a [RED] line, not a traceback"""
     try: return read(path)
     except Error as e: sys.exit(f'[RED] {e}')
 
@@ -105,5 +93,6 @@ def cli_read(path):
 if __name__ == '__main__':
     m = cli_read(sys.argv[1])
     with open(sys.argv[2], 'wb') as f:
-        f.write(m.image); f.truncate(len(m.image) + m.bss)   # bss as a sparse zero tail, never allocated (Metroid Dread's main has about 1.8 GB)
+        f.write(m.image)
+        f.truncate(len(m.image) + m.bss)   # a sparse zero tail
     print([hex(x) for s in m.segments for x in s], hex(m.bss), 'moduleid', m.build_id.hex())

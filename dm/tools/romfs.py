@@ -1,9 +1,4 @@
-"""Read-only paths inside DMROMFS1 images, without extracting their contents.
-
-Readers opt into Path/open/os/mmap here; the real filesystem is untouched. A path
-like /game/RomFS.img/Data/archive is a bounded view of that image entry. Ordinary
-paths retain their normal behavior, including writes to generated outputs.
-"""
+"""Read-only paths inside DMROMFS1 images: /game/RomFS.img/Data/archive is a view of that entry."""
 import builtins
 import errno
 import fnmatch
@@ -33,13 +28,14 @@ class Image:
             magic, off, size, count = HEAD.unpack(head)
             if magic != MAGIC or not 0 < count <= 0xffffffff or off < HEAD.size or off > self.stat.st_size or size != self.stat.st_size - off or count > size // ENT.size:
                 raise ValueError(f'invalid RomFS image header: {path}')
-            f.seek(off); self.index = f.read(size)
+            f.seek(off)
+            self.index = f.read(size)
         if len(self.index) != size: raise ValueError(f'incomplete RomFS image: {path}')
         self.count, self.pool = count, count * ENT.size
         next_child = 1
         for k in range(count):
             a, b, no, nl, t, flags = self.entry(k)
-            if no + nl > size - self.pool or t > 1 or flags or (k == 0 and (t or nl)):   # flags: always 0 (romfs_image.py); the host refuses an image with another value too (dm/host/romfs_image.h)
+            if no + nl > size - self.pool or t > 1 or flags or (k == 0 and (t or nl)):   # flags are 0, as the host requires
                 raise ValueError(f'invalid RomFS image entry {k}: {path}')
             name = self.name(k)
             if k and (not nl or nl > 0x300 or b'\0' in name or b'/' in name or name in (b'.', b'..')):
@@ -126,19 +122,22 @@ class _File(io.RawIOBase):
     def seek(self, offset, whence=0):
         pos = offset + (self.pos if whence == 1 else self.length if whence == 2 else 0)
         if whence not in (0, 1, 2) or pos < 0: raise ValueError('invalid seek')
-        self.pos = pos; return pos
+        self.pos = pos
+        return pos
     def readinto(self, buffer):
         size = min(len(buffer), max(0, self.length - self.pos))
         data = _os.pread(self.fd, size, self.start + self.pos)
-        buffer[:len(data)] = data; self.pos += len(data)
+        buffer[:len(data)] = data
+        self.pos += len(data)
         return len(data)
     def close(self):
         if not self.closed:
-            _fd_ranges.pop(self.fd, None); _os.close(self.fd)
+            _fd_ranges.pop(self.fd, None)
+            _os.close(self.fd)
         super().close()
 
 
-# Type checkers see the builtin's overloads, so a reader's open(..., 'rb').read() stays bytes and 'r' stays str.
+# type checkers see the builtin's overloads
 if TYPE_CHECKING:
     from builtins import open
 else:
@@ -146,7 +145,8 @@ else:
         resolved = _resolve(file) if not isinstance(file, int) else None
         if not resolved: return builtins.open(file, mode, buffering, encoding, errors, newline, **kwargs)
         if mode not in ('r', 'rb', 'rt'): raise OSError(errno.EROFS, 'RomFS images are read-only', file)
-        image, relative = resolved; k = image.find(relative)
+        image, relative = resolved
+        k = image.find(relative)
         if not image.entry(k)[4]: raise IsADirectoryError(file)
         raw = _File(image, k)
         if buffering == 0 and 'b' in mode: return raw
@@ -162,14 +162,17 @@ def stat(path, **kwargs):
 
 
 def _entry_stat(image, k):
-    _, b, _, _, t, _ = image.entry(k); s = image.stat
+    _, b, _, _, t, _ = image.entry(k)
+    s = image.stat
     return SimpleNamespace(st_mode=(_stat.S_IFREG | 0o444) if t else (_stat.S_IFDIR | 0o555), st_size=b if t else 0,
                            st_ino=k + 1, st_dev=s.st_dev, st_mtime=s.st_mtime, st_mtime_ns=s.st_mtime_ns,
                            st_ctime=s.st_ctime, st_ctime_ns=s.st_ctime_ns, st_atime=s.st_atime, st_atime_ns=s.st_atime_ns)
 
 
 def exists(path):
-    try: stat(path); return True
+    try:
+        stat(path)
+        return True
     except OSError: return False
 def isdir(path):
     try: return _stat.S_ISDIR(stat(path).st_mode)
@@ -179,7 +182,7 @@ def isfile(path):
     except OSError: return False
 
 
-class _Entry:   # an image entry as the scan that listed it found it: its type, size and inode come from that image's index, not from the path resolved again
+class _Entry:   # as the listing scan found it, not resolved again
     def __init__(self, parent, name, image, k): self.name, self.path, self._image, self._k = name, _os.path.join(parent, name), image, k
     def stat(self, **kwargs): return _entry_stat(self._image, self._k)
     def is_dir(self, **kwargs): return not self._image.entry(self._k)[4]
@@ -207,7 +210,8 @@ def scandir(path):
 
 def walk(top, topdown=True, onerror=None, followlinks=False):
     if not _resolve(top):
-        yield from _os.walk(top, topdown=topdown, onerror=onerror, followlinks=followlinks); return
+        yield from _os.walk(top, topdown=topdown, onerror=onerror, followlinks=followlinks)
+        return
     def visit(path):
         try:
             dirs, files = [], []
@@ -237,25 +241,35 @@ class Path(type(_Path())):
         with scandir(self) as entries:
             for e in entries: yield self / e.name
     def glob(self, pattern, **kwargs):
-        if not _resolve(self): yield from super().glob(pattern, **kwargs); return
+        if not _resolve(self):
+            yield from super().glob(pattern, **kwargs)
+            return
         if '/' not in pattern:
-            yield from (p for p in self.iterdir() if fnmatch.fnmatchcase(p.name, pattern)); return
+            yield from (p for p in self.iterdir() if fnmatch.fnmatchcase(p.name, pattern))
+            return
         for directory, dirs, files in walk(self):
             for name in dirs + files:
-                p = Path(directory) / name; rel = p.relative_to(self).as_posix()
+                p = Path(directory) / name
+                rel = p.relative_to(self).as_posix()
                 if fnmatch.fnmatchcase(rel, pattern) or (pattern.startswith('**/') and fnmatch.fnmatchcase(rel, pattern[3:])): yield p
     def rglob(self, pattern, **kwargs):
-        if not _resolve(self): yield from super().rglob(pattern, **kwargs); return
+        if not _resolve(self):
+            yield from super().rglob(pattern, **kwargs)
+            return
         yield from self.glob('**/' + str(pattern))
 
 
 class _PathOps:
-    exists = staticmethod(exists); isdir = staticmethod(isdir); isfile = staticmethod(isfile)
+    exists = staticmethod(exists)
+    isdir = staticmethod(isdir)
+    isfile = staticmethod(isfile)
     getsize = staticmethod(lambda path: stat(path).st_size)
     def __getattr__(self, name): return getattr(_os.path, name)
 class _OS:
     path = _PathOps()
-    stat = staticmethod(stat); scandir = staticmethod(scandir); walk = staticmethod(walk)
+    stat = staticmethod(stat)
+    scandir = staticmethod(scandir)
+    walk = staticmethod(walk)
     @staticmethod
     def listdir(path):
         with scandir(path) as entries: return [e.name for e in entries]
@@ -264,7 +278,7 @@ os = _OS()
 
 
 class _Map:
-    """mmap-compatible bounded buffer. Python 3.12's buffer protocol keeps archive parsing zero-copy."""
+    """Python 3.12's buffer protocol keeps archive parsing zero-copy."""
     def __init__(self, fd, start, length):
         self.length, self.pos = length, 0
         self.delta = start % _mmap.ALLOCATIONGRANULARITY
@@ -296,8 +310,12 @@ class _Map:
         self.pos = pos
     def read(self, size=-1):
         end = self.length if size < 0 else min(self.length, self.pos + size)
-        data = self[self.pos:end]; self.pos = end; return data
-    def close(self): self.view.release(); self.mapping.close()
+        data = self[self.pos:end]
+        self.pos = end
+        return data
+    def close(self):
+        self.view.release()
+        self.mapping.close()
     def __enter__(self): return self
     def __exit__(self, *args): self.close()
 
@@ -308,7 +326,8 @@ class _Mmap:
         if fd not in _fd_ranges: return _mmap.mmap(fd, length, *args, **kwargs)
         if sys.version_info < (3, 12): raise RuntimeError('RomFS image archive scans require Python 3.12 or newer')
         if args or kwargs.get('access', _mmap.ACCESS_READ) != _mmap.ACCESS_READ: raise ValueError('RomFS mappings are read-only')
-        start, size = _fd_ranges[fd]; offset = kwargs.get('offset', 0)
+        start, size = _fd_ranges[fd]
+        offset = kwargs.get('offset', 0)
         if offset < 0 or offset > size or (length and length > size - offset): raise ValueError('mapping exceeds RomFS file')
         return _Map(fd, start + offset, length or size - offset)
     def __getattr__(self, name): return getattr(_mmap, name)
@@ -317,6 +336,7 @@ mmap = _Mmap()
 
 if __name__ == '__main__':
     try:
-        root = Path(sys.argv[1]); marker = sys.argv[2] if len(sys.argv) > 2 else ''
+        root = Path(sys.argv[1])
+        marker = sys.argv[2] if len(sys.argv) > 2 else ''
         if not root.is_dir() or not (root / marker).exists(): raise FileNotFoundError(f'missing RomFS marker {marker!r} in {root}')
     except (OSError, ValueError, IndexError, struct.error) as error: sys.exit(f'[RED] {error}')

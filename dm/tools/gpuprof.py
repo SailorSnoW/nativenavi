@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
 """Summarise the host's GPU profile lines in a run's log.
 
-DM_NVN_GPUPROF=<frame>[-<frame>] or every:<n> prints one "[gpuprof]" line per encoder of the profiled frames (render pass: size, colour attachments, depth, draws,
-attachment load / store KB, Metal pixel formats; compute / copy: copies, uniform updates, dispatches, barriers inside the encoder) and a "frame" line per frame. DM_AB=<frames> prints one "[ab]"
-line per phase. This tool reads both:
-
-  gpuprof.py log.txt                       per-frame totals, then the mean per frame of each pass shape (size, colours, depth, formats), by GPU time
-  gpuprof.py log.txt --by class            the same by size class relative to the frame's largest colour pass (full, half, quarter ... per axis: the same for every game)
-  gpuprof.py log.txt --frames 600 1200     only those frames
-  gpuprof.py log.txt --timeline 600        every encoder of frame 600 in GPU order, with the idle gaps between them
-  gpuprof.py log.txt --ab                  the [ab] phases: medians per configuration and the difference from the base
-
-Times are GPU timestamps taken where each encoder begins and ends (relaxed: encoders may overlap), so the sum over encoders is not the frame's GPU time; the frame line's
-span (first start to last end) is closer to it. See docs/agents/05-debugging.md, "GPU time on the device".
+Reads DM_NVN_GPUPROF's "[gpuprof]" encoder and frame lines and DM_AB's "[ab]" lines (docs/agents/05-debugging.md, "GPU time on the device").
+Encoder times may overlap, so their sum is not the frame's GPU time; the frame line's span is closer to it.
 """
 import argparse, collections, re, statistics, sys
 
@@ -23,7 +13,7 @@ FRAME = re.compile(r'\[gpuprof\] frame (\d+): render ([\d.]+) ms, compute / copy
 AB = re.compile(r'\[ab\] phase (\d+) (\S+): (\d+) frames, GPU p50 ([\d.]+) / p90 ([\d.]+) / mean ([\d.]+) ms, frame p50 ([\d.]+) / p90 ([\d.]+) / mean ([\d.]+) ms'
                 r'(?:; per frame: attachments load ([\d.]+) MB store ([\d.]+) MB, passes ([\d.]+))?')
 
-# MTLPixelFormat values the profile prints (fmt <colour 0>/<depth or stencil>; 0 = none)
+# fmt <colour 0>/<depth or stencil>; 0 = none
 MTL_FORMATS = {
     1: 'A8Unorm', 10: 'R8Unorm', 11: 'R8Unorm_sRGB', 12: 'R8Snorm', 13: 'R8Uint', 14: 'R8Sint', 20: 'R16Unorm', 22: 'R16Snorm', 23: 'R16Uint', 24: 'R16Sint',
     25: 'R16Float', 30: 'RG8Unorm', 31: 'RG8Unorm_sRGB', 32: 'RG8Snorm', 33: 'RG8Uint', 34: 'RG8Sint', 40: 'B5G6R5Unorm', 41: 'A1BGR5Unorm', 42: 'ABGR4Unorm',
@@ -43,7 +33,6 @@ Enc = collections.namedtuple('Enc', 'frame idx us kind pass_ w h colors depth lo
 
 
 def parse(lines):
-    """[gpuprof] encoder lines by frame (in log order) and the frame lines ({frame: dict}); lines that do not match are skipped"""
     frames, flines = collections.OrderedDict(), {}
     for line in lines:
         if '[gpuprof]' not in line: continue
@@ -70,7 +59,6 @@ def parse(lines):
 
 
 def frame_stats(es):
-    """Totals of one frame's encoders: sum of their times, span from the first start to the last end, idle time between them (GPU order)"""
     es = sorted(es, key=lambda e: e.start)
     tot = sum(e.us for e in es)
     span = max(e.start + e.us for e in es) - es[0].start
@@ -92,28 +80,33 @@ def shape_key(e):
 
 
 def class_key(e, ref_area):
-    """A size class relative to the frame's largest colour pass (ref_area pixels), by the scale per axis: the same classes for every game and resolution.
-    Passes with four colour attachments or more are their own class (a deferred renderer's G-buffer); <=2 draws marks full-screen work (post-processing, copies)"""
+    """By the scale per axis to the frame's largest colour pass, so the same for every resolution; four colour attachments or more (a G-buffer) and <=2 draws are their own classes"""
     if e.kind != 'R': return 'compute / copy'
     area = e.w * e.h
     if e.colors == 0: return 'depth only (shadow maps)' if e.depth else 'no attachments'
     if area <= 64 * 64: return 'tiny (<=64x64)'
-    s = (area / ref_area) ** 0.5 if ref_area else 1   # the scale per axis: 800x450 is half of 1600x900
+    s = (area / ref_area) ** 0.5 if ref_area else 1
     size = 'full' if s >= 0.7 else 'half' if s >= 0.35 else 'quarter' if s >= 0.18 else 'eighth' if s >= 0.09 else 'small'
     if e.colors >= 4: return f'{size}, {e.colors} colours{" + depth" if e.depth else ""}'
     return f'{size}, {"<=2 draws" if e.draws <= 2 else ">2 draws"}{" + depth" if e.depth else ""}'
 
 
 def aggregate(frames, by='shape', only=None):
-    """Mean per frame of each group over the frames: (rows sorted by GPU time, number of frames). A row: group, passes, us, draws, load KB, store KB"""
-    agg = collections.defaultdict(lambda: [0, 0.0, 0, 0, 0]); nf = 0
+    """(rows sorted by GPU time, number of frames); a row: group, passes, us, draws, load KB, store KB"""
+    agg = collections.defaultdict(lambda: [0, 0.0, 0, 0, 0])
+    nf = 0
     for f, es in frames.items():
         if only and f not in only: continue
         nf += 1
         ref = max((e.w * e.h for e in es if e.kind == 'R' and e.colors), default=0)
         for e in es:
             k = shape_key(e) if by == 'shape' else class_key(e, ref)
-            a = agg[k]; a[0] += 1; a[1] += e.us; a[2] += e.draws; a[3] += e.load_kb; a[4] += e.store_kb
+            a = agg[k]
+            a[0] += 1
+            a[1] += e.us
+            a[2] += e.draws
+            a[3] += e.load_kb
+            a[4] += e.store_kb
     rows = [(k, v[0] / nf, v[1] / nf, v[2] / nf, v[3] / nf, v[4] / nf) for k, v in agg.items()] if nf else []
     rows.sort(key=lambda r: -r[2])
     return rows, nf
@@ -132,7 +125,7 @@ def parse_ab(lines):
 
 
 def ab_summary(phases, skip=1):
-    """Median of each value over the phases of each configuration, leaving out the first <skip> phases (loading, first-use pipeline builds)"""
+    """Leaving out the first <skip> phases (loading, first-use pipeline builds)"""
     by = collections.OrderedDict()
     for p in phases:
         if p['phase'] < skip: continue
@@ -161,7 +154,9 @@ def main(argv=None):
 
     if a.ab:
         phases = parse_ab(lines)
-        if not phases: print('no [ab] lines (DM_AB=<frames> with a switch set to ab)', file=sys.stderr); return 1
+        if not phases:
+            print('no [ab] lines (DM_AB=<frames> with a switch set to ab)', file=sys.stderr)
+            return 1
         res = ab_summary(phases, a.ab_skip)
         print(f'{len(phases)} phases; medians per configuration (first {a.ab_skip} left out):')
         print(f'  {"configuration":32s} {"phases":>6s} {"GPU p50":>8s} {"GPU p90":>8s} {"frame p50":>9s} {"frame p90":>9s} {"load MB":>8s} {"store MB":>8s} {"passes":>7s}')
@@ -176,16 +171,22 @@ def main(argv=None):
         return 0
 
     frames, flines = parse(lines)
-    if not frames: print('no [gpuprof] encoder lines (DM_NVN_GPUPROF=<frame> or every:<n>)', file=sys.stderr); return 1
+    if not frames:
+        print('no [gpuprof] encoder lines (DM_NVN_GPUPROF=<frame> or every:<n>)', file=sys.stderr)
+        return 1
     only = set(a.frames) if a.frames else None
 
     if a.timeline is not None:
         es = frames.get(a.timeline)
-        if not es: print(f'frame {a.timeline} was not profiled; profiled: {" ".join(map(str, list(frames)[:20]))}', file=sys.stderr); return 1
-        es = sorted(es, key=lambda e: e.start); end = es[0].start
+        if not es:
+            print(f'frame {a.timeline} was not profiled; profiled: {" ".join(map(str, list(frames)[:20]))}', file=sys.stderr)
+            return 1
+        es = sorted(es, key=lambda e: e.start)
+        end = es[0].start
         print(f'frame {a.timeline}: {len(es)} encoders in GPU order (start and duration in us; gap = idle before it)')
         for e in es:
-            gap = max(0.0, e.start - end); end = max(end, e.start + e.us)
+            gap = max(0.0, e.start - end)
+            end = max(end, e.start + e.us)
             if e.kind == 'R':
                 what = (f'pass {e.pass_} {e.w}x{e.h} {e.colors}c{"+d" if e.depth else ""} draws {e.draws} loads {e.loads} '
                         f'load {e.load_kb} KB store {e.store_kb} KB {fmt_name(e.cfmt)}/{fmt_name(e.dfmt)}')
@@ -196,7 +197,8 @@ def main(argv=None):
 
     for f, es in frames.items():
         if only and f not in only: continue
-        s = frame_stats(es); fl = flines.get(f)
+        s = frame_stats(es)
+        fl = flines.get(f)
         print(f'frame {f}: {s["encoders"]} encoders ({s["passes"]} render passes), sum {s["sum_us"] / 1e3:.2f} ms, span {s["span_us"] / 1e3:.2f} ms, idle {s["gap_us"] / 1e3:.2f} ms, '
               f'draws {s["draws"]}, attachments load {s["load_kb"] / 1024:.0f} MB store {s["store_kb"] / 1024:.0f} MB'
               + (f' | host: render {fl["render_ms"]:.2f} ms, compute / copy {fl["compute_ms"]:.2f} ms' if fl else ''))

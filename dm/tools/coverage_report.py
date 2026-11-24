@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
-# Coverage summary for the job summary of CI's coverage job (.github/workflows/tests.yml): line coverage per area, the largest files, and the diff coverage of a change.
-# It reads what the measuring tools wrote and prints Markdown; it never fails on coverage (report only), only on a missing or unreadable input it was given.
-#   --host / --textures   llvm-cov's lcov export (make -C dm/host/tests GAME=<id> coverage: dm/host/tests/build/cov/coverage.lcov; make -C dm/gfx/tex/tests coverage:
-#                         dm/gfx/tex/tests/cov/coverage.lcov). Its DA lines are llvm-cov's own line counts, the lines `llvm-cov show` marks, one view for totals and diff
-#                         lines (`llvm-cov report` adds up functions instead, so a line two functions share, a block in a method, counts twice there)
-#   --python              coverage.py's JSON (`coverage json`, after `coverage run` and `coverage combine` over the tool tests; pyproject.toml configures it)
-#   --base REV            diff coverage: the lines `git diff REV...HEAD` adds or changes in C, Objective-C and Python sources, split into those the tests run and those
-#                         they do not. Only lines the coverage data knows (llvm-cov's mapped lines, coverage.py's statements) count; comments and blank lines do not
-# docs/development.md (Continuous integration) has the commands.
+# Coverage summary in Markdown for CI's coverage job (docs/development.md, Continuous integration); report only, it fails only on an unreadable input.
+#   --host / --textures: llvm-cov's lcov export, whose DA lines are `llvm-cov show`'s (`llvm-cov report` counts a line two functions share twice).
+#   --python: coverage.py's JSON. --base REV: diff coverage of the lines `git diff REV...HEAD` adds or changes, only those the coverage data knows.
 import argparse, json, os, re, subprocess, sys, pathlib
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -20,7 +14,7 @@ def rel(path, root):
     return p if r.startswith('..') else r.replace(os.sep, '/')
 
 def read_lcov(text, root):
-    # {file: {line: covered}} from an lcov tracefile (llvm-cov export -format=lcov): SF names a file, DA:<line>,<count> each mapped line; a file listed twice is merged line by line
+    # a file listed twice is merged line by line
     files, lines = {}, None
     for line in text.splitlines():
         if line.startswith('SF:'): lines = files.setdefault(rel(line[3:], root), {})
@@ -31,7 +25,6 @@ def read_lcov(text, root):
     return files
 
 def read_python(doc, root):
-    # {file: {line: covered}} from coverage.py's JSON report: its statements, executed or missing
     files = {}
     for name, f in doc['files'].items():
         lines = files.setdefault(rel(name, root), {})
@@ -40,7 +33,7 @@ def read_python(doc, root):
     return files
 
 def changed_lines(diff):
-    # {file: set of new-side line numbers} from a unified diff (-U0 is enough); deleted files and lines are not in it
+    # -U0 is enough
     out, path = {}, None
     for line in diff.splitlines():
         if line.startswith('+++ '):
@@ -54,17 +47,18 @@ def changed_lines(diff):
     return out
 
 def diff_coverage(changed, files):
-    # per changed source file: (lines run, lines not run), counting only lines the coverage data knows; plus the changed sources no area measures
     rows, unmeasured = {}, []
     for path in sorted(changed):
         if not path.endswith(SOURCE) or '/tests/' in '/' + path or '/third_party/' in path: continue
-        if path not in files: unmeasured.append(path); continue
+        if path not in files:
+            unmeasured.append(path)
+            continue
         known = [ln for ln in sorted(changed[path]) if ln in files[path]]
         if known: rows[path] = ([ln for ln in known if files[path][ln]], [ln for ln in known if not files[path][ln]])
     return rows, unmeasured
 
 def ranges(lines):
-    runs: list[list[int]] = []   # [first, last] of each run of consecutive lines
+    runs: list[list[int]] = []
     for ln in sorted(lines):
         if runs and ln == runs[-1][1] + 1: runs[-1][1] = ln
         else: runs.append([ln, ln])
@@ -73,22 +67,25 @@ def ranges(lines):
 def pct(covered, total): return f'{100 * covered / total:.1f}%' if total else '–'
 
 def markdown(areas, top=15, base=None, diff=None, unmeasured=()):
-    # areas: [(name, tests, {file: {line: covered}} or None when not measured)]; diff: diff_coverage's rows, or None without --base
     out = ['## Coverage', '',
            'Report only: this job never fails on coverage. Line coverage of what the unit tests run, without the tests themselves and third-party code. C: the files the '
            'tests compile (others are not listed); Python: every file under `dm/tools`, `dm/gfx/tools`, `dm/games` and `scripts`, imported by a test or not.', '',
            '| Area | Tests | Files | Lines | Covered | % |', '|---|---|---:|---:|---:|---:|']
     allf = []
     for name, tests, files in areas:
-        if files is None: out.append(f'| {name} | {tests} | | | | not measured |'); continue
-        n = sum(len(v) for v in files.values()); c = sum(sum(v.values()) for v in files.values())
+        if files is None:
+            out.append(f'| {name} | {tests} | | | | not measured |')
+            continue
+        n = sum(len(v) for v in files.values())
+        c = sum(sum(v.values()) for v in files.values())
         out.append(f'| {name} | {tests} | {len(files)} | {n} | {c} | {pct(c, n)} |')
         allf += [(len(v), sum(v.values()), f, name) for f, v in files.items() if v]
     if allf:
         out += ['', f'### The {top} largest files', '', '| File | Area | Lines | Covered | % |', '|---|---|---:|---:|---:|']
         for n, c, f, name in sorted(allf, key=lambda t: (-t[0], t[2]))[:top]: out.append(f'| `{f}` | {name} | {n} | {c} | {pct(c, n)} |')
     if diff is not None:
-        run = sum(len(r) for r, _ in diff.values()); miss = sum(len(m) for _, m in diff.values())
+        run = sum(len(r) for r, _ in diff.values())
+        miss = sum(len(m) for _, m in diff.values())
         out += ['', f'### Diff coverage against `{base}`', '']
         if not diff: out.append('No changed line in a C, Objective-C or Python source that the tests measure.')
         else:

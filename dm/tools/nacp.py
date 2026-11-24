@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
-# The game name, display version and languages from the NUP's control data (control.nacp, saved in the extraction folder by pack_nup.py): the Mac app's name and version come from them,
-#   and the packing script checks the game language against the languages the game supports.
-# Usage: nacp.py <control.nacp> (prints the game name), nacp.py --version <control.nacp> (prints the display version), nacp.py --languages <control.nacp> (prints the supported language codes);
-#   each prints an empty line and exits 1 when none can be read. From Python: import nacp; nacp.name(path), nacp.version(path), nacp.languages(path)
+# Game name, display version and languages from control.nacp.
+# Usage: nacp.py [--version | --languages] <control.nacp>; prints an empty line and exits 1 when none can be read.
 import re, struct, sys, zlib
 from pathlib import Path
 
-# The NACP's languages in its own order (the bit order of SupportedLanguageFlag and the order of the title entries): the language code nn::oe::GetDesiredLanguage returns for each, and its name.
-# Polish and Thai use control-data bits 16 and 17 on either console. The SDK language enum numbers them 18 and 19 (hle_sdk16.c).
+# In SupportedLanguageFlag bit order. Polish and Thai are control-data bits 16 and 17; the SDK's language enum numbers them 18 and 19 (hle_sdk16.c).
 LANGUAGES = [('en-US', 'American English'), ('en-GB', 'British English'), ('ja', 'Japanese'), ('fr', 'French'), ('de', 'German'), ('es-419', 'Latin American Spanish'), ('es', 'Spanish'), ('it', 'Italian'),
              ('nl', 'Dutch'), ('fr-CA', 'Canadian French'), ('pt', 'Portuguese'), ('ru', 'Russian'), ('ko', 'Korean'), ('zh-Hant', 'Traditional Chinese'), ('zh-Hans', 'Simplified Chinese'), ('pt-BR', 'Brazilian Portuguese'),
              ('pl', 'Polish'), ('th', 'Thai')]
 
 
 def name(path):
-    """The title area holds 0x300 bytes per language (name 0x200 + publisher 0x100); take the first non-empty one (0 = American English); a missing file or no sensible name returns an empty string"""
+    """0x300 bytes per language (name 0x200 + publisher 0x100): the first non-empty one; '' when none"""
     p = Path(path)
     if not p.is_file(): return ''
-    b = p.read_bytes(); t = b[:0x3000]
+    b = p.read_bytes()
+    t = b[:0x3000]
     if len(b) >= 2:
-        try:   # newer SDKs compress the title area: a u16 size + raw deflate, inflating to 32 languages × 0x300 (Mario 1.2.1 does); inflate no further than that (a crafted size could inflate about 1,000 times)
-            d = zlib.decompressobj(-15); z = d.decompress(b[2:2 + struct.unpack_from('<H', b)[0]], 0x6000 + 1)
+        try:   # newer SDKs: a u16 size + raw deflate, at most 32 × 0x300 (a crafted size could inflate about 1,000 times)
+            d = zlib.decompressobj(-15)
+            z = d.decompress(b[2:2 + struct.unpack_from('<H', b)[0]], 0x6000 + 1)
             if d.eof and len(z) == 0x6000: t = z
-        except zlib.error: pass   # not compressed
+        except zlib.error: pass
     for i in range(len(t) // 0x300):
         n = t[i * 0x300:i * 0x300 + 0x200].split(b'\0', 1)[0]
         if not n: continue
@@ -33,7 +32,7 @@ def name(path):
 
 
 def version(path):
-    """The display version (0x10 bytes at 0x3060, e.g. 1.2.1), cut to what a bundle version may be (CFBundleVersion: up to three dot-separated integers); a missing file or no leading number returns an empty string"""
+    """0x10 bytes at 0x3060, cut to what CFBundleVersion takes (up to three integers); '' when none"""
     p = Path(path)
     if not p.is_file(): return ''
     m = re.match(rb'\d+(\.\d+){0,2}', p.read_bytes()[0x3060:0x3070])
@@ -41,8 +40,7 @@ def version(path):
 
 
 def languages(path):
-    """The language codes the game supports (the u32 SupportedLanguageFlag at 0x302C, one bit per language in LANGUAGES order; Horizon picks the game language among them), in that order;
-    a missing file or no flag returns an empty list"""
+    """u32 SupportedLanguageFlag at 0x302C, in LANGUAGES order"""
     p = Path(path)
     if not p.is_file(): return []
     b = p.read_bytes()
@@ -52,7 +50,10 @@ def languages(path):
 
 
 if __name__ == '__main__':
-    a = sys.argv[1:]; f = {'--version': version, '--languages': lambda p: ' '.join(languages(p))}.get(a[0] if a else '', name)
+    a = sys.argv[1:]
+    f = {'--version': version, '--languages': lambda p: ' '.join(languages(p))}.get(a[0] if a else '', name)
     if f is not name: a = a[1:]
     if len(a) != 1: sys.exit('usage: nacp.py [--version | --languages] <control.nacp>')
-    n = f(a[0]); print(n); sys.exit(0 if n else 1)
+    n = f(a[0])
+    print(n)
+    sys.exit(0 if n else 1)

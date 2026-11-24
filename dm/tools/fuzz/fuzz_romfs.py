@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""Fuzz dm/tools/romfs.py's Image, the reader of a DMROMFS1 RomFS image (romfs_image.py packs it; the tools read an extraction's RomFS.img through it).
-Seeds: small trees packed by romfs_image.pack from a scratch folder (nested folders, empty files and folders, names that sort byte-wise).
-Clean rejection: Image() raises ValueError (its header, entry, name, tree and sort checks). An image it accepts must hold to what those checks promise, which the harness asserts:
-every entry is reachable once from the root, find() returns each entry by its path (the binary search needs sorted names) and every file range lies inside the image.
-Any other exception, or a broken promise, is a finding. Usage: see fuzzlib.py"""
+"""Fuzz dm/tools/romfs.py's Image. Clean rejection: ValueError. An accepted image must hold to what its checks promise: every entry reachable once,
+find() returns each by its path, every file range inside the image. Usage: see fuzzlib.py"""
 import os
 from pathlib import Path
 import sys
@@ -23,13 +20,17 @@ def seeds():
              'empty': {}}
     with tempfile.TemporaryDirectory() as t:
         for name, tree in trees.items():
-            src = Path(t, name); src.mkdir()
+            src = Path(t, name)
+            src.mkdir()
             def make(d, node):
                 for k, v in node.items():
-                    if isinstance(v, dict): (d / k).mkdir(); make(d / k, v)
+                    if isinstance(v, dict):
+                        (d / k).mkdir()
+                        make(d / k, v)
                     else: (d / k).write_bytes(v)
             make(src, tree)
-            romfs_image.pack(src, Path(t, name + '.img')); out[name] = Path(t, name + '.img').read_bytes()
+            romfs_image.pack(src, Path(t, name + '.img'))
+            out[name] = Path(t, name + '.img').read_bytes()
     return out
 
 
@@ -39,7 +40,7 @@ _file = fuzzlib.InputFile('RomFS.img')
 def check(data):
     p = _file.write(data)
     try: img = romfs.Image(p)
-    except ValueError: return   # the declared rejection
+    except ValueError: return
     size, seen, todo = os.path.getsize(p), {0}, [(0, '')]
     while todo:
         k, path = todo.pop()
@@ -50,7 +51,8 @@ def check(data):
             continue
         for name, j in img.children(k):
             if j in seen: raise fuzzlib.broken('romfs.py:Image', f'entry {j} is reached twice')
-            seen.add(j); todo.append((j, f'{path}/{name}' if path else name))
+            seen.add(j)
+            todo.append((j, f'{path}/{name}' if path else name))
     if len(seen) != img.count: raise fuzzlib.broken('romfs.py:Image', f'{img.count - len(seen)} entries are not reachable from the root')
 
 

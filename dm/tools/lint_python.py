@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-# Python lint and type check with a ratchet (.github/workflows/lint-python.yml): ruff (pyproject.toml's [tool.ruff]: lint rules for bugs, no formatting) and pyright in basic
-# mode ([tool.pyright]) over scripts/ and the tools under dm/. The findings the code had when the check came in are listed in dm/tools/lint_python_baseline.tsv, keyed by tool,
-# file, rule and message with a count (no line numbers: they survive edits elsewhere in the file). The check fails on a finding beyond its key's count (a new one) and on a
-# count above what the code has now (a fixed finding still listed: run --update). So the baseline only shrinks:
-#   --update      lowers counts to what the code has now and drops fixed entries; it never adds one (a new finding is fixed, or silenced on its line with a noqa or
-#                 `# pyright: ignore[<rule>]` and a reason)
-#   --rebaseline  writes every current finding: only with a raised tool version in .github/requirements/lint.txt, whose findings change with it
-#   --against REV fails when the baseline has an entry or a count that REV's has not, unless that checker's pinned version increased (CI uses the PR's base)
-# Run it with the pinned tools, so the findings match CI's (other versions or other packages in the environment change them):
-#   python3 -m venv <dir> && <dir>/bin/pip install -r .github/requirements/lint.txt -r .github/requirements/tools.txt && <dir>/bin/python3 dm/tools/lint_python.py [--update]
-# (tools.txt: the packages the tools import, which pyright resolves; the flake's lint shell, nix develop .#lint, is that environment)
-# Under GitHub Actions, new findings are annotated on their lines and a summary goes to $GITHUB_STEP_SUMMARY.
+# Python lint (ruff) and type check (pyright basic) of scripts/ and dm/ with a ratchet against dm/tools/lint_python_baseline.tsv (.github/workflows/lint-python.yml):
+# more findings than a key's count fail, and so do fewer. --update lowers counts, never adds one (fix a new finding, or noqa / `# pyright: ignore[<rule>]` it
+# with a reason); --rebaseline only with a raised pin in .github/requirements/lint.txt; --against REV fails on entries or counts REV lacks.
+# Run with the pinned tools (nix develop .#lint): other versions find other things.
 import argparse, collections, json, os, re, subprocess, sys, pathlib
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -50,7 +42,7 @@ def write(base):
 def git(*a): return subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True)
 
 def versions(text):
-    # The checkers use three-part release pins. Reject missing, duplicate or unsupported pins instead of authorizing a baseline rewrite.
+    # reject missing, duplicate or unsupported pins instead of authorizing a baseline rewrite
     pins = {}
     for line in text.splitlines():
         name, _, version = line.split('#', 1)[0].strip().partition('==')
@@ -63,15 +55,20 @@ def versions(text):
     return pins
 
 def against(rev, base):
-    # Only an upgraded checker may gain entries or counts; dependency edits and downgrades do not change the ratchet.
+    # only an upgraded checker may gain entries or counts
     old = git('show', f'{rev}:{rel(BASELINE)}')
-    if old.returncode: print(f'lint_python: no baseline at {rev}: nothing to compare'); return 0
+    if old.returncode:
+        print(f'lint_python: no baseline at {rev}: nothing to compare')
+        return 0
     old_reqs = git('show', f'{rev}:{REQS}')
-    if old_reqs.returncode: print(f'[RED] lint_python: cannot read {REQS} at {rev}: {old_reqs.stderr.strip()}'); return 1
+    if old_reqs.returncode:
+        print(f'[RED] lint_python: cannot read {REQS} at {rev}: {old_reqs.stderr.strip()}')
+        return 1
     try:
         before, after = versions(old_reqs.stdout), versions((REPO / REQS).read_text())
     except (OSError, ValueError) as e:
-        print(f'[RED] lint_python: {e}'); return 1
+        print(f'[RED] lint_python: {e}')
+        return 1
     upgraded = {t for t in before if after[t] > before[t]}
     for t in sorted(upgraded): print(f'lint_python: {t} upgraded since {rev}: its baseline may be rewritten')
     was = load(old.stdout)
@@ -89,17 +86,20 @@ def check(args):
     cur = collections.Counter(f[:4] for f in found)
     base = load(BASELINE.read_text()) if BASELINE.exists() else collections.Counter()
     if args.rebaseline:
-        write(cur); print(f'lint_python: wrote {sum(cur.values())} findings to {rel(BASELINE)}'); return 0
+        write(cur)
+        print(f'lint_python: wrote {sum(cur.values())} findings to {rel(BASELINE)}')
+        return 0
     new = {k: n - base[k] for k, n in cur.items() if n > base[k]}
     fixed = {k: base[k] - cur[k] for k in base if base[k] > cur[k]}
     if args.update:
         shrunk = collections.Counter({k: min(n, cur[k]) for k, n in base.items()})
-        write(shrunk); print(f'lint_python: baseline {sum(base.values())} -> {sum(shrunk.values())} findings')
+        write(shrunk)
+        print(f'lint_python: baseline {sum(base.values())} -> {sum(shrunk.values())} findings')
         base, fixed = shrunk, {}
     gha = os.environ.get('GITHUB_ACTIONS') == 'true'
     for tool, path, rule, msg, line in found:
         k = (tool, path, rule, msg)
-        if new.get(k):   # with several of one key, every line is shown: which one is new is not known
+        if new.get(k):   # with several of one key, which one is new is not known
             print(f'::error file={path},line={line},title={tool} {rule}::{msg}' if gha else f'{path}:{line}: {tool} {rule}: {msg}')
     for (tool, path, rule, msg), n in sorted(fixed.items()):
         print(f'fixed, still in the baseline: {tool} {path} {rule} x{n}: {msg}')

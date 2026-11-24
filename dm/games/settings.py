@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
-# The launcher's settings for one game, from settings.tsv (its header describes the columns): the rows whose condition holds for the game, with the game's defaults, as JSON.
-# scripts/build_app.py writes it into the Mac app as Resources/dm/launcher.json; Launcher.swift draws the settings window from it, and Mac front ends read it (docs/frontends.md).
-# Usage: settings.py <game id> <rewritten modules dir> <control.nacp> <out.json>   (DM_GAMES_DIR finds derived profiles, as in game.py; build:<VAR> defaults come from the environment)
+# The launcher's settings for one game: Resources/dm/launcher.json (docs/frontends.md).
+# Usage: settings.py <game id> <rewritten modules dir> <control.nacp> <out.json>   (build:<VAR> defaults come from the environment)
 import json, os, re, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / 'tools'))
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / 'tools'))
 import game, nacp, nso_syms
 
-SECTIONS = ('Game', 'Controls', 'Performance', 'Practice')   # headings on the single settings screen
-SCHEMA = 1   # launcher.json's version (docs/launcher.schema.json); it grows only by optional fields, so a reader of 1 reads every 1
-PRACTICE_DIR = 'practice'   # the practice tools' folder in the rewritten modules' folder (scripts/build_app.py PRACTICE_DIR), Resources/dm/practice in the app
-# The meta column's keys, each with the pattern its value must match. A key is added here, in docs/frontends.md and in
-# docs/launcher.schema.json together (test_launcher_settings.py checks that the three agree); a reader ignores keys it does not know
+SECTIONS = ('Game', 'Controls', 'Performance', 'Practice')
+SCHEMA = 1   # docs/launcher.schema.json; it grows only by optional fields
+PRACTICE_DIR = 'practice'
+# A key is added here, in docs/frontends.md and in docs/launcher.schema.json together; a reader ignores keys it does not know
 META = {
-    'level': r'basic',                       # a setting a front end shows first; without it, the front end decides
-    'needs': r'DM_[A-Z0-9_]+=[^;=]+',        # <VAR>=<value>: a sub-setting, drawn only while the row that sets <VAR> has that value
+    'level': r'basic',
+    'needs': r'DM_[A-Z0-9_]+=[^;=]+',        # a sub-setting, drawn only while the row that sets <VAR> has that value
 }
 
 
 def meta(text, n):
-    """The meta column as {key: value}: key=value pairs separated by ;, each key from META once, its value matching its pattern"""
+    """key=value pairs separated by ;"""
     out = {}
     for pair in filter(None, (p.strip() for p in text.split(';'))):
         key, eq, value = pair.partition('=')
@@ -41,7 +40,7 @@ def rows():
         yield n, c + [''] * (9 - len(c))
 
 
-def fixups_keys(path):   # '# KEY<TAB>value' header rows of a rewriter table, as {KEY: value}
+def fixups_keys(path):
     if not path.is_file(): return {}
     return {m[1]: m[2].strip() for m in re.finditer(r'^# (\w+)\t(.*)$', path.read_text(encoding='utf-8'), re.M)}
 
@@ -51,13 +50,13 @@ UNKNOWN_LANGUAGES = 'This game\'s files do not list its languages, so some of th
 
 def build(gid, patched, control):
     g = game.load(gid)
-    macros = dict(re.findall(r'^#define (DM_GAME_\w+) (.*)$', game.header_one(g), re.M))   # the host's own defaults, as it is compiled for this game
+    macros = dict(re.findall(r'^#define (DM_GAME_\w+) (.*)$', game.header_one(g), re.M))
     keys = fixups_keys(Path(patched) / 'main.fixups.tsv')
     mac_mic = nso_syms.audio_input_capable(Path(patched).glob('*.patched.bin'))
     tools = Path(patched) / PRACTICE_DIR
-    practice = any(tools.glob('*.patched.bin')) and any(tools.glob('*.ips'))   # what pack_app.py's --practice takes, and the app then carries
+    practice = any(tools.glob('*.patched.bin')) and any(tools.glob('*.ips'))
     have = nacp.languages(control)
-    langs = [(c, n) for c, n in nacp.LANGUAGES if not have or c in have]   # no list (none of the NUP's packages may have control data): any language may be the game's, as DM_LANG and the packing script's check take it
+    langs = [(c, n) for c, n in nacp.LANGUAGES if not have or c in have]   # no list: any language may be the game's
 
     def macro(name, n):
         if name not in macros: sys.exit(f'settings.tsv:{n}: no {name} in the game profile header (game.py header)')
@@ -80,7 +79,7 @@ def build(gid, patched, control):
             return {'YES': '1', 'NO': '0', '': '0'}.get(v, v)
         return d
 
-    def takes(kind, values):   # the values a row's variable can take, for needs; None when any (a range, the game's languages)
+    def takes(kind, values):
         if kind == 'toggle': return {'1', '0'} if values == '-' else set(values.split('/'))
         if kind == 'choice' and values != 'languages': return {v.split('?', 1)[0].split('=', 1)[0] for v in values.split(',')}
         return None
@@ -112,7 +111,7 @@ def build(gid, patched, control):
             if s['default'] not in ('0', '1'): sys.exit(f'settings.tsv:{n}: a toggle defaults to 0 or 1: {s["default"]}')
             on_off = ['1', '0'] if values == '-' else values.split('/')
             if len(on_off) != 2 or not all(on_off) or on_off[0] == on_off[1]: sys.exit(f'settings.tsv:{n}: toggle values are - or <on>/<off>: {values}')
-            s.update(on=on_off[0], off=on_off[1], default=on_off[0] if s['default'] == '1' else on_off[1])   # the default as the value the variable takes
+            s.update(on=on_off[0], off=on_off[1], default=on_off[0] if s['default'] == '1' else on_off[1])
         else: sys.exit(f'settings.tsv:{n}: unknown kind {kind}')
         out.append(s)
     return {'schema': SCHEMA, 'game': g.id, 'settings': out}

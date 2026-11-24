@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
-# Pack an extracted RomFS folder into one image file the host reads in place of the folder (hle_fs.c, "RomFS image"): DM_ROMFS may name the image instead of a folder.
-# One file instead of hundreds of thousands: one copy at full speed (Tears of the Kingdom has 304,000 files), and the host
-# keeps one descriptor open for the whole RomFS.
-# Layout (little-endian):
-#   header  32 bytes: magic "DMROMFS1", u64 index offset, u64 index size, u64 entry count
-#   data    each file's bytes, one after another
-#   index   entry count entries of 24 bytes: u64 a, u64 b, u32 name offset, u16 name length, u8 type (0 directory, 1 file), u8 flags
-#           a directory: a = its first child's entry, b = its number of children; a file: a = data offset in the image, b = size
-#           flags: 0 (no meaning is assigned; the readers refuse an image with another value)
-#           then the names, one pool. Entry 0 is the root (empty name). Each directory's children are consecutive entries sorted by name (bytes), so a lookup is a
-#           binary search per path component; directories are numbered breadth-first.
-# The index comes last, so a copy cut off partway has no valid index (the header points past the end of the file) and the host refuses it.
-# Names are the guest names: a host name chosen on a case collision (.dm-case-N) is replaced by the one in its xattr, as hle_fs.c's guest_name does.
+# Packs an extracted RomFS folder into one image the host reads in place (hle_fs.c, "RomFS image"; DM_ROMFS may name it).
+# Layout (little-endian): header 32 bytes (magic "DMROMFS1", u64 index offset, u64 index size, u64 entry count), the files' data, then the index:
+#   24-byte entries (u64 a, u64 b, u32 name offset, u16 name length, u8 type 0 dir / 1 file, u8 flags = 0) and the name pool. A dir: a = first child, b = child count;
+#   a file: a = data offset, b = size. Entry 0 is the root; children are consecutive, sorted by name bytes, numbered breadth-first.
+# The index comes last: a copy cut off partway has none. Names are guest names (hle_fs.c guest_name).
 # Usage: romfs_image.py [--reuse] <RomFS folder> <out image>   (written to <out>.part, renamed at the end)
-# --reuse checks the source tree's names and file metadata, the packer's version and the image's identity before keeping a previous image.
 import argparse, hashlib, json, os, struct, subprocess
 from pathlib import Path
 
@@ -21,9 +12,7 @@ MAGIC = b'DMROMFS1'
 HEAD = struct.Struct('<8sQQQ')
 ENT = struct.Struct('<QQIHBB')
 GUEST_NAME = 'org.d2rmobile.guest-name'
-# Files a dump tool leaves in every folder of the game's tree, which are not game files: an FTP dump keeps the server's listing as .listing (as the NUP spec's §6.3 says a producer
-# may). Packed, a game that lists a folder sees one more entry: Nintendo Switch Sports Resort cuts each name at its first '.', loaded "Parameter/<folder>/" with an empty name, got
-# no resource and crashed at main+0x9d7c60. A folder's artifacts are left out of the image (and out of a NUP's, pack_nup.py)
+# Dump-tool files in every folder (an FTP dump's .listing, NUP spec §6.3): packed, a game listing a folder would see one more entry
 ARTIFACTS = {b'.listing'}
 
 
@@ -46,7 +35,7 @@ def children(path):
 def entries(src):
     ents = [[b'', src, True, 0, 0]]   # name, host path, is dir, a, b
     i = 0
-    while i < len(ents):   # breadth-first: each directory's children land as one consecutive run
+    while i < len(ents):
         name, path, isdir, _, _ = ents[i]
         if isdir:
             kids = children(path)
@@ -56,7 +45,7 @@ def entries(src):
     return ents
 
 
-def file_identity(path):   # not st_dev: macOS numbers a volume when it mounts it, so a reboot moved the Data volume from 16777234 to 16777232 and a 24 GB image was packed again, 8 minutes over SMB
+def file_identity(path):   # not st_dev: macOS numbers volumes at mount
     s = os.stat(path)
     return [s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns]
 
@@ -65,47 +54,50 @@ def source_digest(src, ents):
     h = hashlib.sha256(Path(__file__).read_bytes())
     h.update(os.fsencode(os.path.realpath(src)) + b'\0')
     for name, path, isdir, _, _ in ents:
-        h.update(struct.pack('<I?', len(name), isdir)); h.update(name)
+        h.update(struct.pack('<I?', len(name), isdir))
+        h.update(name)
         h.update(json.dumps(file_identity(path)).encode() + b'\0')
     return h.hexdigest()
 
 
-def reusable(dst, digest):   # whether dst is the image the stamp beside it says was made from inputs with this digest
+def reusable(dst, digest):
     try: return json.loads(Path(dst + '.inputs.json').read_text()) == {'source': digest, 'image': file_identity(dst)}
     except (OSError, ValueError): return False
 
 
 def layout(ents, end):
-    """The header and the index (entries, then the name pool) of an image of ents whose files' a and b are filled in, the file data ending at end.
-    write() writes these bytes and a check of an existing image compares them, so the two cannot disagree on the format."""
+    """write() and the check of an existing image both use these bytes, so the two cannot disagree on the format."""
     pool, idx = bytearray(), bytearray()
     for name, _, isdir, a, b in ents:
-        idx += ENT.pack(a, b, len(pool), len(name), 0 if isdir else 1, 0); pool += name
+        idx += ENT.pack(a, b, len(pool), len(name), 0 if isdir else 1, 0)
+        pool += name
     idx += pool
     return HEAD.pack(MAGIC, end, len(idx), len(ents)), bytes(idx)
 
 
 def write(ents, dst, copy):
-    """ents (entries(): [name, source, is dir, a, b], breadth-first) → dst + '.part'; copy(source, out) writes one file's bytes to out and returns how many. Fills in each file's a and b"""
+    """copy(source, out) writes one file's bytes and returns how many; fills in each file's a and b"""
     part = dst + '.part'
     with open(part, 'wb') as out:
         out.write(b'\0' * HEAD.size)
         off = HEAD.size
         for e in ents:
             if e[2]: continue
-            e[3], e[4] = off, copy(e[1], out); off += e[4]
+            e[3], e[4] = off, copy(e[1], out)
+            off += e[4]
         head, idx = layout(ents, off)
         out.write(idx)
-        out.seek(0); out.write(head)
+        out.seek(0)
+        out.write(head)
     return part
 
 
-def stamp(dst, digest, image):   # the stamp reusable() checks: dst, with identity image, is the image of inputs with this digest
+def stamp(dst, digest, image):
     Path(dst + '.inputs.json.part').write_text(json.dumps({'source': digest, 'image': image}))
     os.replace(dst + '.inputs.json.part', dst + '.inputs.json')
 
 
-def publish(part, dst, digest):   # the written image in place, with its stamp
+def publish(part, dst, digest):
     os.replace(part, dst)
     stamp(dst, digest, file_identity(dst))
 
@@ -113,7 +105,9 @@ def publish(part, dst, digest):   # the written image in place, with its stamp
 def copy_file(path, out):
     n = 0
     with open(path, 'rb') as f:
-        while b := f.read(8 << 20): out.write(b); n += len(b)
+        while b := f.read(8 << 20):
+            out.write(b)
+            n += len(b)
     return n
 
 
@@ -123,7 +117,7 @@ def pack(src, dst, reuse=False):
     digest = source_digest(src, ents)
     if reuse and reusable(dst, digest): return len(ents)
     part = write(ents, dst, copy_file)
-    # A changing source must not publish a mixed image or a reuse stamp for stale data.
+    # a changing source must publish no mixed image or stale stamp
     if source_digest(src, entries(src)) != digest:
         os.unlink(part)
         raise RuntimeError('RomFS changed while packing; run the packer again when its files are stable')
@@ -131,11 +125,12 @@ def pack(src, dst, reuse=False):
     return len(ents)
 
 
-def read_index(img):   # for tests and checks: {guest path: (is dir, offset, size)}
+def read_index(img):
     with open(img, 'rb') as f:
         magic, ioff, isz, n = HEAD.unpack(f.read(HEAD.size))
         assert magic == MAGIC
-        f.seek(ioff); raw = f.read(isz)
+        f.seek(ioff)
+        raw = f.read(isz)
     pool = raw[n * ENT.size:]
     e = [ENT.unpack_from(raw, k * ENT.size) for k in range(n)]
     out, todo = {}, [(0, '')]
@@ -149,19 +144,18 @@ def read_index(img):   # for tests and checks: {guest path: (is dir, offset, siz
     return out
 
 
-# File names that promise a format, and the first bytes that format starts with. A file whose name promises one and whose bytes start with none of its heads is damaged:
-# a NUP carries no NCA hashes, so this is the check its extraction has. A zstd stream starts with a frame (28 b5 2f fd) or a skippable frame (5? 2a 4d 18).
-# Found on a NUP of Ocarina of Time whose three .zs textures began with 12,288 zero bytes: the game asked for one again on every pass of its background loader (PR #1530).
+# A NUP carries no NCA hashes: a file starting with none of its suffix's heads is damaged (zstd: a frame or a skippable frame).
 FORMAT_HEADS = {'.zs': ((b'\x28\xb5\x2f\xfd', b'\xff\xff\xff\xff'), (b'\x50\x2a\x4d\x18', b'\xf0\xff\xff\xff'))}   # suffix: ((bytes, mask), ...)
 
 
-def format_mismatches(img, progress=None):   # [(guest path, size, first 4 bytes)] of the image's files whose bytes do not start as their name promises (FORMAT_HEADS); empty files are left out. progress(done, total): every 4,096 files
+def format_mismatches(img, progress=None):
     files = sorted((off, size, p) for p, (d, off, size) in read_index(img).items() if not d and size and os.path.splitext(p)[1].lower() in FORMAT_HEADS)
     bad = []
     with open(img, 'rb') as f:
-        for k, (off, size, p) in enumerate(files):   # in image order: one pass forward over the disk
+        for k, (off, size, p) in enumerate(files):   # one pass forward over the disk
             if progress and not k % 4096: progress(k, len(files))
-            f.seek(off); head = f.read(min(size, 4))   # not into the next file's bytes
+            f.seek(off)
+            head = f.read(min(size, 4))
             if not any(len(head) == 4 and all(h & m == w & m for h, w, m in zip(head, want, mask)) for want, mask in FORMAT_HEADS[os.path.splitext(p)[1].lower()]):
                 bad.append((p, size, head))
     return bad
@@ -170,7 +164,8 @@ def format_mismatches(img, progress=None):   # [(guest path, size, first 4 bytes
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Pack a RomFS folder into an indexed image')
     ap.add_argument('--reuse', action='store_true', help='keep the image only while its source tree, packer and image are unchanged')
-    ap.add_argument('source'); ap.add_argument('image')
+    ap.add_argument('source')
+    ap.add_argument('image')
     args = ap.parse_args()
     n = pack(args.source, args.image, reuse=args.reuse)
     print(f'{args.image}: {n} entries, {os.path.getsize(args.image)} bytes')
