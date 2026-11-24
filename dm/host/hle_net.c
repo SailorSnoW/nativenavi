@@ -1,4 +1,4 @@
-// Network services stay offline. The BSD service additionally supplies process-local UDP and EventFd transports, which offline engines use for their own threads.
+// Offline network; BSD serves process-local UDP and EventFd, which offline engines use between their threads.
 #include "hle.h"
 #include "hle_net.h"
 #include <pthread.h>
@@ -8,16 +8,12 @@ HLE_FORCE("_ZN2nn6socket10InitializeERKNS0_6ConfigE", "connects to the bsd socke
 HLE_FORCE("_ZN2nn4nifm10InitializeEv", "connects to the nifm network management service; offline (cut)", Result, h_nifm_Initialize, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn4nifm20CancelNetworkRequestEv", "offline: no request is pending", void, h_nifm_Cancel, void) {}
 HLE_FORCE("_ZN2nn4nifm18IsNetworkAvailableEv", "offline: the network is always unavailable", int, h_nifm_Available, void) { return 0; }
-// Returns bool (`and w0, w0, #1`, Metroid Dread's sdk+0x336210): whether the system's network screen resolved the error
 HLE_FORCE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", "offline: not resolved, shows no system network screen", unsigned, h_nifm_HandleErr, void) { return 0; }
 HLE_FORCE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", "offline: no proxy setting", Result, h_nifm_GetProxy, void *p) { (void)p; return RES_FAIL; }
 HLE_FORCE("nnsslInitialize", "connects to the ssl service; the network library's global init needs it to succeed, offline creates no session (cut)", Result, h_ssl_Initialize, void) { return RES_OK; }
 HLE_FORCE("nnsslFinalize", "pairs with nnsslInitialize (cut)", Result, h_ssl_Finalize, void) { return RES_OK; }
 
-// ---------- BSD service: local UDP/EventFd work offline; remote networking stays unavailable ----------
-// Local transports are used even by offline games: RakNet sends a startup datagram to itself in Divinity: Original Sin 2. No host socket is opened. Descriptors belong to
-// this service, not Darwin's fd table, and stay small enough for games' fd_set arrays. Address/flag/error constants below are the Horizon/FreeBSD ABI (libnx's BSD service passes
-// these structures/flags unchanged; FreeBSD11 sys/socket.h and netinet/in.h). IPv4 payloads retain packet boundaries; the per-endpoint queue holds at most256 packets/1MiB.
+// No host socket: descriptors are this service's, small enough for fd_set; constants are the Horizon / FreeBSD 11 ABI
 #define SK_ENETDOWN 50
 static __thread int t_skerr = SK_ENETDOWN;
 static int sk_error(int error) { t_skerr = error; return -1; }
@@ -43,11 +39,13 @@ static uint64_t g_sk_generation;
 static uint16_t g_sk_ephemeral = 49152;
 static pthread_mutex_t g_efd_m = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_efd_c = PTHREAD_COND_INITIALIZER;
-static int sk_used(int fd) { return fd >= 0 && fd < EFD_MAX && g_efd[fd].used; }   // with g_efd_m held
+static int sk_used(int fd) { return fd >= 0 && fd < EFD_MAX && g_efd[fd].used; }   // g_efd_m held
 static int efd_used(int fd) { return sk_used(fd) && g_efd[fd].used == SK_EFD; }
 static int sk_new_locked(int kind) {
     for (int i = 0; i < EFD_MAX; i++) if (!g_efd[i].used) {
-        memset(&g_efd[i], 0, sizeof g_efd[i]); g_efd[i].used = kind; g_efd[i].generation = ++g_sk_generation;
+        memset(&g_efd[i], 0, sizeof g_efd[i]);
+        g_efd[i].used = kind;
+        g_efd[i].generation = ++g_sk_generation;
         g_efd[i].rcvbuf = g_efd[i].sndbuf = SK_DEFAULT_BUF; return i;
     }
     return sk_error(24);   // EMFILE
@@ -60,7 +58,10 @@ static int efd_create(uint64_t v, int flags) {
 }
 int dm_sk_socket(int family, int type, int protocol) {
     if (family != 2 || type != 2 || (protocol && protocol != 17)) return sk_fail();
-    dm_host_mutex_lock(&g_efd_m); int fd = sk_new_locked(SK_UDP); pthread_mutex_unlock(&g_efd_m); return fd;
+    dm_host_mutex_lock(&g_efd_m);
+    int fd = sk_new_locked(SK_UDP);
+    pthread_mutex_unlock(&g_efd_m);
+    return fd;
 }
 int dm_sk_close(int fd) {
     dm_host_mutex_lock(&g_efd_m);
@@ -87,7 +88,7 @@ static int efd_write(int fd, uint64_t v) {
     if (ok) { g_efd[fd].count += v; pthread_cond_broadcast(&g_efd_c); }
     pthread_mutex_unlock(&g_efd_m); return ok ? 0 : sk_error(SK_EBADF);
 }
-// sockaddr_in is {u8 length, u8 family, u16 port, u32 address, padding}, port/address in network byte order. sin_len may be zero in hand-written game code.
+// u8 len, u8 family, u16 port, u32 addr, network order; sin_len may be 0
 static int sk_addr_read(const void *a, unsigned n, uint32_t *addr, uint16_t *port) {
     if (!a || n < 16) return sk_error(SK_EINVAL);
     const uint8_t *b = a;
@@ -123,7 +124,10 @@ static int sk_bind_locked(int fd, uint32_t addr, uint16_t port) {
 }
 int dm_sk_bind(int fd, const void *a, unsigned n) {
     uint32_t addr; uint16_t port; if (sk_addr_read(a, n, &addr, &port)) return -1;
-    dm_host_mutex_lock(&g_efd_m); int r = sk_udp_locked(fd) ? sk_bind_locked(fd, addr, port) : sk_error(SK_EBADF); pthread_mutex_unlock(&g_efd_m); return r;
+    dm_host_mutex_lock(&g_efd_m);
+    int r = sk_udp_locked(fd) ? sk_bind_locked(fd, addr, port) : sk_error(SK_EBADF);
+    pthread_mutex_unlock(&g_efd_m);
+    return r;
 }
 int dm_sk_connect(int fd, const void *a, unsigned n) {
     uint32_t addr = 0; uint16_t port = 0; int disconnect = a && n >= 2 && ((const uint8_t *)a)[1] == 0;
@@ -132,7 +136,11 @@ int dm_sk_connect(int fd, const void *a, unsigned n) {
     dm_host_mutex_lock(&g_efd_m); int r = 0;
     if (!sk_udp_locked(fd)) r = sk_error(SK_EBADF);
     else if (!g_efd[fd].port && sk_bind_locked(fd, 0, 0)) r = -1;
-    else { g_efd[fd].connected = !disconnect; g_efd[fd].peer_addr = addr ? addr : 0x7f000001; g_efd[fd].peer_port = port; }
+    else {
+        g_efd[fd].connected = !disconnect;
+        g_efd[fd].peer_addr = addr ? addr : 0x7f000001;
+        g_efd[fd].peer_port = port;
+    }
     pthread_mutex_unlock(&g_efd_m); return r;
 }
 int dm_sk_name(int fd, void *a, unsigned *n, int peer) {
@@ -148,7 +156,11 @@ int dm_sk_shutdown(int fd, int how) {
     if (!sk_udp_locked(fd)) r = sk_error(SK_EBADF);
     else if (how < 0 || how > 2) r = sk_error(SK_EINVAL);
     else if (!g_efd[fd].connected) r = sk_error(SK_ENOTCONN);
-    else { if (how != 1) g_efd[fd].shut_read = 1; if (how != 0) g_efd[fd].shut_write = 1; pthread_cond_broadcast(&g_efd_c); }
+    else {
+        if (how != 1) g_efd[fd].shut_read = 1;
+        if (how != 0) g_efd[fd].shut_write = 1;
+        pthread_cond_broadcast(&g_efd_c);
+    }
     pthread_mutex_unlock(&g_efd_m); return r;
 }
 int dm_sk_fcntl(int fd, int cmd, int value) {
@@ -157,7 +169,10 @@ int dm_sk_fcntl(int fd, int cmd, int value) {
     else if (cmd == 1) r = g_efd[fd].fdflags;
     else if (cmd == 2) g_efd[fd].fdflags = value & 1;
     else if (cmd == 3) r = g_efd[fd].used == SK_EFD ? (g_efd[fd].flags & 6 ? SK_NONBLOCK : 0) : g_efd[fd].flags;
-    else if (cmd == 4) { if (g_efd[fd].used == SK_EFD) g_efd[fd].flags = (g_efd[fd].flags & ~6) | (value & SK_NONBLOCK ? 2 : 0); else g_efd[fd].flags = value & SK_NONBLOCK; }
+    else if (cmd == 4) {
+        if (g_efd[fd].used == SK_EFD) g_efd[fd].flags = (g_efd[fd].flags & ~6) | (value & SK_NONBLOCK ? 2 : 0);
+        else g_efd[fd].flags = value & SK_NONBLOCK;
+    }
     else r = sk_error(SK_EINVAL);
     pthread_mutex_unlock(&g_efd_m); return r;
 }
@@ -176,7 +191,11 @@ int dm_sk_setopt(int fd, int level, int option, const void *value, unsigned size
         else if (option == 0x20) g_efd[fd].broadcast = !!v;
         else if (option == 0x1001 || option == 0x1002) {
             if (v <= 0) r = sk_error(SK_EINVAL);
-            else { if (v > SK_QUEUE_MAX) v = SK_QUEUE_MAX; if (option == 0x1001) g_efd[fd].sndbuf = v; else g_efd[fd].rcvbuf = v; }
+            else {
+                if (v > SK_QUEUE_MAX) v = SK_QUEUE_MAX;
+                if (option == 0x1001) g_efd[fd].sndbuf = v;
+                else g_efd[fd].rcvbuf = v;
+            }
         } else r = sk_error(42);   // ENOPROTOOPT
     } else r = sk_error(42);
     pthread_mutex_unlock(&g_efd_m); return r;
@@ -219,11 +238,15 @@ long dm_sk_sendto(int fd, const void *data, unsigned long n, int flags, const vo
         if (score > specificity) { target = i; specificity = score; }
     }
     if (target >= 0) { int i = target;
-        // UDP drops a datagram when the receive queue is full; the sender still succeeds, as it has no delivery acknowledgement.
+        // a full queue drops the datagram; the send still succeeds
         if (g_efd[i].packets < SK_PACKET_MAX && n <= (size_t)g_efd[i].rcvbuf && g_efd[i].queued <= (size_t)g_efd[i].rcvbuf - n) {
             sk_packet *p = malloc(sizeof *p + n);
             if (!p) { t_skerr = 55; goto done; }   // ENOBUFS
-            p->next = NULL; p->addr = src; p->port = g_efd[fd].port; p->size = n; if (n) memcpy(p->data, data, n);
+            p->next = NULL;
+            p->addr = src;
+            p->port = g_efd[fd].port;
+            p->size = n;
+            if (n) memcpy(p->data, data, n);
             if (g_efd[i].tail) g_efd[i].tail->next = p; else g_efd[i].head = p;
             g_efd[i].tail = p; g_efd[i].queued += n; g_efd[i].packets++; pthread_cond_broadcast(&g_efd_c);
         }
@@ -254,8 +277,17 @@ long dm_sk_recvfrom(int fd, void *data, unsigned long n, int flags, void *a, uns
         if (!sk_udp_locked(fd) || g_efd[fd].generation != gen) { t_skerr = SK_EBADF; break; }
         sk_packet *p = g_efd[fd].head;
         if (p) {
-            size_t copied = n < p->size ? n : p->size; if (copied) memcpy(data, p->data, copied); sk_addr_write(a, al, p->addr, p->port); r = (long)copied;
-            if (!(flags & SK_MSG_PEEK)) { g_efd[fd].head = p->next; if (!p->next) g_efd[fd].tail = NULL; g_efd[fd].queued -= p->size; g_efd[fd].packets--; free(p); }
+            size_t copied = n < p->size ? n : p->size;
+            if (copied) memcpy(data, p->data, copied);
+            sk_addr_write(a, al, p->addr, p->port);
+            r = (long)copied;
+            if (!(flags & SK_MSG_PEEK)) {
+                g_efd[fd].head = p->next;
+                if (!p->next) g_efd[fd].tail = NULL;
+                g_efd[fd].queued -= p->size;
+                g_efd[fd].packets--;
+                free(p);
+            }
             break;
         }
         if (g_efd[fd].shut_read) { r = 0; break; }
@@ -268,13 +300,17 @@ long dm_sk_recvfrom(int fd, void *data, unsigned long n, int flags, void *a, uns
 done:
     pthread_mutex_unlock(&g_efd_m); return r;
 }
-// Closed/reused descriptors from this wait report POLLNVAL. Descriptors the host never made retain the prior offline behavior: nothing ready at the timeout.
+// closed or reused during the wait: POLLNVAL
 static int efd_ready(sk_pollfd *p, uint64_t n, uint64_t open, const uint64_t generation[EFD_MAX]) {
     int ready = 0;
     for (uint64_t i = 0; i < n; i++) {
         p[i].revents = 0; int fd = p[i].fd;
         if (fd < 0 || fd >= EFD_MAX || !(open >> fd & 1)) continue;
-        if (!sk_used(fd) || g_efd[fd].generation != generation[fd]) { p[i].revents = SK_POLLNVAL; ready++; continue; }
+        if (!sk_used(fd) || g_efd[fd].generation != generation[fd]) {
+            p[i].revents = SK_POLLNVAL;
+            ready++;
+            continue;
+        }
         if (g_efd[fd].used == SK_EFD ? g_efd[fd].count != 0 : (g_efd[fd].head != NULL || g_efd[fd].shut_read)) p[i].revents |= p[i].events & (SK_POLLIN | SK_POLLRDNORM);
         if (g_efd[fd].used == SK_EFD || !g_efd[fd].shut_write) p[i].revents |= p[i].events & (SK_POLLOUT | SK_POLLWRNORM);
         if (p[i].revents) ready++;
@@ -288,16 +324,20 @@ int dm_sk_poll(void *fds, uint64_t n, int ms) {
     for (uint64_t i = 0; i < n; i++) if (p[i].fd >= 0 && sk_used(p[i].fd)) { open |= 1ull << p[i].fd; generation[p[i].fd] = g_efd[p[i].fd].generation; }
     for (uint64_t i = 0; i < n; i++) p[i].revents = 0;
     if (!open) { pthread_mutex_unlock(&g_efd_m); return sk_idle(ms); }
-    // Periodically return from an endless wait, as before, so guest garbage collection/shutdown can observe a thread outside the host hook.
+    // endless waits return every 100 ms: the guest's GC and shutdown must see the thread outside the hook
     int64_t limit = (ms < 0 ? 100 : (int64_t)ms) * 1000000; uint64_t start = guest_ns(); int ready;
     while (!(ready = efd_ready(p, n, open, generation))) {
-        int64_t left = limit - (int64_t)(guest_ns() - start); if (left <= 0 || atomic_load(&dm_reset_stop)) break;   // a reset (hle_reset.c): nothing ready, and the caller's next boundary ends its thread
+        int64_t left = limit - (int64_t)(guest_ns() - start); if (left <= 0 || atomic_load(&dm_reset_stop)) break;   // reset: the next boundary ends the thread
         dm_guest_cond_wait_ns(&g_efd_c, &g_efd_m, dm_detclock_enabled() && left > 1000000 ? 1000000 : left);
     }
     pthread_mutex_unlock(&g_efd_m); return ready;
 }
-void dm_net_reset_wake(void) { pthread_mutex_lock(&g_efd_m); pthread_cond_broadcast(&g_efd_c); pthread_mutex_unlock(&g_efd_m); }   // hle_reset.c
-// fd_set is1024 bits; timeval is {i64 seconds, i64 microseconds}. Only this service's small descriptors can become ready.
+void dm_net_reset_wake(void) {
+    pthread_mutex_lock(&g_efd_m);
+    pthread_cond_broadcast(&g_efd_c);
+    pthread_mutex_unlock(&g_efd_m);
+}
+// fd_set is 1024 bits; timeval {i64 s, i64 us}
 int dm_sk_select(int nfds, uint64_t *r, uint64_t *w, uint64_t *e, const int64_t *tv) {
     uint64_t *sets[3] = {r, w, e}; static const int16_t ask[3] = {SK_POLLIN, SK_POLLOUT, 0}; sk_pollfd p[EFD_MAX]; int np = 0;
     if (nfds < 0 || (tv && (tv[0] < 0 || tv[1] < 0 || tv[1] >= 1000000))) return sk_error(SK_EINVAL);
@@ -329,7 +369,6 @@ SKF("_ZN2nn6socket11GetSockNameEiPNS0_8SockAddrEPj", h_sk_GetSockName, int s, vo
 SKF("_ZN2nn6socket10GetSockOptEiNS0_5LevelENS0_6OptionEPvPj", h_sk_GetSockOpt, int s, int l, int o, void *v, unsigned *n) { return dm_sk_getopt(s, l, o, v, n); }
 SKF("_ZN2nn6socket10SetSockOptEiNS0_5LevelENS0_6OptionEPKvj", h_sk_SetSockOpt, int s, int l, int o, const void *v, unsigned n) { return dm_sk_setopt(s, l, o, v, n); }
 SKF("_ZN2nn6socket5FcntlEiNS0_12FcntlCommandEz", h_sk_Fcntl, int s, int c, int v) { return dm_sk_fcntl(s, c, v); }
-// SDK 21 overloads Star Fox imports: plain sockaddr, the ShutdownMethod enum, Read / Write and a name lookup without options
 SKF("_ZN2nn6socket11GetPeerNameEiP8sockaddrPj", h_sk_GetPeerName21, int s, void *a, unsigned *n) { return dm_sk_name(s, a, n, 1); }
 SKF("_ZN2nn6socket8ShutdownEiNS0_14ShutdownMethodE", h_sk_Shutdown21, int s, int how) { return dm_sk_shutdown(s, how); }
 HLE_FORCE("_ZN2nn6socket4ReadEiPvm", "local UDP/EventFd (offline BSD service)", long, h_sk_Read, int s, void *b, unsigned long n) { return dm_sk_read(s, b, n); }
@@ -350,7 +389,6 @@ HLE_FORCE("_ZN2nn6socket11GetAddrInfoEPKcS2_PKNS0_8AddrInfoEPPS3_", "name resolu
 }
 HLE_FORCE("_ZN2nn6socket12FreeAddrInfoEPNS0_8AddrInfoE", "pairs with GetAddrInfo (cut)", void, h_sk_FreeAddrInfo, void *ai) { (void)ai; }
 HLE_FORCE("_ZN2nn6socket12GetLastErrorEv", "socket error code kept by the host", int, h_sk_GetLastError, void) { return t_skerr; }
-// C interface
 SKF("nnsocketSocket", h_nsk_Socket, int a, int b, int c) { return dm_sk_socket(a, b, c); }
 SKF("nnsocketBind", h_nsk_Bind, int s, const void *a, unsigned n) { return dm_sk_bind(s, a, n); }
 SKF("nnsocketConnect", h_nsk_Connect, int s, const void *a, unsigned n) { return dm_sk_connect(s, a, n); }
@@ -368,9 +406,7 @@ HLE_FORCE("nnsocketSend", "local UDP (offline BSD service)", long, h_nsk_Send, i
 HLE_FORCE("nnsocketGetLastErrno", "socket error code kept by the host", int, h_nsk_GetErrno, void) { return t_skerr; }
 HLE_FORCE("nnsocketSetLastErrno", "socket error code kept by the host", void, h_nsk_SetErrno, int e) { t_skerr = e; }
 
-// ---------- ssl: offline, Initialize and a context's Create / Destroy succeed, everything else that contacts the service fails ----------
-// A context is a session of the local ssl service, so on Horizon Create works with no network and only a connection needs one; DRAGON QUEST BUILDERS 2 ends its startup when Create fails (main+0x861260).
-// Not cut: Context / Connection construction and destruction, Context::GetContextId (only read and write game objects).
+// ssl offline: Initialize and Context Create / Destroy succeed (a local session on Horizon); the rest fails
 #define SSF(m, cname, ...) HLE_FORCE(m, "ssl service (cut): fails", Result, cname, __VA_ARGS__)
 HLE_FORCE("_ZN2nn3ssl10InitializeEv", "same as nnsslInitialize: succeeds, creates no session (cut)", Result, h_ssl_InitCpp, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn3ssl8FinalizeEv", "pairs with Initialize (cut)", Result, h_ssl_FinCpp, void) { return RES_OK; }
@@ -387,7 +423,6 @@ SSF("_ZN2nn3ssl10Connection19SetSocketDescriptorEi", h_ssl_CnSock, void *self, i
 SSF("_ZN2nn3ssl10Connection18GetVerifyCertErrorEPNS_6ResultE", h_ssl_CnVerifyErr, void *self, uint32_t *r) { (void)self; if (r) *r = RES_FAIL; return RES_FAIL; }
 SSF("_ZN2nn3ssl10Connection4PeekEPcPij", h_ssl_CnPeek, void *self, char *b, int *o, unsigned n) { (void)self; (void)b; (void)n; if (o) *o = 0; return RES_FAIL; }
 SSF("_ZN2nn3ssl10Connection4PollEPNS1_9PollEventES3_j", h_ssl_CnPoll, void *self, void *o, void *i, unsigned t) { (void)self; (void)o; (void)i; (void)t; return RES_FAIL; }
-// C interface: all return nnResult
 #define SSC(m, cname) HLE_FORCE(m, "ssl service (cut): fails", Result, cname, void) { return RES_FAIL; }
 SSC("nnsslConnectionCreate", h_nssl_Create) SSC("nnsslConnectionDestroy", h_nssl_Destroy)
 SSC("nnsslConnectionDoHandshakeWithCertBuffer", h_nssl_Handshake) SSC("nnsslConnectionGetConnectionId", h_nssl_GetId)
@@ -399,15 +434,16 @@ SSC("nnsslConnectionSetSessionCacheMode", h_nssl_SetCache) SSC("nnsslConnectionS
 SSC("nnsslConnectionSetVerifyOption", h_nssl_SetVerify) SSC("nnsslConnectionWrite", h_nssl_Write)
 SSC("nnsslContextDestroy", h_nssl_CtxDestroy) SSC("nnsslContextGetContextId", h_nssl_CtxGetId)
 
-// A reset (hle_reset.c), once the game's threads have ended: its sockets and event descriptors close with it, their queued packets freed; the generation keeps counting, so a
-// descriptor number given again is a new one to a poll
+// the generation keeps counting: a reused number is new to a poll
 void dm_net_reset(void) {
     pthread_mutex_lock(&g_efd_m);
     int n = 0;
     for (int i = 0; i < EFD_MAX; i++) {
         n += g_efd[i].used;
         for (sk_packet *k = g_efd[i].head, *x; k; k = x) { x = k->next; free(k); }
-        uint64_t gen = g_efd[i].generation; memset(&g_efd[i], 0, sizeof g_efd[i]); g_efd[i].generation = gen;
+        uint64_t gen = g_efd[i].generation;
+        memset(&g_efd[i], 0, sizeof g_efd[i]);
+        g_efd[i].generation = gen;
     }
     pthread_cond_broadcast(&g_efd_c);
     pthread_mutex_unlock(&g_efd_m);

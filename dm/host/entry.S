@@ -1,9 +1,5 @@
-// Common entries + static stub tables.
-// 0) unimpl_stubs: named stubs for unimplemented imports, the k-th = movz x9,#k; b unimpl_entry (static code: nothing is written at run time)
-// 1) unimpl_entry: stub entry for unimplemented imports, x9 = stub number; save x0-x8+lr and call unimpl_c(idx, regs).
-// 2) dm_gate_stubs + dm_gate: the rewriter replaces svc / cntpct reads with a gate block that pushes the guest's x29 / x30 and calls the address in the thread's KGATE slot, which is
-//    this thread's stub (thread.c guest_gate_stack). The stub passes the top of the thread's gate stack to dm_gate, which saves x0-x30 there, calls gate_dispatch(ret, regs) on that stack,
-//    writes the registers back and returns. Horizon's kernel never writes a thread's stack during an SVC; the gate stack keeps it so.
+// unimpl_stubs: stub k = movz x9,#k; b unimpl_entry, which calls unimpl_c(idx, regs).
+// dm_gate: a rewritten svc / cntpct calls its thread's stub, which runs gate_dispatch on the thread's gate stack.
     .text
     .globl _unimpl_stubs
     .p2align 3
@@ -31,11 +27,11 @@ _unimpl_entry:
     ldp x29, x30, [sp], #96
     ret
 
-// The gate stacks' tops, one per gate slot (thread.c guest_gate_stack). Page-aligned, so that stub k reaches its entry with adrp and an immediate offset alone
+// Page-aligned: each stub reaches its top with adrp + immediate.
     .globl _dm_gate_top
-    .zerofill __DATA,__bss,_dm_gate_top,8192,12      // 8 × 1024 (= thread.c GATE_SLOTS)
+    .zerofill __DATA,__bss,_dm_gate_top,8192,12      // 8 × GATE_SLOTS (thread.c)
 
-// Stub k (16 bytes) serves gate slot k: x29 = the return point (the gate block holds the guest's x29 at [sp] and reloads it after the gate), x30 = the slot's gate stack top
+// Stub k: x29 = return point, x30 = gate slot k's stack top.
     .globl _dm_gate_stubs
     .p2align 4
 _dm_gate_stubs:
@@ -51,11 +47,8 @@ _dm_gate_stubs:
     .globl _dm_gate
     .p2align 2
 _dm_gate:
-    // The register frame (800 bytes) goes at the top of the gate stack, not below the guest's sp: on Horizon an SVC leaves the thread's stack as it was, including the words below sp.
-    // A collector that records a thread's sp before a blocking call and then scans from there finds pointers its callees left below their returned frames: Streets of Rage 4's BRUTE
-    // garbage collector parks a thread in Thread.Sleep with the caller's x20 only in such a word (main+0x2ff4c80's frame), which the old frame here overwrote, so a live array was freed.
-    // Layout as before: x0..x30 at +0 (x30 = the return point), q0..q31 at +256, nzcv / fpsr / fpcr at +768 / +776 / +784, and at +792 the gate block's sp
-    // (the guest's x29 / x30 the block pushed; the guest's stack follows at +16)
+    // The frame goes on the gate stack, not below the guest sp: Horizon's SVCs leave the guest stack intact (a GC may scan below sp).
+    // x0..x30 +0, q0..q31 +256, nzcv/fpsr/fpcr +768/+776/+784, gate block sp +792.
     sub x30, x30, #800
     stp x0, x1, [x30, #0]
     stp x2, x3, [x30, #16]
@@ -94,11 +87,11 @@ _dm_gate:
     str x9, [x30, #776]
     mrs x9, fpcr
     str x9, [x30, #784]
-    ldr x9, [sp]              // the guest's x29 (the crash backtrace walks the x29 chain from here)
-    stp x9, x29, [x30, #232]  // x29, then x30 = the return point
+    ldr x9, [sp]
+    stp x9, x29, [x30, #232]
     mov x9, sp
     str x9, [x30, #792]
-    // A gate entered on its own gate stack would overwrite the frame of the gate below it: none is (gate handlers do not run guest code); stop if one ever is
+    // A gate re-entered on its own stack would overwrite the frame below: stop.
     add x10, x30, #800
     cmp x9, x10
     b.hs 1f
@@ -110,8 +103,8 @@ _dm_gate:
     bl _dm_gate_nested
 1:  mov sp, x30
     ldr x29, [sp, #232]
-    ldr x0, [sp, #240]        // Return point = gate identifier
-    mov x1, sp                // regs
+    ldr x0, [sp, #240]        // return point = gate identifier
+    mov x1, sp
     bl _gate_dispatch
     ldr x9, [sp, #784]
     msr fpcr, x9
@@ -135,9 +128,7 @@ _dm_gate:
     ldp q26, q27, [sp, #672]
     ldp q28, q29, [sp, #704]
     ldp q30, q31, [sp, #736]
-    // A gate may modify any general-purpose register: svc out-parameters are in x0..x8, and the target of mrs cntpct can be any xN (14 of the 33 sites in sdk are x19..x23)
-    // ⇒ read back all of x0..x28 (x18 is the Apple platform register; the guest's x18 has been rewritten to the thread slot, so skip it and leave it alone).
-    // x29 / x30 are the gate block's to restore (from the words it pushed): here they carry the block's sp and the return point
+    // Read back x0..x28 except x18 (Apple's platform register); the gate block restores x29 / x30.
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     ldp x4, x5, [sp, #32]
@@ -158,8 +149,7 @@ _dm_gate:
     mov sp, x29
     ret
 
-// 3) dm_thread_enter(entry, arg, sp): guest thread start. Switch to the guest stack given by the SDK and call entry with x0 = argument;
-//    Horizon threads must exit via ExitThread; returning from entry is reported as an error.
+// dm_thread_enter(entry, arg, sp): entry must end in ExitThread; returning is an error.
     .globl _dm_thread_enter
     .p2align 2
 _dm_thread_enter:

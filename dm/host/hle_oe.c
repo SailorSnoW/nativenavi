@@ -1,128 +1,140 @@
-// nn::oe (application operating environment): on the real device the console state is queried through the am/oe services; the host gives fixed state directly.
-// oe::Initialize is in hle_sdkinit.c, not here.
-// Environment switches: DM_OPMODE=0 handheld / 1 console (default: the profile's op_mode, console unless set; console corresponds to the console-mode render profile); DM_LANG=language code (default en-US; the Mac app's launcher sets it from the bundle's DMLanguage, dm/mac/launcher.c).
+// nn::oe, answered directly. DM_OPMODE=0 handheld / 1 console (default: the profile's op_mode); DM_LANG=language code (default en-US).
 #include "hle.h"
 #include "front.h"
 
-// The operation mode is runtime state (DM_OE_SCRIPT can change it): the single source is here, taken once from DM_OPMODE at startup, the environment variable is not read again afterwards
+// DM_OPMODE is read once; DM_OE_SCRIPT and the front end change the mode
 #include <stdatomic.h>
 #include <unistd.h>
 static _Atomic int g_opmode = -1;
 int dm_opmode(void) {
     int m = g_opmode;
-    if (m < 0) { const char *e = getenv("DM_OPMODE"); int v = e ? atoi(e) : DM_GAME_OPMODE; int exp = -1; atomic_compare_exchange_strong(&g_opmode, &exp, v); m = g_opmode; }
+    if (m < 0) {
+        const char *e = getenv("DM_OPMODE");
+        int v = e ? atoi(e) : DM_GAME_OPMODE;
+        int exp = -1;
+        atomic_compare_exchange_strong(&g_opmode, &exp, v);
+        m = g_opmode;
+    }
     return m;
 }
-// ---------- System notification queue (AppletMessage): front end state changes → fetched by the game every frame with TryPopNotificationMessage ----------
-// Message numbers the host sends: 15 focus change, 30 operation mode change, 31 performance mode change
 enum { MSG_FOCUS = 15, MSG_OPMODE = 30, MSG_PERFMODE = 31 };
 #define MQ 32
-static pthread_mutex_t g_mq_lock = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_mq_cond = PTHREAD_COND_INITIALIZER;   // cond: wakes the blocking PopNotificationMessage
-static uint32_t g_mq[MQ]; static int g_mqh, g_mqn;
-static _Atomic int g_ntf_opmode, g_ntf_perfmode;          // only pushed after the game turns it on with Set*NotificationEnabled
+static pthread_mutex_t g_mq_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_mq_cond = PTHREAD_COND_INITIALIZER;
+static uint32_t g_mq[MQ];
+static int g_mqh, g_mqn;
+static _Atomic int g_ntf_opmode, g_ntf_perfmode;          // pushed only once the game enables them
 static void mq_push(uint32_t m) {
     pthread_mutex_lock(&g_mq_lock);
-    // 15/30/31 are invalidation notifications meaning "query the current state", not events carrying historical values.
-    // While one of the same type has not been taken yet, the first queue position is kept: a consumer loop only reads the latest state, repeated notifications write back the same thing, and with the same size there is no further resize.
-    // Only these three state notifications are merged; future per-occurrence events (such as Resume/Exit) must not use this rule.
-    // Legitimate state producers only send these three, so at most three of them are pending, and any number of focus losses/restores no longer hits the 32-slot limit; after a pop, new changes are enqueued as usual.
+    // 15 / 30 / 31 mean "query again": one still queued stands for a new one. Never merge an event of its own (Resume, Exit).
     if (m == MSG_FOCUS || m == MSG_OPMODE || m == MSG_PERFMODE)
         for (int i = 0; i < g_mqn; i++)
-            if (g_mq[(g_mqh + i) % MQ] == m) { pthread_mutex_unlock(&g_mq_lock); return; }
+            if (g_mq[(g_mqh + i) % MQ] == m) {
+                pthread_mutex_unlock(&g_mq_lock);
+                return;
+            }
     if (g_mqn == MQ) die("oe notification queue overflow (is the game not popping?)");
     g_mq[(g_mqh + g_mqn++) % MQ] = m;
     pthread_cond_broadcast(&g_mq_cond);
     pthread_mutex_unlock(&g_mq_lock);
 }
-void dm_set_opmode(int m) {   // DM_OE_SCRIPT: change the state and push 30 / 31 according to the switches the game has turned on
-    int old = dm_opmode(); if (old == m) return;
+void dm_set_opmode(int m) {
+    int old = dm_opmode();
+    if (old == m) return;
     g_opmode = m;
     LOG("oe operation mode %d → %d", old, m);
     if (g_ntf_opmode) mq_push(MSG_OPMODE);
     if (g_ntf_perfmode) mq_push(MSG_PERFMODE);
 }
-// FocusState: 1 InFocus, 2 OutOfFocus, 3 Background. The front end calls dm_focus_set (the Mac window losing focus or being minimized, front_mac.m)
-static _Atomic int g_focus = 1; static _Atomic uint64_t g_focus_in_ns;   // the front end's state; time of its most recent entry into InFocus
-// Focus handling mode the game set (-1: none). The SDK's oe::SetFocusHandlingMode (SDK 18 sdk+0x3c5770) turns it into am's SetFocusHandlingMode(notify, ?, suspend) and
-// SetOutOfFocusSuspendingEnabled: 0 → (0, 0, 1), 1 → (1, 1, 0), 2 → (1, 0, 1), 3 → (0, 0, 1) + out-of-focus suspending. Only 1 and 2 ask for focus notifications; under 0 and 3
-// the system suspends the game out of focus and it never sees message 15 (the host's suspend is the guest clock freeze and the graphics gate). Super Mario Galaxy 2 sets 3, and
-// its Wii layer's pause on focus 2 (main+0x663ba0) never finished: the main loop waits for the GX thread to pause (main+0x5ce870), which waits for work the paused CPU never sends
+// FocusState: 1 InFocus, 2 OutOfFocus, 3 Background
+static _Atomic int g_focus = 1;
+static _Atomic uint64_t g_focus_in_ns;
+// -1: none. Only modes 1 and 2 get message 15 (docs/reference/services.md#focus-handling-mode-decides-whether-focus-changes-are-notified)
 static _Atomic int g_focus_mode = -1;
-static int focus_notifies(void) { int m = atomic_load(&g_focus_mode); return m != 0 && m != 3; }   // no mode set: notify, as before
-// Library applets the game has open (dm_applet_enter / dm_applet_leave, DM_APPLET in hle.h). On Horizon an applet the application starts takes its focus: am sends message 15
-// with OutOfFocus when it opens (libnx: AppletFocusState_OutOfFocus, "LibraryApplet open") and 15 with InFocus when it closes, and the application's Show call returns once it
-// has closed. The host's stand-ins answer on the caller's thread, so the game sees that pair around the call. Mario Kart 8 Deluxe applies the controller applet's answer only
-// after the InFocus notification (its notification thread main+0x8ea560 sets the flag main+0x87b5d0 takes each frame); with none its 2P character select never took input
-// (GitHub issue #550). The game sees the front end's state, or 2 while an applet is open over an application in focus; a change of what it sees is one notification 15
-static int g_applets; static _Atomic int g_seen = 1; static pthread_mutex_t g_seen_lock = PTHREAD_MUTEX_INITIALIZER;
-static void focus_sync(int applets) {   // applets: +1 an applet opens, -1 one closes, 0 the front end's state changed
+static int focus_notifies(void) {
+    int m = atomic_load(&g_focus_mode);
+    return m != 0 && m != 3;
+}
+// Open library applets take the application's focus: the game sees 2 while one is open (docs/reference/services.md#library-applets-take-the-applications-focus)
+static int g_applets;
+static _Atomic int g_seen = 1;
+static pthread_mutex_t g_seen_lock = PTHREAD_MUTEX_INITIALIZER;
+static void focus_sync(int applets) {
     pthread_mutex_lock(&g_seen_lock);
     g_applets += applets;
     if (g_applets < 0) die("dm_applet_leave without dm_applet_enter");
     int w = atomic_load(&g_focus), s = w == 1 && g_applets ? 2 : w, changed = atomic_exchange(&g_seen, s) != s;
     pthread_mutex_unlock(&g_seen_lock);
-    if (!changed) return;   // pushed outside the lock: 15 only says "query the state again", so pushes from two threads need no order
+    if (!changed) return;   // outside the lock: pushes need no order
     LOG("oe focus state → %d%s", s, applets > 0 ? " (library applet open)" : applets < 0 ? " (library applet closed)" : "");
     if (focus_notifies()) mq_push(MSG_FOCUS);
 }
-void dm_applet_enter(const char *name) { LOG("oe library applet: %s", name); focus_sync(1); }
+void dm_applet_enter(const char *name) {
+    LOG("oe library applet: %s", name);
+    focus_sync(1);
+}
 void dm_applet_leave(void) { focus_sync(-1); }
-int dm_focus_now(void) { return atomic_load(&g_focus); }   // the front end's state, not an applet's: the display link follows the window
-uint64_t dm_focus_in_since(void) { return atomic_load(&g_focus_in_ns); }   // graphics layer display link watchdog: stalls are only computed while active, counted from activation (nvn_display.inc mtl_present_wait)
+int dm_focus_now(void) { return atomic_load(&g_focus); }
+uint64_t dm_focus_in_since(void) { return atomic_load(&g_focus_in_ns); }
 void dm_focus_set(int st) {
     if (st < 1 || st > 3) die("dm_focus_set: invalid state %d", st);
     if (st == 1) atomic_store(&g_focus_in_ns, now_ns());
     if (atomic_exchange(&g_focus, st) == st) return;
     focus_sync(0);
 }
-static int opmode(void) { return dm_opmode(); }
 
-HLE_FORCE("_ZN2nn2oe17FinishStartupLogoEv", "dismiss the system boot screen (through the am application proxy); the host has no boot screen", void, h_oe_FinishLogo, void) {}   // Metroid Dread calls it at main+0xadfed0
+HLE_FORCE("_ZN2nn2oe17FinishStartupLogoEv", "dismiss the system boot screen (through the am application proxy); the host has no boot screen", void, h_oe_FinishLogo, void) {}
 HLE_FORCE("_ZN2nn2oe38SetUserInactivityDetectionTimeExtendedEb", "inactivity extension mode 1 or 0; the host never turns the screen off", void, h_oe_InactivityExtSafe, unsigned on) { (void)on; }
-// Applet resource user ID (ARUID, the number am assigns to this process): the host has no am, and the SDK's own getter returns 0. SDK 20's OpenAudioRenderer (the CPU rendering + manual execution path, sdk+0x221730)
-//   aborts when it gets 0 (The Legend of Zelda: Breath of the Wild 1.9.0); SDK 16 did not check. Report a fixed non-zero ID, used only as an identifier
+// the SDK's getter returns 0 without am, and OpenAudioRenderer aborts on 0 (docs/reference/services.md#applet-resource-user-id)
 HLE_FORCE("_ZN2nn6applet23GetAppletResourceUserIdEv", "applet resource user ID; the host returns a fixed non-zero value", uint64_t, h_applet_Aruid, void) { return DM_APPLET_RESOURCE_USER_ID; }
 
-// OperationMode: 0 Handheld, 1 Console; PerformanceMode: 0 Normal, 1 Boost (one-to-one with the operation mode)
-HLE_FORCE("_ZN2nn2oe16GetOperationModeEv", "operation mode query; a fixed value from DM_OPMODE", int, h_oe_GetOpMode, void) { return opmode(); }
-// Profile perf_mode boost: Boost whatever the operation mode, a combination a Switch 1 never reports, so a profile choice and not a default. Rhythm Heaven Groove keeps one flag per mode
-//   (main+0xa764 / main+0xa784): console means a TV, which gets a latency calibration (main+0x20d0, scene script main+0x4c0820), and Boost alone picks its 1920x1080 draw size
-//   (table main+0xada6d0, else 1280x720). Handheld with Boost gave it full-size drawing without the TV calibration, as a phone wanted
-HLE_FORCE("_ZN2nn2oe18GetPerformanceModeEv", "performance mode query; same as the operation mode (profile perf_mode boost: Boost)", int, h_oe_GetPerfMode, void) { return DM_GAME_PERF_BOOST ? 1 : opmode(); }
-// Switch 2 SDKs: the graphics scale, which the SDK takes from am's IGraphicsScalingParametersFunctions (a session the host never opened: null read in
-// oe::GetGraphicsScalingParameters). The SDK maps the parameter's first word 10 / 20 / 30 to scale 0 / 1 / 2. Which tier a console reports when is not measured. The games that
-// read it render at full size and count their whole GPU time with tier 0, and less with 1 and 2, so it is taken as how much of the GPU the game may use, not as the operation
-// mode (an inference from their code; a system that needs the GPU itself, as for GameChat's video, would lower it, which the host never does): the host answers 0 in both
-// modes. Donkey Kong Bananza takes it as its display manager's scale index (+0x1c7, main+0x549348): its frame buffer is the display's size times {1.0, 0.8, 2/3}[tier]
-// (main+0x30f840; docked 2304x1296 with tier 1, 2880x1620 with 0), and as an index into {3, 12, 16} (main+0x1d1a604) whose value less 3 (0, 9, 13) its dynamic resolution
-// adds to its GPU time (main+0x549614). Star Fox keeps only "tier 0" (byte +0xa of its event 5, main+0xba69970) and renders 0.8 times smaller below it: docked, 768x432 for
-// its 1920x1080 window where tier 0 gives 960x540, its handheld size. Ocarina of Time draws 2048x1152 with tier 1 and 2560x1440 with 0. The host answered 1 docked until
-// these were found. DM_GFX_SCALE sets a tier, to see what a game does with a reduced one
-static int gfx_scale(void) { const char *e = getenv("DM_GFX_SCALE"); int v = e ? atoi(e) : 0; return v >= 0 && v <= 2 ? v : 0; }
+// OperationMode: 0 Handheld, 1 Console; PerformanceMode: 0 Normal, 1 Boost
+HLE_FORCE("_ZN2nn2oe16GetOperationModeEv", "operation mode query; a fixed value from DM_OPMODE", int, h_oe_GetOpMode, void) { return dm_opmode(); }
+// a combination a Switch 1 never reports
+HLE_FORCE("_ZN2nn2oe18GetPerformanceModeEv", "performance mode query; same as the operation mode (profile perf_mode boost: Boost)", int, h_oe_GetPerfMode, void) { return DM_GAME_PERF_BOOST ? 1 : dm_opmode(); }
+// The scale tier is GPU budget, not the operation mode: 0 in both (docs/reference/services.md#the-graphics-scale-does-not-follow-the-operation-mode); DM_GFX_SCALE sets one
+static int gfx_scale(void) {
+    const char *e = getenv("DM_GFX_SCALE");
+    int v = e ? atoi(e) : 0;
+    return v >= 0 && v <= 2 ? v : 0;
+}
 HLE_FORCE("_ZN2nn2oe23GetCurrentGraphicsScaleEv", "graphics scale (Switch 2, through am): 0, the whole GPU (DM_GFX_SCALE sets 1 or 2)", int, h_oe_GfxScale, void) { return gfx_scale(); }
 HLE_FORCE("_ZN2nn2oe42SetGraphicsScaleChangedNotificationEnabledEb", "graphics scale change notification (Switch 2, through am); the host's scale never changes",
           void, h_oe_GfxScaleNotify, unsigned on) { (void)on; }
-// The frame length the game aims at (Switch 2 SDKs): oe::SetGraphicsTargetFrameRate maps up to 59 fps to mode 1, up to 119 to mode 2 and above to mode 3, SetGraphicsTargetFrameRateAuto
-// to mode 0, and both call this, which locks the gs graphics server's context and sends it the mode. The host has no graphics server (nv::InitializeGraphics), so the context is null and
-// the lock crashed: Hyrule Warriors: Age of Imprisonment sets 60 / its present interval at boot (main+0x1e5d244). The host paces by the window's present interval, so the mode is only noted
+// The SDK's sends the mode to the gs server the host lacks; the host paces by the present interval (docs/reference/services.md#the-target-frame-rate-graphics-frame-length)
 HLE_FORCE("_ZN2nn2gs3sdk26SetGraphicsFrameLengthModeENS1_23GraphicsFrameLengthModeE", "target frame length (Switch 2, gs): noted; the host paces by the present interval",
           void, h_gs_FrameLength, int mode) {
-    static int last = -1; if (mode != last) { LOG("gs: graphics frame length mode %d (0 auto, 1 30 fps, 2 60 fps, 3 120 fps)", mode); last = mode; }
+    static int last = -1;
+    if (mode != last) {
+        LOG("gs: graphics frame length mode %d (0 auto, 1 30 fps, 2 60 fps, 3 120 fps)", mode);
+        last = mode;
+    }
 }
 HLE_FORCE("_ZN2nn2oe24IsInStoreDemoModeEnabledEv", "retail store demo mode (through am); never", unsigned, h_oe_StoreDemo, void) { return 0; }
 
-// Scripted state changes (verify lifecycle / overheat downgrade without a window): DM_OE_SCRIPT="focus=3@10,focus=1@20,opmode=0@30" (second N); bg=1 / bg=0 run the whole background round trip (see script_bg)
-// Time counts from the game's first notification fetch. Coexists with front end calls.
-// bg=1 / bg=0: the whole "to background / back to foreground" sequence (script_bg: out of focus, background, then audio, guest clock and graphics suspended; back in the reverse order) (resign active -> enter background; enter foreground -> become active).
-// Used to reproduce "after going to the background and back" problems on the Mac (audio take-over and resume, guest clock freeze, graphics suspend); to imitate the process being suspended as well, send dmhost SIGSTOP / SIGCONT between the two items
+// DM_OE_SCRIPT="focus=3@10,focus=1@20,opmode=0@30" (seconds from the first notification fetch); bg=1 / bg=0: the background round trip
 static void script_bg(int on) {
-    if (on) { dm_focus_set(2); dm_focus_set(3); dm_audio_suspend(1); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); }
-    else { dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); dm_audio_suspend(0); dm_focus_set(2); dm_focus_set(1); }
+    if (on) {
+        dm_focus_set(2);
+        dm_focus_set(3);
+        dm_audio_suspend(1);
+        guest_clock_freeze_for(1, 1);
+        dm_gfx_suspend(1);
+    } else {
+        dm_gfx_suspend(0);
+        guest_clock_freeze_for(1, 0);
+        dm_audio_suspend(0);
+        dm_focus_set(2);
+        dm_focus_set(1);
+    }
 }
 static void *oe_script(void *arg) {
-    char *buf = arg; uint64_t t0 = now_ns();
+    char *buf = arg;
+    uint64_t t0 = now_ns();
     for (char *save, *tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
-        char key[16]; int v; double at;
+        char key[16];
+        int v;
+        double at;
         if (sscanf(tok, "%15[a-z]=%d@%lf", key, &v, &at) != 3) die("DM_OE_SCRIPT entry '%s' should be key=value@seconds", tok);
         uint64_t due = t0 + (uint64_t)(at * 1e9), now = now_ns();
         if (due > now) usleep((useconds_t)((due - now) / 1000));
@@ -134,31 +146,37 @@ static void *oe_script(void *arg) {
     return NULL;
 }
 static void oe_script_start(void) {
-    const char *e = getenv("DM_OE_SCRIPT"); if (!e) return;
-    pthread_t th; if (pthread_create(&th, NULL, oe_script, strdup(e))) die("DM_OE_SCRIPT thread");
+    const char *e = getenv("DM_OE_SCRIPT");
+    if (!e) return;
+    pthread_t th;
+    if (pthread_create(&th, NULL, oe_script, strdup(e))) die("DM_OE_SCRIPT thread");
     pthread_detach(th);
 }
 static pthread_once_t g_oe_once = PTHREAD_ONCE_INIT;
 
 HLE_FORCE("_ZN2nn2oe20GetCurrentFocusStateEv", "foreground / background state; the front end's dm_focus_set, out of focus while a library applet is open", int, h_oe_GetFocus, void) { return atomic_load(&g_seen); }
 HLE_FORCE("_ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE", "focus handling mode; 1 and 2 get focus notifications, 0 and 3 none (see g_focus_mode)", void, h_oe_SetFocusMode, int m) {
-    atomic_store(&g_focus_mode, m); LOG("oe::SetFocusHandlingMode %d (%s)", m, focus_notifies() ? "focus notifications" : "suspended out of focus, no focus notifications");
+    atomic_store(&g_focus_mode, m);
+    LOG("oe::SetFocusHandlingMode %d (%s)", m, focus_notifies() ? "focus notifications" : "suspended out of focus, no focus notifications");
 }
 
-// Notification: returns bool (w0), the host has no system notifications
+// returns bool
 HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "system notification queue; front end state changes are queued", unsigned, h_oe_TryPopMsg, uint32_t *msg) {
     pthread_once(&g_oe_once, oe_script_start);
     pthread_mutex_lock(&g_mq_lock);
     int ok = g_mqn > 0;
-    if (ok) { *msg = g_mq[g_mqh]; g_mqh = (g_mqh + 1) % MQ; g_mqn--; }
+    if (ok) {
+        *msg = g_mq[g_mqh];
+        g_mqh = (g_mqh + 1) % MQ;
+        g_mqn--;
+    }
     pthread_mutex_unlock(&g_mq_lock);
-    if (ok) LOG("oe notification popped by the game: %u", *msg);   // state changes are rare, printing each one does not flood the log
+    if (ok) LOG("oe notification popped by the game: %u", *msg);
     return ok;
 }
-// The blocking form (Link's Awakening pops on a thread of its own, main+0xfa1ff8): the SDK's version waits on the system event oe::Initialize would have created,
-// and the host's oe::Initialize is a no-op, so it aborted on an uninitialized event. Wait for the host queue instead, then take the message the Try path's way
+// The SDK's waits on oe::Initialize's system event, which the host never makes: wait on the host queue
 HLE_FORCE("_ZN2nn2oe22PopNotificationMessageEv", "system notification queue (blocking); waits on the host queue", uint32_t, h_oe_PopMsg, void) {
-    pthread_once(&g_oe_once, oe_script_start);   // DM_OE_SCRIPT also for games that only pop this way (Mario Kart 8 Deluxe): the wait below reaches the Try path only once a notification is queued
+    pthread_once(&g_oe_once, oe_script_start);
     uint32_t m = 0;
     for (;;) {
         pthread_mutex_lock(&g_mq_lock);
@@ -168,29 +186,40 @@ HLE_FORCE("_ZN2nn2oe22PopNotificationMessageEv", "system notification queue (blo
             dm_thread_native_wait(0);
         }
         pthread_mutex_unlock(&g_mq_lock);
-        if (atomic_load(&dm_reset_stop)) return 0;   // a reset (hle_reset.c): no message, and the caller's next gate ends its thread
-        if (h_oe_TryPopMsg(&m)) return m;   // another thread may have taken it in between: wait again
+        if (atomic_load(&dm_reset_stop)) return 0;   // reset: the caller's next gate ends its thread
+        if (h_oe_TryPopMsg(&m)) return m;   // taken meanwhile: wait again
     }
 }
-void dm_oe_reset_wake(void) { pthread_mutex_lock(&g_mq_lock); pthread_cond_broadcast(&g_mq_cond); pthread_mutex_unlock(&g_mq_lock); }   // hle_reset.c
-// bool arguments: Switch callers do not extend them, declared as unsigned and only the low 8 bits are looked at
+void dm_oe_reset_wake(void) {
+    pthread_mutex_lock(&g_mq_lock);
+    pthread_cond_broadcast(&g_mq_cond);
+    pthread_mutex_unlock(&g_mq_lock);
+}
+// bool: only the low 8 bits count
 HLE_FORCE("_ZN2nn2oe28SetResumeNotificationEnabledEb", "resume notification switch; the host expresses resume as focus notification 15", void, h_oe_SetResumeNtf, unsigned on) { (void)on; }
 HLE_FORCE("_ZN2nn2oe42SetOperationModeChangedNotificationEnabledEb", "operation mode change notification switch", void, h_oe_SetOpModeNtf, unsigned on) { g_ntf_opmode = on & 0xff; }
 HLE_FORCE("_ZN2nn2oe44SetPerformanceModeChangedNotificationEnabledEb", "performance mode change notification switch", void, h_oe_SetPerfModeNtf, unsigned on) { g_ntf_perfmode = on & 0xff; }
 
-// nn::settings::LanguageCode = struct { char string[8]; }, 8 bytes returned by value in x0
+// LanguageCode { char string[8]; }, returned in x0
 HLE_FORCE("_ZN2nn2oe18GetDesiredLanguageEv", "system language query; value from DM_LANG", uint64_t, h_oe_GetLang, void) {
     const char *e = getenv("DM_LANG");
     char code[8] = {0};
     strncpy(code, e && *e ? e : "en-US", sizeof code - 1);
-    uint64_t v; memcpy(&v, code, 8);
+    uint64_t v;
+    memcpy(&v, code, 8);
     return v;
 }
 
-// A reset (hle_reset.c): the notifications nobody popped, the switches and focus handling mode the game set, and the library applets it had open (a thread stopped inside one
-// never left it: the game would see itself out of focus for good) go with it; the front end's focus and operation mode are the console's and stay
+// Reset drops the game's notifications, switches, focus mode and applets; the front end's focus and operation mode stay
 void dm_oe_reset(void) {
-    pthread_mutex_lock(&g_mq_lock); g_mqh = g_mqn = 0; pthread_mutex_unlock(&g_mq_lock);
-    atomic_store(&g_ntf_opmode, 0); atomic_store(&g_ntf_perfmode, 0); atomic_store(&g_focus_mode, -1);
-    pthread_mutex_lock(&g_seen_lock); g_applets = 0; atomic_store(&g_seen, atomic_load(&g_focus)); pthread_mutex_unlock(&g_seen_lock);
+    pthread_mutex_lock(&g_mq_lock);
+    g_mqh = g_mqn = 0;
+    pthread_mutex_unlock(&g_mq_lock);
+    atomic_store(&g_ntf_opmode, 0);
+    atomic_store(&g_ntf_perfmode, 0);
+    atomic_store(&g_focus_mode, -1);
+    pthread_mutex_lock(&g_seen_lock);
+    g_applets = 0;
+    atomic_store(&g_seen, atomic_load(&g_focus));
+    pthread_mutex_unlock(&g_seen_lock);
 }

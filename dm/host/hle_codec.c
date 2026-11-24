@@ -1,34 +1,52 @@
-// nn::codec's hardware Opus decoder: the real device decodes in hardware via the hwopus service (the game's audio and cutscene tracks are Opus; this is not an online feature).
-// The game uses its C interface (GetHardwareOpusDecoderWorkBufferSize opens hwopus and aborts in sm::Initialize: Tears of the Kingdom, SDK 20.5.22). Host: each call goes to the
-// sdk's software C interface instead (the sdk bundles libopus, native ARM). The software decoder state lives in a host block kept per game decoder object (objmap), so the size of
-// the game's HardwareOpusDecoderType does not matter; the game's work buffer is sized by GetOpusDecoderWorkBufferSize and handed to the software decoder as is.
+// nn::codec's hardware Opus decoder on the sdk's bundled libopus (no hwopus service); state in a host block per decoder (objmap).
 #include "hle.h"
 
-#define SOFT_OPUS_STATE 0x200   // bytes for the software OpusDecoderType (larger than the SDK's)
-static void *opus_fn(const char *name) { void *f = guest_sym(name); if (!f) die("sdk lacks %s", name); return f; }
-static void *opus_soft(const void *hw) { void *s = objmap_get(hw); if (!s) die("Opus decoder %p was not initialized by the host", hw); return s; }
+#define SOFT_OPUS_STATE 0x200   // bytes; larger than the SDK's OpusDecoderType
+static void *opus_fn(const char *name) {
+    void *f = guest_sym(name);
+    if (!f) die("sdk lacks %s", name);
+    return f;
+}
+static void *opus_soft(const void *hw) {
+    void *s = objmap_get(hw);
+    if (!s) die("Opus decoder %p was not initialized by the host", hw);
+    return s;
+}
 HLE_FORCE("_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEiii", "hwopus service; work buffer computed for the software decoder", size_t, h_codec_HwOpusWorkSize, int rate, int ch, int option) {
-    (void)option; size_t (*f)(int, int) = opus_fn("_ZN2nn5codec28GetOpusDecoderWorkBufferSizeEii"); return f(rate, ch);
+    (void)option;
+    size_t (*f)(int, int) = opus_fn("_ZN2nn5codec28GetOpusDecoderWorkBufferSizeEii");
+    return f(rate, ch);
 }
 HLE_FORCE("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeEiiPvmi", "hwopus service; replaced by the software OpusDecoder", int, h_codec_HwOpusInit,
           void *hw, int rate, int ch, void *buf, size_t size, int option) {
-    (void)option; int (*f)(void *, int, int, void *, size_t) = opus_fn("_ZN2nn5codec21InitializeOpusDecoderEPNS0_15OpusDecoderTypeEiiPvm");
-    void *s = objmap_get(hw); if (!s) { s = calloc(1, SOFT_OPUS_STATE); objmap_put(hw, s); }
+    (void)option;
+    int (*f)(void *, int, int, void *, size_t) = opus_fn("_ZN2nn5codec21InitializeOpusDecoderEPNS0_15OpusDecoderTypeEiiPvm");
+    void *s = objmap_get(hw);
+    if (!s) {
+        s = calloc(1, SOFT_OPUS_STATE);
+        objmap_put(hw, s);
+    }
     return f(s, rate, ch, buf, size);
 }
 HLE_FORCE("_ZN2nn5codec27FinalizeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE", "hwopus service; software OpusDecoder", void, h_codec_HwOpusFini, void *hw) {
     void (*f)(void *) = opus_fn("_ZN2nn5codec19FinalizeOpusDecoderEPNS0_15OpusDecoderTypeE");
     void *s = objmap_del(hw);
-    if (s) { f(s); free(s); }
+    if (s) {
+        f(s);
+        free(s);
+    }
 }
 HLE_FORCE("_ZN2nn5codec32GetHardwareOpusDecoderSampleRateEPKNS0_23HardwareOpusDecoderTypeE", "hwopus service; software OpusDecoder", int, h_codec_HwOpusRate, const void *hw) {
-    int (*f)(const void *) = opus_fn("_ZN2nn5codec24GetOpusDecoderSampleRateEPKNS0_15OpusDecoderTypeE"); return f(opus_soft(hw));
+    int (*f)(const void *) = opus_fn("_ZN2nn5codec24GetOpusDecoderSampleRateEPKNS0_15OpusDecoderTypeE");
+    return f(opus_soft(hw));
 }
 HLE_FORCE("_ZN2nn5codec34GetHardwareOpusDecoderChannelCountEPKNS0_23HardwareOpusDecoderTypeE", "hwopus service; software OpusDecoder", int, h_codec_HwOpusCh, const void *hw) {
-    int (*f)(const void *) = opus_fn("_ZN2nn5codec26GetOpusDecoderChannelCountEPKNS0_15OpusDecoderTypeE"); return f(opus_soft(hw));
+    int (*f)(const void *) = opus_fn("_ZN2nn5codec26GetOpusDecoderChannelCountEPKNS0_15OpusDecoderTypeE");
+    return f(opus_soft(hw));
 }
 HLE_FORCE("_ZN2nn5codec24ResetHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE", "hwopus service; software OpusDecoder", void, h_codec_HwOpusReset, void *hw) {
-    void (*f)(void *) = opus_fn("_ZN2nn5codec16ResetOpusDecoderEPNS0_15OpusDecoderTypeE"); f(opus_soft(hw));
+    void (*f)(void *) = opus_fn("_ZN2nn5codec16ResetOpusDecoderEPNS0_15OpusDecoderTypeE");
+    f(opus_soft(hw));
 }
 HLE_FORCE("_ZN2nn5codec33DecodeOpusInterleavedWithHardwareEPNS0_23HardwareOpusDecoderTypeEPmPiPsmPKvm", "hwopus service; software OpusDecoder", int, h_codec_HwOpusDecode,
           void *hw, size_t *consumed, int *samples, int16_t *out, size_t out_size, const void *in, size_t in_size) {
@@ -36,8 +54,7 @@ HLE_FORCE("_ZN2nn5codec33DecodeOpusInterleavedWithHardwareEPNS0_23HardwareOpusDe
     return f(opus_soft(hw), consumed, samples, out, out_size, in, in_size);
 }
 
-// SDK 21's asynchronous interface over hwopus (a HardwareOpusDecoderManager that owns decoders and a pool of I/O buffers) is not served: the game's modules name this one call
-// of it and none that makes a manager. The SDK's own would open hwopus
+// The game names this one call of SDK 21's async interface and none that makes a manager
 HLE_FORCE("_ZN2nn5codec46GetHardwareOpusDecoderManagerFreeIoBufferCountEPKNS0_30HardwareOpusDecoderManagerTypeE", "hwopus service; refused: the host has no decoder manager", int, h_codec_HwOpusMgrFreeIo, const void *gm) {
     LOG("[RED] codec: GetHardwareOpusDecoderManagerFreeIoBufferCount(%p): the host has no hardware Opus decoder manager, no free I/O buffer", gm);
     return 0;

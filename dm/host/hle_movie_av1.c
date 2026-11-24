@@ -1,10 +1,5 @@
-// AV1 for the nn::codec decoders (hle_codec_video.c): Fire Emblem Fortune's Weave's 82 movies are AV1 in WebM (2560x1440). Two backends behind one interface: Apple's VideoToolbox, whose AV1
-// decoder is hardware only (Apple M3 and A17 Pro on), and dav1d (dm/third_party/dav1d) on older chips, for a stream VideoToolbox refuses, or with DM_AV1_DAV1D=1 on any chip. The movie module
-// aborts on a decoder that does not initialize (movie::detail::InitializeDecoderByTransferMemory, subsdk2+0xf9b4), so without one a game with AV1 movies could not run there.
-// VideoToolbox wants a format description holding the stream's av1C record (ISO-BMFF AV1 binding, 2.3.3): four bytes read from the sequence header, then that header's OBU. The decoder API takes no
-// configuration for AV1, so the sequence header comes from the stream, where every key frame carries one (AV1 5.5); a changed one makes a new session. A temporal unit goes in whole, its OBUs in
-// the low-overhead format WebM and the SDK's demuxer keep them in (each with its size). Decoding is synchronous and a temporal unit shows at most one frame, in presentation order, so no queue.
-// dav1d decodes several frames at once (frame threads), so its pictures come out later than their units go in, each with its unit's time (mav1_next)
+// AV1 for the nn::codec decoders: VideoToolbox (hardware only, M3 on), else dav1d. The movie module aborts without a decoder.
+// VideoToolbox takes the av1C record (ISO-BMFF AV1 2.3.3) built from the stream's sequence header; a temporal unit goes in whole.
 #include "hle.h"
 #include <VideoToolbox/VideoToolbox.h>
 #include "dav1d/dav1d.h"
@@ -15,30 +10,54 @@ struct mav1 {
     uint8_t seq[512]; size_t nseq;
     CMVideoFormatDescriptionRef fd; VTDecompressionSessionRef vs;
     CVPixelBufferRef got, locked;
-    int soft;                     // dav1d decodes: no hardware decoder, DM_AV1_DAV1D=1, or a stream VideoToolbox refused (until mav1_reset)
+    int soft;                     // dav1d decodes (until mav1_reset)
     Dav1dContext *dav1d; Dav1dPicture pic; int has_pic;
-    Dav1dData in;                 // the temporal unit dav1d has not taken whole yet
-    int draining;                 // a drain gave a picture and has not reached its end (dav1d_step)
-    uint8_t *y8, *uv; size_t ny8, nuv;   // dav1d's picture as NV12: the chroma interleaved, and the luma of a 10- or 12-bit stream shifted to 8 bits
+    Dav1dData in;                 // what dav1d has not taken of the unit
+    int draining;                 // a drain gave a picture and must run to its end
+    uint8_t *y8, *uv; size_t ny8, nuv;   // NV12, luma shifted to 8 bits
     int red;
     movie_vt_history history;
 };
 static int hw_av1(void) { const char *e = getenv("DM_AV1_DAV1D"); return !(e && *e && *e != '0') && VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1); }
-mav1 *mav1_new(movie_vt_control *control) { mav1 *a = calloc(1, sizeof *a); if (!a) die("movie: AV1 decoder allocation failed"); a->soft = !hw_av1(); a->history.control = control; return a; }
+mav1 *mav1_new(movie_vt_control *control) {
+    mav1 *a = calloc(1, sizeof *a);
+    if (!a) die("movie: AV1 decoder allocation failed");
+    a->soft = !hw_av1();
+    a->history.control = control;
+    return a;
+}
 const char *mav1_backend(const mav1 *a) { return a->soft ? "dav1d" : "VideoToolbox"; }
 static void unlock_picture(mav1 *a) {
-    if (a->locked) { CVPixelBufferUnlockBaseAddress(a->locked, kCVPixelBufferLock_ReadOnly); CVPixelBufferRelease(a->locked); a->locked = NULL; }
+    if (a->locked) {
+        CVPixelBufferUnlockBaseAddress(a->locked, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferRelease(a->locked);
+        a->locked = NULL;
+    }
     if (a->has_pic) { dav1d_picture_unref(&a->pic); a->has_pic = 0; }
 }
 static void av1_close(mav1 *a) {
-    if (a->vs) { VTDecompressionSessionWaitForAsynchronousFrames(a->vs); VTDecompressionSessionInvalidate(a->vs); CFRelease(a->vs); a->vs = NULL; }
+    if (a->vs) {
+        VTDecompressionSessionWaitForAsynchronousFrames(a->vs);
+        VTDecompressionSessionInvalidate(a->vs);
+        CFRelease(a->vs);
+        a->vs = NULL;
+    }
     if (a->fd) { CFRelease(a->fd); a->fd = NULL; }
     if (a->got) { CVPixelBufferRelease(a->got); a->got = NULL; }
 }
-void mav1_reset(mav1 *a) { unlock_picture(a); av1_close(a); movie_vt_clear(&a->history); a->nseq = 0; if (a->in.sz) dav1d_data_unref(&a->in); if (a->dav1d) dav1d_flush(a->dav1d); a->draining = 0; a->soft = !hw_av1(); }
+void mav1_reset(mav1 *a) {
+    unlock_picture(a);
+    av1_close(a);
+    movie_vt_clear(&a->history);
+    a->nseq = 0;
+    if (a->in.sz) dav1d_data_unref(&a->in);
+    if (a->dav1d) dav1d_flush(a->dav1d);
+    a->draining = 0;
+    a->soft = !hw_av1();
+}
 void mav1_free(mav1 *a) { if (a) { mav1_reset(a); if (a->dav1d) dav1d_close(&a->dav1d); free(a->y8); free(a->uv); free(a); } }
 
-// ---- The sequence header (AV1 5.5), read as far as the colour config ----
+// Sequence header (AV1 5.5), read as far as the colour config.
 typedef struct { const uint8_t *p; size_t n, bit; int bad; } av1_bits;
 static uint32_t rb(av1_bits *b, unsigned n) {
     uint32_t v = 0;
@@ -46,7 +65,11 @@ static uint32_t rb(av1_bits *b, unsigned n) {
     while (n--) { v = v << 1 | ((b->p[b->bit / 8] >> (7 - b->bit % 8)) & 1); b->bit++; }
     return v;
 }
-static void uvlc(av1_bits *b) { unsigned z = 0; while (!b->bad && !rb(b, 1)) if (++z >= 32) return; if (z < 32) rb(b, z); }
+static void uvlc(av1_bits *b) {
+    unsigned z = 0;
+    while (!b->bad && !rb(b, 1)) if (++z >= 32) return;
+    if (z < 32) rb(b, z);
+}
 static size_t leb128(const uint8_t *p, size_t n, uint64_t *v) {
     *v = 0;
     for (size_t i = 0; i < n && i < 8; i++) { *v |= (uint64_t)(p[i] & 0x7f) << (i * 7); if (!(p[i] & 0x80)) return i + 1; }
@@ -105,10 +128,9 @@ int mav1_av1c(const uint8_t *obu, size_t n, uint8_t c[4], int *w, int *h) {
     c[3] = 0;
     return 1;
 }
-// The sequence header OBU of a temporal unit, or none
 static const uint8_t *find_seq(const uint8_t *p, size_t n, size_t *len) {
     for (size_t i = 0; i < n;) {
-        if (!(p[i] & 2)) return NULL;   // no size field: not the low-overhead format
+        if (!(p[i] & 2)) return NULL;   // not the low-overhead format
         size_t hdr = p[i] & 4 ? 2 : 1; uint64_t size;
         size_t l = i + hdr < n ? leb128(p + i + hdr, n - i - hdr, &size) : 0;
         if (!l || size > n - i - hdr - l) return NULL;
@@ -118,7 +140,6 @@ static const uint8_t *find_seq(const uint8_t *p, size_t n, size_t *len) {
     return NULL;
 }
 // Only a shown key frame resets every reference slot (AV1 5.9.2).
-// Hidden key frames can retain references to pictures before them.
 static int av1_key(const mav1 *a, const uint8_t *data, size_t n) {
     int key = 0;
     for (size_t i = 0; i < n;) {
@@ -147,7 +168,10 @@ static void av1_on_frame(void *ref, void *src, OSStatus st, VTDecodeInfoFlags fl
 static int av1_open(mav1 *a, const uint8_t *seq, size_t n) {
     av1_close(a);
     uint8_t rec[4 + sizeof a->seq]; int w = 0, h = 0;
-    if (n > sizeof a->seq || !mav1_av1c(seq, n, rec, &w, &h)) { if (!a->red++) LOG("[RED] movie: an AV1 sequence header the host cannot read (%zu bytes)", n); return 0; }
+    if (n > sizeof a->seq || !mav1_av1c(seq, n, rec, &w, &h)) {
+        if (!a->red++) LOG("[RED] movie: an AV1 sequence header the host cannot read (%zu bytes)", n);
+        return 0;
+    }
     memcpy(rec + 4, seq, n);
     CFDataRef data = CFDataCreate(NULL, rec, (CFIndex)(4 + n));
     const void *ak[] = {CFSTR("av1C")}, *av[] = {data};
@@ -163,12 +187,15 @@ static int av1_open(mav1 *a, const uint8_t *seq, size_t n) {
     VTDecompressionOutputCallbackRecord cb = {av1_on_frame, a};
     st = movie_vt_create(&a->history, a->fd, attrs, &cb, &a->vs); CFRelease(attrs);
     if (st == MOVIE_VT_CANCELLED) return -1;
-    if (st) { if (!a->red++) LOG("[RED] movie: VideoToolbox cannot create an AV1 session (%d)", (int)st); a->vs = NULL; return 0; }
+    if (st) {
+        if (!a->red++) LOG("[RED] movie: VideoToolbox cannot create an AV1 session (%d)", (int)st);
+        a->vs = NULL;
+        return 0;
+    }
     if (a->seq != seq) memcpy(a->seq, seq, n); a->nseq = n;
     static int once; if (!once++) LOG("[movie] AV1: VideoToolbox decoding %dx%d, profile %d level %d", w, h, rec[1] >> 5, rec[1] & 31);
     return 1;
 }
-// ---- dav1d ----
 static void d_log(void *cookie, const char *fmt, va_list ap) {
     (void)cookie; char b[256]; vsnprintf(b, sizeof b, fmt, ap);
     size_t l = strlen(b); if (l && b[l - 1] == '\n') b[l - 1] = 0;
@@ -179,14 +206,18 @@ static int grow(uint8_t **p, size_t *have, size_t want) {
     uint8_t *q = realloc(*p, want); if (!q) return 0;
     *p = q; *have = want; return 1;
 }
-// dav1d's planar picture as the NV12 the interface gives: the luma in place for 8 bits, else shifted down into y8; the chroma interleaved into uv (subsampled from 4:2:2 and 4:4:4, grey for 4:0:0)
+// 4:2:2 / 4:4:4 chroma subsampled, 4:0:0 grey
 static int dav1d_nv12(mav1 *a, const Dav1dPicture *p, mav1_picture *out) {
     int w = p->p.w, h = p->p.h, sh = p->p.bpc - 8, l = p->p.layout, cw = (w + 1) / 2, ch = (h + 1) / 2;
     int sx = l != DAV1D_PIXEL_LAYOUT_I444, sy = l == DAV1D_PIXEL_LAYOUT_I420;
     if (!grow(&a->uv, &a->nuv, (size_t)cw * 2 * ch) || (sh && !grow(&a->y8, &a->ny8, (size_t)w * h))) return 0;
     const uint8_t *y = p->data[0]; size_t ys = (size_t)p->stride[0];
     if (sh) {
-        for (int r = 0; r < h; r++) { const uint16_t *s = (const uint16_t *)((const uint8_t *)p->data[0] + (ptrdiff_t)r * p->stride[0]); uint8_t *o = a->y8 + (size_t)r * w; for (int x = 0; x < w; x++) o[x] = (uint8_t)(s[x] >> sh); }
+        for (int r = 0; r < h; r++) {
+            const uint16_t *s = (const uint16_t *)((const uint8_t *)p->data[0] + (ptrdiff_t)r * p->stride[0]);
+            uint8_t *o = a->y8 + (size_t)r * w;
+            for (int x = 0; x < w; x++) o[x] = (uint8_t)(s[x] >> sh);
+        }
         y = a->y8; ys = (size_t)w;
     }
     for (int r = 0; r < ch; r++) {
@@ -198,14 +229,12 @@ static int dav1d_nv12(mav1 *a, const Dav1dPicture *p, mav1_picture *out) {
             o[2 * x] = sh ? (uint8_t)(((const uint16_t *)u)[c] >> sh) : u[c]; o[2 * x + 1] = sh ? (uint8_t)(((const uint16_t *)v)[c] >> sh) : v[c];
         }
     }
-    unsigned mc = p->seq_hdr->mtrx;   // matrix coefficients (AV1 6.4.2); unspecified, BT.601 below 720 lines and BT.709 from there, as VideoToolbox attaches to such a stream's pictures
+    unsigned mc = p->seq_hdr->mtrx;   // unspecified: BT.601 below 720 lines, else BT.709, as VideoToolbox does
     if (mc == DAV1D_MC_UNKNOWN) mc = h < 720 ? DAV1D_MC_BT601 : DAV1D_MC_BT709;
     *out = (mav1_picture){y, a->uv, ys, (size_t)cw * 2, w, h, mc == DAV1D_MC_BT709 ? 2 : mc == DAV1D_MC_BT2020_NCL || mc == DAV1D_MC_BT2020_CL ? 5 : 1, p->seq_hdr->color_range, p->m.timestamp};
     return 1;
 }
-// dav1d's threads. A temporal unit of a hierarchical stream holds several frames (the hidden ones the next units only show), and decoded one after the other they made that
-// unit many times longer than the others: Ocarina of Time's 1080p 60 fps title movie took 80 to 122 ms for one unit in 32 on an M2 Pro (two task threads, one frame at a time)
-// and 15.4 ms a unit over its heaviest five seconds, at a budget of 16.7. Frame threads decode those frames, and the units waiting behind them, side by side
+// docs/reference/movies.md#dav1d-decoded-one-frame-at-a-time
 #define DAV1D_THREADS 4
 #define DAV1D_FRAMES 3
 static int dav1d_open_once(mav1 *a) {
@@ -213,23 +242,27 @@ static int dav1d_open_once(mav1 *a) {
     Dav1dSettings st; dav1d_default_settings(&st);
     st.n_threads = DAV1D_THREADS; st.max_frame_delay = DAV1D_FRAMES;
     st.logger.cookie = a; st.logger.callback = d_log;
-    if (dav1d_open(&a->dav1d, &st)) { a->dav1d = NULL; if (!a->red++) LOG("[RED] movie: dav1d could not be opened"); return 0; }
+    if (dav1d_open(&a->dav1d, &st)) {
+        a->dav1d = NULL;
+        if (!a->red++) LOG("[RED] movie: dav1d could not be opened");
+        return 0;
+    }
     static int once; if (!once++) LOG("[movie] AV1: dav1d %s decoding, %d threads on %d frames at once (%s)", dav1d_version(), st.n_threads, st.max_frame_delay,
                                       hw_av1() ? "a stream VideoToolbox refused" : getenv("DM_AV1_DAV1D") ? "DM_AV1_DAV1D" : "no hardware AV1 decoder");
     return 1;
 }
-// Gives dav1d what it has not taken of the unit, then asks it for one picture: 1 with it, 0 none now, -1 the unit was refused. One dav1d_get_picture for each dav1d_send_data:
-// a second one in a row is dav1d's drain, which waits for the frames in flight and so decodes them one after the other. With drain, and the unit taken, that is what is asked.
-// A drain that has given a picture must go on to its end (EAGAIN) before the next unit: dav1d (1.5.4, lib.c drain_picture) steps over its empty frame contexts on the way to
-// the oldest frame, which leaves frame_thread.next on a frame still in flight if data comes then. The next frame waits for that one and retires it with task_thread.first one
-// context past the oldest frame for good, and retiring a frame cancels the task rescan asked for task_thread.first: a live frame's from then on. Its task is never run, the
-// workers sleep and dav1d_submit_frame waits for ever (found when the drain stopped as soon as a packet arrived: Ocarina of Time's title movie froze in 3 runs of 6)
+// 1 picture, 0 none now, -1 refused. A second get in a row is dav1d's drain. A drain that gave a picture must run to EAGAIN before
+// the next unit: dav1d 1.5.4 otherwise leaves frame_thread.next on a frame in flight and its workers wait for ever.
 static int dav1d_step(mav1 *a, int drain, mav1_picture *out) {
     for (int tries = 0; tries < 64; tries++) {
-        int draining = !a->in.sz;   // nothing to give: this get is the second in a row
+        int draining = !a->in.sz;
         if (a->in.sz) {
             int r = dav1d_send_data(a->dav1d, &a->in);   // EAGAIN: a picture has to be taken first
-            if (r && r != DAV1D_ERR(EAGAIN)) { dav1d_data_unref(&a->in); if (!a->red++) LOG("[RED] movie: dav1d refused a temporal unit (%d, first case)", r); return -1; }
+            if (r && r != DAV1D_ERR(EAGAIN)) {
+                dav1d_data_unref(&a->in);
+                if (!a->red++) LOG("[RED] movie: dav1d refused a temporal unit (%d, first case)", r);
+                return -1;
+            }
         } else if (!drain) return 0;
         Dav1dPicture p = {0};
         int g = dav1d_get_picture(a->dav1d, &p);
@@ -242,15 +275,19 @@ static int dav1d_step(mav1 *a, int drain, mav1_picture *out) {
         }
         if (g == DAV1D_ERR(EAGAIN)) { if (draining) a->draining = 0; }
         else if (!a->red++) LOG("[RED] movie: dav1d could not decode a frame (%d, first case)", g);
-        if (!a->in.sz && (g == DAV1D_ERR(EAGAIN) || !drain)) return 0;   // the unit is in and no picture is ready; a frame in error is passed over while draining
+        if (!a->in.sz && (g == DAV1D_ERR(EAGAIN) || !drain)) return 0;   // a frame in error is passed over while draining
     }
-    if (a->in.sz) { dav1d_data_unref(&a->in); if (!a->red++) LOG("[RED] movie: dav1d took no more data, a temporal unit dropped (first case)"); return -1; }
+    if (a->in.sz) {
+        dav1d_data_unref(&a->in);
+        if (!a->red++) LOG("[RED] movie: dav1d took no more data, a temporal unit dropped (first case)");
+        return -1;
+    }
     return 0;
 }
 static int decode_dav1d(mav1 *a, const uint8_t *data, size_t n, int64_t ts, mav1_picture *out) {
     if (!dav1d_open_once(a)) return -1;
-    if (a->in.sz) dav1d_data_unref(&a->in);   // a unit left unfinished (its caller stopped): dropped
-    if (a->draining) {   // a drain its caller left: ended here, its pictures lost
+    if (a->in.sz) dav1d_data_unref(&a->in);
+    if (a->draining) {   // a drain its caller left: its pictures are lost
         int lost = 0;
         for (int tries = 0; tries < 64; tries++) { Dav1dPicture p = {0}; int g = dav1d_get_picture(a->dav1d, &p); if (!g) { dav1d_picture_unref(&p); lost++; } else if (g == DAV1D_ERR(EAGAIN)) break; }
         a->draining = 0;
@@ -271,13 +308,13 @@ int mav1_decode(mav1 *a, const uint8_t *data, size_t n, int64_t ts, mav1_picture
     if (changed) movie_vt_clear(&a->history);
     if (seq && (changed || !a->vs)) {
         int opened = av1_open(a, seq, seqn);
-        if (opened < 0) return 0;   // Stop / Flush / Finalize cancelled the session being made
-        if (!opened) {   // a stream VideoToolbox does not take: dav1d from this temporal unit on (it holds the sequence header)
+        if (opened < 0) return 0;   // Stop / Flush / Finalize cancelled it
+        if (!opened) {   // VideoToolbox refused the stream: dav1d from this unit on
             LOG("[movie] AV1: dav1d decodes the stream instead"); av1_close(a); a->soft = 1;
             return decode_dav1d(a, data, n, ts, out);
         }
     }
-    if (!a->vs) return 0;   // the stream's first sequence header has not come
+    if (!a->vs) return 0;
     CMBlockBufferRef bb = NULL; CMSampleBufferRef sb = NULL; size_t ssz = n;
     OSStatus st = CMBlockBufferCreateWithMemoryBlock(NULL, NULL, n, NULL, NULL, 0, n, 0, &bb);
     if (!st) st = CMBlockBufferReplaceDataBytes(data, bb, 0, n);

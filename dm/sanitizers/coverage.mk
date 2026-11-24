@@ -1,8 +1,8 @@
-# Line coverage of the unit tests, shared by dm/host/tests and dm/gfx/tex/tests (make coverage in each; CI's coverage job runs both, dm/tools/coverage_report.py summarizes them).
+# Line coverage of the unit tests, shared by dm/host/tests and dm/gfx/tex/tests (make coverage in each; dm/tools/coverage_report.py summarizes them).
 # As for the sanitizers (sanitizers.mk), a second make compiles the same test rules with SAN = COV_FLAGS into a build folder of its own, so the plain build stays as it is.
 # Every test process writes a raw profile of its own (LLVM_PROFILE_FILE, %p) in continuous mode (%c: the counters are mapped onto the file as they run), so the children
-# that a test forks and ends with _exit, which writes no profile, count into their parent's file; llvm-profdata merges the profiles and llvm-cov exports the line counts as lcov, for the sources the
-# tests compile (their includes too), without the tests themselves, third-party code, generated headers and the SDK. Apple's toolchain has both tools (xcrun).
+# a test forks and ends with _exit, which writes no profile, count into their parent's file. The lcov export covers the sources the tests compile (their includes too),
+# without the tests themselves, third-party code, generated headers and the SDK.
 COV_FLAGS = -fprofile-instr-generate -fcoverage-mapping
 COV_IGNORE = /tests/|/third_party/|/gen/|^/Applications/|^/Library/
 # $(call cov_profile,<folder>): the LLVM_PROFILE_FILE pattern of a coverage build

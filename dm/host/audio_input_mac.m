@@ -48,7 +48,8 @@ static AudioDeviceID default_input_device(void) {
 static int device_string(AudioDeviceID device, AudioObjectPropertySelector selector, char out[0x100]) {
     memset(out, 0, 0x100);
     AudioObjectPropertyAddress address = { selector, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
-    CFStringRef value = NULL; UInt32 size = sizeof(CFStringRef);
+    CFStringRef value = NULL;
+    UInt32 size = sizeof(CFStringRef);
     if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &value) != noErr || !value) return 0;
     int ok = CFStringGetCString(value, out, 0x100, kCFStringEncodingUTF8);
     CFRelease(value);
@@ -96,45 +97,58 @@ int dm_audio_input_platform_route_changed(void) {
     return changed;
 }
 
+static void unit_dispose(AudioUnit unit) {
+    AudioUnitUninitialize(unit);
+    AudioComponentInstanceDispose(unit);
+}
+
 static void input_cleanup_locked(void) {
     if (!g_input.unit) return;
     if (atomic_exchange_explicit(&g_input.running, 0, memory_order_acq_rel)) AudioOutputUnitStop(g_input.unit);
     while (atomic_load_explicit(&g_input.callbacks, memory_order_acquire)) sched_yield();
-    AudioUnitUninitialize(g_input.unit);
-    AudioComponentInstanceDispose(g_input.unit);
-    for (int i = 0; i < INPUT_CHANNEL_MAX; i++) { free(g_input.planes[i]); g_input.planes[i] = NULL; }
-    free(g_input.buffers); g_input.buffers = NULL;
-    g_input.unit = NULL; g_input.device = kAudioObjectUnknown; g_input.channel_count = 0; g_input.max_frames = 0;
-    memset(g_input.name, 0, sizeof g_input.name); memset(g_input.uid, 0, sizeof g_input.uid);
+    unit_dispose(g_input.unit);
+    for (int i = 0; i < INPUT_CHANNEL_MAX; i++) {
+        free(g_input.planes[i]);
+        g_input.planes[i] = NULL;
+    }
+    free(g_input.buffers);
+    g_input.buffers = NULL;
+    g_input.unit = NULL;
+    g_input.device = kAudioObjectUnknown;
+    g_input.channel_count = 0;
+    g_input.max_frames = 0;
+    memset(g_input.name, 0, sizeof g_input.name);
+    memset(g_input.uid, 0, sizeof g_input.uid);
     memset(&g_input.format, 0, sizeof g_input.format);
     atomic_store_explicit(&g_input.failed, 0, memory_order_release);
 }
 
-static OSStatus input_proc(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *time, UInt32 bus, UInt32 frames, AudioBufferList *io) {
-    (void)io;
-    input_device *d = ctx;
-    atomic_fetch_add_explicit(&d->callbacks, 1, memory_order_acquire);
-    if (!atomic_load_explicit(&d->running, memory_order_acquire) || atomic_load_explicit(&d->failed, memory_order_acquire)) {
-        atomic_fetch_sub_explicit(&d->callbacks, 1, memory_order_release);
-        return noErr;
-    }
+static OSStatus input_render(input_device *d, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *time, UInt32 frames) {
+    if (!atomic_load_explicit(&d->running, memory_order_acquire) || atomic_load_explicit(&d->failed, memory_order_acquire)) return noErr;
     if (!d->buffers || frames > d->max_frames) {
         atomic_store_explicit(&d->failed, 1, memory_order_release);
-        atomic_fetch_sub_explicit(&d->callbacks, 1, memory_order_release);
         return kAudio_ParamError;
     }
     for (int i = 0; i < d->channel_count; i++) d->buffers->mBuffers[i].mDataByteSize = frames * sizeof(float);
     OSStatus status = AudioUnitRender(d->unit, flags, time, 1, frames, d->buffers);
     if (status != noErr) {
         atomic_store_explicit(&d->failed, 1, memory_order_release);
-        atomic_fetch_sub_explicit(&d->callbacks, 1, memory_order_release);
         return status;
     }
     const float *planes[INPUT_CHANNEL_MAX];
     for (int i = 0; i < d->channel_count; i++) planes[i] = d->planes[i];
     dm_audio_input_process(planes, d->channel_count, frames, d->format.mSampleRate);
-    atomic_fetch_sub_explicit(&d->callbacks, 1, memory_order_release);
     return noErr;
+}
+
+// callbacks counts the renders under way: input_cleanup_locked waits for 0 before it disposes of the unit
+static OSStatus input_proc(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *time, UInt32 bus, UInt32 frames, AudioBufferList *io) {
+    (void)io;
+    input_device *d = ctx;
+    atomic_fetch_add_explicit(&d->callbacks, 1, memory_order_acquire);
+    OSStatus status = input_render(d, flags, time, frames);
+    atomic_fetch_sub_explicit(&d->callbacks, 1, memory_order_release);
+    return status;
 }
 
 // These listeners are process-wide: keep listening while a started stream is waiting for a device.
@@ -180,42 +194,59 @@ static int input_prepare_locked(void) {
         return 0;
     }
 
-    AudioStreamBasicDescription client = {0};
-    client.mSampleRate = device_format.mSampleRate;  // AUHAL does not rate-convert microphone input; the core resampler does.
-    client.mFormatID = kAudioFormatLinearPCM;
-    client.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved;
-    client.mBytesPerPacket = sizeof(float); client.mFramesPerPacket = 1; client.mBytesPerFrame = sizeof(float);
-    client.mChannelsPerFrame = device_format.mChannelsPerFrame; client.mBitsPerChannel = 32;
+    AudioStreamBasicDescription client = {
+        .mSampleRate = device_format.mSampleRate,   // AUHAL does not rate-convert microphone input; audio_input.c resamples
+        .mFormatID = kAudioFormatLinearPCM,
+        .mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
+        .mBytesPerPacket = sizeof(float),
+        .mFramesPerPacket = 1,
+        .mBytesPerFrame = sizeof(float),
+        .mChannelsPerFrame = device_format.mChannelsPerFrame,
+        .mBitsPerChannel = 32,
+    };
     status = AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &client, sizeof client);
     AURenderCallbackStruct callback = { input_proc, &g_input };
     if (status == noErr) status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &callback, sizeof callback);
     if (status == noErr) status = AudioUnitInitialize(unit);
-    UInt32 max_frames = 0; size = sizeof max_frames;
+    UInt32 max_frames = 0;
+    size = sizeof max_frames;
     if (status == noErr) status = AudioUnitGetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &max_frames, &size);
     if (status != noErr) {
-        if (unit) { AudioUnitUninitialize(unit); AudioComponentInstanceDispose(unit); }
+        if (unit) unit_dispose(unit);
         return 0;
     }
     if (!max_frames) max_frames = INPUT_FALLBACK_MAX_FRAMES;
     UInt32 channels = client.mChannelsPerFrame;
     AudioBufferList *buffers = calloc(1, sizeof(AudioBufferList) + (channels - 1) * sizeof(AudioBuffer));
-    if (!buffers) { AudioUnitUninitialize(unit); AudioComponentInstanceDispose(unit); return 0; }
+    if (!buffers) {
+        unit_dispose(unit);
+        return 0;
+    }
     buffers->mNumberBuffers = channels;
     float *planes[INPUT_CHANNEL_MAX] = {0};
     for (UInt32 i = 0; i < channels; i++) {
         planes[i] = calloc(max_frames, sizeof(float));
-        if (!planes[i]) { status = memFullErr; break; }
+        if (!planes[i]) {
+            status = memFullErr;
+            break;
+        }
         buffers->mBuffers[i].mNumberChannels = 1;
         buffers->mBuffers[i].mDataByteSize = max_frames * sizeof(float);
         buffers->mBuffers[i].mData = planes[i];
     }
     if (status != noErr) {
         for (int i = 0; i < INPUT_CHANNEL_MAX; i++) free(planes[i]);
-        free(buffers); AudioUnitUninitialize(unit); AudioComponentInstanceDispose(unit); return 0;
+        free(buffers);
+        unit_dispose(unit);
+        return 0;
     }
 
-    g_input.unit = unit; g_input.device = device; g_input.format = client; g_input.buffers = buffers;
-    g_input.max_frames = max_frames; g_input.channel_count = (int)channels;
+    g_input.unit = unit;
+    g_input.device = device;
+    g_input.format = client;
+    g_input.buffers = buffers;
+    g_input.max_frames = max_frames;
+    g_input.channel_count = (int)channels;
     if (!device_string(device, kAudioObjectPropertyName, g_input.name)) strlcpy(g_input.name, "Unknown input device", sizeof g_input.name);
     if (!device_string(device, kAudioDevicePropertyDeviceUID, g_input.uid)) strlcpy(g_input.uid, "unknown", sizeof g_input.uid);
     fprintf(stderr, "[dm] audio input: opened device=\"%s\" uid=\"%s\" rate=%.0f channels=%u%s\n", g_input.name, g_input.uid,

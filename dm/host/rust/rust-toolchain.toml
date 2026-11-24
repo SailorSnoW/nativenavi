@@ -1,4 +1,4 @@
-# The Rust the host is built with: rustup installs it on the first build in this folder. Raising it is one change here (the packing script's host key includes rustc's version).
+# The Rust the host is built with: rustup installs it on the first build in this folder. The packing script's host key includes rustc's version.
 [toolchain]
 channel = "1.95.0"
 profile = "minimal"

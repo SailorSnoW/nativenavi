@@ -1,5 +1,5 @@
-# The host's Rust code (docs/development.md, "Rust in the host"): one static library that dm/host/rust.mk builds and dm/host/Makefile links into the host.
-# No crate from outside the repository: the build runs with --locked --offline, so it needs no network and pulls in no code nobody here read.
+# The host's Rust code (docs/development.md, "Rust in the host"): one static library that dm/host/rust.mk builds and dm/host/Makefile links.
+# No crate from outside the repository: the build runs with --locked --offline.
 [package]
 name = "dmhost_rs"
 version = "0.0.0"
@@ -14,9 +14,9 @@ crate-type = ["staticlib"]
 opt-level = 2                 # as the host's C (dm/host/Makefile CFLAGS)
 debug = "line-tables-only"    # files and lines in crash reports and in the host's dSYM
 panic = "abort"               # never unwind into the C or the game's frames
-overflow-checks = true        # an overflow nobody meant stops the host where it happens instead of wrapping on; every sum here is bounded (the tests take the extremes)
+overflow-checks = true        # an unintended overflow stops the host instead of wrapping; every sum here is bounded (the tests take the extremes)
 codegen-units = 1
-lto = "fat"                   # one object of what the exported functions reach, core included: without it the link took whole members of core (float and IPv6 formatting...), 0.13 MB of code nothing calls. Not the C host's -flto, which dm/host/Makefile keeps off
+lto = "fat"                   # keeps only what the exported functions reach, core included; inside the library only (the C host has no -flto)
 incremental = false
 
 [profile.dev]

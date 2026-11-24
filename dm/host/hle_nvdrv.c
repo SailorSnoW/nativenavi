@@ -1,12 +1,13 @@
-// nvdrv (the NVIDIA driver service): the host takes over NVN entirely and has no use for it; only the SDK movie library's hardware decoder (subsdk0's NVOMX → NvRmChannelOpen) opens /dev/nvhost-* directly.
-// The original NvOsDrvOpen first connects to the nvdrv service; the host has no service process and the SDK aborts on the spot (Engage aborted when Unity created a decoder at startup).
-// Takeover: opening a device always fails (fd = -1), and ioctls and event queries return an error, so the decoder takes its own failure path
+// nvdrv (the NVIDIA driver service): the host takes over NVN entirely and has no use for it; only the SDK movie library's hardware decoder (subsdk0's NVOMX → NvRmChannelOpen)
+// opens /dev/nvhost-* directly. The SDK's NvOsDrvOpen would first connect to the nvdrv service and abort without it. Opening a device fails (fd = -1), and ioctls and event
+// queries return an error, so the decoder takes its own failure path
 #include "hle.h"
 
 #define NV_ERR 3   // NvError: non-zero means failure (3 = not initialized)
 
 HLE_FORCE("NvOsDrvOpen", "nvdrv open device: the host has no nvdrv, returns −1", int, h_nvos_Open, const char *path) {
-    static int red; if (!red++) LOG("[RED] nvdrv: cannot open %s (the host has no nvdrv; only hardware movie decoding uses it)", path ? path : "(null)");
+    static int red;
+    if (!red++) LOG("[RED] nvdrv: cannot open %s (the host has no nvdrv; only hardware movie decoding uses it)", path ? path : "(null)");
     return -1;
 }
 HLE_FORCE("NvOsDrvClose", "nvdrv close device; nothing to do", void, h_nvos_Close, int fd) { (void)fd; }

@@ -1,10 +1,9 @@
-//! The host's log (dm.h LOG): a line formatted here into a buffer on the stack, so that logging allocates nothing, and written by the host's dm_log with the "[dm] "
-//! prefix that LOG gives the C's lines. The text is the C's own, byte for byte where a line moved from C: the symptom index and the tests search for it.
+//! The host's log (dm.h LOG), formatted on the stack. The text is the C's byte for byte: the symptom index and tests search for it.
 #![allow(unsafe_code)]
 
 use core::fmt::{self, Write};
 
-/// Longer lines are cut at a character boundary (none of the host's comes near it)
+/// Longer lines are cut at a character boundary
 const LINE: usize = 1024;
 
 struct Line {
@@ -14,7 +13,7 @@ struct Line {
 
 impl Write for Line {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        let mut take = s.len().min(LINE - 1 - self.n); // the last byte stays for the NUL
+        let mut take = s.len().min(LINE - 1 - self.n); // last byte for the NUL
         while !s.is_char_boundary(take) {
             take -= 1;
         }
@@ -24,10 +23,9 @@ impl Write for Line {
     }
 }
 
-/// One line (no newline: dm_log ends it); `log!` is the way to call it
 pub(crate) fn line(args: fmt::Arguments<'_>) {
     let mut l = Line { buf: [0; LINE], n: 0 };
-    let _ = l.write_fmt(args); // Line never fails; a Display that fails leaves what it wrote
+    let _ = l.write_fmt(args);
     #[cfg(not(test))]
     {
         use core::ffi::c_char;
@@ -35,8 +33,7 @@ pub(crate) fn line(args: fmt::Arguments<'_>) {
             fn dm_log(fmt: *const c_char, ...);
         }
         l.buf[l.n] = 0;
-        // SAFETY: dm_log is the host's printf-style logger (dm.h; hle_bigstack.c, or dm.h's weak one in the unit tests). "%s" takes one NUL-terminated string: buf is
-        // NUL-terminated at n < LINE (a NUL inside the text only ends the line early)
+        // SAFETY: buf is NUL-terminated at n < LINE; "%s" takes one string
         unsafe { dm_log(c"[dm] %s".as_ptr(), l.buf.as_ptr().cast::<c_char>()) }
     }
     #[cfg(test)]
@@ -48,7 +45,7 @@ macro_rules! log {
 }
 pub(crate) use log;
 
-/// C's `%#x`: 0x and the hex digits, but a plain 0 for zero
+/// C's `%#x` (a plain 0 for zero)
 pub(crate) struct Hx<T>(pub T);
 
 impl<T: fmt::LowerHex + Default + PartialEq> fmt::Display for Hx<T> {
@@ -57,7 +54,7 @@ impl<T: fmt::LowerHex + Default + PartialEq> fmt::Display for Hx<T> {
     }
 }
 
-/// Text in a fixed buffer of N bytes, the last kept free as a C string's NUL would be: a write that does not fit whole writes nothing and fails
+/// A write that does not fit whole in N - 1 bytes writes nothing and fails
 pub(crate) struct Text<const N: usize> {
     buf: [u8; N],
     n: usize,
@@ -69,10 +66,9 @@ impl<const N: usize> Text<N> {
     }
 
     pub(crate) fn as_str(&self) -> &str {
-        core::str::from_utf8(&self.buf[..self.n]).unwrap_or("") // only whole strs are ever written
+        core::str::from_utf8(&self.buf[..self.n]).unwrap_or("") // only whole strs are written
     }
 
-    /// s appended when it fits whole; false, and nothing written, when it does not
     pub(crate) fn push(&mut self, s: &str) -> bool {
         if self.n + s.len() >= N {
             return false;
@@ -89,7 +85,6 @@ impl<const N: usize> Write for Text<N> {
     }
 }
 
-/// The lines the code under test logged, per test thread
 #[cfg(test)]
 pub(crate) mod captured {
     use std::cell::RefCell;
@@ -102,7 +97,6 @@ pub(crate) mod captured {
         LINES.with(|l| l.borrow_mut().push(String::from_utf8_lossy(line).into_owned()));
     }
 
-    /// What was logged since the last call, in order
     pub(crate) fn take() -> Vec<String> {
         LINES.with(|l| std::mem::take(&mut *l.borrow_mut()))
     }
@@ -114,7 +108,7 @@ mod tests {
 
     #[test]
     fn a_long_line_is_cut_at_a_character_boundary() {
-        let long = "\u{d7}".repeat(LINE); // two bytes each: the cut falls inside one
+        let long = "\u{d7}".repeat(LINE); // two bytes each
         crate::log::log!("{long}");
         let got = captured::take();
         assert_eq!(got.len(), 1);
@@ -131,10 +125,10 @@ mod tests {
     fn text_takes_whole_writes_only_and_keeps_a_byte_free() {
         let mut t = Text::<8>::new();
         assert!(t.push("abc") && t.push("defg"));
-        assert!(!t.push("h")); // 8 bytes would leave none for the NUL
+        assert!(!t.push("h"));
         assert_eq!(t.as_str(), "abcdefg");
         let mut t = Text::<8>::new();
-        assert!(t.write_str("\u{d7}\u{d7}\u{d7}\u{d7}").is_err()); // 8 bytes
+        assert!(t.write_str("\u{d7}\u{d7}\u{d7}\u{d7}").is_err());
         assert_eq!(t.as_str(), "");
     }
 }

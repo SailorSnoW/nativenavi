@@ -1,4 +1,4 @@
-// Mods folder (DM_MODS, default <DM_ROOT>/mods): emulator-style mods, one folder each, feeding the RomFS overlay and load-time exefs patches (docs/development.md "Mods")
+// Emulator-style mods (DM_MODS, default <DM_ROOT>/mods): RomFS overlay folders and load-time exefs patches
 #include "dm.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <ctype.h>
@@ -18,11 +18,15 @@ typedef struct { rec_t *r; int n, cap; } recs_t;
 typedef struct { const module_t *m; uint64_t off, len; int mod; } applied_t;
 typedef struct { char path[1536], sha[65], why[400]; int refused, seen; } baked_t;
 
-static mod_t g_mods[MOD_MAX]; static int g_nmods;
-static pfile_t g_pfiles[PFILE_MAX]; static int g_npfiles;
-static applied_t *g_applied; static int g_napplied, g_applied_cap;
+static mod_t g_mods[MOD_MAX];
+static int g_nmods;
+static pfile_t g_pfiles[PFILE_MAX];
+static int g_npfiles;
+static applied_t *g_applied;
+static int g_napplied, g_applied_cap;
 typedef struct { char name[256]; char romfs[1300]; int on, at_start; } mod_entry;
-static mod_entry g_all[MOD_MAX * 4]; static int g_nall, g_edited;
+static mod_entry g_all[MOD_MAX * 4];
+static int g_nall, g_edited;
 static char g_overlay_first[4096];
 static char g_base[1024];
 static FILE *g_check;
@@ -49,7 +53,7 @@ static uint8_t *read_file(const char *path, size_t *n) {
     return buf;
 }
 
-// A patch names its module by NSO build ID, often with trailing zeros cut or all 32 bytes given; the loader keeps the first 16 bytes
+// build IDs come with trailing zeros cut or all 32 bytes; the loader keeps 16
 static int bid_matches(const char *id, const char *build) {
     size_t n = strlen(id);
     if (n < 8 || strlen(build) != 32) return 0;
@@ -84,7 +88,7 @@ static void scan_patch_dir(const char *dir, int mod) {
         if (e->d_name[0] == '.') continue;
         int ips = has_suffix(e->d_name, ".ips"), pch = has_suffix(e->d_name, ".pchtxt");
         if (!ips && !pch) {
-            if (g_mods[mod].builtin) continue;   // a built-in set's folder also holds its rewritten module
+            if (g_mods[mod].builtin) continue;
             if (!strcmp(e->d_name, "main") || !strcmp(e->d_name, "sdk") || !strcmp(e->d_name, "rtld") || !strncmp(e->d_name, "subsdk", 6) || !strcmp(e->d_name, "main.npdm"))
                 LOG("[RED] mods: %s: %s/%s replaces or adds a code module, which the rewriter has to process when the game is built: not loaded", g_mods[mod].name, dir, e->d_name);
             continue;
@@ -99,7 +103,10 @@ static void scan_patch_dir(const char *dir, int mod) {
             p->bid[k] = 0;
             if (e->d_name[k] != '.') p->bid[0] = 0;
         } else pchtxt_bid(p->path, p->bid);
-        if (!p->bid[0]) { LOG("[RED] mods: %s: %s names no NSO build ID (an .ips is named after it, a .pchtxt starts with @nsobid-): not applied", g_mods[mod].name, p->path); continue; }
+        if (!p->bid[0]) {
+            LOG("[RED] mods: %s: %s names no NSO build ID (an .ips is named after it, a .pchtxt starts with @nsobid-): not applied", g_mods[mod].name, p->path);
+            continue;
+        }
         g_npfiles++;
     }
     closedir(d);
@@ -126,10 +133,12 @@ static void mod_root(const char *dir, const char *tid, char *root, size_t n) {
     }
 }
 
-// What the Mods menu needs of a mod, on or off: its romfs folder (changed while the game runs), and whether it has anything that is only read at the start.
-// Its entry in g_all, or NULL when the list is full (the folders found are at most as many, so a full list is a bug)
+// NULL when the list is full (a bug: it holds every folder found)
 static mod_entry *list_mod(const char *base, const char *name, const char *tid, int on) {
-    if (g_nall >= (int)(sizeof g_all / sizeof *g_all)) { LOG("[RED] mods: more than %d mods listed: %s is left out of the Mods menu", (int)(sizeof g_all / sizeof *g_all), name); return NULL; }
+    if (g_nall >= (int)(sizeof g_all / sizeof *g_all)) {
+        LOG("[RED] mods: more than %d mods listed: %s is left out of the Mods menu", (int)(sizeof g_all / sizeof *g_all), name);
+        return NULL;
+    }
     mod_entry *m = &g_all[g_nall++];
     char dir[1280], root[1280], p[1400];
     strlcpy(m->name, name, sizeof m->name); m->on = on;
@@ -193,9 +202,7 @@ static int list_dirs(const char *dir, char out[][256], int max) {
     return n;
 }
 
-// A mod folder with nothing of its own and folders that are mods is a pack of variants (a recolour in five colours): each is listed as
-// "<pack>/<variant>". Two of a pack that replace the same RomFS file are alternatives, and only one of them is on; two that share no file
-// (a pack of separate mods) can both be on
+// A folder of only mod folders is a pack of variants "<pack>/<variant>"; two that replace the same RomFS file are alternatives.
 static size_t pack_len(const char *name) { const char *s = strchr(name, '/'); return s ? (size_t)(s - name) + 1 : 0; }
 static int shares_file(const char *a, const char *b) {
     DIR *d = opendir(a);
@@ -218,7 +225,7 @@ static int alternatives(int a, int b) {
 static int alternative_on(int a) { for (int i = 0; i < g_nall; i++) if (g_all[i].on && alternatives(a, i)) return 1; return 0; }
 int dm_mods_exclusive(int i) { for (int k = 0; i >= 0 && i < g_nall && k < g_nall; k++) if (alternatives(i, k)) return 1; return 0; }
 
-// order.txt lists mod folder names, highest priority first; a leading '#' turns a mod off. Folders it does not name follow in name order
+// order.txt: highest priority first, '#' turns a mod off; unnamed folders follow in name order
 void dm_mods_init(void) {
     char *base = g_base;
     const char *e = getenv("DM_MODS_CHECK");
@@ -265,7 +272,7 @@ void dm_mods_init(void) {
     for (int i = 0; i < nfound; i++) if (!taken[i]) {
         mod_entry *m = list_mod(base, found[i], tid, 0);
         if (!m) break;
-        int on = !alternative_on((int)(m - g_all));   // of alternatives order.txt does not name, the first
+        int on = !alternative_on((int)(m - g_all));
         m->on = on;
         if (on) add_mod(base, found[i], tid, overlay, sizeof overlay); else off++;
     }
@@ -273,18 +280,24 @@ void dm_mods_init(void) {
     LOG("mods: %s: %d on, %d off (order.txt)", base, g_nmods, off);
 }
 
-// A built-in set of code patches (the practice tools' IPS, hle_practice.c): the .ips / .pchtxt files of dir, applied as a mod's, at the highest priority (the player turned it on
-// in the launcher), and not in the Mods menu or order.txt. Before load_modules, after dm_mods_init
+// highest priority, not in the Mods menu or order.txt; before load_modules, after dm_mods_init
 void dm_mods_add_builtin(const char *name, const char *dir) {
     if (g_nmods == MOD_MAX) { LOG("[RED] mods: more than %d mods: %s is not loaded", MOD_MAX, name); return; }
     int idx = g_nmods++, before = g_npfiles;
     mod_t *m = &g_mods[idx];
-    snprintf(m->name, sizeof m->name, "%s", name); snprintf(m->dir, sizeof m->dir, "%s", dir); snprintf(m->root, sizeof m->root, "%s", dir); m->builtin = 1;
+    snprintf(m->name, sizeof m->name, "%s", name);
+    snprintf(m->dir, sizeof m->dir, "%s", dir);
+    snprintf(m->root, sizeof m->root, "%s", dir);
+    m->builtin = 1;
     scan_patch_dir(dir, idx);
-    int added = g_npfiles - before;   // to the front: the files applied last win, and dm_mods_patch_module applies from the end of the list to its start
+    int added = g_npfiles - before;   // the files applied last win, and dm_mods_patch_module applies from the end
     pfile_t *tmp = added ? malloc((size_t)added * sizeof *g_pfiles) : NULL;
     if (added && !tmp) die("mods: patch file list allocation failed");
-    if (added) { memcpy(tmp, g_pfiles + before, (size_t)added * sizeof *g_pfiles); memmove(g_pfiles + added, g_pfiles, (size_t)before * sizeof *g_pfiles); memcpy(g_pfiles, tmp, (size_t)added * sizeof *g_pfiles); }
+    if (added) {
+        memcpy(tmp, g_pfiles + before, (size_t)added * sizeof *g_pfiles);
+        memmove(g_pfiles + added, g_pfiles, (size_t)before * sizeof *g_pfiles);
+        memcpy(g_pfiles, tmp, (size_t)added * sizeof *g_pfiles);
+    }
     free(tmp);
     LOG("mods: %s (built in): %d exefs patch file(s) from %s, before the mods folder's", name, added, dir);
 }
@@ -295,8 +308,7 @@ const char *dm_mods_name(int i) { return i >= 0 && i < g_nall ? g_all[i].name : 
 int dm_mods_on(int i) { return i >= 0 && i < g_nall && g_all[i].on; }
 int dm_mods_edited(void) { return g_edited; }
 
-// The romfs folders follow at once: files the game opens from now on come from the new set (what it has loaded stays until it loads it again).
-// Code patches are read at the start only. The choice is written to order.txt either way
+// RomFS follows at once (loaded files stay until reloaded); code patches only at the start
 void dm_mods_set(int i, int on) {
     if (i < 0 || i >= g_nall) return;
     for (int k = 0; on && k < g_nall; k++) if (g_all[k].on && alternatives(i, k)) { g_all[k].on = 0; if (g_all[k].at_start) g_edited = 1; }
@@ -307,7 +319,9 @@ void dm_mods_set(int i, int on) {
         strlcat(overlay, g_all[k].romfs, sizeof overlay);
     }
     dm_fs_overlay_set(overlay);
-    char p[1280], tmp[1290]; snprintf(p, sizeof p, "%s/order.txt", g_base); snprintf(tmp, sizeof tmp, "%s.tmp", p);
+    char p[1280], tmp[1290];
+    snprintf(p, sizeof p, "%s/order.txt", g_base);
+    snprintf(tmp, sizeof tmp, "%s.tmp", p);
     FILE *f = fopen(tmp, "w");
     if (!f) { LOG("[RED] mods: cannot write %s: %s", tmp, strerror(errno)); return; }
     for (int k = 0; k < g_nall; k++) fprintf(f, "%s%s\n", g_all[k].on ? "" : "# ", g_all[k].name);
@@ -329,7 +343,7 @@ static void rec_add(recs_t *rs, uint64_t off, uint32_t len, const uint8_t *data,
 }
 static void recs_free(recs_t *rs) { for (int i = 0; i < rs->n; i++) free(rs->r[i].data); free(rs->r); *rs = (recs_t){0}; }
 
-// Record offsets are positions in the uncompressed NSO, whose 0x100-byte header precedes the image
+// offsets count from the uncompressed NSO's 0x100-byte header
 static int parse_ips(const uint8_t *b, size_t n, recs_t *rs) {
     int w = n >= 5 && !memcmp(b, "IPS32", 5) ? 4 : n >= 5 && !memcmp(b, "PATCH", 5) ? 3 : 0;
     if (!w) return -1;
@@ -408,9 +422,7 @@ static void parse_pchtxt(char *text, recs_t *rs) {
     }
 }
 
-// An instruction the rewriter replaces wherever the game has it (patch_nso.py): written into the mapped image as it is, it would run
-// against Apple's kernel instead of the host. Field tests are by instruction class; within the FP / SIMD classes that move a value
-// to or from a general register, v18 is taken for x18 (a refusal too many, never one too few)
+// An instruction the rewriter replaces would run against Apple's kernel as written; FP / SIMD moves take v18 for x18
 static const char *needs_rewriter(uint32_t w) {
     unsigned rd = w & 31, rn = w >> 5 & 31, rt2 = w >> 10 & 31, rm = w >> 16 & 31;
     static const char *x18 = "uses x18, which Apple's kernel owns";
@@ -485,11 +497,14 @@ static void changed_read(changed_t *c, const module_t *m, const char *dir) {
 
 static int changed_hit(const changed_t *c, uint64_t off, uint64_t len) {
     int lo = 0, hi = c->n;
-    while (lo < hi) { int mid = (lo + hi) / 2; if ((uint64_t)c->run[mid][0] + c->run[mid][1] <= off) lo = mid + 1; else hi = mid; }
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if ((uint64_t)c->run[mid][0] + c->run[mid][1] <= off) lo = mid + 1;
+        else hi = mid;
+    }
     return lo < c->n && c->run[lo][0] < off + len;
 }
 
-// *final: no rewrite of the module can make the patch either
 static const char *rec_refusal(const module_t *m, const changed_t *c, const rec_t *r, uint64_t *at, int *final) {
     *at = r->off; *final = 1;
     if (r->off < NSO_HEADER) return "lies in the NSO header";
@@ -497,8 +512,7 @@ static const char *rec_refusal(const module_t *m, const changed_t *c, const rec_
     *at = off;
     if (end > m->key_page_off) return "lies outside the module's image";
     *final = 0;
-    // The code a patch writes: the text, and the padding after it up to the read-only data (a code cave: sloperinaGZ's IPS puts its stubs at main+0x3c46400, past
-    // TEXT_END 0x3c461d0), which the loader seals executable with the text. The rewriter never wrote the padding, so only the text has moved words to refuse
+    // a patch may write the padding up to the read-only data (a code cave), sealed with the text and never rewritten
     uint64_t code_end = m->ro_off > m->text_end ? m->ro_off : m->text_end;
     if (off >= code_end) return NULL;
     if (off < m->text_end && !c->ok) return "is code, and the module has no changed-words list of its build beside it (rewrite it with dm/tools/patch_nso.py)";
@@ -526,7 +540,7 @@ static void note_applied(const module_t *m, uint64_t off, uint64_t len, int mod)
         g_applied_cap = g_applied_cap ? g_applied_cap * 2 : 256;
         g_applied = dm_realloc(g_applied, (size_t)g_applied_cap * sizeof *g_applied, "the mods' applied patches");
     }
-    g_applied[g_napplied++] = (applied_t){m, off, len, mod};   // NOLINT(clang-analyzer-security.ArrayBound): the count starts at 0 and the table grows when it is full (the analyzer takes the globals as any value)
+    g_applied[g_napplied++] = (applied_t){m, off, len, mod};   // NOLINT(clang-analyzer-security.ArrayBound): the table grows when full
 }
 
 static void sha256_hex(const uint8_t *buf, size_t n, char out[65]) {
@@ -534,8 +548,7 @@ static void sha256_hex(const uint8_t *buf, size_t n, char out[65]) {
     for (int k = 0; k < CC_SHA256_DIGEST_LENGTH; k++) snprintf(out + 2 * k, 3, "%02x", d[k]);
 }
 
-// <name>.mods.tsv beside a module the launch-time rewrite made (dm/tools/mods_rewrite.py): the patch files that are in its code already
-// ("baked", digest, path) and those the rewriter refused ("refused", digest, path, reason)
+// <name>.mods.tsv (dm/tools/mods_rewrite.py): "baked" and "refused" rows
 static baked_t *baked_read(const module_t *m, const char *dir, int *n) {
     *n = 0;
     char p[1280]; snprintf(p, sizeof p, "%s/%s.mods.tsv", dir, m->name);
@@ -566,8 +579,7 @@ static void check_file(const module_t *m, const pfile_t *p, const char *status, 
     }
 }
 
-// Called while the image is still writable, before the loader seals its code and relocates it: the point at which Horizon's loader
-// applies the same patches to the NSO. A file is applied whole or not at all, since half a hook is worse than none
+// While the image is writable, before sealing and relocation, as Horizon's loader; a file applies whole or not at all
 void dm_mods_patch_module(module_t *m, const char *dir) {
     changed_t changed = {0}; int read_changed = 0, nbaked = 0;
     baked_t *baked = baked_read(m, dir, &nbaked);
@@ -628,8 +640,7 @@ void dm_mods_report_unmatched(void) {
     }
 }
 
-// DM_MODS_CHECK=<file>: the verdict on every patch file of a loaded module's build, with its patches, then the host ends before the
-// game starts. dm/tools/mods_rewrite.py asks this way which files the modules have to be rewritten with
+// DM_MODS_CHECK=<file>: the verdicts, then the host ends before the game starts
 void dm_mods_check_done(void) {
     if (!g_check) return;
     fclose(g_check);

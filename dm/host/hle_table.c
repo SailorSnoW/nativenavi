@@ -1,4 +1,4 @@
-// libc passthrough table: C library functions consistent with AAPCS64 and with no struct layout dependency, connected directly to Apple libc. Goes into the swhle section.
+// libc passthrough table (swhle section): C library functions whose calls are the same under both ABIs (hle.h) and that depend on no struct layout, bound to Apple's libc.
 #include "hle.h"
 #include <math.h>
 #include <ctype.h>

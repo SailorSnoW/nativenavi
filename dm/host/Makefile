@@ -1,7 +1,7 @@
-# Game profile (dm/games/<id>/): the host is built for one, Ocarina of Time's unless GAME names another (a derived profile's title ID). game_profile.h is generated from game.tsv into gen/<id>/; the chain version header dmsh_chain.h lives in dm/gfx/nvn
+# Game profile (dm/games/<id>/): Ocarina of Time's unless GAME names a derived profile's title ID. game_profile.h is generated from its game.tsv into gen/<id>/
 GAME ?= 0400486024DEC000
-# A profile outside the repository (DM_GAMES_DIR: the packing script's derived profile of a version the profile here does not register) is reached through the symlink gen/<id>/profile: make cannot take paths with spaces.
-# DM_GAMES_FIRST=1 (the packing script sets it for a derived profile) takes it even when dm/games has the game
+# A profile outside the repository (DM_GAMES_DIR) is reached through the symlink gen/<id>/profile: make cannot take paths with spaces.
+# DM_GAMES_FIRST=1 takes it even when dm/games has the game
 ifneq ($(strip $(GAME)),)
 GAME_DIR := $(if $(and $(wildcard ../games/$(GAME)/game.tsv),$(if $(DM_GAMES_FIRST),,1)),../games/$(GAME),$(shell python3 ../games/game.py link $(GAME) gen/$(GAME)/profile >&2 && echo gen/$(GAME)/profile))
 ifeq ($(GAME_DIR),)
@@ -10,25 +10,23 @@ endif
 endif
 GAME_H = gen/$(GAME)/game_profile.h
 include ../mac/min_os.mk
-# -O2 as the other native code here (dav1d, the launcher). Not -O3 (no measured gain over -O2) and not -flto, which moves
-# hle_bigstack.c's inline-assembly entry apart from its return path (SIGBUS in dm_bigstack_enter on Breath of the Wild, PR #556)
+# Not -O3 (no measured gain over -O2) and not -flto, which moves hle_bigstack.c's inline-assembly entry apart from its return path (SIGBUS in dm_bigstack_enter)
 CFLAGS=-O2 -g -Wall -mmacosx-version-min=$(MACOS_MIN)
-# One job per core unless the command line sets -j: the host and the libraries below build one object per source (GNU make 3.81, the system's, takes -j from MAKEFLAGS set here)
+# One job per core unless the command line sets -j (GNU make 3.81, the system's, takes -j from MAKEFLAGS set here)
 ifeq ($(filter -j%,$(MAKEFLAGS)),)
 MAKEFLAGS += -j$(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 endif
-# Service-layer takeover hle_*.c files are included by wildcard: adding a file does not touch this line (avoids merge conflicts)
+# hle_*.c by wildcard, so that adding one does not touch this line
 SRC=main.c loader.c hle.c crash.c probe.c thread.c memstat.m haptics_apple.m audio_input.c audio_input_mac.m pad_switch2_apple.m $(sort $(wildcard hle_*.c)) front_mac.m entry.S
-# NVN null device + nn::vi + the Metal layer (dm/gfx/)
-# Sources under dm/gfx, dm/gfx/nvn and dm/gfx/tex are included by wildcard (tests/ and metal/ do not go into the host): adding a file does not touch this line
+# NVN, nn::vi and the Metal layer (dm/gfx, nvn and tex; not tests/ or metal/)
 GFX=$(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m))
-# Third party: dav1d, the AV1 decoder where VideoToolbox has none (hle_movie_av1.c), with its arm64 NEON assembly and its configuration in config/. Its *_tmpl.c files are built
-# through the per-bit-depth wrappers in config/tmpl, and the assembly files other assembly files include (*_tmpl.S, util.S) are not built on their own: the list meson builds
+# dav1d, the AV1 decoder where VideoToolbox has none (hle_movie_av1.c). Its *_tmpl.c files are built through the per-bit-depth wrappers in config/tmpl, and the assembly
+# files other assembly files include (*_tmpl.S, util.S) are not built on their own: the list meson builds
 DAV1D=../third_party/dav1d
 DAV1D_SRC=$(sort $(filter-out %_tmpl.c,$(wildcard $(DAV1D)/src/*.c)) $(DAV1D)/src/arm/cpu.c $(wildcard $(DAV1D)/config/tmpl/*.c) \
           $(filter-out %_tmpl.S %/util.S,$(wildcard $(DAV1D)/src/arm/64/*.S)))
-# An object is named by its source's path (src/arm/cpu.c: gen/dav1d/src_arm_cpu.c.o): an archive keeps only file names, and src/cpu.c and src/arm/cpu.c as two cpu.c.o made
-# dsymutil skip the second one's debug information
+# An object is named by its source's path (src/arm/cpu.c: gen/dav1d/src_arm_cpu.c.o): an archive keeps only file names, and with two cpu.c.o dsymutil skips the second's
+# debug information
 dav1d_obj=gen/dav1d/$(subst /,_,$(patsubst $(DAV1D)/%,%,$(1))).o
 DAV1D_OBJ=$(foreach s,$(DAV1D_SRC),$(call dav1d_obj,$(s)))
 DAV1D_LIB=gen/dav1d/libdav1d.a
@@ -45,29 +43,27 @@ $(DAV1D_LIB): $(DAV1D_OBJ)
 include rust.mk
 .PHONY: rust
 rust: $(RS_LIB)
-# The host's own Metal shaders (dm/gfx/msl/*.metal) compiled for MSL_SDK into gen/msl-<sdk>/host_msl_gen.h (dm/gfx/tools/host_msl.py; dm/gfx/nvn/host_msl.m loads them), so the host
-# compiles no MSL at run time
+# The host's own Metal shaders (dm/gfx/msl/*.metal), compiled for MSL_SDK into gen/msl-<sdk>/host_msl_gen.h, so the host compiles no MSL at run time
 MSL_SDK ?= macosx
 MSL_MIN_macosx = $(MACOS_MIN)
 MSL_SRC = $(sort $(wildcard ../gfx/msl/*.metal))
 MSL_H = gen/msl-$(MSL_SDK)/host_msl_gen.h
-# Recheck the toolchain and target on every build; the generator keeps the header unchanged when its inputs match.
+# Run on every build (the toolchain may change); the generator leaves the header as it is when its inputs match
 $(MSL_H): $(MSL_SRC) ../gfx/tools/host_msl.py FORCE
 	python3 ../gfx/tools/host_msl.py --sdk $(MSL_SDK) $(if $(MSL_MIN_$(MSL_SDK)),--min $(MSL_MIN_$(MSL_SDK))) $@ $(MSL_SRC)
 .PHONY: host_msl
 host_msl: $(MSL_H)
-.DEFAULT_GOAL := dmhost   # The header generation rules are written first below, so the default goal must be stated explicitly (otherwise make only generates the headers and does not build the host)
+.DEFAULT_GOAL := dmhost   # the header rules come first
 .PHONY: game_profile
 game_profile: $(GAME_H)
-# Regenerated on every make (FORCE): the same GAME can come from another profile folder (DM_GAMES_FIRST), whose game.tsv may be older than the header; game.py writes it only when it changes
+# FORCE: the same GAME can come from another profile folder (DM_GAMES_FIRST), whose game.tsv may be older than the header; game.py writes it only when it changes
 $(GAME_H): $(GAME_DIR)/game.tsv ../games/game.py FORCE
 	@python3 ../games/game.py header $(GAME) $@
 .PHONY: FORCE
 FORCE:
-# The host: one object per source in gen/<id>/obj (dm.h includes the profile header, so every game has its own), compiled on every core, then linked into gen/<id>/dmhost with
-# the same flags (as clang's one-step compile and link gives each of its jobs the whole line) and its dSYM made from the objects, as clang does after its own link. Each object
-# lists the headers its source read (-MMD; -MP: a removed header is no error), so an edit rebuilds the objects that include it and the link; the Makefile (CFLAGS, these lines)
-# rebuilds them all. The generated headers come first (order-only: the dependency files name them for the sources that read them). The packing script builds gen/<id>/dmhost and takes it
+# The host: one object per source in gen/<id>/obj (dm.h includes the profile header, so every game has its own), linked into gen/<id>/dmhost with the same flags (as
+# clang's one-step compile and link would) and its dSYM made from the objects. -MMD -MP: each object depends on the headers its source read. The generated headers are
+# order-only prerequisites: the dependency files name them for the sources that read them
 HOST_CFLAGS = $(CFLAGS) -I../gfx/nvn/include -I$(dir $(MSL_H)) -I$(dir $(GAME_H)) -I$(DAV1D)/include -fobjc-arc
 HOST_FRAMEWORKS = -framework Cocoa -framework UserNotifications -framework QuartzCore -framework Metal -framework MetalFX -framework GameController -framework CoreBluetooth -framework IOBluetooth -framework CoreHaptics -framework IOKit -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework CoreFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework ImageIO -framework UniformTypeIdentifiers
 HOST_SRC = $(SRC) $(GFX)
@@ -89,10 +85,10 @@ $(HOST_BIN): $(HOST_OBJ) $(DAV1D_LIB) $(RS_LIB) Makefile rust.mk ../mac/min_os.m
 ifneq ($(strip $(GAME)),)
 -include $(HOST_OBJ:.o=.d)
 endif
-# dm/host/dmhost (what the run commands, regress.py and CI start) is a copy of this game's gen/<id>/dmhost with its dSYM, made again whenever the two differ: another game's or
-# an older build's (make's whole-second times could not tell two games' builds in one second apart)
+# dm/host/dmhost (what the run commands, regress.py and CI start) is a copy of this game's gen/<id>/dmhost with its dSYM, made again whenever the two differ (make's
+# whole-second times cannot tell two builds made in one second apart)
 dmhost: $(HOST_BIN) FORCE
 	@cmp -s $(HOST_BIN) $@ || { rm -rf $@ $@.dSYM && cp $(HOST_BIN) $@ && cp -R $(HOST_BIN).dSYM $@.dSYM; }
-clean:   # the host and everything make generates for it (gen/: the profile headers, each game's objects and host, and the dav1d build; dmhost_* and *.dSYM beside them, as in .gitignore)
+clean:   # everything make generates for the host
 	rm -rf gen dmhost dmhost_* *.dSYM
 .PHONY: clean

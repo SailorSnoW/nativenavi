@@ -1,19 +1,21 @@
-// Host common miscellany: guest object side table, monotonic clock, C library imports that none of the modules define.
-// (The former 136 HLE entries for nn::os/mem/lmem/C++ ABI have been deleted: the SDK brings its own nn::os, and at load time not one of these entries was resolved and used.)
+// Guest object side table, guest clock, entropy and getenv.
 #include <pthread.h>
 #include "hle.h"
 #include <mach/mach_time.h>
 #include <stdatomic.h>
 
-// ---------- Side table ----------
-// Guest object -> host state, linear probing with backward-shift deletion: no deleted markers, so every key sits once in the run of
-// occupied slots from its home slot, and an empty slot ends every search (t_objmap). Keys are guest pointers, never NULL.
+// Linear probing with backward-shift deletion: an empty slot ends every search. Keys are never NULL.
 #define OM_SIZE (1u << 18)
 #define OM_MASK (OM_SIZE - 1)
 static struct { const void *k; void *v; } g_om[OM_SIZE];
 static pthread_mutex_t g_om_lock = PTHREAD_MUTEX_INITIALIZER;
-static unsigned om_h(const void *k) { uint64_t x = (uint64_t)k; x ^= x >> 29; x *= 0xbf58476d1ce4e5b9ull; return (unsigned)(x >> 40) & OM_MASK; }
-// The key's slot, or the empty slot that ends its run. Called with g_om_lock held
+static unsigned om_h(const void *k) {
+    uint64_t x = (uint64_t)k;
+    x ^= x >> 29;
+    x *= 0xbf58476d1ce4e5b9ull;
+    return (unsigned)(x >> 40) & OM_MASK;
+}
+// g_om_lock held
 static unsigned om_find(const void *k) {
     unsigned i = om_h(k);
     while (g_om[i].k && g_om[i].k != k) i = (i + 1) & OM_MASK;
@@ -21,14 +23,15 @@ static unsigned om_find(const void *k) {
 }
 void *objmap_get(const void *k) {
     pthread_mutex_lock(&g_om_lock);
-    void *r = g_om[om_find(k)].v;   // an empty slot holds NULL
+    void *r = g_om[om_find(k)].v;
     pthread_mutex_unlock(&g_om_lock);
     return r;
 }
 void objmap_put(const void *k, void *v) {
     pthread_mutex_lock(&g_om_lock);
     unsigned i = om_find(k);
-    g_om[i].k = k; g_om[i].v = v;
+    g_om[i].k = k;
+    g_om[i].v = v;
     pthread_mutex_unlock(&g_om_lock);
 }
 void *objmap_del(const void *k) {
@@ -36,10 +39,13 @@ void *objmap_del(const void *k) {
     unsigned i = om_find(k);
     void *r = g_om[i].v;
     if (g_om[i].k) {
-        // Close the hole: each later entry of the run whose home slot is not after the hole (cyclically) moves back into it
         for (unsigned j = (i + 1) & OM_MASK; g_om[j].k; j = (j + 1) & OM_MASK)
-            if (((j - om_h(g_om[j].k)) & OM_MASK) >= ((j - i) & OM_MASK)) { g_om[i] = g_om[j]; i = j; }
-        g_om[i].k = NULL; g_om[i].v = NULL;
+            if (((j - om_h(g_om[j].k)) & OM_MASK) >= ((j - i) & OM_MASK)) {
+                g_om[i] = g_om[j];
+                i = j;
+            }
+        g_om[i].k = NULL;
+        g_om[i].v = NULL;
     }
     pthread_mutex_unlock(&g_om_lock);
     return r;
@@ -49,15 +55,19 @@ uint64_t now_ns(void) {
     if (!tb.denom) mach_timebase_info(&tb);
     return mach_absolute_time() * tb.numer / tb.denom;
 }
-// Guest clock: the system counters the guest can read (mrs cntpct gate, svc GetSystemTick) all go through here. Default = now_ns().
-// Freeze (guest_clock_freeze_for): while frozen the guest clock does not advance ⇒ the game's next tick never comes due; after unfreezing the frozen duration is subtracted, the guest clock is continuous with no jump
-// DM_DETCLOCK=<step ns> (for replay / test runs; product runs do not set it = wall clock): from the first present on the guest clock becomes "advance a fixed step per present", not following the wall clock --
-// the client's per-frame dt and the server tick catch-up snapshots are both determined by the present count, so frame N in a run is byte-for-byte comparable between two passes of the same replay (the foundation of byte-for-byte picture proof).
-// Before the first frame the wall clock is still used (the boot period has waits that poll by time, freezing would hang them); at the switch it continues from the guest clock value at that time, no jump. It does not advance while frozen.
-static _Atomic uint64_t g_gfrozen, g_glag, g_gdet, g_guest_frame; static _Atomic int g_gfz, g_gdet_on; static uint64_t g_gdet_step = 1;
+// Every guest-readable system counter goes through here. Frozen, it does not advance, and the frozen time is subtracted after.
+// DM_DETCLOCK=<step ns>: a fixed step per present from the first one on (the wall clock before: boot polls by time).
+static _Atomic uint64_t g_gfrozen, g_glag, g_gdet, g_guest_frame;
+static _Atomic int g_gfz, g_gdet_on;
+static uint64_t g_gdet_step = 1;
 uint64_t dm_guest_frame(void) { return atomic_load(&g_guest_frame); }
 static int detclock_cfg(void) {
-    static int c = -1; if (c < 0) { const char *e = getenv("DM_DETCLOCK"); g_gdet_step = e ? strtoull(e, 0, 0) : 0; c = g_gdet_step > 0; }
+    static int c = -1;
+    if (c < 0) {
+        const char *e = getenv("DM_DETCLOCK");
+        g_gdet_step = e ? strtoull(e, 0, 0) : 0;
+        c = g_gdet_step > 0;
+    }
     return c;
 }
 static uint64_t wall_guest_ns(void) { return atomic_load(&g_gfz) ? atomic_load(&g_gfrozen) : now_ns() - atomic_load(&g_glag); }
@@ -69,108 +79,133 @@ uint64_t guest_ns_at_host_time(uint64_t host_ns) {
     uint64_t lag = atomic_load(&g_glag);
     return host_ns >= lag ? host_ns - lag : 0;
 }
-// The system counter on that clock: 31.25 MHz (32 ns a tick) on the Switch 2, whose SDK reads cntpct_el0 and converts with that rate (nn::os::GetSystemTickFrequency answers
-// 0x1dcd650, sdk 20.5.19 Ounce). Read at the Switch's 19.2 MHz, every tick span a Switch 2 game measured came out 1.63 times too short, and the same clock's GPU timestamps
-// 1.63 times too late: Donkey Kong Bananza's frame-rate controller took its frame for seconds long and held it at 20 fps (present interval 3)
+// docs/reference/frame-rate.md#the-switch-2s-system-tick-is-3125-mhz
 #define GUEST_TICK_NS 32
 uint64_t guest_ticks(void) { return guest_ns() / GUEST_TICK_NS; }
-uint64_t guest_tick_hz(void) { return 1000000000ull / GUEST_TICK_NS; }   // 0x1dcd650, as GetSystemTickFrequency; a rewritten mrs cntfrq_el0 reads it (patch_nso.py)
+uint64_t guest_tick_hz(void) { return 1000000000ull / GUEST_TICK_NS; }   // a rewritten mrs cntfrq_el0 reads it
 int dm_detclock_enabled(void) { return detclock_cfg() && atomic_load(&g_gdet_on); }
 void dm_guest_frame_tick(void) {
     crash_watch_frame();
     atomic_fetch_add(&g_guest_frame, 1);
     if (!detclock_cfg()) return;
     if (!atomic_load(&g_gdet_on)) {
-        atomic_store(&g_gdet, wall_guest_ns()); atomic_store(&g_gdet_on, 1);
-        LOG("DM_DETCLOCK: from the first present on, the guest clock advances by presents, step %llu ns", (unsigned long long)g_gdet_step); return;
+        atomic_store(&g_gdet, wall_guest_ns());
+        atomic_store(&g_gdet_on, 1);
+        LOG("DM_DETCLOCK: from the first present on, the guest clock advances by presents, step %llu ns", (unsigned long long)g_gdet_step);
+        return;
     }
     if (!atomic_load(&g_gfz)) atomic_fetch_add(&g_gdet, g_gdet_step);
 }
 static void guest_clock_freeze_apply(int on) {
-    if (on && !atomic_load(&g_gfz)) { atomic_store(&g_gfrozen, now_ns() - atomic_load(&g_glag)); atomic_store(&g_gfz, 1); }
-    else if (!on && atomic_load(&g_gfz)) { atomic_store(&g_glag, now_ns() - atomic_load(&g_gfrozen)); atomic_store(&g_gfz, 0); }
+    if (on && !atomic_load(&g_gfz)) {
+        atomic_store(&g_gfrozen, now_ns() - atomic_load(&g_glag));
+        atomic_store(&g_gfz, 1);
+    } else if (!on && atomic_load(&g_gfz)) {
+        atomic_store(&g_glag, now_ns() - atomic_load(&g_gfrozen));
+        atomic_store(&g_gfz, 0);
+    }
 }
-// Freezing has several unrelated reasons (0 freeze tick for testing / loading screen, 1 App in background, 2 system keyboard up, 3 NVN prepare step, 4 NVN pipeline archive init):
-// freeze if any holds, release only when all are lifted -- otherwise "switch to background and back while the keyboard is up" or "archive init finishes inside the prepare step"
-// would release the clock early
-static pthread_mutex_t g_gfz_mu = PTHREAD_MUTEX_INITIALIZER; static unsigned g_gfz_reasons;
-// A suspended application does not run: Horizon suspends the whole process out of focus. The host freezes the guest clock in the background but its
-// guest threads go on until they block, so a guest reading the clock twice there saw no time pass. Super Mario Galaxy 2's frame pacing (main+0x5926a8) took the interval between two
-// frames as its period, got 0, and the next frame's loop that steps by it (main+0x9abd0) never ended. The same stall on the render thread during the host's first-submission prepare
-// step or pipeline archive open (reasons 3 and 4: seconds on a slow disk or cold prebuild) let Vanillaware's main thread skip hundreds of frames and advance into texture teardown
-// before frame 1 finished (13 Sentinels: Aegis Rim, SIGSEGV at main+0x309128 / +0x309e28). Guest reads of the system counter (the cntpct gate, svc GetSystemTick) wait while any
-// GFZ_WAIT_MASK reason holds; host work (dm_host_work: inside a submit or present, which the graphics suspend waits for) reads the frozen clock, as do the other reasons
+// 0 tick hold, 1 background, 2 keyboard, 3 NVN prepare, 4 pipeline archive init: frozen while any holds.
+static pthread_mutex_t g_gfz_mu = PTHREAD_MUTEX_INITIALIZER;
+static unsigned g_gfz_reasons;
+// Guest reads wait while one holds (docs/reference/services.md#guest-clock-reads-wait-while-the-app-is-in-the-background); host work reads the frozen clock.
 enum { GFZ_WAIT_MASK = (1u << 1) | (1u << 3) | (1u << 4) };
-static pthread_cond_t g_gfz_cv = PTHREAD_COND_INITIALIZER; static _Atomic int g_gfz_wait;
-// Each read also counts on the reading thread: a run of yields whose passes read the clock is a wait for a time, which the yield back-off sleeps from its start (hle_thread.c thr_yield)
+static pthread_cond_t g_gfz_cv = PTHREAD_COND_INITIALIZER;
+static _Atomic int g_gfz_wait;
+// A run of yields that read the clock is a timed wait: the yield back-off sleeps from its start.
 __thread uint64_t dm_clock_reads;
 void guest_clock_read_wait(void) {
     dm_clock_reads++;
     if (!atomic_load(&g_gfz_wait) || atomic_load(&dm_host_work)) return;
     pthread_mutex_lock(&g_gfz_mu);
-    while ((g_gfz_reasons & GFZ_WAIT_MASK) && !atomic_load(&dm_reset_stop)) pthread_cond_wait(&g_gfz_cv, &g_gfz_mu);   // a reset: the read goes on to its gate's end of the thread
+    while ((g_gfz_reasons & GFZ_WAIT_MASK) && !atomic_load(&dm_reset_stop)) pthread_cond_wait(&g_gfz_cv, &g_gfz_mu);   // reset: go on to the gate's end
     pthread_mutex_unlock(&g_gfz_mu);
 }
-int guest_clock_frozen_for(int reason) { pthread_mutex_lock(&g_gfz_mu); int on = g_gfz_reasons >> reason & 1; pthread_mutex_unlock(&g_gfz_mu); return on; }   // hle_reset.c: the prepare step (3) is under way
-void dm_clock_reset_wake(void) { pthread_mutex_lock(&g_gfz_mu); pthread_cond_broadcast(&g_gfz_cv); pthread_mutex_unlock(&g_gfz_mu); }   // hle_reset.c
+int guest_clock_frozen_for(int reason) {
+    pthread_mutex_lock(&g_gfz_mu);
+    int on = g_gfz_reasons >> reason & 1;
+    pthread_mutex_unlock(&g_gfz_mu);
+    return on;
+}
+void dm_clock_reset_wake(void) {
+    pthread_mutex_lock(&g_gfz_mu);
+    pthread_cond_broadcast(&g_gfz_cv);
+    pthread_mutex_unlock(&g_gfz_mu);
+}
 void guest_clock_freeze_for(int reason, int on) {
     pthread_mutex_lock(&g_gfz_mu);
-    if (on) g_gfz_reasons |= 1u << reason; else g_gfz_reasons &= ~(1u << reason);
+    if (on) g_gfz_reasons |= 1u << reason;
+    else g_gfz_reasons &= ~(1u << reason);
     guest_clock_freeze_apply(g_gfz_reasons != 0);
     int wait = (g_gfz_reasons & GFZ_WAIT_MASK) != 0;
     atomic_store(&g_gfz_wait, wait);
-    if (!wait) pthread_cond_broadcast(&g_gfz_cv);   // after the clock is running again: a released read sees it continue
+    if (!wait) pthread_cond_broadcast(&g_gfz_cv);   // after the clock runs again
     pthread_mutex_unlock(&g_gfz_mu);
 }
-// Entropy source: true random by default (arc4random); with DM_DETCLOCK on it becomes a fixed-seed splitmix64 stream (so that replay pictures are byte-for-byte comparable, the camp blue fire particles differed between two passes).
-// The two outlets (libc getentropy, svc GetInfo RandomEntropy) share one stream; the call count is reported in the log (first call and every 1000 calls)
-static _Atomic uint64_t g_detrng = 0x5357444554524e47ull; static _Atomic uint64_t g_detrng_n;
+// DM_DETCLOCK: a fixed-seed stream keeps replays byte-for-byte comparable. getentropy, GetInfo RandomEntropy and csrng share it.
+static _Atomic uint64_t g_detrng = 0x5357444554524e47ull;
+static _Atomic uint64_t g_detrng_n;
 uint64_t dm_entropy64(void) {
     if (!detclock_cfg()) return ((uint64_t)arc4random() << 32) | arc4random();
     uint64_t z = atomic_fetch_add(&g_detrng, 0x9E3779B97F4A7C15ull) + 0x9E3779B97F4A7C15ull;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull; z = (z ^ (z >> 27)) * 0x94D049BB133111EBull; z ^= z >> 31;
-    uint64_t n = atomic_fetch_add(&g_detrng_n, 1) + 1; if (n == 1 || n % 1000 == 0) LOG("DM_DETCLOCK: deterministic entropy call %llu", (unsigned long long)n);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    uint64_t n = atomic_fetch_add(&g_detrng_n, 1) + 1;
+    if (n == 1 || n % 1000 == 0) LOG("DM_DETCLOCK: deterministic entropy call %llu", (unsigned long long)n);
     return z;
 }
 HLE("getentropy", int, g_getentropy, void *p, size_t n) {
-    if (!detclock_cfg()) { arc4random_buf(p, n); return 0; }
-    for (size_t i = 0; i < n; i += 8) { uint64_t v = dm_entropy64(); memcpy((uint8_t *)p + i, &v, n - i < 8 ? n - i : 8); }
+    if (!detclock_cfg()) {
+        arc4random_buf(p, n);
+        return 0;
+    }
+    for (size_t i = 0; i < n; i += 8) {
+        uint64_t v = dm_entropy64();
+        memcpy((uint8_t *)p + i, &v, n - i < 8 ? n - i : 8);
+    }
     return 0;
 }
-// The SDK's own getentropy (Unicorn Overlord, SDK 16.2.4: std::random_device at nnMain) fills through nn::crypto::GenerateCryptographicallyRandomBytes, which opens the csrng service;
-// Pokémon Legends: Z-A (SDK 19) calls it first thing in nnMain (main+0x1734b4)
-// (InitializeCsrng → sm::Initialize, the game aborted there). The call goes through the sdk's PLT, so the takeover gives it the same stream as getentropy above
+// docs/reference/services.md#cryptographically-random-bytes
 HLE_FORCE("_ZN2nn6crypto36GenerateCryptographicallyRandomBytesEPvm", "csrng service; host entropy (the getentropy stream)", void, g_csrng_bytes, void *p, size_t n) {
     g_getentropy(p, n);
 }
 
-// ---------- getenv: the game profile's game_env ----------
-// Horizon gives a program no environment, and the SDK's C library starts with an empty environ. Runtimes that take their settings from the environment then run on defaults sized for the
-// Switch's 64 GB alias region: Absolum's .NET GC (NativeAOT) reserves 5 × its heap limit as its region range, 3.75 GB, unless DOTNET_GCRegionRange says otherwise.
-// The profile's game_env (KEY=VALUE, separated by spaces; DM_GAME_ENV overrides it, also from the Mac app's env.txt) answers getenv for those names; any other name goes to the SDK's own getenv
+// Horizon gives no environment: the profile's game_env answers its names; others go to the SDK's getenv.
 static const char **g_env_kv;   // "KEY=VALUE" strings, NULL-terminated
 static void game_env_init(void) {
-    const char *e = getenv("DM_GAME_ENV"); if (!e) e = DM_GAME_ENV;
-    int n = 0; for (const char *p = e; *p; p++) n += *p == '=';
+    const char *e = getenv("DM_GAME_ENV");
+    if (!e) e = DM_GAME_ENV;
+    int n = 0;
+    for (const char *p = e; *p; p++) n += *p == '=';
     if (!(g_env_kv = calloc((size_t)n + 1, sizeof *g_env_kv))) die("game_env allocation failed");
-    char *s = strdup(e); int k = 0;
-    for (char *t = strtok(s, " "); t && k < n; t = strtok(NULL, " ")) if (strchr(t, '=')) g_env_kv[k++] = t;
+    char *s = strdup(e);
+    int k = 0;
+    for (char *t = strtok(s, " "); t && k < n; t = strtok(NULL, " "))
+        if (strchr(t, '=')) g_env_kv[k++] = t;
     if (k) LOG("game environment (%s): %s", getenv("DM_GAME_ENV") ? "DM_GAME_ENV" : "game profile game_env", e);
     else free(s);   // no accepted entry points into the copy
 }
-static const char *const *game_env(void) { static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, game_env_init); return g_env_kv; }
+static const char *const *game_env(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, game_env_init);
+    return g_env_kv;
+}
 HLE_FORCE("getenv", "the game profile's game_env answers its names; the SDK's own getenv (an empty environ on Horizon) the rest", char *, g_getenv, const char *name) {
     static char *(*orig)(const char *);
     size_t n = name ? strlen(name) : 0;
-    for (const char *const *p = game_env(); n && *p; p++) if (!strncmp(*p, name, n) && (*p)[n] == '=') return (char *)*p + n + 1;
+    for (const char *const *p = game_env(); n && *p; p++)
+        if (!strncmp(*p, name, n) && (*p)[n] == '=') return (char *)*p + n + 1;
     if (!orig && !(orig = guest_sym("getenv"))) return NULL;
     return orig(name);
 }
 
-// A reset (hle_reset.c), after the services have let their entries go: every key left is the stopped game's (its memory is about to go, and the new boot may put another object there)
+// Reset: every key left is the stopped game's.
 void dm_objmap_reset(void) {
     pthread_mutex_lock(&g_om_lock);
-    unsigned n = 0; for (unsigned i = 0; i < OM_SIZE; i++) if (g_om[i].k) n++;
+    unsigned n = 0;
+    for (unsigned i = 0; i < OM_SIZE; i++)
+        if (g_om[i].k) n++;
     memset(g_om, 0, sizeof g_om);
     pthread_mutex_unlock(&g_om_lock);
     if (n) LOG("reset: %u host objects of the game's left in the side table, forgotten", n);

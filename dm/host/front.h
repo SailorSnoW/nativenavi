@@ -1,50 +1,37 @@
 // Host front end (front_mac.m).
 #pragma once
 #include <stdlib.h>
-// Metal reads HUD switches when the first device is made. Called before host preload and again after the launcher applies its settings; explicit environment values win.
+// Metal reads these at its first device; explicit environment values win.
 static inline void front_hud_env(void) {
     const char *e = getenv("DM_METAL_HUD");
     if (!e || !atoi(e)) return;
     setenv("MTL_HUD_ENABLED", "1", 0);
-    // Spatial scaling has no temporal exposure: showing that HUD metric makes the MetalFX rows flicker.
+    // MetalFX spatial has no temporal exposure: this HUD metric would flicker.
     setenv("MTL_HUD_HIDE_METALFX_METRICS", "1", 0);
 }
-// Run the guest: with a window the guest runs on its own thread and the main thread belongs to the system UI; without a window it runs directly on the current thread.
+// With a window the guest runs on its own thread (the main thread is the UI's).
 void front_run(void (*guest)(void));
-// The CAMetalLayer the graphics backend presents frames to (NULL when there is no window)
 void *front_metal_layer(void);
-// The highest refresh rate of the screen the game is shown on in Hz, 0 = not known (front_mac.m: the window's screen). Any thread
+// Hz, 0 = unknown. Any thread.
 int front_screen_max_fps(void);
-// Whether the window's current screen mode supports variable refresh (front_mac.m). Any thread
+// Any thread.
 int front_screen_variable_refresh(void);
-// The frame rate the display link paces the game at (60, 30, 120; nvn_display.inc link_sync): in fullscreen, a screen whose refresh rate is not a multiple of it is switched, while the game runs,
-// to a mode of the same size whose rate is, and back when the window leaves fullscreen or that screen (front_mac.m). Called from the present thread
+// Fullscreen: switches to a same-size mode whose rate is a multiple of fps. Present thread.
 void front_screen_match(int fps);
-// Whether startup fullscreen or a screen mode switch is still settling, so the display link waits before starting (front_mac.m). Any thread
+// Any thread.
 int front_screen_settling(void);
-// Progress screen of the first-start prepare step (nvn_prewarm.inc warm_prepare: "Preparing shaders" while the pipelines of the prewarm lists are built before the game's first frame):
-// title and done of total shown over the game's view (a dark screen, the title, a bar and a count), updated on each call; title NULL hides it. Any thread; the front end switches to its main
-// thread and does not block. Nothing is shown without a window
+// title NULL hides it. Any thread; does not block.
 void front_progress(const char *title, long done, long total);
-// An app that hosts the game view and has a look of its own (a launcher holding several games) can draw that progress itself: set before the game starts, with a window the hook gets each
-// front_progress call's values on the front end's main thread (title NULL when the step ends; the title is valid during the call) and the front end shows no screen of its own.
-// NULL (the default): the front end's screen above
+// Set before start: gets front_progress's values on the main thread in place of the built-in screen.
 extern void (*front_progress_hook)(const char *title, long done, long total);
 #include <stdint.h>
 #include <stddef.h>
-// Controller applet prompt (hle_hid.c ctrl_support, ctrl_prompt.h; GitHub issue #1640): the game wants min to max players (max <= 0: no maximum) and sees fewer. The main thread shows a
-// prompt over the game while controllers join and the calling thread blocks until it closes. 1: done (A or Return with the minimum in, the maximum in, or nobody left to join);
-// 0: closed (B, Escape); -1 with no window: nothing shown, the caller answers as the player closing it
+// Blocks until closed: 1 done, 0 closed (B / Escape), -1 no window.
 int front_ctrl_support(int min, int max);
 
-// Save not written (called by the host's hle_fs.c; a front end may provide a strong implementation of the same name that tells the player; the Mac front end has none, and the default weak implementation only logs).
-// Timing: when a save write fails (disk full etc.) within one of the game's save transactions (between two Commits), so that this Commit is refused and the previously committed save is unchanged, it is called once per refused transaction;
-// the next transaction that succeeds commits as usual, and the front end need not do any recovery. err = the first failing errno (ENOSPC = 28 means out of space). Called on the game thread; the front end switches to the main thread itself and must not block
+// A save write failed (err = first errno), so that transaction's Commit is refused. Game thread: do not block.
 void front_save_failed(int err);
 
-// GPU lost (called by the graphics backend's nvn_mtl.m gpu_lost_check, once): the first command buffer came back MTL4CommandQueueErrorAccessRevoked, so macOS runs none of the process's GPU work
-// any more and nothing is drawn again. By then presents have stopped and the game's waits for the GPU are released, so the game runs on with nothing on screen until the front end ends it.
-// The Mac front end leaves full screen, says why in an alert and quits with exit status 70; without a window it ends the run as the default weak implementation (nvn_mtl.m) does:
-// a FATAL line and an abort. Called on Metal's feedback queue; the front end switches to the main thread itself and must not block
+// MTL4CommandQueueErrorAccessRevoked: no GPU work runs any more. Metal's feedback queue: do not block.
 void front_gpu_lost(void);
 

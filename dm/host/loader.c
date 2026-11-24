@@ -1,5 +1,4 @@
-// Multi-module loading (playing the role of Horizon's rtld): mapping, claiming thread slots, gate registration, cross-module relocation, take-over by name, segment permissions.
-// The code area (original text and patch area) is set to read-only+execute as soon as it is copied in, and from then on the loader only writes data.
+// Multi-module loading in Horizon rtld's role. The code area is read-only+execute once copied in; from then on the loader only writes data.
 #include "dm.h"
 #include <fcntl.h>
 #include <errno.h>
@@ -12,7 +11,7 @@
 
 module_t *g_mod;
 int g_nmod;
-// Stable module addresses live in g_mod; lookup order follows activation, including unload/reload.
+// Module addresses in g_mod are stable; lookup order follows activation.
 pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
 enum { KEY_K18, KEY_KTLS, KEY_KTLR, KEY_KGATE, KEY_N };
 
@@ -32,7 +31,7 @@ static void create_keys(void) {
     LOG("key numbers K18=%lu KTLS=%lu KTLR=%lu KGATE=%lu", g_key18, g_keytls, g_keytlr, g_keygate);
 }
 
-// K slot check: the pthread TSD layout is fixed, slot = tpidrro_el0 + 8*key
+// slot = tpidrro_el0 + 8 * key (fixed pthread TSD layout)
 static void tsd_check(void) {
     pthread_setspecific(g_key18, (void *)0x1234);
     uint64_t base; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(base));
@@ -64,9 +63,12 @@ static void *module_sym_linear(module_t *m, const char *name) {
     }
     return NULL;
 }
-// Symbol name hash table: inserted in ascending index order, not overwritten if the same name is already there ⇒ lookup results are identical, entry by entry, to a linear scan (the first defined symbol with that name).
-// Of the 91–99 ms of ① host loading, relocation + forced take-over took 77–86 ms, mainly because every by-name relocation scanned the symbol tables of two modules linearly
-static uint32_t sym_hash(const char *s) { uint32_t h = 2166136261u; while (*s) h = (h ^ (uint8_t)*s++) * 16777619u; return h; }
+// Inserted in index order, the first of a name kept: the same result as a linear scan (first definition).
+static uint32_t sym_hash(const char *s) {
+    uint32_t h = 2166136261u;
+    while (*s) h = (h ^ (uint8_t)*s++) * 16777619u;
+    return h;
+}
 static void build_symhash(module_t *m) {
     unsigned cap = 16; while (cap < m->nsym * 2) cap <<= 1;
     m->symh = calloc(cap, sizeof *m->symh); m->symh_mask = cap - 1;
@@ -75,7 +77,7 @@ static void build_symhash(module_t *m) {
         const char *nm = m->strtab + s->st_name;
         for (unsigned j = sym_hash(nm) & m->symh_mask;; j = (j + 1) & m->symh_mask) {
             if (!m->symh[j]) { m->symh[j] = i; break; }
-            if (!strcmp(m->strtab + m->symtab[m->symh[j]].st_name, nm)) break;   // The same name already exists with a smaller index: keep that one
+            if (!strcmp(m->strtab + m->symtab[m->symh[j]].st_name, nm)) break;
         }
     }
 }
@@ -93,15 +95,15 @@ void *module_sym(module_t *m, const char *name) {
                if (l != r) { g_symchk_bad++; LOG("[RED] DM_SYMCHECK: %s in %s hash %p ≠ linear %p", name, m->name, r, l); } }
     return r;
 }
-static void *loaded_sym(const char *name) {   // the module list is fixed once load_modules has mapped them
-    for (int i = 0; i < g_nmod; i++) { void *p = module_sym(&g_mod[i], name); if (p) return p; }   // in load order
+static void *loaded_sym(const char *name) {
+    for (int i = 0; i < g_nmod; i++) { void *p = module_sym(&g_mod[i], name); if (p) return p; }
     return NULL;
 }
 void *guest_sym(const char *name) {
     void *p = loaded_sym(name);
     return p;
 }
-// For modules with the patch area before the base (patch_off < 0) addresses in the patch area count too, as for modules whose patch area follows the image (crash reports, the GC pause's "in guest code" test)
+// The patch area counts as the module's, before or after the image.
 module_t *module_of(const void *p) {
     for (int i = 0; i < g_nmod; i++) {
         const uint8_t *b = g_mod[i].base;
@@ -111,7 +113,7 @@ module_t *module_of(const void *p) {
     return NULL;
 }
 
-// Whether main imports a symbol whose name starts with prefix (an undefined dynamic symbol: one main calls but another module defines), for behaviour that follows what the game uses
+// an undefined dynamic symbol of main: one it calls and another module defines
 int dm_game_imports(const char *prefix) {
     size_t n = strlen(prefix);
     for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) {
@@ -121,29 +123,30 @@ int dm_game_imports(const char *prefix) {
     return 0;
 }
 
-// SDK major version, from the version string the SDK's libraries keep in the sdk module's read-only data ("NintendoSDK_nnSdk-10_4_0"; SDK 12 spells it NintendoSdk_;
-// Switch 2 SDKs name a variant first: "NintendoSdk_nnSdk-Generic_20_5_19", Donkey Kong Bananza).
-// 0 = no sdk module or no version string
+// From the sdk's version string ("NintendoSDK_nnSdk-10_4_0", "NintendoSdk_nnSdk-Generic_20_5_19"); 0 when none
 int dm_sdk_major(void) {
     static int major = -1;
     if (major >= 0) return major;
     major = 0;
     for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "sdk")) {
-        const char *b = (const char *)g_mod[i].base + g_mod[i].ro_off, *e = (const char *)g_mod[i].base + g_mod[i].key_page_off;   // read-only data, data and bss
+        const char *b = (const char *)g_mod[i].base + g_mod[i].ro_off, *e = (const char *)g_mod[i].base + g_mod[i].key_page_off;
         for (const char *p = b; (p = memmem(p, (size_t)(e - p), "_nnSdk-", 7)); p += 7) {
             if (p - b < 11 || strncasecmp(p - 11, "NintendoSDK", 11)) continue;
             const char *v = p + 7;
             while (v < e && ((*v >= 'A' && *v <= 'Z') || (*v >= 'a' && *v <= 'z'))) v++;   // a variant name ("Generic") and its '_'
             if (v > p + 7 && v < e && *v == '_') v++;
-            if (v < e && *v >= '0' && *v <= '9') { major = atoi(v); LOG("sdk: NintendoSDK nnSdk-%.20s (major %d)", p + 7, major); break; }
+            if (v < e && *v >= '0' && *v <= '9') {
+                major = atoi(v);
+                LOG("sdk: NintendoSDK nnSdk-%.20s (major %d)", p + 7, major);
+                break;
+            }
         }
     }
     if (!major) LOG("[RED] sdk: no SDK version string in the sdk module");
     return major;
 }
 
-// Whether the sdk module was built for the Switch 2 ("Ounce"): its file system access log line names the build spec ("FS_ACCESS: { sdk_version: 20.5.19, spec: Ounce }";
-// Switch 1 SDKs say "spec: NX"). The host has only the Switch 2's side: main.c reports an sdk that is not
+// Its FS access log line names the spec ("spec: Ounce"; Switch 1: "spec: NX").
 int dm_sdk_ounce(void) {
     static int ounce = -1;
     if (ounce >= 0) return ounce;
@@ -156,12 +159,13 @@ int dm_sdk_ounce(void) {
     return ounce;
 }
 
-// The constants NVN2's own nvnDeviceGetInteger answers: the driver is compiled into the game's sdk, and its API and GPU code versions move with the SDK (20.5.19: API 231.30, GPU code minor 17;
-// 21.4.4: 231.39 and 20). Games check them: Splatoon Raiders requires minor >= 39 and otherwise creates no graphics system (main+0x31b86b0). The driver's switch over the items loads w0 with the
-// major first, then jumps through a byte table: mov w0, #231 / adr / adrp + add (the table) / ldrb / add, lsl #2 / br, with cmp wN, #<last item> before it. A case that is a constant is mov w0, #v; b.
-// Returns 1 with *out set when item has such a case; 0 for a case that reads something else (most items go through the driver's table lookup or read the GPU's description), or no such switch
+// NVN2's nvnDeviceGetInteger constants move with the SDK, and games check them. Read off the driver's switch: mov w0, #231 / adr or adrp + add / ldrb /
+// add, lsl #2 / br, after a cmp wN, #<last>; a constant case is mov w0, #v; b. 0 for a case that reads something else.
 int dm_sdk_nvn2_item(unsigned item, int *out) {
-    static const uint8_t *table; static const uint32_t *cases; static unsigned last; static int found = -1;
+    static const uint8_t *table;
+    static const uint32_t *cases;
+    static unsigned last;
+    static int found = -1;
     if (found < 0) {
         found = 0;
         for (int i = 0; i < g_nmod && !found; i++) if (!strcmp(g_mod[i].name, "sdk")) {
@@ -195,22 +199,23 @@ int dm_sdk_nvn2_item(unsigned item, int *out) {
     return 1;
 }
 
-// Cross-module symbol resolution: first look for a definition in the loaded modules, and only if not found hand over to HLE / stubs
 static uint64_t resolve_sym(module_t *m, const char *name) {
     void *p = loaded_sym(name); if (p) return (uint64_t)p;
     return resolve_import(m, name);
 }
 
-// Forced take-over table (hle.h HLE_FORCE, the __DATA,swforce section): a hit overrides the definition inside the module
-static const hle_force_ent *g_force; static unsigned g_nforce; static unsigned *g_force_hits;
-static unsigned *g_fidx, g_fmask;   // name hash over the table: force_lookup runs for every named relocation, and each lookup used to strcmp its way through all 722 entries (the swhle table's scan is hashed the same way, hle.c)
+// HLE_FORCE (__DATA,swforce): a hit overrides the module's own definition
+static const hle_force_ent *g_force;
+static unsigned g_nforce;
+static unsigned *g_force_hits;
+static unsigned *g_fidx, g_fmask;   // hashed: looked up for every named relocation
 static void force_init(void) {
     unsigned long sz; g_force = (const hle_force_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swforce", &sz);
     g_nforce = g_force ? (unsigned)(sz / sizeof *g_force) : 0;
     g_force_hits = calloc(g_nforce + 1, sizeof *g_force_hits);
     unsigned cap = 16; while (cap < g_nforce * 2) cap <<= 1;
     g_fidx = calloc(cap, sizeof *g_fidx); g_fmask = cap - 1;
-    for (unsigned i = 0; i < g_nforce; i++) {   // insertion doubles as the duplicate check (a wrong list must still fail loudly, at once)
+    for (unsigned i = 0; i < g_nforce; i++) {   // doubles as the duplicate check
         for (unsigned j = sym_hash(g_force[i].name) & g_fmask;; j = (j + 1) & g_fmask) {
             if (!g_fidx[j]) { g_fidx[j] = i + 1; break; }
             if (!strcmp(g_force[g_fidx[j] - 1].name, g_force[i].name)) die("duplicate entry in the forced takeover list: %s", g_force[i].name);
@@ -228,13 +233,14 @@ static void *force_lookup(const char *name) {
         unsigned i = g_fidx[j] - 1;
         if (!strcmp(g_force[i].name, name)) {
             if (!g_force_hits[i]++ && g_flag.imports) LOG("force %s  (%s)", name, g_force[i].why);
-            void *hlecount_wrap(const char *, const char *, void *); return hlecount_wrap("FORCE", name, g_force[i].fn);   // A counting stub when DM_HLECOUNT is set
+            void *hlecount_wrap(const char *, const char *, void *); return hlecount_wrap("FORCE", name, g_force[i].fn);
         }
     }
     return NULL;
 }
-// HLE_ADDON takeovers (the __DATA,swaddon section): bound for an add-on module's imports only (bind_sym), so the game's own modules load as they do without the add-on
-static const hle_force_ent *g_addon; static unsigned g_naddon, g_addon_hits;
+// HLE_ADDON (__DATA,swaddon): an add-on module's imports only
+static const hle_force_ent *g_addon;
+static unsigned g_naddon, g_addon_hits;
 static void addon_init(void) {
     unsigned long sz; g_addon = (const hle_force_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swaddon", &sz);
     g_naddon = g_addon ? (unsigned)(sz / sizeof *g_addon) : 0;
@@ -242,7 +248,7 @@ static void addon_init(void) {
         if (!strcmp(g_addon[i].name, g_addon[j].name)) die("duplicate entry in the add-on takeover list: %s", g_addon[i].name);
     for (unsigned i = 0; i < g_naddon; i++) if (force_lookup_quiet(g_addon[i].name)) die("%s is both a forced and an add-on takeover", g_addon[i].name);
 }
-static void *addon_lookup(const char *name) {   // a short list, looked up only for an add-on's few dozen imports
+static void *addon_lookup(const char *name) {
     for (unsigned i = 0; i < g_naddon; i++) if (!strcmp(g_addon[i].name, name)) {
         g_addon_hits++;
         if (g_flag.imports) LOG("add-on takeover %s  (%s)", name, g_addon[i].why);
@@ -250,7 +256,7 @@ static void *addon_lookup(const char *name) {   // a short list, looked up only 
     }
     return NULL;
 }
-// The list is this game's: an entry no module names is a leftover or a mistyped name, and is reported
+// An entry no module names is a leftover or a typo: reported
 static void force_check(void) {
     unsigned unused = 0;
     for (unsigned i = 0; i < g_nforce; i++)
@@ -258,7 +264,7 @@ static void force_check(void) {
     LOG("force: %u entries hit, %u not referenced", g_nforce - unused, unused);
 }
 
-// Read the rewriter table header (segment boundaries, slot numbers); any row beyond the header means an old-format build output (code modified at load time), which is rejected
+// Rows beyond the header are an old-format build output (code modified at load time): rejected
 static void read_layout(module_t *m, const char *dir) {
     char path[1024]; snprintf(path, sizeof path, "%s/%s.fixups.tsv", dir, m->name);
     FILE *f = fopen(path, "r");
@@ -267,7 +273,7 @@ static void read_layout(module_t *m, const char *dir) {
     char line[256], key[48]; unsigned long v; unsigned seen = 0;
     while (fgets(line, sizeof line, f)) {
         if (sscanf(line, "# %47s %lx", key, &v) != 2) die("%s: the output comes from an old rewriter; rewrite the modules again with dm/tools/patch_nso.py", path);
-        if (!strcmp(key, "PATCH_OFF")) m->patch_off = strtoll(line + 2 + strlen(key), NULL, 16);   // may be negative (patch area before the base)
+        if (!strcmp(key, "PATCH_OFF")) m->patch_off = strtoll(line + 2 + strlen(key), NULL, 16);   // negative: patch area before the base
         else if (!strcmp(key, "IMAGE_SIZE")) m->image_size = v;
         else if (!strcmp(key, "FILE_IMAGE_LEN")) m->file_image_len = v;
         else if (!strcmp(key, "BACK_OFF")) m->back_off = v;
@@ -296,30 +302,25 @@ static void read_layout(module_t *m, const char *dir) {
         die("%s: back patch area, but BACK_OFF / BACK_LEN missing or wrong", path);
 }
 
-// Frame step state (the page after the key page, read-write; layout in patch_nso.py FRAME_STEP): the rewriter's stubs step the game by the host's whole vsyncs capped at this
-// target, 0 = the game's own interval logic. The profile's fps_target, overridden by DM_FPS_TARGET (0, 30 or 60); the graphics layer decides the steps and paces presents
-// (hle_nvn.c fstep_tick)
+// Frame step page (patch_nso.py FRAME_STEP): the stubs step by whole vsyncs capped at the target, 0 = the game's own logic.
 uint8_t *dm_fps_state;
-static const char *g_fps_mod;   // the module holding the state page (for the log)
+static const char *g_fps_mod;
 static void install_fps_state(module_t *m) {
     if (m->fps_state_off + 0x40 > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
     dm_fps_state = m->base + m->fps_state_off; g_fps_mod = m->name;
 }
-// The settings in the state page, written when the game starts (main.c, after host loading): nothing reads the page before the game runs
+// Nothing reads the page before the game runs.
 void dm_fps_state_apply(void) {
     if (!dm_fps_state) return;
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
     if (t != 0 && t != 30 && t != 60) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30 or 60; using the game's own frame step", e); t = 0; }
     float f = (float)t; memcpy(dm_fps_state, &f, sizeof f);
-    // Render scale of the 3D views, which the stubs of the game's view-size update read (the RENDER_SCALE capability of the frame step stubs: Ocarina of Time's patches.py): 1.0,
-    // the default, keeps the game's own size and its dynamic resolution; a factor from 0.5 to under 1.0 renders the 3D views at that fraction of it, the dynamic resolution held at
-    // its top level (DM_RENDER_SCALE). Below the game's own resolution only: the output and the game's upscaler stay as they are. Independent of the frame step: written at target 0 too
+    // RENDER_SCALE: 1.0 keeps the game's size and dynamic resolution; 0.5 to under 1.0 renders the 3D views at that fraction, dynamic resolution held at top.
     const char *rs = getenv("DM_RENDER_SCALE"); float sc = 1.0f;
     if (rs) { char *end; sc = strtof(rs, &end); if (end == rs || *end || !(sc >= 0.5f && sc <= 1.0f)) { LOG("[RED] DM_RENDER_SCALE=%s: must be 0.5 to 1.0; keeping the game's size", rs); sc = 1.0f; }
               else if (sc < 1.0f) LOG("%s: 3D views rendered at %.2f of the game's size (DM_RENDER_SCALE)", g_fps_mod, sc); }
     memcpy(dm_fps_state + 0x10, &sc, sizeof sc);
-    // The game's own dynamic resolution, which the level function's stub reads (the DYNAMIC_RESOLUTION capability of the frame step stubs): 1 lets it run, 0 (the default) holds
-    // full resolution. A build without that stub ignores the field
+    // DYNAMIC_RESOLUTION: 1 lets the game's run, 0 holds full resolution; ignored by a build without that stub.
     const char *dr = getenv("DM_DYNAMIC_RESOLUTION"); uint32_t dyn = dr && !strcmp(dr, "1");
     if (dr && strcmp(dr, "0") && strcmp(dr, "1")) LOG("[RED] DM_DYNAMIC_RESOLUTION=%s: must be 0 or 1; keeping full resolution", dr);
     memcpy(dm_fps_state + 0x40, &dyn, sizeof dyn);
@@ -349,9 +350,7 @@ static void register_gates(module_t *m, const char *dir) {
     LOG("%s: gates %d patch_off %#llx keys %lu/%lu/%lu/%lu", m->name, ng, m->patch_off, g_key18, g_keytls, g_keytlr, g_keygate);
 }
 
-// DT_RELR (from SDK 20; all three modules of The Legend of Zelda: Breath of the Wild 1.9.0 have it): a compact table of relative relocations with the addend in the slot (*slot += base).
-// Each 8-byte entry: even = a new start offset (relocate it, the pointer moves to the next slot); odd = a bitmap whose bits 1-63 stand for the 63 slots after the pointer, which then moves on by 63 slots.
-// Without it main's GOT and vtables hold module offsets (main's RELA keeps only symbol relocations)
+// DT_RELR (SDK 20+): even entry = offset to relocate (*slot += base); odd = bitmap of the 63 slots after the pointer. Main's RELA holds only symbol relocations.
 static unsigned relr_apply(module_t *m, uint64_t relr, uint64_t relrsz, uint64_t delta) {
     const uint64_t *e = (const uint64_t *)(m->base + relr); uint64_t *where = NULL; unsigned n = 0;
     for (uint64_t i = 0; i < relrsz / 8; i++) {
@@ -364,23 +363,19 @@ static unsigned relr_apply(module_t *m, uint64_t relr, uint64_t relrsz, uint64_t
     return n;
 }
 
-// The address a symbol relocation of module m binds to, as Horizon's rtld would with the modules loaded now (forced take-over, then the loaded modules in load order, then HLE / stub).
-// *other: the module's own definition was taken over by an earlier module's; *weak0: an undefined weak symbol nothing defines, bound to 0
+// As Horizon's rtld: forced takeover, then the loaded modules in load order, then HLE / stub. *weak0: an undefined weak nothing defines, bound to 0
 static uint64_t bind_sym(module_t *m, const Elf64_Sym *s, int *other, int *weak0) {
     uint64_t v = (uint64_t)force_lookup(m->strtab + s->st_name);
     if (!v && m->addon) v = (uint64_t)addon_lookup(m->strtab + s->st_name);
     *other = *weak0 = 0;
-    // Symbols the module defines itself are also looked up globally in load order (the ELF default; Horizon's rtld does the same): the definition of an earlier-loaded module overrides a later one; only local / non-default visibility binds to itself.
-    // Engage's main defines its own operator new / delete (Unity's memory manager) and sdk has a copy too (forwarding to malloc / free): previously sdk bound its own delete,
-    // so blocks from main's new were freed by sdk's libc++ string code into the SDK heap, and CentralHeap::Free reported NotNMallocPtr
+    // Own definitions are also looked up globally (ELF default, as Horizon's rtld): a main defining operator new / delete gets sdk's frees too.
     if (!v && s->st_shndx) {
         uint64_t self = (uint64_t)m->base + s->st_value;
         v = ELF64_ST_BIND(s->st_info) == STB_LOCAL || ELF64_ST_VISIBILITY(s->st_other) != STV_DEFAULT ? self : resolve_sym(m, m->strtab + s->st_name);
         if (!v) v = self;
         *other = v != self;
     }
-    // An undefined weak symbol that no module defines and the host does not implement is 0, as Horizon's rtld binds it: the code tests its address before calling it.
-    // Octopath Traveler 0's main imports the thread_local init function _ZTHN13LowLevelTasks5FTask10ActiveTaskE weakly; a named stub made it look defined and the game called it
+    // 0, as Horizon's rtld binds it: the code tests the address, and a stub would look defined.
     const char *nm = m->strtab + s->st_name;
     *weak0 = !v && !s->st_shndx && ELF64_ST_BIND(s->st_info) == STB_WEAK && !loaded_sym(nm) && !hle_implements(nm);
     if (!v && !*weak0) v = resolve_sym(m, nm);
@@ -424,9 +419,7 @@ static void relocate(module_t *m) {
     if (nint > 8) LOG("%s: %d bound to an earlier module's definition in all", m->name, nint);
 }
 
-// DM_LOADHASH=1 (diagnostics): after loading, output an address-independent sha256 per module, to prove that the load results of "early start / no early start" are byte-identical.
-// Module base addresses and host ASLR differ every run, and only the values of the relocation slots change with them: copy the image and, using the same relocation table, replace every slot with an address-independent token --
-// RELATIVE → (0, addend); symbol target falls in some module → (1 + module number, offset within the module); otherwise (host forced take-over / host symbol) → (name FNV, addend); all other bytes as is.
+// DM_LOADHASH=1: an address-independent sha256 per module (relocation slots replaced by tokens), to compare load results between runs.
 #include <CommonCrypto/CommonDigest.h>
 void loader_hash_log(void) {
     if (!getenv("DM_LOADHASH")) return;
@@ -439,8 +432,12 @@ void loader_hash_log(void) {
             case DT_JMPREL: jmprel = d->d_un.d_ptr; break; case DT_PLTRELSZ: pltsz = d->d_un.d_val; break;
             case DT_RELR: relr = d->d_un.d_ptr; break; case DT_RELRSZ: relrsz = d->d_un.d_val; break;
         }
-        // DT_RELR slots: subtracting the base makes them address-independent (done on the copy, reusing relr_apply's walk)
-        if (relr) { uint8_t *b = m->base; m->base = cp; relr_apply(m, relr, relrsz, -(uint64_t)b); m->base = b; }
+        if (relr) {
+            uint8_t *b = m->base;
+            m->base = cp;
+            relr_apply(m, relr, relrsz, -(uint64_t)b);
+            m->base = b;
+        }
         const Elf64_Rela *tabs[2] = {(const Elf64_Rela *)(m->base + rela), (const Elf64_Rela *)(m->base + jmprel)};
         uint64_t sizes[2] = {relasz, pltsz}; unsigned nslot = 0;
         for (int t = 0; t < 2; t++)
@@ -448,15 +445,19 @@ void loader_hash_log(void) {
                 const Elf64_Rela *r = &tabs[t][i]; uint64_t tok[1] = {0};
                 if (ELF64_R_TYPE(r->r_info) != R_AARCH64_RELATIVE) {
                     uint64_t v = *(const uint64_t *)(m->base + r->r_offset); int hit = 0;
-                    for (int j = 0; j < g_nmod; j++) if (v >= (uint64_t)g_mod[j].base && v < (uint64_t)g_mod[j].base + g_mod[j].size) { tok[0] = 1 + j; hit = 1; break; }
+                    for (int j = 0; j < g_nmod; j++) if (v >= (uint64_t)g_mod[j].base && v < (uint64_t)g_mod[j].base + g_mod[j].size) {
+                        tok[0] = 1 + j;
+                        hit = 1;
+                        break;
+                    }
                     if (!hit) { const char *nm = m->strtab + m->symtab[ELF64_R_SYM(r->r_info)].st_name; uint64_t h = 0xcbf29ce484222325ull;
                                 for (; *nm; nm++) h = (h ^ (uint8_t)*nm) * 0x100000001b3ull; tok[0] = h | 1ull << 63; }
                 }
-                memcpy(cp + r->r_offset, &tok[0], 8);                // The 8 slot bytes are replaced by the token head; the token tail is appended below in slot order
+                memcpy(cp + r->r_offset, &tok[0], 8);
                 nslot++;
             }
         CC_SHA256_CTX c; CC_SHA256_Init(&c); CC_SHA256_Update(&c, cp, (CC_LONG)m->size);
-        for (int t = 0; t < 2; t++)                                // Token tails (addend / offset) are appended in slot order, and together with the slot head uniquely determine the slot value
+        for (int t = 0; t < 2; t++)
             for (uint64_t i = 0; i < sizes[t] / sizeof(Elf64_Rela); i++) {
                 const Elf64_Rela *r = &tabs[t][i]; uint64_t tail = (uint64_t)r->r_addend;
                 if (ELF64_R_TYPE(r->r_info) != R_AARCH64_RELATIVE) {
@@ -480,14 +481,13 @@ static uint8_t *slurp(const char *path, size_t *n) {
     close(fd); *n = st.st_size; return p;
 }
 
-// Seal the code area immediately after copying into anonymous pages (16 KB pages): [0, text_end) and the patch area are read-only+execute, and from then on any write to the code area crashes on the spot;
-// what lies between (ro and data on the same page can only go together) is writable
+// The code area is sealed right after copying: any later write to it crashes. What shares a 16 KB page with ro and data stays writable.
 static void map_image(module_t *m, const char *dir) {
     char path[1024]; snprintf(path, sizeof path, "%s/%s.patched.bin", dir, m->name);
     size_t sz; uint8_t *raw = slurp(path, &sz);
     if (m->patch_off < 0) {
-        // Patch area before the base: file = the first part of the image (text + ro + data) + patch area; bss and the key page are anonymous zero pages. The gap from the patch area's end to the base is left inaccessible (PROT_NONE)
-        // With a back patch area (patch_nso.py TWO) the file ends with it, BACK_LEN bytes, copied to BACK_OFF in the image
+        // Patch area before the base: the file holds image + patch area; bss and the key page are zero pages; the gap to the base is PROT_NONE.
+        // A back patch area (patch_nso.py TWO) ends the file, BACK_LEN bytes copied to BACK_OFF.
         uint64_t pre = (uint64_t)-m->patch_off, fl = m->file_image_len, bl = m->back_len;
         if (sz < fl + bl) die("%s is shorter than FILE_IMAGE_LEN %#llx + BACK_LEN %#llx", path, (unsigned long long)fl, (unsigned long long)bl);
         m->size = m->image_size; m->patch_len = (sz - bl - fl + 0x3FFF) & ~0x3FFFull;
@@ -495,7 +495,9 @@ static void map_image(module_t *m, const char *dir) {
         uint8_t *a = mmap(NULL, pre + m->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (a == MAP_FAILED) die("%s mmap %#llx", m->name, (unsigned long long)(pre + m->size));
         m->base = a + pre;
-        memcpy(m->base, raw, fl); memcpy(a, raw + fl, sz - bl - fl); if (bl) memcpy(m->base + m->back_off, raw + sz - bl, bl);
+        memcpy(m->base, raw, fl);
+        memcpy(a, raw + fl, sz - bl - fl);
+        if (bl) memcpy(m->base + m->back_off, raw + sz - bl, bl);
         free(raw); install_key_page(m); dm_mods_patch_module(m, dir);
         if (bl && mprotect(m->base + m->back_off, bl, PROT_READ | PROT_EXEC)) die("%s mprotect back patch", m->name);
         uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
@@ -516,8 +518,7 @@ static void map_image(module_t *m, const char *dir) {
 
 
 void load_modules(const char *dir, const char **names, const char *const *dirs, int n) {
-    // Map everything and parse the symbol tables first, then relocate all at once (cross-module symbols must all be in place first)
-    // DM_BOOTPROF: breakdown of ① host loading (milliseconds), to set the upper bound for ③ pre-relocation / mmap
+    // Map all and parse their symbols first: cross-module symbols must be in place before relocating.
     uint64_t t0 = now_ns(), tm = 0, tp = 0, tg = 0, tr = 0, t;
     if (n <= 0) die("no modules to load");
     if (!(g_mod = calloc((size_t)n, sizeof *g_mod))) die("cannot allocate %d module slots", n);   // once: module addresses stay stable
@@ -531,7 +532,7 @@ void load_modules(const char *dir, const char **names, const char *const *dirs, 
     create_keys();
     for (int i = 0; i < n; i++) {
         module_t *m = &g_mod[i];
-        t = now_ns(); map_image(m, m->dir); tm += now_ns() - t;   // On return the code area is already read-only+execute; from here on the loader only writes data
+        t = now_ns(); map_image(m, m->dir); tm += now_ns() - t;
         if (!i) tsd_check();
         t = now_ns(); parse_dynamic(m); tp += now_ns() - t;
         t = now_ns(); register_gates(m, m->dir); tg += now_ns() - t;
@@ -541,19 +542,20 @@ void load_modules(const char *dir, const char **names, const char *const *dirs, 
     force_init(); addon_init();
     t = now_ns(); for (int i = 0; i < g_nmod; i++) relocate(&g_mod[i]); tr = now_ns() - t;
     force_check();
-    for (int i = 0; i < g_nmod; i++) if (g_mod[i].addon) { LOG("add-on takeovers: %u imports of the add-ons bound to them (%u entries)", g_addon_hits, g_naddon); break; }
-    { void hlecount_seal(void); hlecount_seal(); }   // DM_HLECOUNT: relocation done, seal the counting stub pages as read-only executable
+    for (int i = 0; i < g_nmod; i++) if (g_mod[i].addon) {
+        LOG("add-on takeovers: %u imports of the add-ons bound to them (%u entries)", g_addon_hits, g_naddon);
+        break;
+    }
+    { void hlecount_seal(void); hlecount_seal(); }
     if (getenv("DM_SYMCHECK")) LOG("DM_SYMCHECK: %lu symbol lookups at load time, hash and linear disagree %lu", g_symchk_n, g_symchk_bad);
     if (g_flag.bootprof) LOG("① breakdown: mapping (read + copy + seal pages) %.1f ms, dynamic section parsing %.1f ms, gate registration %.1f ms, relocation + forced takeover %.1f ms, total %.1f ms",
                              tm / 1e6, tp / 1e6, tg / 1e6, tr / 1e6, (now_ns() - t0) / 1e6);
 }
 
-// A reset (hle_reset.c): each module's writable part as it was when the game first started (after relocation, the forced take-overs, the mods' patches and the frame step
-// settings), copied back before the game starts again, so its data and bss are a new process's. The code and patch areas are read-only and stay; the key page is read-only and
-// holds the same key numbers. Pages of zeros (bss) are not kept, only cleared again. The modules keep their addresses, so the gates, the forced imports and every guest function
-// the host looked up stay valid
-typedef struct { uint8_t *lo; size_t n; uint8_t **page; } mod_snap;   // page[i]: a copy of 16 KB page i, NULL for a page of zeros
-static mod_snap *g_snap; static size_t g_snap_bytes;
+// Reset: each module's writable part as it was at first start, copied back; code, patch areas and key pages stay, so gates and looked-up functions stay valid.
+typedef struct { uint8_t *lo; size_t n; uint8_t **page; } mod_snap;   // page[i]: a copy of 16 KB page i, NULL for zeros
+static mod_snap *g_snap;
+static size_t g_snap_bytes;
 static void mod_writable(const module_t *m, uint8_t **lo, size_t *n) {
     uint64_t a = (m->text_end + 0x3FFF) & ~0x3FFFull, b = m->patch_off > 0 ? ((uint64_t)m->patch_off & ~0x3FFFull) : m->back_len ? m->back_off : m->size;
     *lo = m->base + a; *n = b > a ? b - a : 0;
@@ -585,11 +587,7 @@ void loader_reset(void) {
     }
     LOG("reset: the modules' data and bss as at the first start (%.1f MB kept of it)", g_snap_bytes / 1048576.0);
 }
-// Plays the role of rtld's InitModules (rtld+0x830): call each module's DT_INIT. The order is reverse of the load list:
-// modules later in the list are the ones the earlier ones depend on, so the sdk module's DT_INIT, which constructs the
-// libc++ globals (std::cout and friends), runs before main's static initializers, which already write to them. Forward
-// order crashed Little Busters! Converted Edition at its first log line (std::ostream::write on an unconstructed cout).
-// The timing is decided by nn::init::Start: after nninitStartup and _init_libc2, before nnMain (the 4th argument callback of Start).
+// rtld's InitModules: DT_INIT in reverse load order, so the sdk's libc++ globals exist before main's static initializers. Called by nn::init::Start before nnMain.
 void run_module_inits(void) {
     for (int i = g_nmod - 1; i >= 0; i--) {
         module_t *m = &g_mod[i];

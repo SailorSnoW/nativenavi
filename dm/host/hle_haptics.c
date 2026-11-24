@@ -16,20 +16,25 @@ static int enabled;
 
 static int valid(int p) { return p >= 0 && p < DM_PLAYERS; }
 static void clear_locked(int p) {
-    states[p].player = p; states[p].epoch++;
+    states[p].player = p;
+    states[p].epoch++;
     states[p].motor[0] = states[p].motor[1] = idle;
     if (output) output(states[p]);
 }
 void dm_haptics_init(void (*sink)(dm_haptic_state), int on) {
     pthread_mutex_lock(&lock);
-    output = sink; enabled = on; available = 0; suspended = 0;
+    output = sink;
+    enabled = on;
+    available = 0;
+    suspended = 0;
     for (int p = 0; p < DM_PLAYERS; p++) clear_locked(p);
     pthread_mutex_unlock(&lock);
 }
 int dm_haptics_has_output(void) {
     pthread_mutex_lock(&lock);
     int out = output != NULL;
-    pthread_mutex_unlock(&lock); return out;
+    pthread_mutex_unlock(&lock);
+    return out;
 }
 void dm_haptics_route(int p, int on) {
     if (!valid(p)) return;
@@ -40,17 +45,21 @@ void dm_haptics_route(int p, int on) {
 }
 void dm_haptics_clear(int p) {
     if (!valid(p)) return;
-    pthread_mutex_lock(&lock); clear_locked(p); pthread_mutex_unlock(&lock);
+    pthread_mutex_lock(&lock);
+    clear_locked(p);
+    pthread_mutex_unlock(&lock);
 }
 uint64_t dm_haptics_epoch(int p) {
     pthread_mutex_lock(&lock);
     uint64_t e = valid(p) ? states[p].epoch : 0;
-    pthread_mutex_unlock(&lock); return e;
+    pthread_mutex_unlock(&lock);
+    return e;
 }
 uint32_t dm_haptics_available(void) {
     pthread_mutex_lock(&lock);
     uint32_t m = enabled && output ? available : 0;
-    pthread_mutex_unlock(&lock); return m;
+    pthread_mutex_unlock(&lock);
+    return m;
 }
 void dm_haptics_suspend(unsigned reason, int on) {
     pthread_mutex_lock(&lock);
@@ -70,10 +79,13 @@ void dm_haptics_send(const dm_vibration_update *u, int n) {
         int p = u[i].player, m = u[i].motor;
         if (!valid(p) || m < 0 || m > 1 || !(available >> p & 1)) continue;
         dm_vibration v = u[i].value;
-        v.amplitude_low = amplitude(v.amplitude_low); v.amplitude_high = amplitude(v.amplitude_high);
-        v.frequency_low = frequency(v.frequency_low, 160); v.frequency_high = frequency(v.frequency_high, 320);
+        v.amplitude_low = amplitude(v.amplitude_low);
+        v.amplitude_high = amplitude(v.amplitude_high);
+        v.frequency_low = frequency(v.frequency_low, 160);
+        v.frequency_high = frequency(v.frequency_high, 320);
         if (!memcmp(&v, &states[p].motor[m], sizeof v)) continue;
-        states[p].motor[m] = v; changed |= 1u << p;
+        states[p].motor[m] = v;
+        changed |= 1u << p;
     }
     for (int p = 0; p < DM_PLAYERS; p++) if (changed >> p & 1) output(states[p]);
     pthread_mutex_unlock(&lock);
@@ -81,13 +93,16 @@ void dm_haptics_send(const dm_vibration_update *u, int n) {
 dm_vibration dm_haptics_actual(int p, int m) {
     pthread_mutex_lock(&lock);
     dm_vibration v = enabled && !suspended && valid(p) && m >= 0 && m < 2 && (available >> p & 1) ? states[p].motor[m] : idle;
-    pthread_mutex_unlock(&lock); return v;
+    pthread_mutex_unlock(&lock);
+    return v;
 }
 dm_haptic_level dm_haptics_level(const dm_vibration *v, int n, float gain) {
     float power = 0, weighted = 0;
     for (int i = 0; i < n; i++) {
         float lo = amplitude(v[i].amplitude_low), hi = amplitude(v[i].amplitude_high);
-        lo *= lo; hi *= hi; power += lo + hi;
+        lo *= lo;
+        hi *= hi;
+        power += lo + hi;
         weighted += lo * logf(frequency(v[i].frequency_low, 160) / 40) + hi * logf(frequency(v[i].frequency_high, 320) / 40);
     }
     if (!isfinite(gain) || gain < 0) gain = 0;

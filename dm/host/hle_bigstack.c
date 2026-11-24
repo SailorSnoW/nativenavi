@@ -1,25 +1,14 @@
-// Big-stack entry (hle.h HLE_FORCE, every take-over but HLE_FORCE_DIRECT's): a take-over function runs directly on the stack of the guest thread that calls it, and the stack a game gives a thread can be small --
-// the save thread of Super Mario 3D World + Bowser's Fury has only 8 KB (CreateThread stack top 0x…9fe0, crash 0x21a0 below it); when it calls fs::MountSaveData,
-// the host's mount path (two 1 KB-class path buffers in h_fs_MountSave + two 1100-byte ones in mount_ex + snprintf) ran past the stack bottom, SIGBUS in __vfprintf.
-// On hardware this call is one IPC that needs a few hundred bytes of stack; the host's file system take-overs size their buffers by PATH_MAX, and one file open takes 6-7 KB (-fstack-usage: OpenFile 1.3 KB -> host_path_ex 1.9 KB -> path_component 3.2 KB).
-// How: what gets registered is a static stub (one per take-over function, which loads the implementation's address into x16 and jumps to dm_bigstack_enter). The entry looks at the current sp: inside the guest address block (a guest thread stack)
-// it switches to this thread's host stack (512 KB, mapped on first use, with a guard page), calls the implementation with x0-x8 / d0-d7 untouched and the caller's stack arguments copied below the saved pair, and switches back after it returns; outside the guest block (a host thread, or already on the host stack) it jumps straight through.
-// The implementation's own return address is then the instruction after the entry's call, not the game's call site: the entry keeps the game's return address beside the saved sp at the top of the host stack,
-// and dm_bigstack_caller (hle.h) gives it back, so take-overs that log their call site (audio Start / Stop / Close) name the game's code on either path.
-// Stack arguments: a take-over's stub with more than 8 parameters enters at dm_bigstack_enter_n with how many bytes the caller put on its stack in x17, 8 per parameter past the eighth (hle.h; the video decoder's and Opus's take-overs have 9-12),
-// rounded up to 16, at most 64; only those are read, all inside the caller's own frame (none for 8 parameters or fewer). Variadic functions reading their arguments from the stack cannot use it.
-// The stubs are generated at compile time by the macro, not written at run time as DM_HLECOUNT does
-// Log lines take the same entry (dm_log below, dm.h LOG): any take-over may log, and formatting one line takes about 2.7 KB of stack, so a line logged on a guest stack is
-// written on the host stack wherever it is called from: a HLE_FORCE_DIRECT take-over, or host code called on a guest stack (the controller applet's stand-in from a game thread of Drag x Drive, PR #1943)
+// Big-stack entry for HLE_FORCE takeovers and log lines (docs/reference/memory.md#host-calls-on-small-guest-stacks): with sp in the guest block, switch to
+// this thread's 512 KB host stack, call x16 with x0-x8 / d0-d7 untouched and the stack arguments copied, and switch back; elsewhere jump straight through.
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdatomic.h>
 #include <sys/mman.h>
-#define DM_LOG_IMPL   // dm_log is defined here, not by dm.h's weak definition
+#define DM_LOG_IMPL   // dm_log is defined here, not by dm.h's weak one
 #include "dm.h"
 
-int dm_guest_as_contains(uintptr_t a);   // hle_svc.c
+int dm_guest_as_contains(uintptr_t a);
 
 #define BS_SIZE (512u << 10)
 #define BS_GUARD 16384u
@@ -28,27 +17,28 @@ static pthread_once_t g_bs_once = PTHREAD_ONCE_INIT;
 static void bs_free(void *top) { if (top) munmap((uint8_t *)top - BS_SIZE - BS_GUARD, BS_SIZE + BS_GUARD); }
 static void bs_init(void) { if (pthread_key_create(&g_bs_key, bs_free)) die("big stack pthread_key_create"); }
 
-// sp inside the guest address block -> the top of this thread's host stack (16-byte aligned); otherwise 0 (no switch)
+// sp in the guest block -> this thread's host stack top (16-aligned); else 0
 uintptr_t dm_bigstack_top(uintptr_t sp);
 uintptr_t dm_bigstack_top(uintptr_t sp) {
-    if (__builtin_expect(atomic_load_explicit(&dm_reset_stop, memory_order_relaxed), 0)) dm_reset_entry(sp);   // a reset (hle_reset.c): a game thread may end at its entry into the host
+    if (__builtin_expect(atomic_load_explicit(&dm_reset_stop, memory_order_relaxed), 0)) dm_reset_entry(sp);   // reset: a game thread may end here
     if (!dm_guest_as_contains(sp)) return 0;
     pthread_once(&g_bs_once, bs_init);
     uint8_t *top = pthread_getspecific(g_bs_key);
     if (!top) {
         uint8_t *m = mmap(NULL, BS_SIZE + BS_GUARD, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        if (m == MAP_FAILED) { fputs("[dm] [RED] big stack mapping failed, staying on the guest stack this time\n", stderr); return 0; }   // not LOG: its dm_log comes back here for a stack
-        mprotect(m, BS_GUARD, PROT_NONE);   // guard page: running off the host stack itself crashes here instead of quietly corrupting another mapping
+        if (m == MAP_FAILED) {
+            fputs("[dm] [RED] big stack mapping failed, staying on the guest stack this time\n", stderr);   // not LOG: it would come back here
+            return 0;
+        }
+        mprotect(m, BS_GUARD, PROT_NONE);
         top = m + BS_GUARD + BS_SIZE;
         pthread_setspecific(g_bs_key, top);
     }
     return (uintptr_t)top;
 }
 
-// x16 = implementation. dm_bigstack_enter carries over no stack arguments (the NVN layer's entries, log lines, take-overs with 8 parameters or fewer);
-// dm_bigstack_enter_n takes their size in x17 (16-64 bytes, a multiple of 16; the take-over's stub sets it). Frame (on the original stack, 0xb0 bytes): +0x00 x0-x8, x16,
-// +0x50 d0-d7, +0x90 x17 / x19, +0xa0 x29 / x30. After the switch the original sp and the game's return address are stored at the new stack top, the stack arguments copied below
-// them, and x19 (callee-saved, so the implementation keeps it) holds where the pair is; the sp and x19 are restored when the implementation returns
+// Frame (0xb0, original stack): +0 x0-x8, x16, +0x50 d0-d7, +0x90 x17 / x19, +0xa0 x29 / x30. enter_n: x17 = stack argument bytes, 16-64.
+// The original sp and the game's return address go at the new stack top; x19 (callee-saved) points at them.
 __asm__(
     ".text\n"
     ".p2align 2\n"
@@ -91,7 +81,7 @@ __asm__(
     "    mov sp, x17\n"
     "    stp x9, x10, [sp, #-16]!\n"
     "    mov x19, sp\n"
-    "    add x12, x9, #0xb0\n"           // the caller's stack arguments: its sp at the call
+    "    add x12, x9, #0xb0\n"
     "    sub sp, sp, x11\n"
     "    mov x13, sp\n"
     "    cbz x11, 3f\n"
@@ -114,25 +104,27 @@ __asm__(
     "    add sp, sp, #0xb0\n"
     "    br x16\n");
 
-// The return address inside an implementation that came through the switch is _dm_bigstack_ret; the game's own is in the slot the entry stored below this thread's host stack top. Only the outermost
-// take-over of a thread switches (a nested one already runs off the guest block and is jumped to directly), so that slot belongs to the call in progress
+// Only a thread's outermost takeover switches, so the slot at its host stack top belongs to the call in progress.
 void *dm_bigstack_caller(void *ra) {
     extern const char dm_bigstack_ret[];
-    void **top = ra == (void *)dm_bigstack_ret ? pthread_getspecific(g_bs_key) : NULL;   // set: a switch happened on this thread
+    void **top = ra == (void *)dm_bigstack_ret ? pthread_getspecific(g_bs_key) : NULL;
     return top ? top[-1] : ra;
 }
 
-// A log line (dm.h LOG). The variable arguments stay where the caller put them (on its stack, which stays mapped); only the formatting moves: log_emit is entered through
-// dm_bigstack_enter as a take-over is, with the argument list by address, so on a guest stack it runs on the host stack and anywhere else it is jumped to directly
+// Only the formatting moves to the host stack; the variable arguments stay on the caller's.
 static void log_emit(const char *fmt, va_list *ap) __attribute__((used));
 static void log_emit(const char *fmt, va_list *ap) {
-    flockfile(stderr); vfprintf(stderr, fmt, *ap); fputc('\n', stderr); funlockfile(stderr);
+    flockfile(stderr);
+    vfprintf(stderr, fmt, *ap);
+    fputc('\n', stderr);
+    funlockfile(stderr);
 }
 void log_emit_bs(const char *fmt, va_list *ap);
 __asm__(".text\n.p2align 2\n.globl _log_emit_bs\n.private_extern _log_emit_bs\n_log_emit_bs:\n"
         "    adrp x16, _log_emit@PAGE\n    add x16, x16, _log_emit@PAGEOFF\n    b _dm_bigstack_enter\n");
 void dm_log(const char *fmt, ...) {
-    va_list ap; va_start(ap, fmt);
+    va_list ap;
+    va_start(ap, fmt);
     log_emit_bs(fmt, &ap);
     va_end(ap);
 }

@@ -28,7 +28,7 @@ static _Atomic int input_ready;
 static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned input_started_count;
 
-// Resampler state belongs to the single AUHAL producer callback.
+// Owned by the AUHAL callback.
 static double input_rate, input_next_output;
 static uint64_t input_frame_index;
 static float input_previous;
@@ -56,15 +56,16 @@ static uint64_t monotonic_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+// millionths of full scale
+static uint32_t level_peak(double a) { return a >= 4294.0 ? UINT32_MAX : (uint32_t)(a * 1000000.0); }
+static uint64_t level_square(double a) { return a >= 4294.0 ? UINT64_MAX / 4 : (uint64_t)(a * a * 1000000.0); }
+
 static void level_add(input_level_window *w, float before, float after) {
     double a = fabs((double)before), b = fabs((double)after);
-    uint32_t ap = a >= 4294.0 ? UINT32_MAX : (uint32_t)(a * 1000000.0);
-    uint32_t bp = b >= 4294.0 ? UINT32_MAX : (uint32_t)(b * 1000000.0);
-    uint64_t asq = a >= 4294.0 ? UINT64_MAX / 4 : (uint64_t)(a * a * 1000000.0);
-    uint64_t bsq = b >= 4294.0 ? UINT64_MAX / 4 : (uint64_t)(b * b * 1000000.0);
+    uint32_t ap = level_peak(a), bp = level_peak(b);
     w->samples++;
-    w->pre_squares += asq;
-    w->post_squares += bsq;
+    w->pre_squares += level_square(a);
+    w->post_squares += level_square(b);
     if (ap > w->pre_peak) w->pre_peak = ap;
     if (bp > w->post_peak) w->post_peak = bp;
 }
@@ -104,11 +105,18 @@ dm_audio_input_stream *dm_audio_input_open(int format, int channels, int rate, i
 
     pthread_mutex_lock(&input_lock);
     int free_slot = -1;
-    for (int i = 0; i < INPUT_MAX; i++) if (!atomic_load_explicit(&input_streams[i], memory_order_relaxed)) { free_slot = i; break; }
-    if (free_slot < 0) { pthread_mutex_unlock(&input_lock); return NULL; }
+    for (int i = 0; i < INPUT_MAX; i++) {
+        if (!atomic_load_explicit(&input_streams[i], memory_order_relaxed)) {
+            free_slot = i;
+            break;
+        }
+    }
+    if (free_slot < 0) {
+        pthread_mutex_unlock(&input_lock);
+        return NULL;
+    }
 
-    // Cursor arithmetic wraps at 2^32. Power-of-two storage keeps the slot sequence continuous across that wrap.
-    // The stream still exposes and enforces the exact capacity the game requested.
+    // Power-of-two storage keeps slots continuous across the 2^32 cursor wrap.
     uint32_t storage = 1;
     while (storage < (uint32_t)capacity_frames) storage <<= 1;
     dm_audio_input_stream *s = calloc(1, sizeof *s);
@@ -120,11 +128,21 @@ dm_audio_input_stream *dm_audio_input_open(int format, int channels, int rate, i
     }
     s->capacity = (uint32_t)capacity_frames;
     s->sample_mask = storage - 1;
-    atomic_init(&s->head, 0); atomic_init(&s->tail, 0);
+    atomic_init(&s->head, 0);
+    atomic_init(&s->tail, 0);
     atomic_init(&s->user_gain_bits, float_bits(input_user_gain()));
-    atomic_init(&s->dropped, 0); atomic_init(&s->captured, 0); atomic_init(&s->read, 0); atomic_init(&s->read_requests, 0); atomic_init(&s->underruns, 0); atomic_init(&s->zero_fill, 0);
-    atomic_init(&s->pre_squares, 0); atomic_init(&s->post_squares, 0); atomic_init(&s->level_samples, 0);
-    atomic_init(&s->pre_peak, 0); atomic_init(&s->post_peak, 0); atomic_init(&s->last_report_ns, 0);
+    atomic_init(&s->dropped, 0);
+    atomic_init(&s->captured, 0);
+    atomic_init(&s->read, 0);
+    atomic_init(&s->read_requests, 0);
+    atomic_init(&s->underruns, 0);
+    atomic_init(&s->zero_fill, 0);
+    atomic_init(&s->pre_squares, 0);
+    atomic_init(&s->post_squares, 0);
+    atomic_init(&s->level_samples, 0);
+    atomic_init(&s->pre_peak, 0);
+    atomic_init(&s->post_peak, 0);
+    atomic_init(&s->last_report_ns, 0);
     atomic_init(&s->state, INPUT_STOPPED);
     atomic_store_explicit(&input_streams[free_slot], s, memory_order_seq_cst);
     pthread_mutex_unlock(&input_lock);
@@ -133,7 +151,7 @@ dm_audio_input_stream *dm_audio_input_open(int format, int channels, int rate, i
 
 static void input_close_capture_locked(void) {
     atomic_store_explicit(&input_ready, 0, memory_order_release);
-    dm_audio_input_platform_close();  // joins the callback before resetting its resampler
+    dm_audio_input_platform_close();
     input_rate = 0;
     input_have_previous = 0;
 }
@@ -148,8 +166,7 @@ static int input_start_capture_locked(void) {
     return 0;
 }
 
-// The route listener runs on its own control queue. Preserve the streams and their start requests
-// through a missing device or failed reopen, so a later device event or Start can bring them back.
+// Route listener queue; streams and start requests survive a failed reopen.
 void dm_audio_input_route_changed(void) {
     pthread_mutex_lock(&input_lock);
     if (input_started_count && dm_audio_input_platform_route_changed()) input_start_capture_locked();
@@ -174,8 +191,7 @@ void dm_audio_input_close(dm_audio_input_stream *s) {
     }
     pthread_mutex_unlock(&input_lock);
 
-    // A callback that has sampled the old slot must finish. A callback entering after the
-    // count is observed at zero can only see the cleared slot (the writer-count and slot atomics are seq_cst).
+    // Wait out callbacks that sampled the old slot (seq_cst).
     while (atomic_load_explicit(&input_writers, memory_order_seq_cst)) sched_yield();
     free(s->samples);
     free(s);
@@ -221,7 +237,8 @@ static void input_report_if_due(dm_audio_input_stream *s) {
     uint64_t now = monotonic_ns(), last = atomic_load_explicit(&s->last_report_ns, memory_order_relaxed);
     if (!now || now - last < 2000000000ull || !atomic_compare_exchange_strong_explicit(&s->last_report_ns, &last, now, memory_order_relaxed, memory_order_relaxed)) return;
     char name[0x100] = "unknown", uid[0x100] = "unknown";
-    double rate = 0.0; int channels = 0;
+    double rate = 0.0;
+    int channels = 0;
     dm_audio_input_platform_info(name, uid, &rate, &channels);
     uint64_t captured = atomic_exchange_explicit(&s->captured, 0, memory_order_relaxed);
     uint64_t read = atomic_exchange_explicit(&s->read, 0, memory_order_relaxed);
@@ -278,17 +295,20 @@ int dm_audio_input_read(dm_audio_input_stream *s, void *dst, int frames) {
 }
 
 static void input_push_sample(float value, dm_audio_input_stream *const *streams, input_level_window *levels) {
-    if (!(value == value)) value = 0.0f;
+    if (isnan(value)) value = 0.0f;
     for (int i = 0; i < INPUT_MAX; i++) {
         dm_audio_input_stream *s = streams[i];
         if (!s || atomic_load_explicit(&s->state, memory_order_relaxed) != INPUT_STARTED) continue;
-        float gain = bits_float(atomic_load_explicit(&s->user_gain_bits, memory_order_relaxed));   // DM_MIC_GAIN, 1 to 8
+        float gain = bits_float(atomic_load_explicit(&s->user_gain_bits, memory_order_relaxed));
         float sample = soft_limit(value * gain);
         level_add(&levels[i], value, sample);
         uint32_t tail = atomic_load_explicit(&s->tail, memory_order_relaxed);
         uint32_t head = atomic_load_explicit(&s->head, memory_order_acquire);
         atomic_fetch_add_explicit(&s->captured, 1, memory_order_relaxed);
-        if (tail - head >= s->capacity) { atomic_fetch_add_explicit(&s->dropped, 1, memory_order_relaxed); continue; }
+        if (tail - head >= s->capacity) {
+            atomic_fetch_add_explicit(&s->dropped, 1, memory_order_relaxed);
+            continue;
+        }
         int16_t pcm = sample <= -1.0f ? INT16_MIN : sample >= 1.0f ? INT16_MAX : (int16_t)(sample * 32768.0f);
         s->samples[tail & s->sample_mask] = pcm;
         atomic_store_explicit(&s->tail, tail + 1, memory_order_release);
@@ -303,7 +323,11 @@ void dm_audio_input_process(const float *const *channels, int channel_count, uin
     input_level_window levels[INPUT_MAX] = {0};
     for (int i = 0; i < INPUT_MAX; i++) streams[i] = atomic_load_explicit(&input_streams[i], memory_order_seq_cst);
     if (input_rate != sample_rate) {
-        input_rate = sample_rate; input_next_output = 0; input_frame_index = 0; input_previous = 0; input_have_previous = 0;
+        input_rate = sample_rate;
+        input_next_output = 0;
+        input_frame_index = 0;
+        input_previous = 0;
+        input_have_previous = 0;
     }
     double step = sample_rate / DM_AUDIO_INPUT_RATE;
     for (uint32_t i = 0; i < frames; i++) {
@@ -312,7 +336,10 @@ void dm_audio_input_process(const float *const *channels, int channel_count, uin
         mono /= (float)channel_count;
         if (!input_have_previous) {
             input_push_sample(mono, streams, levels);
-            input_previous = mono; input_have_previous = 1; input_frame_index = 1; input_next_output = step;
+            input_previous = mono;
+            input_have_previous = 1;
+            input_frame_index = 1;
+            input_next_output = step;
             continue;
         }
         uint64_t t = input_frame_index++;
