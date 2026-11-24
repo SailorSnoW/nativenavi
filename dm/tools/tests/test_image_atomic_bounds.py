@@ -27,6 +27,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 RYU = ROOT / 'dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader'
 spec = importlib.util.spec_from_file_location('dmsh_atomic', ROOT / 'dm/gfx/tools/dmsh_atomic.py')
+assert spec and spec.loader
 atomic = importlib.util.module_from_spec(spec); spec.loader.exec_module(atomic)
 sys.path.insert(0, str(ROOT / 'dm/gfx/tools'))
 import dmsh_chain   # noqa: E402  (the build's Metal compile)

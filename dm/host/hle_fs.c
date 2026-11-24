@@ -91,7 +91,7 @@ static void save_poison_txn(int txn, int e) {
     int z = 0;
     atomic_compare_exchange_strong(&g_mnt[txn].poison, &z, e ? e : EIO);
 }
-static void save_poison(int e) { // Test helper: poison the first mounted transaction.
+static void __attribute__((unused)) save_poison(int e) {   // test helper (t_fs): poison the first mounted transaction
     for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].txn_root == i) { save_poison_txn(i, e); return; }
 }
 // The default weak implementation only logs; a front end that shows the failure provides a strong one of the same name (the unit tests count the calls with theirs). Called on the game thread
@@ -289,8 +289,8 @@ static const dir_index *dir_index_get(const char *dir) {
     while ((e = dir_next(d))) {
         if (!guest_name(dir, e->d_name, guest, sizeof guest)) { ok = 0; break; }
         size_t gl = strlen(guest) + 1, same = !strcmp(guest, e->d_name), pl = same ? 0 : strlen(e->d_name) + 1;
-        if (n == cap && !(off = realloc(off, (cap *= 2) * sizeof *off))) die("directory index allocation failed");
-        while (plen + gl + pl > pcap) if (!(pool = realloc(pool, pcap *= 2))) die("directory index allocation failed");
+        if (n == cap) off = dm_realloc(off, (cap *= 2) * sizeof *off, "a directory index");
+        while (plen + gl + pl > pcap) pool = dm_realloc(pool, pcap *= 2, "a directory index");
         off[n][0] = plen; memcpy(pool + plen, guest, gl); plen += gl;
         off[n][1] = same ? off[n][0] : plen; if (!same) { memcpy(pool + plen, e->d_name, pl); plen += pl; }
         n++;
@@ -1011,7 +1011,7 @@ static int dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
             if (!guest_name(parent, e->d_name, guest, 0x301)) continue;
             size_t gl = strlen(guest);
             if (ri && gl > sizeof OVERLAY_DELETE - 1 && !strcmp(guest + gl - (sizeof OVERLAY_DELETE - 1), OVERLAY_DELETE)) continue;
-            if (nn == cap && !(names = realloc(names, (cap *= 2) * sizeof *names))) die("rom overlay directory snapshot allocation failed");
+            if (nn == cap) names = dm_realloc(names, (cap *= 2) * sizeof *names, "a rom overlay directory snapshot");
             strlcpy(names[nn++], guest, sizeof names[0]);
         }
         err = errno; closedir(x);
@@ -1023,7 +1023,7 @@ static int dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
         for (uint64_t j = 0; j < m->img->e[dk].b; j++) {
             const img_ent *c = &m->img->e[m->img->e[dk].a + j]; size_t l = c->nlen < 0x300 ? c->nlen : 0x300;
             memcpy(guest, m->img->names + c->name, l); guest[l] = 0;
-            if (nn == cap && !(names = realloc(names, (cap *= 2) * sizeof *names))) die("rom overlay directory snapshot allocation failed");
+            if (nn == cap) names = dm_realloc(names, (cap *= 2) * sizeof *names, "a rom overlay directory snapshot");
             strlcpy(names[nn++], guest, sizeof names[0]);
         }
     nn = names_first(names, nn, nover, nfold);

@@ -216,6 +216,6 @@ int cap_next(cap_reader *r, cap_chunk *c, uint8_t **data) {
 }
 void cap_unload(cap_reader *r) { free(r->buf); memset(r, 0, sizeof *r); }
 void cap_buf_put(cap_buf *b, const void *data, size_t n) {
-    if (b->n + n > b->cap) { size_t c = b->cap ? b->cap : 4096; while (c < b->n + n) c *= 2; b->p = realloc(b->p, c); b->cap = c; }
+    if (b->n + n > b->cap) { size_t c = b->cap ? b->cap : 4096; while (c < b->n + n) c *= 2; uint8_t *p = realloc(b->p, c); if (!p) abort(); b->p = p; b->cap = c; }   // abort: a capture cut short would replay wrong
     memcpy(b->p + b->n, data, n); b->n += n;
 }

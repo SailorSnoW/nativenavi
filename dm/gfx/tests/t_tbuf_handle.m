@@ -47,7 +47,7 @@ int main(void) { @autoreleasepool {
         for (int draw = 0; draw < 2; draw++) {
             if (draw) { uint32_t next = 2; mtl_sub_update(&next, (uint64_t)mem + (mode == 0 || mode == 2 ? 0 : 4096), 4); }
             id<MTL4ComputeCommandEncoder> en = dispatch_enc(); enc_c_pso(en, pso);
-            CHECK(encode_args((id<MTLCommandEncoder>)en, sh, 5, 0), "production buffer arguments encode");
+            CHECK(encode_args(en, sh, 5, 0), "production buffer arguments encode");
             enc_c_args(en, result.gpuAddress + 4 * draw, 1); enc_c_dispatch(en, MTLSizeMake(1,1,1), MTLSizeMake(1,1,1));
         }
         CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error(), "GPU submission completes");

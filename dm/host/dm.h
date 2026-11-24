@@ -42,6 +42,8 @@ __attribute__((weak)) void dm_log(const char *fmt, ...) {
 #endif
 #define LOG(...) dm_log("[dm] " __VA_ARGS__)
 #define die(...) do { LOG("FATAL " __VA_ARGS__); abort(); } while (0)
+// realloc for a table the host cannot go on without: never NULL, so the caller neither loses the old block nor writes through NULL. what: the table, in the FATAL line
+static inline void *dm_realloc(void *p, size_t bytes, const char *what) { void *q = realloc(p, bytes); if (!q && bytes) die("out of memory for %s (%zu bytes)", what, bytes); return q; }
 
 typedef struct { uint32_t st_name; uint8_t st_info, st_other; uint16_t st_shndx; uint64_t st_value, st_size; } Elf64_Sym;
 typedef struct { int64_t d_tag; union { uint64_t d_val, d_ptr; } d_un; } Elf64_Dyn;
@@ -156,7 +158,7 @@ void dm_gfx_suspend(int on);
 void dm_gfx_quit(int wait_ms);   // hle_nvn.c: the process is ending (the graceful exit): what the pipeline archive has not written yet, written, waiting up to wait_ms
 void dm_gfx_quit_begin(void);   // hle_nvn.c: the process is about to end (the graceful exit, oe::ExecuteProgram's hand-over): the pipeline prewarm stops and the archive starts writing what it holds, without waiting
 enum { DM_QUIT_ARCH_MS = 10000 };   // what any end of the process the host controls gives the pipeline archive's write (atexit, the graceful exit): a file of 900 bases took 1.8-4 s on Macs
-void dm_gfx_enter(void); void dm_gfx_leave(void);   // hle_nvn.c: the gate dm_gfx_suspend closes, for callers outside the NVN layer
+void dm_gfx_enter(void);   // hle_nvn.c: the gate dm_gfx_suspend closes, for callers outside the NVN layer (t_pso_archive holds a draw under way with it)
 void dm_gfx_shot_at(long k, const char *path);   // graphics side: screenshot of the k-th frame after the current presented frame (nvn_mtl.m)
 void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg);   // The same, then(arg) in place of the last _exit(0) (oe::ExecuteProgram: execve of the next program)
 void dm_host_shutdown(const char *why);   // Graceful exit (hle_lifecycle.c): stop background threads and audio, stop the pipeline prewarm, drain graphics, write the pipeline archive, then _exit(0); used by SIGTERM and oe::ExecuteProgram

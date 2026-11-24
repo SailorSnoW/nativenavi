@@ -33,7 +33,7 @@ static NvShader *shader(id<MTLLibrary> lib, NSString *name, int stage) {
 static void draw_handles(NvShader *fs, id<MTLRenderPipelineState> pso, int x) {
     CHECK(rp_begin() != nil, "production render pass open");
     enc_r_pso(g_enc, pso); enc_r_viewport(g_enc, (MTLViewport){x, 0, 4, 4, 0, 1});
-    CHECK(encode_args((id<MTLCommandEncoder>)g_enc, fs, 1, 0), "production fragment arguments encoded");
+    CHECK(encode_args(g_enc, fs, 1, 0), "production fragment arguments encoded");
     enc_r_draw(g_enc, MTLPrimitiveTypeTriangle, 0, 3);
 }
 static uint64_t bound(NvShader *s, int i) { return ((uint64_t *)((uint8_t *)s->ab_buf.contents + s->ab_off))[i]; }
@@ -82,7 +82,7 @@ static void compute_case(NvShader *cs, id<MTLComputePipelineState> pso, int reve
     for(int i=0;i<2;i++) {
         if(i)mtl_sub_update(&second,(uint64_t)mem,8);
         id<MTL4ComputeCommandEncoder> ce=dispatch_enc();enc_c_pso(ce,pso);
-        CHECK(encode_args((id<MTLCommandEncoder>)ce,cs,5,0),"production compute handle tables encoded");
+        CHECK(encode_args(ce,cs,5,0),"production compute handle tables encoded");
         enc_c_args(ce,result.gpuAddress+16*i,1);enc_c_dispatch(ce,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));
     }
     CHECK(mtl_wait(mtl_sub_commit(),5000000000ull)&&!mtl_last_commit_error(),"compute GPU submission completed");

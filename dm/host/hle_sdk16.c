@@ -415,10 +415,13 @@ HLE_FORCE("_ZN2nn4diag6detail7PutImplERKNS0_11LogMetaDataEPKcm", "game log → h
     (void)meta; while (n && (s[n - 1] == '\n' || s[n - 1] == '\0')) n--; if (n) LOG("[game] %.*s", (int)n, s);
 }
 // Abort: report the call site (module + offset) and the guest backtrace, then exit
-static void diag_abort(uint32_t res, void *lr) {
+__attribute__((noinline)) static void diag_abort(uint32_t res, void *lr) {
     module_t *m = module_of(lr);
     LOG("game called nn::diag abort: Result %#x, call site %s+%#llx", res, m ? m->name : "?", m ? (unsigned long long)((uint8_t *)lr - m->base) : (unsigned long long)(uintptr_t)lr);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wframe-address"   // the caller's frame on purpose: the HLE entry the guest called (noinline keeps it one frame up)
     dm_backtrace((uint64_t)__builtin_frame_address(1));
+#pragma clang diagnostic pop
     die("game aborted");
 }
 HLE_FORCE("_ZN2nn4diag6detail9AbortImplEv", "game aborted", void, h_diag_Abort0, void) { diag_abort(0, dm_bigstack_caller(__builtin_return_address(0))); }

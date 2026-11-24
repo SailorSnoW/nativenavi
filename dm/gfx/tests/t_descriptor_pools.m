@@ -64,7 +64,7 @@ int main(void) { @autoreleasepool {
     mtl_sub_begin();
     for (int i = 0; i < 2; i++) { pt.pool = (dpool_t *)&tp[i]; state_op(OP_SET_TEX_POOL, &pt);
         image_prepare(program, 0x20); encode_args(nil, sh, 5, 0);
-        id<MTL4ComputeCommandEncoder> en = dispatch_enc(); enc_c_pso(en, pipeline); CHECK(encode_args((id<MTLCommandEncoder>)en, sh, 5, 0), "production image binding encodes");
+        id<MTL4ComputeCommandEncoder> en = dispatch_enc(); enc_c_pso(en, pipeline); CHECK(encode_args(en, sh, 5, 0), "production image binding encodes");
         enc_c_args(en, values.gpuAddress + 4 * i, 1); enc_c_dispatch(en, MTLSizeMake(1,1,1), MTLSizeMake(1,1,1)); }
     CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error(), "image dispatches complete");
     unsigned a = pixel(&tex[0]), b = pixel(&tex[1]);

@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/games')); sys.path.insert(0, str(REPO / 'dm/tools')); sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
 import game, nacp
 spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
+assert spec and spec.loader
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 nsp.nacp = nacp   # main sets it
 

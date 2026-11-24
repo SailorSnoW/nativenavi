@@ -152,14 +152,14 @@ static void gpu_arguments(void) {
     CHECK(pipeline!=nil,"resource ABI pipeline compiles"); if (!pipeline) return;
     mtl_sub_begin(); id<MTL4ComputeCommandEncoder> en=enc_c_begin(NULL);
     state_op(OP_BIND_UBO,&ins[0]); state_op(OP_BIND_SSBO,&outs[0]);
-    CHECK(encode_args((id<MTLCommandEncoder>)en,shader,5,0),"the compute stage's argument block encodes through production helpers");
+    CHECK(encode_args(en,shader,5,0),"the compute stage's argument block encodes through production helpers");
     enc_c_pso(en,pipeline); enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));
     enc_c_end(en);
     CHECK(mtl_wait(mtl_sub_commit(),5000000000ull) && !mtl_last_commit_error(),"resource ABI GPU dispatch completes"); mtl_drain();
     CHECK(csout[0]==29 && rtout[0]==0,"the GPU reads and writes the compute stage's UBO/SSBO, not the mesh stage's");
     mtl_sub_begin(); en=enc_c_begin(NULL);
     state_op(OP_BIND_UBO,&ins[1]); state_op(OP_BIND_SSBO,&outs[1]);
-    CHECK(encode_args((id<MTLCommandEncoder>)en,shader,5,0),"and again with the stage bound anew");
+    CHECK(encode_args(en,shader,5,0),"and again with the stage bound anew");
     enc_c_pso(en,pipeline); enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));
     enc_c_end(en);
     CHECK(mtl_wait(mtl_sub_commit(),5000000000ull) && !mtl_last_commit_error(),"second resource ABI GPU dispatch completes"); mtl_drain();

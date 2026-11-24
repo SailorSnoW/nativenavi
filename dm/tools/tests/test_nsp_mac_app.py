@@ -28,8 +28,10 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[3]
 SCRIPT = REPO / 'scripts/build_app.py'
 spec = importlib.util.spec_from_file_location('build_app', SCRIPT)
+assert spec and spec.loader
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 spec = importlib.util.spec_from_file_location('pack_app', REPO / 'dm/mac/pack_app.py')
+assert spec and spec.loader
 pack_app = importlib.util.module_from_spec(spec); spec.loader.exec_module(pack_app)
 TID = '01008CF01BAAC000'
 TEST_ROOT = Path(os.environ.get('NATIVENAVI_TEST_ROOT', tempfile.gettempdir()))

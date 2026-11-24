@@ -846,7 +846,7 @@ static DmAmiiboMenuDelegate *g_amiibo_menu;
 static DmResetTarget *g_reset_target;
 void front_run(void (*guest)(void)) {
     // A game: tell macOS its work is latency-critical, so the system does not trade its frame time for power while the frame rate is capped
-    static id activity; activity = [[NSProcessInfo processInfo] beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical reason:@"game"];
+    static id activity __attribute__((unused)); activity = [[NSProcessInfo processInfo] beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical reason:@"game"];
     if (!getenv("DM_WINDOW")) {
         kern_return_t kr;
         int role_status = front_windowless_role(getenv("DM_WINDOWLESS_ROLE"), &kr);

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location('launcher_settings', ROOT / 'dm/games/settings.py')
+assert spec and spec.loader
 settings = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(settings)
 

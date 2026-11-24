@@ -12,7 +12,7 @@ GAME_H = gen/$(GAME)/game_profile.h
 include ../mac/min_os.mk
 # -O2 as the other native code here (dav1d, the launcher). Not -O3 (no measured gain over -O2) and not -flto, which moves
 # hle_bigstack.c's inline-assembly entry apart from its return path (SIGBUS in dm_bigstack_enter on Breath of the Wild, PR #556)
-CFLAGS=-O2 -g -Wall -Wno-unused-function -mmacosx-version-min=$(MACOS_MIN)
+CFLAGS=-O2 -g -Wall -mmacosx-version-min=$(MACOS_MIN)
 # One job per core unless the command line sets -j: the host and the libraries below build one object per source (GNU make 3.81, the system's, takes -j from MAKEFLAGS set here)
 ifeq ($(filter -j%,$(MAKEFLAGS)),)
 MAKEFLAGS += -j$(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -27,12 +27,18 @@ GFX=$(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ..
 DAV1D=../third_party/dav1d
 DAV1D_SRC=$(sort $(filter-out %_tmpl.c,$(wildcard $(DAV1D)/src/*.c)) $(DAV1D)/src/arm/cpu.c $(wildcard $(DAV1D)/config/tmpl/*.c) \
           $(filter-out %_tmpl.S %/util.S,$(wildcard $(DAV1D)/src/arm/64/*.S)))
-DAV1D_OBJ=$(patsubst $(DAV1D)/%,gen/dav1d/%.o,$(DAV1D_SRC))
+# An object is named by its source's path (src/arm/cpu.c: gen/dav1d/src_arm_cpu.c.o): an archive keeps only file names, and src/cpu.c and src/arm/cpu.c as two cpu.c.o made
+# dsymutil skip the second one's debug information
+dav1d_obj=gen/dav1d/$(subst /,_,$(patsubst $(DAV1D)/%,%,$(1))).o
+DAV1D_OBJ=$(foreach s,$(DAV1D_SRC),$(call dav1d_obj,$(s)))
 DAV1D_LIB=gen/dav1d/libdav1d.a
 DAV1D_H=$(wildcard $(DAV1D)/config/*.h $(DAV1D)/src/*.h $(DAV1D)/src/*_tmpl.c $(DAV1D)/src/arm/*.h $(DAV1D)/src/arm/asm.S $(DAV1D)/src/arm/64/*_tmpl.S $(DAV1D)/src/arm/64/util.S $(DAV1D)/include/*/*.h)
-gen/dav1d/%.o: $(DAV1D)/% $(DAV1D_H) ../mac/min_os.mk
-	@mkdir -p $(dir $@)
-	clang -O2 -g -mmacosx-version-min=$(MACOS_MIN) -fvisibility=hidden -fomit-frame-pointer -fno-align-functions -I$(DAV1D) -I$(DAV1D)/include -I$(DAV1D)/config -c $< -o $@
+define DAV1D_RULE
+$(call dav1d_obj,$(1)): $(1) $$(DAV1D_H) ../mac/min_os.mk
+	@mkdir -p $$(dir $$@)
+	clang -O2 -g -mmacosx-version-min=$$(MACOS_MIN) -fvisibility=hidden -fomit-frame-pointer -fno-align-functions -I$$(DAV1D) -I$$(DAV1D)/include -I$$(DAV1D)/config -c $$< -o $$@
+endef
+$(foreach s,$(DAV1D_SRC),$(eval $(call DAV1D_RULE,$(s))))
 $(DAV1D_LIB): $(DAV1D_OBJ)
 	rm -f $@; ar rcs $@ $^
 # The host's Rust code, a static library (rust.mk: RS_LIB)

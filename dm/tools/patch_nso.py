@@ -113,7 +113,9 @@ PATCH_FILES = list(patch_paths.values())
 def load_patches():
     tables, where = {'CUTS': {}, 'OBS': {}, 'FRAME_STEP': {}, 'STUBS': {}, 'MATCH_CUTS': {}, 'MATCH_FRAME_STEP': {}, 'MATCH_STUBS': {}, 'SDK_MATCH_CUTS': {}, 'CAPABILITIES': {}}, {}
     for n, path in enumerate(PATCH_FILES):
-        spec = importlib.util.spec_from_file_location(f'patches_{n}', path); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        spec = importlib.util.spec_from_file_location(f'patches_{n}', path)
+        assert spec and spec.loader
+        m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
         for kind, table in tables.items():
             if kind == 'SDK_MATCH_CUTS': continue
             if kind == 'MATCH_CUTS' and os.path.basename(path) in SHARED:   # SDK-wide and engine-wide
@@ -256,7 +258,7 @@ def regs_in(ins):
     except Exception: pass
     return s
 def pick(avoid, n=2):
-    out = [r for r in range(0, 16) if r not in avoid and r != 18][:n]; assert len(out) == n; return out
+    out = [r for r in range(16) if r not in avoid and r != 18][:n]; assert len(out) == n; return out
 
 def subst(ins, S):
     """x18/w18 → xS/wS: only the 4 register field positions are changed, verified against the disassembly text."""
@@ -754,7 +756,7 @@ def exclusive_order_sites(img, ranges):
                     or w & 0x3FE0FC00 == 0x08007C00 or w & 0xBFE08000 == 0x88200000):   # stxr* (Rt2 all ones), stxp
                 out.append(o)
     return out
-ORDERED = set(exclusive_order_sites(IMG, CODE_RANGES))   # changed_runs leaves these out: a cheat that writes over one runs its own instruction, which no site depends on
+ORDERED = set(exclusive_order_sites(IMG, CODE_RANGES))   # changed_runs leaves these out: a mod's patch that writes over one runs its own instruction, which no site depends on
 for o in ORDERED:
     struct.pack_into('<I', IMG, o, struct.unpack_from('<I', IMG, o)[0] | 0x8000)   # ldxr → ldaxr, stxr → stlxr, ldxp → ldaxp, stxp → stlxp
 if ORDERED: stats['exclusive_ordered'] = len(ORDERED)
@@ -1777,8 +1779,8 @@ with open(P('cuts.tsv'), 'w') as f:
     for off, ob, nb, why in cuts: f.write(f'{off:#x}\t{ob}\t{nb}\t{why}\n')   # Columns: offset, original bytes, new bytes, reason
 # The text words whose instructions no longer run as the file has them: every word this rewriter changed (sites, cuts,
 # jump tables; not an exclusive access that only gained ordering), the windows whose copies in the patch area run instead, and the spin waits' instructions, which run
-# from their copies after the first pass. Runs of offset and length; the host's cheat engine refuses a write into any of them
-# (hle_cheats.c main_write_pages: a cheat's instruction there would undo a site or never run)
+# from their copies after the first pass. Runs of offset and length; the host refuses a mod's code patch over any of them
+# (hle_mods.c rec_refusal: the patch's instruction there would undo a site or never run)
 def changed_runs():
     words = set()
     for o in range(0, TEXT_END, 0x1000):   # whole blocks first: almost all of the text is unchanged

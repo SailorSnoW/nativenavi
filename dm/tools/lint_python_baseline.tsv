@@ -14,67 +14,22 @@ pyright	dm/tools/docs_symptoms.py	reportOptionalMemberAccess	1	"group" is not a 
 pyright	dm/tools/gpuprof.py	reportArgumentType	1	Argument of type "Unknown | None" cannot be assigned to parameter "value" of type "int" in function "__setitem__" Type "Unknown | None" is not assignable to type "int" "None" is not assignable to "int"
 pyright	dm/tools/gpuprof.py	reportOptionalMemberAccess	1	"split" is not a known attribute of "None"
 pyright	dm/tools/make_ext_font.py	reportOptionalSubscript	1	Object of type "None" is not subscriptable
-pyright	dm/tools/patch_nso.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
 pyright	dm/tools/patch_nso.py	reportArgumentType	2	Argument of type "str | None" cannot be assigned to parameter "string" of type "str" in function "fullmatch" Type "str | None" is not assignable to type "str" "None" is not assignable to "str"
 pyright	dm/tools/patch_nso.py	reportCallIssue	2	No overloads for "fullmatch" match the provided arguments
-pyright	dm/tools/patch_nso.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/patch_nso.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
 pyright	dm/tools/patch_nso.py	reportOptionalSubscript	2	Object of type "None" is not subscriptable
 pyright	dm/tools/patch_nso.py	reportWildcardImportFromLibrary	1	Wildcard import from a library not allowed
 pyright	dm/tools/sdis.py	reportWildcardImportFromLibrary	1	Wildcard import from a library not allowed
-pyright	dm/tools/tests/test_bench.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_bench.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_bench.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_gpuprof.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_gpuprof.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_gpuprof.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_image_atomic_bounds.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_image_atomic_bounds.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_image_atomic_bounds.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
 pyright	dm/tools/tests/test_image_atomic_bounds.py	reportOptionalSubscript	1	Object of type "None" is not subscriptable
-pyright	dm/tools/tests/test_launcher_settings.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_launcher_settings.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_launcher_settings.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_chain.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_nsp_chain.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_chain.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_incremental.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
 pyright	dm/tools/tests/test_nsp_incremental.py	reportAttributeAccessIssue	1	Cannot assign to attribute "nacp" for class "ModuleType" Attribute "nacp" is unknown
-pyright	dm/tools/tests/test_nsp_incremental.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_incremental.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_mac.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_nsp_mac.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_mac.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
 pyright	dm/tools/tests/test_nsp_mac_app.py	reportArgumentType	1	Argument of type "Unknown | None" cannot be assigned to parameter "obj" of type "Sized" in function "len" Type "Unknown | None" is not assignable to type "Sized" "None" is incompatible with protocol "Sized" "__len__" is not present
 pyright	dm/tools/tests/test_nsp_mac_app.py	reportArgumentType	1	Argument of type "str | None" cannot be assigned to parameter "src" of type "StrPath" in function "copy2" Type "str | None" is not assignable to type "StrPath" Type "None" is not assignable to type "StrPath" "None" is not assignable to "str" "None" is incompatible with protocol "PathLike[str]" "__fspath__" is not present
-pyright	dm/tools/tests/test_nsp_mac_app.py	reportArgumentType	2	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
 pyright	dm/tools/tests/test_nsp_mac_app.py	reportCallIssue	1	No overloads for "copy2" match the provided arguments
-pyright	dm/tools/tests/test_nsp_mac_app.py	reportOptionalMemberAccess	2	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_mac_app.py	reportOptionalMemberAccess	2	"loader" is not a known attribute of "None"
 pyright	dm/tools/tests/test_nsp_mac_app.py	reportOptionalSubscript	4	Object of type "None" is not subscriptable
-pyright	dm/tools/tests/test_nsp_progress.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_nsp_progress.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_nsp_progress.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_patches.py	reportArgumentType	3	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_patches.py	reportOptionalMemberAccess	3	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_patches.py	reportOptionalMemberAccess	3	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_pso_offline.py	reportArgumentType	1	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_pso_offline.py	reportOptionalMemberAccess	1	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_pso_offline.py	reportOptionalMemberAccess	1	"loader" is not a known attribute of "None"
-pyright	dm/tools/tests/test_shader_regressions.py	reportArgumentType	2	Argument of type "ModuleSpec | None" cannot be assigned to parameter "spec" of type "ModuleSpec" in function "module_from_spec" Type "ModuleSpec | None" is not assignable to type "ModuleSpec" "None" is not assignable to "ModuleSpec"
-pyright	dm/tools/tests/test_shader_regressions.py	reportOptionalMemberAccess	2	"exec_module" is not a known attribute of "None"
-pyright	dm/tools/tests/test_shader_regressions.py	reportOptionalMemberAccess	2	"loader" is not a known attribute of "None"
 pyright	dm/tools/tests/test_spin_waits.py	reportArgumentType	1	Argument of type "list[FunctionDef | ClassDef | Assign]" cannot be assigned to parameter "body" of type "list[stmt]" in function "__init__" "list[FunctionDef | ClassDef | Assign]" is not assignable to "list[stmt]" Type parameter "_T@list" is invariant, but "FunctionDef | ClassDef | Assign" is not the same as "stmt" Consider switching from "list" to "Sequence" which is covariant
 pyright	dm/tools/tests/test_tail_call.py	reportCallIssue	3	Object of type "ModuleType" is not callable Attribute "__call__" is unknown
 pyright	scripts/bench.py	reportArgumentType	1	Argument of type "Unknown | None" cannot be assigned to parameter "number" of type "_SupportsRound2[_T@round]" in function "round" Type "Unknown | None" is not assignable to type "_SupportsRound2[_T@round]" "None" is incompatible with protocol "_SupportsRound2[_T@round]" "__round__" is not present
 pyright	scripts/bench.py	reportArgumentType	1	Argument of type "float" cannot be assigned to parameter "value" of type "int" in function "__setitem__" "float" is not assignable to "int"
 pyright	scripts/bench.py	reportCallIssue	1	No overloads for "round" match the provided arguments
-pyright	scripts/bench.py	reportOptionalMemberAccess	1	"group" is not a known attribute of "None"
 ruff	dm/gfx/tools/shader_split.py	B006	1	Do not use mutable data structures for argument defaults
-ruff	dm/tools/patch_nso.py	PIE808	1	Unnecessary `start` argument in `range`
-ruff	dm/tools/sdis.py	F841	1	Local variable `lo` is assigned to but never used
-ruff	dm/tools/tests/test_gpuprof.py	F401	1	`os` imported but unused
-ruff	dm/tools/tests/test_gpuprof.py	F401	1	`sys` imported but unused
 ruff	dm/tools/tests/test_image_atomic_bounds.py	B023	1	Function definition does not bind loop variable `dependencies`
-ruff	dm/tools/tests/test_spin_waits.py	F401	1	`sys` imported but unused
 ruff	scripts/bench.py	B023	1	Function definition does not bind loop variable `ok`

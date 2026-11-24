@@ -18,6 +18,7 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[3]
 SCRIPT = REPO / 'scripts/build_app.py'
 spec = importlib.util.spec_from_file_location('build_app', SCRIPT)
+assert spec and spec.loader
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
 

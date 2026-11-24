@@ -23,7 +23,9 @@ FILES = [REPO / 'dm/tools/sdk_patches.py'] + sorted((REPO / 'dm/games').glob('*/
 
 
 def load(path, n):
-    spec = importlib.util.spec_from_file_location(f'patches_{n}', path); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    spec = importlib.util.spec_from_file_location(f'patches_{n}', path)
+    assert spec and spec.loader
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
 
 
@@ -292,6 +294,7 @@ class ExternalRegistry(unittest.TestCase):
 class RewriteKey(unittest.TestCase):
     def test_patch_files_of_the_games_builds(self):
         spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
+        assert spec and spec.loader
         nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
         tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, tmp)
         gid = '0400486024DEC000'   # Ocarina of Time: function-matched rules in its own patches.py, which names no build
@@ -308,6 +311,7 @@ class RewriteKey(unittest.TestCase):
 
     def test_patch_files_of_a_provisional_profile(self):
         spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
+        assert spec and spec.loader
         nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
         tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, tmp)
         bid = '5e' * 16   # a build that no repository profile knows

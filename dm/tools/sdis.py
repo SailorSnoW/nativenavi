@@ -33,7 +33,7 @@ for i in range(0, t.get(2, 0), 24):
     got[off] = cstr(STR + struct.unpack_from('<I', img, SYM + (info >> 32) * 24)[0])
 plt = {}
 def plt_scan():
-    lo = t[23]  # The PLT is right near the end of text; scan text directly for adrp x16 sequences
+    # The PLT is right near the end of text; scan text directly for adrp x16 sequences
     for o in range(0, len(img) - 16, 4):
         w = struct.unpack_from('<I', img, o)[0]
         if w & 0x9F00001F != 0x90000010: continue

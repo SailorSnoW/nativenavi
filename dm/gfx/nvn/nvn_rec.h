@@ -237,7 +237,6 @@ static inline int rx_need_flush(void) {
     return atomic_load_explicit(&g_rx_drain, memory_order_acquire)
         || atomic_load_explicit(&g_rx_need_fence, memory_order_seq_cst) > atomic_load_explicit(&g_sub_cmt, memory_order_seq_cst);
 }
-static int rx_busy(void) { return rx_inflight() > 0; }
 static double rx_stamp_s(id heap, int slot) {   // a boundary stamp in seconds on the Mach clock, as a commit feedback's GPU times are; 0 when it was not written
     if (!heap || slot < 0) return 0;
     NSData *d = [(id<MTL4CounterHeap>)heap resolveCounterRange:NSMakeRange((NSUInteger)slot, 1)]; const MTL4TimestampHeapEntry *en = d.bytes;

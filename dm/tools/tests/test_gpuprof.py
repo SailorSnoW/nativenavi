@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # dm/tools/gpuprof.py: the host's [gpuprof] and [ab] lines (DM_NVN_GPUPROF, DM_AB) parsed from a synthetic log, the per-frame totals, the groupings and the A/B medians
-import contextlib, importlib.util, io, os, sys, tempfile, unittest
+import contextlib, importlib.util, io, tempfile, unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-spec = importlib.util.spec_from_file_location('gpuprof', REPO / 'dm/tools/gpuprof.py'); gpuprof = importlib.util.module_from_spec(spec); spec.loader.exec_module(gpuprof)
+spec = importlib.util.spec_from_file_location('gpuprof', REPO / 'dm/tools/gpuprof.py')
+assert spec and spec.loader
+gpuprof = importlib.util.module_from_spec(spec); spec.loader.exec_module(gpuprof)
 
 P = '[dm] [nvn-mtl] [gpuprof] '
 

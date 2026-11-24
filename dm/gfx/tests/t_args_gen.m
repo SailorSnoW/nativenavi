@@ -48,7 +48,7 @@ static id<MTLRenderPipelineState> pipeline(id<MTLLibrary> lib, NvShader *vs) {
     return p;
 }
 // One point: the vertex shader runs once, after the draw before it (the barrier makes its storage writes visible to the next draw's vertex stage)
-#define DRAW(en, sh, ps) do { CHECK(encode_args((id<MTLCommandEncoder>)en, sh, 0, 1), #sh " encoded"); enc_r_pso(en, ps); enc_r_draw(en, MTLPrimitiveTypePoint, 0, 1); \
+#define DRAW(en, sh, ps) do { CHECK(encode_args(en, sh, 0, 1), #sh " encoded"); enc_r_pso(en, ps); enc_r_draw(en, MTLPrimitiveTypePoint, 0, 1); \
                               [en barrierAfterEncoderStages:MTLStageVertex beforeEncoderStages:MTLStageVertex visibilityOptions:MTL4VisibilityOptionDevice]; } while (0)
 
 static void composite_slots(void) {
@@ -200,7 +200,7 @@ int main(void) { @autoreleasepool {
         g_cur_arena->used = g_cur_arena->len - pad_step;
         NvArena *old_arena = g_cur_arena;
 
-        CHECK(encode_args((id<MTLCommandEncoder>)en3, vd, 5, 0), "vd encoded");
+        CHECK(encode_args(en3, vd, 5, 0), "vd encoded");
         CHECK(g_cur_arena != old_arena, "ubp_get inside ub_padded rolled over to a new arena");
         enc_c_pso(en3, pvd); enc_c_dispatch(en3, MTLSizeMake(1,1,1), MTLSizeMake(1,1,1));
         enc_c_end(en3);

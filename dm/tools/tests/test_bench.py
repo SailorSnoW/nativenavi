@@ -5,7 +5,9 @@ from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
-spec = importlib.util.spec_from_file_location('bench', REPO / 'scripts/bench.py'); bench = importlib.util.module_from_spec(spec); spec.loader.exec_module(bench)
+spec = importlib.util.spec_from_file_location('bench', REPO / 'scripts/bench.py')
+assert spec and spec.loader
+bench = importlib.util.module_from_spec(spec); spec.loader.exec_module(bench)
 
 
 class Bench(unittest.TestCase):

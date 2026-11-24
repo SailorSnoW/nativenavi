@@ -18,6 +18,7 @@
 # first frames are built, so runs compare the scene rather than its loading. A frame route ends once the frame after its window and its screenshot are in, or at --timeout.
 # Load on the Mac moves the numbers: compare variants of one invocation, not invocations.
 import argparse, datetime, json, math, os, re, shutil, signal, statistics, subprocess, sys, time
+from typing import NoReturn
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -25,7 +26,7 @@ sys.path.insert(0, str(REPO / 'dm/tools'))
 import romfs as rfs
 
 
-def fail(msg):
+def fail(msg) -> NoReturn:
     print(f'error: {msg}', file=sys.stderr); sys.exit(1)
 
 

@@ -132,8 +132,8 @@ static void mesh_scratch_bind(id<MTL4RenderCommandEncoder> en) {
     if (over) RED_ONCE(173, "mesh scratch: %u mesh groups found none of the %u slices free and drew nothing (dmsh_abi.h DMSH_MESH_SCRATCH_*: the GPU ran more groups at once than the pool was sized for)", over, head[DMSH_MESH_SCRATCH_MASK] + 1);
     enc_r_vbuf(en, DMSH_MESH_SCRATCH_SLOT, gpu);   // the mesh function's stage array (the table persists; enc_r_vbuf skips an unchanged address)
 }
-static void mtk_encode(id<MTLRenderCommandEncoder> en_) {
-    id<MTL4RenderCommandEncoder> en = (id<MTL4RenderCommandEncoder>)en_; NvShader *ts = g_mtk.ts, *ms = g_mtk.ms;
+static void mtk_encode(id<MTL4RenderCommandEncoder> en) {
+    NvShader *ts = g_mtk.ts, *ms = g_mtk.ms;
     [en setArgumentTable:g_vt atStages:MTLRenderStageMesh];
     if (ms->rf.mesh_spill) mesh_scratch_bind(en);
     uint64_t draw_gpu = g_mtk.ind_rec;

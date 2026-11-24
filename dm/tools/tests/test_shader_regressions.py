@@ -18,8 +18,10 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[3]
 TOOL = REPO / 'dm/gfx/tools/shader_regressions.py'
 spec = importlib.util.spec_from_file_location('shader_regressions', TOOL)
+assert spec and spec.loader
 sr = importlib.util.module_from_spec(spec); spec.loader.exec_module(sr)
 spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
+assert spec and spec.loader
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
 FAIL = 'NotSupportedException: MSL 2.3 image atomics require IGN with a discarded result'

@@ -314,7 +314,7 @@ static void rec_add(recs_t *rs, uint64_t off, uint32_t len, const uint8_t *data,
     if (!len) return;
     if (rs->n == rs->cap) {
         rs->cap = rs->cap ? rs->cap * 2 : 64;
-        if (!(rs->r = realloc(rs->r, (size_t)rs->cap * sizeof *rs->r))) die("mods: patch record allocation failed");
+        rs->r = dm_realloc(rs->r, (size_t)rs->cap * sizeof *rs->r, "the mods' patch records");
     }
     uint8_t *copy = malloc(len);
     if (!copy) die("mods: patch record allocation failed");
@@ -469,7 +469,7 @@ static void changed_read(changed_t *c, const module_t *m, const char *dir) {
         if (sscanf(line, "%lx %lx", &off, &len) != 2) continue;
         if (c->n == cap) {
             cap = cap ? cap * 2 : 1024;
-            if (!(c->run = realloc(c->run, (size_t)cap * sizeof *c->run))) die("mods: changed list allocation failed");
+            c->run = dm_realloc(c->run, (size_t)cap * sizeof *c->run, "a module's changed-words list (mods)");
         }
         c->run[c->n][0] = (uint32_t)off; c->run[c->n][1] = (uint32_t)len; c->n++;
     }
@@ -518,7 +518,7 @@ static void note_applied(const module_t *m, uint64_t off, uint64_t len, int mod)
     }
     if (g_napplied == g_applied_cap) {
         g_applied_cap = g_applied_cap ? g_applied_cap * 2 : 256;
-        if (!(g_applied = realloc(g_applied, (size_t)g_applied_cap * sizeof *g_applied))) die("mods: applied list allocation failed");
+        g_applied = dm_realloc(g_applied, (size_t)g_applied_cap * sizeof *g_applied, "the mods' applied patches");
     }
     g_applied[g_napplied++] = (applied_t){m, off, len, mod};
 }
@@ -540,7 +540,7 @@ static baked_t *baked_read(const module_t *m, const char *dir, int *n) {
         char *fld[4] = {0}; int nf = 0;
         for (char *t = line; t && nf < 4; nf++) { fld[nf] = t; t = strchr(t, '\t'); if (t) *t++ = 0; }
         if (nf < 3 || (strcmp(fld[0], "baked") && strcmp(fld[0], "refused"))) continue;
-        if (!(b = realloc(b, (size_t)(*n + 1) * sizeof *b))) die("mods: baked list allocation failed");
+        b = dm_realloc(b, (size_t)(*n + 1) * sizeof *b, "the mods' baked list");
         baked_t *e = &b[(*n)++]; *e = (baked_t){0};
         e->refused = fld[0][0] == 'r';
         strlcpy(e->sha, trim(fld[1]), sizeof e->sha); strlcpy(e->path, trim(fld[2]), sizeof e->path);

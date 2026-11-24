@@ -63,14 +63,14 @@ static int cap_reg_find(uint64_t a) {   // the region holding address a (regions
     return -1;
 }
 static void cap_reg_hash(cap_region *r, const uint8_t *p) {   // p: the region's bytes (or the copy that was written)
-    size_t nb = (size_t)((r->size + 4095) / 4096); r->hash = realloc(r->hash, nb * 8);
+    size_t nb = (size_t)((r->size + 4095) / 4096); r->hash = dm_realloc(r->hash, nb * 8, "the capture's page hashes");
     for (size_t b = 0; b < nb; b++) { uint64_t o = (uint64_t)b * 4096; r->hash[b] = cap_hash_block(p + o, (size_t)MIN(4096, r->size - o)); }
 }
 // Regions are written once their index is fixed; a later region gets the next index, so the sorted order is kept in a separate index table
 static uint32_t *g_cap_rid; static uint32_t g_cap_nrid;   // g_cap_rid[sorted position] = region number in the file
 static int cap_reg_add(uint64_t lo, uint64_t size, uint32_t kind) {   // a new disjoint region (its bytes are written by cap_mem); returns its sorted position
     int pos = 0; while (pos < (int)g_cap_nreg && g_cap_reg[pos].lo < lo) pos++;
-    g_cap_reg = realloc(g_cap_reg, (g_cap_nreg + 1) * sizeof *g_cap_reg); g_cap_rid = realloc(g_cap_rid, (g_cap_nreg + 1) * sizeof *g_cap_rid);
+    g_cap_reg = dm_realloc(g_cap_reg, (g_cap_nreg + 1) * sizeof *g_cap_reg, "the capture's regions"); g_cap_rid = dm_realloc(g_cap_rid, (g_cap_nreg + 1) * sizeof *g_cap_rid, "the capture's region IDs");
     memmove(g_cap_reg + pos + 1, g_cap_reg + pos, (g_cap_nreg - pos) * sizeof *g_cap_reg); memmove(g_cap_rid + pos + 1, g_cap_rid + pos, (g_cap_nreg - pos) * sizeof *g_cap_rid);
     g_cap_reg[pos] = (cap_region){lo, size, kind, 1, NULL}; g_cap_rid[pos] = g_cap_nrid++; g_cap_nreg++;
     cap_reg_hash(&g_cap_reg[pos], (const uint8_t *)(uintptr_t)lo);   // the bytes now: cap_mem counts what changed before they were written
@@ -192,7 +192,7 @@ static uint64_t *g_cap_segq; static uint32_t g_cap_nseg, g_cap_segq_cap;
 static uint64_t cap_seg_get(uint64_t addr) {   // a segment's index in this submit (queued to be copied)
     void *have = nvn_hm_get(&g_cap_seg, &addr); if (have) return (uint64_t)(uintptr_t)have - 1;
     uint32_t idx = g_cap_nseg++; nvn_hm_put(&g_cap_seg, &addr, (void *)(uintptr_t)(idx + 1));
-    if (g_cap_nseg > g_cap_segq_cap) { g_cap_segq_cap = g_cap_segq_cap ? g_cap_segq_cap * 2 : 256; g_cap_segq = realloc(g_cap_segq, g_cap_segq_cap * 8); }
+    if (g_cap_nseg > g_cap_segq_cap) { g_cap_segq_cap = g_cap_segq_cap ? g_cap_segq_cap * 2 : 256; g_cap_segq = dm_realloc(g_cap_segq, g_cap_segq_cap * 8, "the capture's segment queue"); }
     g_cap_segq[idx] = addr; return idx;
 }
 static void cap_seg_write(uint32_t idx) {   // copy the records from the segment start to its END or JUMP, then encode them in the copy
@@ -308,7 +308,7 @@ static void cap_tex_read(const tex_t *t, int rec) {   // rec: named by a record 
 static void cap_registries(uint32_t submit) {   // the entries that differ from the last written ones (all of them at submit 1)
     cap_buf tb = {0}, sb = {0}; tex_t *reads = NULL; int nreads = 0;
     os_unfair_lock_lock(&g_rmu);
-    if (g_cap_ntreg0 < g_ntreg) { g_cap_treg0 = realloc(g_cap_treg0, g_ntreg * sizeof *g_cap_treg0); memset(g_cap_treg0 + g_cap_ntreg0, 0, (g_ntreg - g_cap_ntreg0) * sizeof *g_cap_treg0); g_cap_ntreg0 = g_ntreg; }
+    if (g_cap_ntreg0 < g_ntreg) { g_cap_treg0 = dm_realloc(g_cap_treg0, g_ntreg * sizeof *g_cap_treg0, "the capture's texture registrations"); memset(g_cap_treg0 + g_cap_ntreg0, 0, (g_ntreg - g_cap_ntreg0) * sizeof *g_cap_treg0); g_cap_ntreg0 = g_ntreg; }
     reads = malloc((size_t)MAX(g_ntreg, 1) * sizeof *reads);
     for (int i = 0; i < g_ntreg; i++) {
         treg_t *r = &g_treg[i], *o = &g_cap_treg0[i];
@@ -320,7 +320,7 @@ static void cap_registries(uint32_t submit) {   // the entries that differ from 
         else if (r->ok) reads[nreads++] = r->t;
         cap_buf_put(&tb, &e, sizeof e);
     }
-    if (g_cap_nsreg0 < g_nsreg) { g_cap_sreg0 = realloc(g_cap_sreg0, g_nsreg * sizeof *g_cap_sreg0); g_cap_sreg0_ok = realloc(g_cap_sreg0_ok, g_nsreg); memset(g_cap_sreg0_ok + g_cap_nsreg0, 0, g_nsreg - g_cap_nsreg0); g_cap_nsreg0 = g_nsreg; }
+    if (g_cap_nsreg0 < g_nsreg) { g_cap_sreg0 = dm_realloc(g_cap_sreg0, g_nsreg * sizeof *g_cap_sreg0, "the capture's sampler registrations"); g_cap_sreg0_ok = dm_realloc(g_cap_sreg0_ok, g_nsreg, "the capture's sampler registrations"); memset(g_cap_sreg0_ok + g_cap_nsreg0, 0, g_nsreg - g_cap_nsreg0); g_cap_nsreg0 = g_nsreg; }
     for (int i = 0; i < g_nsreg; i++) {
         if (!g_sreg_ok[i] || (g_cap_sreg0_ok[i] && !memcmp(&g_sreg[i], &g_cap_sreg0[i], sizeof g_sreg[i]))) continue;
         cap_sreg e = {i, 0, g_sreg[i]}; g_cap_sreg0[i] = g_sreg[i]; g_cap_sreg0_ok[i] = 1; cap_buf_put(&sb, &e, sizeof e);
