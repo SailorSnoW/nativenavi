@@ -1,6 +1,6 @@
 // A whole clear waiting as a lazy clear (lc_push) lands before a later scissored clear of the same target, never after it: the pass a triangle clear opens takes it as its load
-// action (clear_color_tri, clear_ds_tri), and a scissored zero clear's copy lands it first (clear_rect_zero). FINAL FANTASY IX clears the window whole, then its 4:3 field view
-// with a scissor, and draws the field in that pass; the whole clear landed in the next pass and wiped the field.
+// action (clear_color_tri, clear_ds_tri), and a scissored zero clear's copy lands it first (clear_rect_zero). A game may clear the window whole, then a 4:3 view with a
+// scissor, and draw in that pass: the whole clear landing in the next pass would wipe the view.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

@@ -58,7 +58,9 @@ class ReadImage(unittest.TestCase):
         self.assertEqual(resolve.call_count, 1 + len(walked))
         self.assertEqual(sorted((Path(d).relative_to(self.image).as_posix(), sorted(ds), sorted(fs)) for d, ds, fs in walked),
                          sorted((Path(d).relative_to(self.src).as_posix(), sorted(ds), sorted(fs)) for d, ds, fs in os.walk(self.src)))
-        other = self.root / 'other'; (other / 'only').mkdir(parents=True); romfs_image.pack(other, self.image)   # a new image at the same path: a new scan sees it
+        other = self.root / 'other'   # a new image at the same path: a new scan sees it
+        (other / 'only').mkdir(parents=True)
+        romfs_image.pack(other, self.image)
         self.assertEqual([e.name for e in romfs.scandir(self.image)], ['only'])
 
     def test_seek_read_and_mmap_cannot_cross_an_entry_boundary(self):
@@ -82,12 +84,13 @@ class ReadImage(unittest.TestCase):
             self.assertEqual(shader_split.scan_file((str(self.virtual / rel), rel)), shader_split.scan_file((str(self.src / rel), rel)))
             self.assertEqual(shader_split.scan_file((str(self.virtual / rel), rel)), (rel, {}, set(), {}))
         # Image replacement must invalidate the process's cached index.
-        (self.src / 'new').write_text('new entry'); romfs_image.pack(self.src, self.image)
+        (self.src / 'new').write_text('new entry')
+        romfs_image.pack(self.src, self.image)
         self.assertEqual((self.virtual / 'new').read_text(), 'new entry')
 
     @unittest.skipUnless(shutil.which('zstd'), 'zstd command required')
     def test_zstd_file_inside_an_image(self):
-        # Mario Wonder's .zs files: the zstd command cannot open a path inside the image, so unzs feeds it the bytes.
+        # .zs files: the zstd command cannot open a path inside the image, so unzs feeds it the bytes.
         with patch.dict(os.environ, DM_GAME='0400486024DEC000'):
             import shader_split
         (self.src / 'data/table.byml.zs').write_bytes(subprocess.run(['zstd', '-c', '-q'], input=self.data, capture_output=True, check=True).stdout)

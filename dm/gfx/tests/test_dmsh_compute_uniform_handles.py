@@ -1,5 +1,5 @@
-"""Compute handles loaded through c0's uniform-address table must retain their uniform slot and word offsets. Synthetic Maxwell only: Civilization VI's four remaining compute
-shaders used this path, and lost 382 buffer fetches. The optional GPU check executes the translated fetch; t_tbuf_handle checks production binding of its two uniform words."""
+"""Compute handles loaded through c0's uniform-address table keep their uniform slot and word offsets (synthetic Maxwell). The optional GPU check runs the translated
+fetch; t_tbuf_handle checks the host's binding of its two uniform words."""
 import json, os, shutil, struct, subprocess, sys, tempfile, unittest
 from pathlib import Path
 

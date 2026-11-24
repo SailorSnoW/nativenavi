@@ -213,7 +213,7 @@ static void alias_lifecycle(void) {
 }
 
 // Device-shared memory (an NVN memory pool's storage, hle_nvn.c) is not given back: UnmapPhysicalMemory or a shrinking SetHeapSize over any page of it fails with InvalidCurrentMemory and
-// leaves every page and byte as it was, as on Horizon; once the pool is gone (each registration removed) both work again (PR #1616, Monster Jam Steel Titans 2)
+// leaves every page and byte as it was, as on Horizon; once the pool is gone (each registration removed) both work again
 static void device_shared_refused(void) {
     assert(!pages(1, alias, 16 * P));
     memset((void *)alias, 0x6d, 16 * P);
@@ -304,8 +304,8 @@ static void module_sources(void) {
     g_nmod = 0; memset(g_mod, 0, sizeof test_modules); assert(!munmap(b, 0x20000));
 }
 
-// A module with the patch area before the base and a second one after the image (patch_nso.py TWO, EA SPORTS FC 27's 185.6 MB of text): data and bss end at the back area,
-// which is reported as CodeData+RX and is no mapping source, like a patch area after the image
+// A module with the patch area before the base and a second one after the image (patch_nso.py TWO): data and bss end at the back area, which is reported as CodeData+RX and
+// is no mapping source, like a patch area after the image
 static void module_back_patch(void) {
     uint8_t *a = mmap(NULL, 0x30000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0), *b = a + 0x8000;
     assert(a != MAP_FAILED);
@@ -570,9 +570,9 @@ static void layout_order(void) {
     assert(info(I_AliasAddr) + info(I_AliasSize) == info(I_AslrAddr) + info(I_AslrSize));
     assert(info(I_AslrAddr) == (uint64_t)(uintptr_t)g_as && info(I_AslrSize) == g_reserve);
 }
-// A walk of the address space from 0, region by region, as the practice tools make it (sloperinaGZ's sys_regions, which stops after 100,000 regions): host memory outside what the
-// guest sees is one free region up to the next thing it sees, so the walk reaches the heap in a few steps, each region starting where the last ended, and ends past the host's
-// user addresses, inaccessible to the end. It took 4 KiB steps before, and gave up 400 MB in
+// A walk of the address space from 0, region by region, as the practice tools make it (sys_regions, which stops after 100,000 regions): host memory outside what the guest
+// sees is one free region up to the next thing it sees, so the walk reaches the heap in a few steps, each region starting where the last ended, and ends past the host's
+// user addresses, inaccessible to the end
 static void region_walk(void) {
     static _Alignas(0x4000) uint8_t image[0x8000];
     g_nmod = 1; g_mod[0] = (module_t){.base = image, .size = sizeof image};
@@ -631,7 +631,7 @@ int main(int argc, char **argv) {
     g_mod[0].back_len = 0x40000;   // a back patch area (patch_nso.py TWO) is code from the file, not bss
     assert(info(I_UsedMem) == DM_GAME_MEM_USED + 0xfec0000);
     // SetHeapSize charges the used memory GetInfo reports, not the size of the rewritten modules (patch areas and key pages): a heap of total − used fits however large the host's copies
-    // are (MIO: Memories in Orbit, 68 MB of modules against the default 64 MB, was refused the heap nninitStartup asks for; GitHub issue #941). A byte more is ResultLimitReached
+    // are. A byte more is ResultLimitReached
     g_nmod = 1; g_mod[0] = (module_t){.size=4 * DM_GAME_APP_POOL, .patch_off=0x100000};
     assert(info(I_UsedMem) == DM_GAME_MEM_USED);
     size_t room = (DM_GAME_APP_POOL - info(I_UsedMem)) & ~(size_t)0x1fffff;

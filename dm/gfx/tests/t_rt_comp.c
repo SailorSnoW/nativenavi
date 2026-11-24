@@ -1,7 +1,7 @@
 // The time-constraint declarations through the real acquire path (hle_nvn.c rt_acquire, rt_tick, rt_retire) and a frame thread (nvn_rt_join / nvn_rt_tick), without giving
 // the test a real-time policy: only the thread's CPU clock and the policy calls are replaced. A frame acquired in two calls is measured whole, each acquire thread is measured
 // and declared on itself, an acquire thread that stops acquiring goes back to the standard policy, and DM_RT_COMP / DM_RT=0 keep their meaning. With no argument the test
-// runs itself in its three modes (auto, fixed, off). From PR #2137 (thehobbit85), carried onto the per-thread slots
+// runs itself in its three modes (auto, fixed, off).
 #include <time.h>
 #include <pthread.h>
 #include <spawn.h>

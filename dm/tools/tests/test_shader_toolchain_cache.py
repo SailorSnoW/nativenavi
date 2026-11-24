@@ -439,7 +439,8 @@ class MetalPrefill(unittest.TestCase):
         self.cache.compile_split('mac', str(msl), [str(a), str(b)], lambda lib: self.fail('a second compile'))
         self.assertEqual((a.read_bytes(), b.read_bytes()), (b'TESTED', b' UNIT'))
         self.assertEqual(self.cache.stats['mac', 'reused'], 1)
-        c = self.root / 'c.metallib'; msl.write_bytes(b'FOLDED UNIT')   # three pieces: base, side and readable-tile libraries
+        c = self.root / 'c.metallib'   # three pieces: base, side and readable-tile libraries
+        msl.write_bytes(b'FOLDED UNIT')
         self.cache.compile_split('mac', str(msl), [str(a), str(b), str(c)], lambda lib: (lib[:6], lib[6:13], lib[13:]))
         a.unlink(); b.unlink(); c.unlink()
         self.cache.compile_split('mac', str(msl), [str(a), str(b), str(c)], lambda lib: self.fail('a second compile'))

@@ -1,7 +1,7 @@
 // The uniform copy hand-off (nvn_rec.h ubc_push / ubc_wait / ubc_thread): a waiter and a pusher wake the sleeping copy thread with one call per sleep, a waiter that outlasts
-// its spin sleeps and is woken once, and no push is lost (each one is made without a waiter calling in). Before, ubc_wait locked the copy mutex and signalled on every spin
-// while the thread slept, and the woken thread could not get that mutex back: Ocarina of Time's replay thread spent half its busy time in ubc_wait on one build (170-330k
-// instructions a draw against 32-48k). No GPU work (CPU-only list in tests.yml).
+// its spin sleeps and is woken once, and no push is lost (each one is made without a waiter calling in). A wait that locks the copy mutex and signals on every spin while the
+// thread sleeps keeps the woken thread from getting that mutex back (Ocarina of Time's replay thread then spends half its busy time in ubc_wait). No GPU work (CPU-only list
+// in tests.yml).
 static _Atomic int g_late;   // case 5: the copy thread is held on its way to sleep (flag set, word read), where a late wake call can land
 #define UBC_T_SLEEPING() do { if (atomic_load(&g_late)) usleep(20000); } while (0)
 #include "../nvn/nvn_mtl.m"
@@ -29,7 +29,7 @@ int main(void) { @autoreleasepool {
     uint64_t a = 7, b = 0; ubc_wait(ubc_push(&b, &a, sizeof a));   // starts the copy thread
     CHECK(b == 7, "the first copy was not made");
 
-    // 1. A wait on copies queued while the copy thread slept: the push wakes it, the wait adds no wake call (it used to signal on every spin until the thread had the mutex)
+    // 1. A wait on copies queued while the copy thread slept: the push wakes it, the wait adds no wake call
     enum { N1 = 300 }; uint64_t lat[N1]; int n1 = 0, maxw = 0; long sumw = 0;
     for (int i = 0; i < N1; i++) {
         if (!asleep()) { CHECK(0, "the copy thread did not go to sleep"); break; }

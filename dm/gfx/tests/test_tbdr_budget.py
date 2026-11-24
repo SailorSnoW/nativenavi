@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
+DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')
 
 TOOL = Path(os.environ.get('TBDR_BUDGET_TOOL', Path(__file__).resolve().parents[1] / 'tools/tbdr_budget.py'))
 

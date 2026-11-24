@@ -1,8 +1,8 @@
 // Initial ASTC image data exists before registration in a CPU_UNCACHED or CPU_CACHED pool, with no flush.
 // Every mip must sample its literal color at first use. The storage stays the content: a later CPU write is
 // re-uploaded, and a new texture object over rewritten storage samples the new data, not the earlier upload.
-// An uncompressed 3D texture with no IMAGE / COMPRESSIBLE flag is taken from its storage the same way (Xenoblade Chronicles 3's 10x10x10
-// particle steering fields, GitHub issue #1011); with IMAGE it stays a GPU texture. IMAGE does not keep a block-compressed texture out (Pokemon Pokopia's icons).
+// An uncompressed 3D texture with no IMAGE / COMPRESSIBLE flag is taken from its storage the same way; with IMAGE it stays a GPU texture. IMAGE does not keep a
+// block-compressed texture out.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -44,7 +44,7 @@ static void run(int format, uint64_t serial, uint32_t pool_flags, int c0, uint32
     if (!late_fill) fill(&t,mem,c0);
     mtl_tex_init(&t);
     if (late_fill) {
-        // Bloodstained resolves textures with sparse layout in ordinary CPU-visible storage before filling them.
+        // A game may resolve textures with sparse layout in ordinary CPU-visible storage before filling them.
         mtl_sub_begin();
         CHECK("unfilled sparse-layout ASTC texture resolves", tex_mtl(&t) != nil);
         finish();
@@ -67,7 +67,7 @@ static void run(int format, uint64_t serial, uint32_t pool_flags, int c0, uint32
         uint8_t stored[64];
         CHECK("a GPU copy is written back to sparse-layout storage", !nvn_deswizzle(&t.d, 0, 0, mem, stored, 32) && !memcmp(stored, staging, sizeof stored));
     }
-    // A new texture object with the same description over the rewritten storage (GitHub issue #568): its own upload, not the earlier object's texture
+    // A new texture object with the same description over the rewritten storage: its own upload, not the earlier object's texture
     dm_guest_write_prepare(mem,t.L.size);fill(&t,mem,c0+2);
     tex_t u=t;u.serial=serial+100;mtl_tex_init(&u);mtl_sub_begin();id<MTLTexture> other=tex_mtl(&u);finish();
     expect(other,c0+2,"a new object over rewritten storage samples the new data");
@@ -104,7 +104,7 @@ static void run3d(uint64_t serial, uint32_t tex_flags, int want) {
 int main(void){@autoreleasepool{mtl_init();
     const uint32_t uncached=NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED,cached=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED;
     run(NVN_FORMAT_RGBA_ASTC_6x6,9750,uncached,0,0);run(NVN_FORMAT_RGBA_ASTC_6x6_SRGB,9751,uncached,0,0);run(NVN_FORMAT_RGBA_ASTC_6x6,9752,cached,3,0);
-    run(NVN_FORMAT_RGBA_ASTC_6x6,9753,uncached,1,NVN_TEXTURE_FLAGS_IMAGE);   // IMAGE on a block-compressed format: shaders cannot write it (Pokemon Pokopia's icons)
+    run(NVN_FORMAT_RGBA_ASTC_6x6,9753,uncached,1,NVN_TEXTURE_FLAGS_IMAGE);   // IMAGE on a block-compressed format: shaders cannot write it
     run(NVN_FORMAT_RGBA_ASTC_6x6_SRGB,9754,uncached,2,NVN_TEXTURE_FLAGS_SPARSE);
     run3d(9760,0,1);run3d(9761,NVN_TEXTURE_FLAGS_IMAGE,0);
     printf("t_initial_uncached: %d checks, %d failed\n",checks,failed);return failed!=0;}}

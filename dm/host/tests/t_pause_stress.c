@@ -1,7 +1,7 @@
-// Stop-the-world stress, modelled on IL2CPP's Boehm collector: workers alternate a real SVC (SleepThread through the gate's thr_svc_enter / svc_thread / thr_svc_leave) with bursts of "guest
-// code" that read a shared object word; a collector pauses every worker (SetThreadActivity), reads each context (GetThreadContext3), sets bit 0 of the object word (the liveness mark
-// that turns a klass pointer into klass|1) and checks that no worker ran meanwhile, then resumes them. A worker that runs while the world is stopped is the bug: FMOD's stream thread
-// jumped through klass|1. Usage: t_pause_stress [--seconds N] [--cycles N]; exit status 1 on any violation or a stuck pause.
+// Stop-the-world stress in the shape of a conservative collector's: workers alternate a real SVC (SleepThread through the gate's thr_svc_enter / svc_thread / thr_svc_leave) with
+// bursts of "guest code" that read a shared object word; a collector pauses every worker (SetThreadActivity), reads each context (GetThreadContext3), sets bit 0 of the object
+// word (the liveness mark that turns a klass pointer into klass|1) and checks that no worker ran meanwhile, then resumes them. A worker that runs while the world is stopped is
+// the bug: it would jump through klass|1. Usage: t_pause_stress [--seconds N] [--cycles N]; exit status 1 on any violation or a stuck pause.
 // Build with -DDM_TEST_MODULE_OF: module_of reports guest code through a thread-local flag, so the SIGUSR2 handler stops a worker only inside a burst.
 #include "../hle_thread.c"
 #include <stdarg.h>
@@ -17,7 +17,7 @@ static _Atomic uint64_t viol[V_KINDS];
 static _Atomic int64_t viol_cycle[V_KINDS], viol_worker[V_KINDS];   // first occurrence (-1: none)
 static _Atomic uint64_t g_cycle;
 static const char *_Atomic g_phase = "start";
-static _Atomic uint64_t object_word;   // the collector's mark bit lives here, as IL2CPP's liveness sets bit 0 of an object's klass word
+static _Atomic uint64_t object_word;   // the collector's mark bit lives here, as a collector's liveness mark sets bit 0 of an object's klass word
 static _Atomic int g_stop;
 
 static void violation(int kind, int worker) {

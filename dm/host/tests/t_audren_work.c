@@ -165,7 +165,7 @@ int main(void) {
         if (route) {
             assert((uint8_t *)sdk_event >= (uint8_t *)g_rev && (uint8_t *)sdk_event < (uint8_t *)(g_rev + 4));
             assert(g_ar[0].handle[1] == (event_in_handle ? sdk_event : (uint8_t *)sdk_work + 0x80));
-            memset(event, 0xee, sizeof event);   // the game may reuse its object at once (LEGO Star Wars: on its stack; Little Nightmares): nothing refers to it
+            memset(event, 0xee, sizeof event);   // the game may reuse its object at once (on its stack, for one): nothing refers to it
         }
         int d = event_destroys;
         h_ar_Close(handle[0], handle[1]);
@@ -199,7 +199,7 @@ int main(void) {
         h_ar_Close(handle[0], handle[1]);
     }
     free(work);
-    // The output device notification: a second acquire is refused until a release, which destroys the event as the SDK's does (Nintendo Switch Sports Resort, main+0x3af119c)
+    // The output device notification: a second acquire is refused until a release, which destroys the event as the SDK's does
     h_ad_NotifyRelease21(notify_event);   // never acquired: nothing to destroy
     assert(notify_destroys == 0);
     assert(h_ad_Notify21(notify_event) == RES_OK);

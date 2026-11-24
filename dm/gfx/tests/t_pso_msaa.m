@@ -1,6 +1,6 @@
 // A pipeline drawn in a multisampled pass carries the pass's sample count, through the production pass setup, pipeline lookup and Metal 4 base specialization.
 // newRenderPipelineDescriptorForSpecialization returns its fixed state at the defaults (1 sample, alpha to coverage off, no input primitive class, amplification count 1): specialized from it as it came, the pipeline
-// reads as 1-sample, and Metal's API validation (MTL_DEBUG_LAYER=1, which the Makefile check sets) stops at its bind in a 4x pass. PRAGMATA's 4x depth-only passes did.
+// reads as 1-sample, and Metal's API validation (MTL_DEBUG_LAYER=1, which the Makefile check sets) stops at its bind in a 4x pass.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

@@ -80,7 +80,8 @@ class Nvn2Only(unittest.TestCase):
                                     ('geo.bnsh', fz.bnsh_of([[(8, *fz.VS), (0x20, *fz.stage(0x1061))]])[0], 'a geometry shader')):
                 path = Path(t) / name; path.write_bytes(data)
                 with self.subTest(name=name), self.assertRaisesRegex(ss.Refused, r'^\[RED\] /' + re.escape(name) + '.*' + why): ss.scan_file((str(path), name))
-            cut = Path(t) / 'cut.bnsh'; cut.write_bytes((REPO / 'dm/tools/fuzz/corpus/shader_split/bnsh-far-pointer.bin').read_bytes())   # a damaged file: left out with its red line, as before
+            cut = Path(t) / 'cut.bnsh'   # a damaged file: left out with its red line
+            cut.write_bytes((REPO / 'dm/tools/fuzz/corpus/shader_split/bnsh-far-pointer.bin').read_bytes())
             with contextlib.redirect_stdout(io.StringIO()) as said: got = ss.scan_file((str(cut), 'cut.bnsh'))
             self.assertEqual(got[3][0], 'unreadable'); self.assertIn('[RED] ', said.getvalue())
 

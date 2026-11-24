@@ -1,5 +1,5 @@
-// An attachment-less draw of four full-screen triangles whose fragment shader stores into the layer its primitive ID names (Fire Emblem Fortune's Weave's deinterleaved
-// ambient occlusion, b6726be4afc44691): every layer of the array image must be written, through the host's own draw path
+// An attachment-less draw of four full-screen triangles whose fragment shader stores into the layer its primitive ID names (as a deinterleaved ambient occlusion pass does):
+// every layer of the array image must be written, through the host's own draw path
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

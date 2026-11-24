@@ -111,7 +111,7 @@ static void image_case(int tid) {
     read_check(tid, view, (const float[8]){px[0]/255.f, px[1]/255.f, px[2]/255.f, 1, px[4]/255.f, px[5]/255.f, px[6]/255.f, 1}, 0.001f);
 }
 // A plain texture filled once from its pool (tex_init_fill): guest bits uploaded in Metal's order, so it reads right with no swap, and a later Metal render into part of it
-// leaves the rest as uploaded (GitHub issue #183: Tears of the Kingdom's Depths walls). The guest storage keeps the guest's bits
+// leaves the rest as uploaded. The guest storage keeps the guest's bits
 static void init_fill_case(int tid, int format, int pool_flags) {
     tex_t t = {.magic=MAGIC('T','E','X',0), .serial=98000+(unsigned)tid};
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .flags=pool_flags | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
@@ -217,7 +217,7 @@ int main(void) { @autoreleasepool {
         init_fill_case(416 + i, packed[i], NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED);
         init_fill_case(420 + i, packed[i], NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS);
     }
-    // RGBA4: R, G, B, A from bit 0 up (Metal's ABGR4 holds them reversed), every nibble different; (B, G, R, A) is Super Mario RPG's shadowmask mapping
+    // RGBA4: R, G, B, A from bit 0 up (Metal's ABGR4 holds them reversed), every nibble different; (B, G, R, A) is a shadow mask's mapping
     uint16_t rgba4[2] = {0x8421, 0x0f00};
     uint8_t bgra[4] = {NVN_SWZ_B, NVN_SWZ_G, NVN_SWZ_R, NVN_SWZ_A};
     float rgba4f[8] = {1/15.f,2/15.f,4/15.f,8/15.f, 0,0,1,0}, bgra4f[8] = {4/15.f,2/15.f,1/15.f,8/15.f, 1,0,0,0};

@@ -1,4 +1,4 @@
-// Raw HID gamepads (pad_hid.h, GitHub issue #637): the default map and DM_HID_MAP, the Xbox 360 layout of virtual pads (issue #2465), report 0x3F's map, raw sticks and Nintendo's descriptor (PR #989), hat directions, axis scaling, the stick dead zone and analog triggers
+// Raw HID gamepads (pad_hid.h): the default map and DM_HID_MAP, the Xbox 360 layout of virtual pads, report 0x3F's map, raw sticks and Nintendo's descriptor, hat directions, axis scaling, the stick dead zone and analog triggers
 #include <stdio.h>
 #include "../pad_hid.h"
 
@@ -67,7 +67,7 @@ int main(void) {
     h.has[PH_Z] = 0; h.has[PH_RX] = 1; h.axis[PH_RX] = -1; pad_hid_sticks(&h, s); CHECK(s[2] == -DM_STICK_MAX && s[3] == 0);   // Rx / Ry without Z
     h.has[PH_ACCEL] = 1; h.axis[PH_ACCEL] = -1; CHECK(!(pad_hid_buttons(&h) & DM_BTN_ZR));
     h.axis[PH_ACCEL] = pad_hid_norm(200, 0, 255); CHECK(pad_hid_buttons(&h) & DM_BTN_ZR);
-    // The Xbox 360 layout (a virtual 045e:028e pad read as HID, Steam Link's GamePad-N, issue #2465): one-at-a-time presses of a GameSir G8 through Steam Link as macOS
+    // The Xbox 360 layout (a virtual 045e:028e pad read as HID, Steam Link's GamePad-N): one-at-a-time presses of a GameSir G8 through Steam Link as macOS
     // delivered them: bottom, right, top, left, back, start, LB, RB, then the d-pad up, right, down, left
     uint8_t has[PH_AXES] = {[PH_X] = 1, [PH_Y] = 1, [PH_Z] = 1, [PH_RX] = 1, [PH_RY] = 1, [PH_RZ] = 1};
     CHECK(pad_hid_layout_for(0, 0x045e, 0x028e, has) == PAD_HID_X360);

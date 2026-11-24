@@ -1,4 +1,4 @@
-"""Residency by command buffer (nvn_mtl.m res_name, PR #2715): the NVN layer attaches no residency set to a queue, and every command buffer it commits names the host's sets itself.
+"""Residency by command buffer (nvn_mtl.m res_name): the NVN layer attaches no residency set to a queue, and every command buffer it commits names the host's sets itself.
 A command buffer that ended or was made outside the two helpers would read memory outside its residency, a GPU fault, so this checks the sources: no addResidencySet, endCommandBuffer
 only in cb_end (and the recorder's stand-in, which records it for cb_end on the encode thread), commandBuffer on g_q only in cl_cb. dm/gfx/tests/t_res_cb.m checks the paths at run
 time. No compiler, GPU or game files needed."""

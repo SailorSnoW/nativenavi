@@ -1,6 +1,4 @@
-// The set of CPU-written textures (mtl_tex_cpu_written, tex_cpu_written, mtl_tex_release): membership, no duplicates, a released texture leaving it, and lookups of textures
-// not in it staying cheap with thousands of consecutive serials in it (a CFSet that hashed serials as numbers probed a whole bucket run per miss: half of Batman: Arkham Knight's
-// rendering thread with 6,442 CPU-written textures)
+// The set of CPU-written textures: membership, no duplicates, release, and cheap misses with thousands of consecutive serials in it.
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
@@ -85,8 +83,7 @@ static void finalized_upload(int write_after_record) {
     h_nvnCommandBufferCopyTextureToBuffer(&cmd, &tex, NULL, &region, (uint64_t)mem+131072, 0);
     NVNcommandHandle handle = h_nvnCommandBufferEndRecording(&cmd);
     if (write_after_record) h_nvnTextureWriteTexels(&tex, NULL, &region, pixels);
-    // Cached descriptor views must not own every upload after its API object
-    // is finalized. Two IDs and a compatible view exercise all lookup caches.
+    // Cached descriptor views must not own every upload after the API object is finalized; two IDs and a compatible view exercise all lookup caches.
     mtl_reg_tex(2, (const tex_t *)&tex, NULL);
     mtl_sub_begin();
     id<MTLTexture> before = tex_by_id(1), second = tex_by_id(2); uint64_t compatible_id = 0;
@@ -96,7 +93,6 @@ static void finalized_upload(int write_after_record) {
     h_nvnTextureFinalize(&tex);
     CHECK(mtl_cpu_tex_count() == 0, "finalized texture leaves the live CPU set");
     CHECK(!g_treg[1].view && !g_treg[2].view && !g_treg[2].alt, "finalization retires every descriptor's cached views");
-    // Reuse the API object: commands and registered descriptors must use their snapshots.
     memset(&tex, 0xa5, sizeof tex);
     state_reset(); memset(&R,0,sizeof R); mtl_sub_begin(); mtl_exec(nvn_rec_linear(handle, NULL));
     CHECK(mtl_wait(mtl_sub_commit(),5000000000ull), "recorded texture readback completed");
@@ -107,7 +103,7 @@ static void finalized_upload(int write_after_record) {
     CHECK(tex_fit(2, tex_by_id(2), MTLTextureType2DArray, &compatible_id), "late compatible view resolves");
     CHECK(mtl_wait(mtl_sub_commit(),5000000000ull), "registered descriptor upload completed");
     CHECK(!g_treg[1].view && !g_treg[2].view && !g_treg[2].alt, "late descriptor views retire at submission end");
-    // Resolve again: a retired serial may already hold an NvPkg in the ghost cache.
+    // a retired serial may already hold an NvPkg in the ghost cache
     mtl_sub_begin(); mtl_exec(nvn_rec_linear(handle, NULL));
     CHECK(mtl_wait(mtl_sub_commit(),5000000000ull), "recorded snapshot can be replayed again");
     CHECK(!memcmp(mem+131072, pixels, sizeof pixels), "replayed retired snapshot keeps its CPU content");
@@ -116,9 +112,7 @@ static void finalized_upload(int write_after_record) {
     CHECK(!tex_cpu_written(&snap), "pool finalization drops retired CPU classification");
     defer_drain(); munmap(mem,len);
 }
-// nvnMemoryPoolFinalize on a game thread while the submit thread walks the texture IDs (pool_gpu, holding g_rmu): the finalize dropped the pool's CPU-written classification before it
-// marked the pool's IDs gone, so a walk in between found a live ID, a pool still set and a texture no longer CPU-written, and tex_mtl_ handed out its packaged entry (an NvPkg) as the
-// texture: "-[NvPkg buffer]: unrecognized selector" in tex_by_id (Ocarina of Time, reference/nvn-objects.md). Here the test holds g_rmu as the walk does while another thread finalizes
+// A pool finalize must mark its IDs gone before dropping its CPU-written classification, or a walk under g_rmu hands out an NvPkg as the texture (reference/nvn-objects.md).
 static void *finalize_pool(void *pool) { h_nvnMemoryPoolFinalize((NVNmemoryPool *)pool); return NULL; }
 static void finalize_during_walk(void) {
     const size_t len = 262144;
@@ -141,7 +135,7 @@ static void finalize_during_walk(void) {
     CHECK(first && first.width == 4, "the packaged texture resolves");
     CHECK([tex_get(serial) isKindOfClass:[NvPkg class]], "its table entry is an NvPkg");
     pthread_t th; pthread_create(&th, NULL, finalize_pool, &pool);
-    usleep(100000);   // the finalize runs as far as it can while the walk holds g_rmu
+    usleep(100000);
     CHECK(tex_cpu_written((const tex_t *)&tex), "the pool's classification stays while a walk can still find its IDs live");
     id again = tex_mtl((const tex_t *)&tex);
     CHECK(again && ![again isKindOfClass:[NvPkg class]], "tex_mtl does not hand out the NvPkg during the finalize");
@@ -155,7 +149,7 @@ static void finalize_during_walk(void) {
     defer_drain(); munmap(mem,len);
 }
 #if DM_GAME_TEX_DIRTY_UPLOAD
-// nvn_ft_poll: a registered texture whose storage the GPU wrote after the CPU's rewrite is left to the GPU and stays registered, so the CPU's next rewrite is still uploaded
+// a texture the GPU wrote after the CPU's rewrite stays registered, so the CPU's next rewrite is still uploaded
 static void poll_asks_again(void) {
     const size_t len = 1 << 20;
     uint8_t *mem = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -178,9 +172,7 @@ static void poll_asks_again(void) {
     h_nvnTextureFinalize(&tex); h_nvnMemoryPoolFinalize((NVNmemoryPool *)&pool);
     defer_drain(); munmap(mem, len);
 }
-// Writes beside a registered texture (ft_written): storage 0x200 past a host page shares its first and last pages with other data. A write there leaves the texture registered and
-// not CPU-written, at the poll and at first use (nvn_ft_written); a write of the texture's own bytes in those pages, or of a page wholly inside it, is still taken as written.
-// The Great Ace Attorney Chronicles' window textures and render targets lie so beside textures it fills from the CPU, and were all made CPU-written
+// A write beside a registered texture in its shared first or last page leaves it not CPU-written; a write of its own bytes there is taken.
 static void poll_beside(void) {
     const size_t len = 4 << 20, pg = (size_t)getpagesize(), off = 4 * pg + 0x200;
     uint8_t *mem = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -192,31 +184,29 @@ static void poll_beside(void) {
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, (ptrdiff_t)off);
     CHECK(h_nvnTextureInitialize(&a, &tb), "texture a initialized");
     tex_t *ta = (tex_t *)&a;
-    size_t boff = (off + ta->L.size + 2 * pg) & ~(pg - 1); boff += 0x200;   // b: two pages on, 0x200 past a page too
+    size_t boff = (off + ta->L.size + 2 * pg) & ~(pg - 1); boff += 0x200;
     h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, (ptrdiff_t)boff);
     CHECK(h_nvnTextureInitialize(&b, &tb), "texture b initialized");
     tex_t *tb_ = (tex_t *)&b;
     CHECK(ta->L.size > 2 * pg && nvn_ft_tracked(ta->serial) && nvn_ft_tracked(tb_->serial), "both registered, each with pages wholly inside");
-    // beside a: the bytes before it in its first page, and after it in its last
     uint8_t *before = ta->mem - 0x100, *after = ta->mem + ta->L.size + 0x40;
     dm_guest_write_prepare(before, 0x100); memset(before, 0x5a, 0x100);
     dm_guest_write_prepare(after, 0x40); memset(after, 0x5a, 0x40);
     nvn_ft_poll();
     CHECK(!tex_cpu_written(ta) && nvn_ft_tracked(ta->serial), "a write beside it, in the pages it shares, does not make it CPU-written (poll)");
-    dm_guest_write_prepare(after, 0x40); memset(after, 0x33, 0x40);   // again, after the restamp
+    dm_guest_write_prepare(after, 0x40); memset(after, 0x33, 0x40);
     nvn_ft_poll();
     CHECK(!tex_cpu_written(ta) && nvn_ft_tracked(ta->serial), "nor a second write beside it");
     dm_guest_write_prepare(ta->mem + ta->L.size - 4, 4); ta->mem[ta->L.size - 1] ^= 0xff;
     nvn_ft_poll();
     CHECK(tex_cpu_written(ta) && !nvn_ft_tracked(ta->serial), "a write of its own bytes in its last page is uploaded");
-    // b at first use: a write beside it, then one into a page wholly inside it
     uint8_t *bb = tb_->mem - 0x80;
     dm_guest_write_prepare(bb, 0x80); memset(bb, 0x11, 0x80);
     CHECK(!nvn_ft_written(tb_) && nvn_ft_tracked(tb_->serial) && !tex_cpu_written(tb_), "a write beside it does not make it CPU-written at first use");
     uint8_t *mid = (uint8_t *)(((uintptr_t)tb_->mem + 2 * pg) & ~(uintptr_t)(pg - 1));
     dm_guest_write_prepare(mid, 1); mid[0] = 1;
     CHECK(nvn_ft_written(tb_) && tex_cpu_written(tb_), "a write of a page wholly inside it does");
-    // c: COMPRESSIBLE (out of the first-use rule, as GAAC's targets), resolved as a GPU texture that can be rendered into: a write beside it does not make it CPU-written
+    // c: COMPRESSIBLE (out of the first-use rule), renderable: a write beside it does not make it CPU-written
     size_t coff = (boff + tb_->L.size + 2 * pg) & ~(pg - 1); coff += 0x200;
     NVNtexture c = {0};
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_COMPRESSIBLE); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, (ptrdiff_t)coff);
@@ -236,15 +226,13 @@ static void poll_asks_again(void) { printf("poll_asks_again: skipped, the profil
 static void poll_beside(void) { printf("poll_beside: skipped, the profile has no tex_dirty_upload\n"); }
 #endif
 static int resident(id o) { pthread_mutex_lock(&g_res_mu); int r = [g_res_objects containsObject:o]; pthread_mutex_unlock(&g_res_mu); return r; }
-static void settle(void) { for (int i = 0; i < 2; i++) { g_fence++; pthread_mutex_lock(&g_mu); g_done = g_fence; pthread_mutex_unlock(&g_mu); defer_drain(); } }   // the GPU passed every fence
-// The GPU's first write over a texture taken from its storage (cpu_unc_drop): every serial that held the package now holds its texture, the package goes, and the serials go one by
-// one, the last through the ghost table. The texture stays resident while any serial entry, live or finalized, holds it, and leaves the residency set with the last. Ocarina of Time's
-// 260x260 terrain tiles handed over this way left the set with the package, or with the first holder a ghost eviction dropped, while still drawn: GPU address faults (#1326)
+static void settle(void) { for (int i = 0; i < 2; i++) { g_fence++; pthread_mutex_lock(&g_mu); g_done = g_fence; pthread_mutex_unlock(&g_mu); defer_drain(); } }
+// The GPU's first write over a texture from its storage (cpu_unc_drop): it stays resident while any serial entry, live or ghost, holds it; leaving earlier is a GPU address fault.
 static void handover_holders(void) {
     const size_t len = 262144;
     uint8_t *mem = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (mem == MAP_FAILED) abort();
-    memset(mem + 65536, 0x5a, 4096);   // what the CPU wrote before the first use
+    memset(mem + 65536, 0x5a, 4096);
     pool_t pool = {0}; pool_builder_t pb = {.mem=mem, .size=len, .flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool *)&pool, (const NVNmemoryPoolBuilder *)&pb), "hand-over: pool initialized");
     NVNtextureBuilder tb = {0}; NVNtexture a = {0}, b = {0}; h_nvnTextureBuilderSetDefaults(&tb);
@@ -255,7 +243,7 @@ static void handover_holders(void) {
     mtl_sub_begin();
     id<MTLTexture> ta = tex_mtl((const tex_t *)&a), tb2 = tex_mtl((const tex_t *)&b);
     CHECK(ta && ta == tb2 && [tex_get(sa) isKindOfClass:[NvPkg class]] && tex_get(sa) == tex_get(sb), "hand-over: both resolve to one package taken from the storage");
-    mtl_tex_gpu_written((const tex_t *)&a);   // the GPU writes over the storage
+    mtl_tex_gpu_written((const tex_t *)&a);
     cpu_unc_drop();
     CHECK(tex_get(sa) == (id)ta && tex_get(sb) == (id)ta, "hand-over: both serials hold the package's texture");
     NVNtexture c = {0}; CHECK(h_nvnTextureInitialize(&c, &tb), "hand-over: a new texture object over the same storage");
@@ -266,10 +254,10 @@ static void handover_holders(void) {
     CHECK(resident(ta), "hand-over: the package's release leaves the texture resident for its serials");
     h_nvnTextureFinalize(&a); settle();
     CHECK(resident(ta), "hand-over: one serial's release leaves it resident for the other");
-    tex_put(sa, ta);   // a record of the finalized object replayed: its serial resolves through the ghost table
+    tex_put(sa, ta);
     h_nvnTextureFinalize(&b); settle();
     CHECK(resident(ta), "hand-over: a finalized serial in the ghost table keeps it resident");
-    atomic_fetch_add(&g_cur_frame, GHOST_IDLE);   // not resolved for that long: the entries that come past NGHOST evict it
+    atomic_fetch_add(&g_cur_frame, GHOST_IDLE);
     for (uint64_t i = 0; i < NGHOST; i++) tex_put((1ull << 61) + i, [NSObject new]);
     settle();
     pthread_mutex_lock(&g_smu); int left = own_stats_locked().retire_wait; pthread_mutex_unlock(&g_smu);
@@ -278,33 +266,28 @@ static void handover_holders(void) {
     CHECK(!resident(tc), "hand-over: the pool's own texture goes with the pool");
     munmap(mem, len);
 }
-// Retirement's two conditions, one after the other: the queue waits for the fence of the submission in flight at the retirement (completion), then asks the owner (eligibility,
-// own_retire_locked). An object an entry holds waits in the owner; its last count going hands it back behind the submission then in flight, so the entry's last encodings complete
-// before it leaves the residency set. The entry here holds a view of the texture (an sRGB / linear twin's): the entry's own drop retires the view, and only the owner's hand-back
-// retires the texture. One step of the GPU: fence() passes one fence
+// Retirement: the queue waits for the fence of the submission in flight, then asks the owner (own_retire_locked); an object an entry holds waits in the owner.
 static void fence(void) { g_fence++; pthread_mutex_lock(&g_mu); g_done = g_fence; pthread_mutex_unlock(&g_mu); defer_drain(); }
 static void retire_after_completion(void) {
     id<MTLTexture> x = [g_dev newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:4 height:4 mipmapped:NO]];
     res_add(x); res_commit();
-    uint64_t k = (1ull << 62) + 990001; tex_put(k, [x newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm]);   // a serial's entry holds a view of it
+    uint64_t k = (1ull << 62) + 990001; tex_put(k, [x newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm]);
     pthread_mutex_lock(&g_smu); uint32_t w0 = own_stats_locked().retire_wait; pthread_mutex_unlock(&g_smu);
-    defer_obj_release(x);   // retired: behind the submission now in flight
+    defer_obj_release(x);
     defer_drain();
     CHECK(resident(x), "retire: before its fence passes, a retired texture stays resident (the queue does not ask the owner yet)");
     fence();
     pthread_mutex_lock(&g_smu); uint32_t w1 = own_stats_locked().retire_wait; pthread_mutex_unlock(&g_smu);
     CHECK(resident(x) && w1 == w0 + 1, "retire: its fence passed, an entry still holds it: it stays resident and waits in the owner");
-    serial_del(k);   // the last entry goes: handed back behind the submission in flight
+    serial_del(k);
     pthread_mutex_lock(&g_smu); uint32_t w2 = own_stats_locked().retire_wait; pthread_mutex_unlock(&g_smu);
     defer_drain();
     CHECK(resident(x) && w2 == w0, "retire: handed back, it stays resident until the submission in flight when its last entry went completes");
     fence(); res_commit();
     CHECK(!resident(x), "retire: then it leaves the residency set");
 }
-// The same two conditions across threads, as the host runs them: a completion handler's drain (defer_drain, its try of g_smu) while the submit thread's entries come
-// and go. One live entry holds a view of the texture throughout, so whatever the interleaving it must never leave the residency set; the other thread retires it again
-// and again and passes fences. When that entry goes too, the owner hands the texture back and it leaves after the next fence. TSan: the shared state is the owner's
-// (under g_smu), the queue's (g_deferred_mu) and the residency set's (g_res_mu)
+// The same across threads: one live entry holds a view throughout, so the texture never leaves the residency set until it goes.
+// TSan: shared state is under g_smu (owner), g_deferred_mu (queue) and g_res_mu (residency set).
 enum { CHURN = 4000 };
 static _Atomic int g_churn_done, g_lost_residency;
 static id<MTLTexture> g_churn_x;
@@ -321,7 +304,7 @@ static void retire_across_threads(void) {
     tex_put(hold, [x newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm]);
     pthread_t t; atomic_store(&g_churn_done, 0); atomic_store(&g_lost_residency, 0);
     pthread_create(&t, NULL, retirer, NULL);
-    for (int i = 0; i < CHURN; i++) {   // the texture, a view of it, a finalized serial's ghost entry: put and taken away
+    for (int i = 0; i < CHURN; i++) {
         id o = i % 3 == 0 ? (id)x : (id)[x newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
         tex_put(i % 3 == 2 ? ghost : churn, o);
         serial_del(churn);
@@ -329,7 +312,7 @@ static void retire_across_threads(void) {
     }
     atomic_store(&g_churn_done, 1); pthread_join(t, NULL);
     CHECK(!atomic_load(&g_lost_residency) && resident(x), "across threads: held by a live entry's view, the texture never left the residency set");
-    atomic_fetch_add(&g_cur_frame, GHOST_IDLE);   // idle, the ghost entry goes as newer ones come
+    atomic_fetch_add(&g_cur_frame, GHOST_IDLE);
     for (uint64_t i = 0; i < NGHOST; i++) tex_put((1ull << 61) + 1000 + i, [NSObject new]);
     serial_del(hold); defer_drain(); fence(); fence(); res_commit();
     pthread_mutex_lock(&g_smu); uint32_t waiting = own_stats_locked().retire_wait; char why[256] = ""; int ok = own_check_locked(why, sizeof why); pthread_mutex_unlock(&g_smu);
@@ -339,8 +322,7 @@ static void retire_across_threads(void) {
     g_churn_x = nil;
     }
 }
-// A CPU write published through a buffer must be visible to a texture sharing its
-// storage. Compare no flush, a direct pool flush, and a buffer-relative flush.
+// a CPU write published through a buffer must be visible to a texture sharing its storage
 static void flushed_buffer_upload(int flush_kind) {
     const size_t len = 262144, buffer_off = 65536, flush_off = 4096, output_off = 131072;
     uint8_t *mem = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -354,14 +336,12 @@ static void flushed_buffer_upload(int flush_kind) {
     CHECK(h_nvnBufferInitialize(&buffer, &bb), "flush test buffer initialized at nonzero pool offset");
     NVNtextureBuilder tb = {0}; NVNtexture tex = {0};
     h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 4); h_nvnTextureBuilderSetHeight(&tb, 4);
-    // Storage images may be GPU-written, so their contents are not inferred from
-    // CPU storage at first use. Only an explicit flush publishes this upload.
+    // storage images may be GPU-written, so only an explicit flush publishes this upload
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetStorage(&tb, &pool, buffer_off + flush_off);
     uint8_t pixels[64], zeros[64] = {0}; for (int i=0;i<64;i++) pixels[i]=(uint8_t)(i+32);
-    // Fill before registration so a dirty-upload profile cannot infer publication
-    // from a later write. TextureWriteTexels would bypass the flush path as well.
-    nvn_texdesc stored = ((const tex_builder_t *)&tb)->d; stored.gob_order = 1;   // the block order the texture takes at TextureInitialize: NVN2's, as its builder names no device with X1 order
+    // filled before registration so a dirty-upload profile cannot infer publication from a later write
+    nvn_texdesc stored = ((const tex_builder_t *)&tb)->d; stored.gob_order = 1;   // NVN2's block order: the builder names no device with X1 order
     CHECK(nvn_swizzle(&stored, 0, 0, pixels, 16, mem + buffer_off + flush_off) == 0, "CPU pixels swizzled into buffer storage");
     CHECK(h_nvnTextureInitialize(&tex, &tb), "flush test texture initialized without packaged layout");
     const tex_t *t = (const tex_t *)&tex;
@@ -383,8 +363,7 @@ static void flushed_buffer_upload(int flush_kind) {
     CHECK(!nvn_flushed(mem + buffer_off + flush_off, 1), "pool finalization retires buffer flush ranges");
     defer_drain(); munmap(mem,len);
 }
-// Per-pool CPU-written tables: a pool that lives on collects retired classifications, and a Finalize of another pool drops only its own table without walking other pools' entries
-// (walking all three global tables under g_cpu_tex_mu grew Ocarina of Time pause-menu save loads from 80 to 640 ms over 200 loads)
+// A Finalize drops only its own pool's CPU-written table, without walking other pools' entries.
 static void pool_index(void) {
     enum { M = 200000, DROPS = 1000 };
     static uint8_t mem[3]; pool_t pools[3] = {{.mem=&mem[0]}, {.mem=&mem[1]}, {.mem=&mem[2]}};
@@ -418,13 +397,13 @@ int main(int argc, const char **argv) { @autoreleasepool {
     q.serial = BASE;
     CHECK(mtl_cpu_tex_count() == 0 && !tex_cpu_written(&q), "empty at start");
     for (int i = 0; i < N; i++) mtl_tex_cpu_written(&t[i]);
-    mtl_tex_cpu_written(&t[7]);   // again: no duplicate
+    mtl_tex_cpu_written(&t[7]);
     CHECK(mtl_cpu_tex_count() == N, "every CPU-written texture counted once");
     int in = 0; for (int i = 0; i < N; i++) in += tex_cpu_written(&t[i]);
     CHECK(in == N, "every one found");
     tex_t qlo = {.serial = BASE - 1}, qhi = {.serial = BASE + N}, qz = {.serial = 0};
     CHECK(!tex_cpu_written(&qlo) && !tex_cpu_written(&qhi) && !tex_cpu_written(&qz), "serials outside the set are not in it");
-    // Misses: a million lookups of serials past the set, as every resolve of a GPU-only texture asks. With the old set's probing this took seconds; with a mixed hash, far less
+    // a million misses past the set: a hash that does not mix serials takes seconds here
     uint64_t t0 = bp_now(); int hits = 0;
     for (int i = 0; i < 1000000; i++) { q.serial = BASE + N + 1 + (uint64_t)i; hits += tex_cpu_written(&q); }
     double ms = (bp_now() - t0) / 1e6;
@@ -437,7 +416,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
     tex_t z = {0}; mtl_tex_cpu_written(&z);
     CHECK(mtl_cpu_tex_count() == N - 2, "a texture with no serial is not recorded");
     for (int i=0;i<N;i++) mtl_tex_release(&t[i]);
-    // NVNtexture is plain data: finalizing a copy ends the copy. The texture stays live while the object it was initialized in holds it; if that object no longer does, the copy was the last one
+    // NVNtexture is plain data: finalizing a copy ends the copy; the texture lives while its original object holds it
     static tex_t own, cpy, moved;
     own.magic = MAGIC('T', 'E', 'X', 0); own.serial = 900001; own.d = t[0].d; mtl_tex_init(&own); mtl_tex_cpu_written(&own);
     cpy = own; mtl_tex_release(&cpy);

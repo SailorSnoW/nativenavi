@@ -20,7 +20,7 @@ static void run_case(int format) {
     NVNtextureBuilder tb = {0}; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
     h_nvnTextureBuilderSetHeight(&tb, 90); h_nvnTextureBuilderSetFormat(&tb, format);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR); h_nvnTextureBuilderSetStride(&tb, 640);
-    h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 65536); EXPECT("linear texture init", 1, h_nvnTextureInitialize(&tex, &tb));
+    h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, 65536); EXPECT("linear texture init", 1, h_nvnTextureInitialize(&tex, &tb));
     id<MTLTexture> t = tex_mtl((const tex_t *)&tex);
     printf("LINEAR format=%#x Metal=%lu minimumAlignment=%lu bufferBacked=%d row=640\n", format, (unsigned long)t.pixelFormat,
         (unsigned long)[g_dev minimumLinearTextureAlignmentForPixelFormat:t.pixelFormat], t.buffer != nil);
@@ -37,8 +37,8 @@ static void run_case(int format) {
     id<MTLCommandBuffer> cb = q_cb(); id<MTLComputeCommandEncoder> en = [cb computeCommandEncoder]; [en setComputePipelineState:ps]; [en setTexture:image atIndex:0];
     [en dispatchThreads:MTLSizeMake(160,90,1) threadsPerThreadgroup:MTLSizeMake(8,8,1)]; [en endEncoding]; [cb commit]; [cb waitUntilCompleted];
     EXPECT("image compute complete", MTLCommandBufferStatusCompleted, cb.status);
-    h_nvnMemoryPoolInvalidateMappedRange((const NVNmemoryPool *)&pool, 65536, 640*90);
-    uint8_t *map = (uint8_t *)h_nvnMemoryPoolMap((const NVNmemoryPool *)&pool) + 65536; int bad = 0;
+    h_nvnMemoryPoolInvalidateMappedRange((NVNmemoryPool *)&pool, 65536, 640*90);
+    uint8_t *map = (uint8_t *)h_nvnMemoryPoolMap((NVNmemoryPool *)&pool) + 65536; int bad = 0;
     static const uint8_t want[] = {51,102,153,255}; for(int i=0;i<160*90;i++) bad += memcmp(map+i*4,want,4) != 0;
     EXPECT("GPU image writes -> CPU pool map, 14400 literal pixels", 0, bad);
     h_nvnTextureFinalize(&tex); mtl_pool_del(mem); mtl_alias_drop_pool(&pool); free(mem);   // as nvnMemoryPoolFinalize: the next case's pool object has the same address
@@ -50,7 +50,7 @@ static void render_target_stride_case(void) {
     h_nvnTextureBuilderSetWidth(&tb, 16); h_nvnTextureBuilderSetHeight(&tb, 16);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET);
-    h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 0);
+    h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, 0);
     EXPECT("linear target inferred stride storage", 2048, h_nvnTextureBuilderGetStorageSize(&tb));
     EXPECT("linear target init", 1, h_nvnTextureInitialize(&tex, &tb));
     id<MTLTexture> t = tex_mtl((const tex_t *)&tex);
@@ -75,7 +75,7 @@ static void scaled_copy_case(void) {
     NVNtextureBuilder tb = {0}; NVNtexture dst = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
     h_nvnTextureBuilderSetHeight(&tb, 90); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8_SRGB);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR); h_nvnTextureBuilderSetStride(&tb, 640);
-    h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 65536); EXPECT("scaled copy destination init", 1, h_nvnTextureInitialize(&dst, &tb));
+    h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, 65536); EXPECT("scaled copy destination init", 1, h_nvnTextureInitialize(&dst, &tb));
     tex_t src = {.magic=MAGIC('T','E','X',0), .serial=900001}; src.d.width=320; src.d.height=180; src.d.depth=src.d.levels=src.d.samples=1;
     src.d.target=NVN_TEXTURE_TARGET_2D; src.d.format=NVN_FORMAT_RGBA8_SRGB;
     id<MTLTexture> source = tex_mtl(&src); id<MTLCommandBuffer> seed = q_cb();
@@ -84,23 +84,23 @@ static void scaled_copy_case(void) {
     [[seed renderCommandEncoderWithDescriptor:pd] endEncoding]; [seed commit]; [seed waitUntilCompleted];
     EXPECT("scaled copy source seeded", MTLCommandBufferStatusCompleted, seed.status);
     NVNcommandBuffer cmd; EXPECT("scaled copy command init", 1, h_nvnCommandBufferInitialize(&cmd, NULL));
-    h_nvnCommandBufferAddCommandMemory(&cmd, (const NVNmemoryPool *)&pool, 0, 65536); h_nvnCommandBufferBeginRecording(&cmd);
+    h_nvnCommandBufferAddCommandMemory(&cmd, (NVNmemoryPool *)&pool, 0, 65536); h_nvnCommandBufferBeginRecording(&cmd);
     NVNcopyRegion sr={0,0,0,320,180,1}, dr={0,0,0,160,90,1};
     h_nvnCommandBufferCopyTextureToTexture(&cmd, (const NVNtexture *)&src, NULL, &sr, &dst, NULL, &dr, NVN_COPY_FLAGS_LINEAR_FILTER_BIT);
     NVNcommandHandle h=h_nvnCommandBufferEndRecording(&cmd); state_reset(); memset(&R,0,sizeof R); mtl_sub_begin(); uint8_t *records = nvn_rec_linear(h, NULL); mtl_exec(records);
     EXPECT("scaled copy committed", 1, mtl_wait(mtl_sub_commit(),5000000000ull)); EXPECT("scaled copy GPU error",0,mtl_last_commit_error()); free(records);   // the linear copy of the records, once their work is done
-    h_nvnMemoryPoolInvalidateMappedRange((const NVNmemoryPool *)&pool,65536,640*90); uint8_t *map=(uint8_t *)h_nvnMemoryPoolMap((const NVNmemoryPool *)&pool)+65536;
+    h_nvnMemoryPoolInvalidateMappedRange((NVNmemoryPool *)&pool,65536,640*90); uint8_t *map=(uint8_t *)h_nvnMemoryPoolMap((NVNmemoryPool *)&pool)+65536;
     static const uint8_t want[]={255,0,0,255}; int bad=0; for(int i=0;i<160*90;i++)bad+=memcmp(map+i*4,want,4)!=0;
     EXPECT("scaled render copy -> CPU pool map, 14400 literal red pixels",0,bad);
     EXPECT("scaled destination keeps pool backing",1,tex_mtl((const tex_t *)&dst).buffer!=nil);
     h_nvnTextureFinalize(&dst); mtl_tex_release(&src); mtl_pool_del(mem); free(mem);
 }
-// Linear textures whose rows the device cannot view on the pool's buffer (DM_TBUF_ALIGN=64, more than the Mac's 16 bytes; Axiom Verge's 8x8 RGBA8 textures have 32-byte rows). 6x6 RGBA8: 24 bytes of
+// Linear textures whose rows the device cannot view on the pool's buffer (DM_TBUF_ALIGN=64, more than the Mac's 16 bytes; 8x8 RGBA8 textures have 32-byte rows). 6x6 RGBA8: 24 bytes of
 // pixels in each row, the rest of the row filled so that a wrong stride shows.
 //   0: LINEAR, 32-byte rows: uploaded from its storage at its stride, and ReadTexels reads its pixels; then an NVN copy into it, a CPU write, reads on another thread and an upload
 //   1: LINEAR, 64-byte rows: stays a view
 //   2: LINEAR, 32-byte rows, read by ReadTexels on another thread before its first use: the read has its pixels, and the first use on the submit thread still uploads it
-//   3: IMAGE|LINEAR, 32-byte rows, only sampled (Hades II's Bink planes, GitHub issue #1956): CPU-written while the GPU has not written its storage, uploaded again after a CPU
+//   3: IMAGE|LINEAR, 32-byte rows, only sampled (a movie's planes): CPU-written while the GPU has not written its storage, uploaded again after a CPU
 //      write; a recorded GPU write into it makes it a GPU texture that keeps its content
 //   4: IMAGE|LINEAR, 32-byte rows, its storage written by the GPU before its first use: a GPU texture, not CPU-written, its first fill at its stride
 //   5: LINEAR_RENDER_TARGET, 32-byte rows, only sampled: CPU-written, as 3
@@ -135,10 +135,10 @@ static void unaligned_upload_case(void) {   // a pool made through NVN, so that 
         for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) { uint8_t *p = mem + at + y * stride[i] + x * 4; p[0] = (uint8_t)(x * 40 + i); p[1] = (uint8_t)(y * 40); p[2] = 0x5a; p[3] = 0xff; }
         NVNtextureBuilder tb = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 6); h_nvnTextureBuilderSetHeight(&tb, 6);
         h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, flags[i]); h_nvnTextureBuilderSetStride(&tb, stride[i]);
-        h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, (ptrdiff_t)at);
+        h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&pool, (ptrdiff_t)at);
         EXPECT("unaligned case: texture init", 1, h_nvnTextureInitialize(&tex[i], &tb));
     }
-    h_nvnMemoryPoolFlushMappedRange((const NVNmemoryPool *)&pool, 65536 + 4 * 4096, 32 * 6);   // 4: flushed, so its first fill takes the storage (tex_init_fill; the pool is CPU_CACHED)
+    h_nvnMemoryPoolFlushMappedRange((NVNmemoryPool *)&pool, 65536 + 4 * 4096, 32 * 6);   // 4: flushed, so its first fill takes the storage (tex_init_fill; the pool is CPU_CACHED)
     mtl_tex_gpu_written((const tex_t *)&tex[4]);   // 4: a GPU write into its storage is recorded before its first use, as a render target, clear, copy or image binding records it
     mtl_sub_begin();   // this thread is the submit thread from here on (tex_mtl_ uploads only there)
     read_job job = {&tex[2], stored[2], -1}; pthread_t th;
@@ -164,7 +164,7 @@ static void unaligned_upload_case(void) {   // a pool made through NVN, so that 
     // 0, after an NVN copy from 1 into it: the copy lands in its storage too (tex_storage_dst), so ReadTexels on another thread has the copied rows; a CPU write after that is read there,
     // without the texture being uploaded on that thread; and the next upload on the submit thread carries both
     NVNcommandBuffer cmd; EXPECT("unaligned case: command buffer init", 1, h_nvnCommandBufferInitialize(&cmd, NULL));
-    h_nvnCommandBufferAddCommandMemory(&cmd, (const NVNmemoryPool *)&pool, 0, 65536); h_nvnCommandBufferBeginRecording(&cmd);
+    h_nvnCommandBufferAddCommandMemory(&cmd, (NVNmemoryPool *)&pool, 0, 65536); h_nvnCommandBufferBeginRecording(&cmd);
     NVNcopyRegion cr = {0, 0, 0, 6, 6, 1}; h_nvnCommandBufferCopyTextureToTexture(&cmd, &tex[1], NULL, &cr, &tex[0], NULL, &cr, 0);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd); state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint8_t *records = nvn_rec_linear(h, NULL); mtl_exec(records);
     EXPECT("0: the copy from 1 committed", 1, mtl_wait(mtl_sub_commit(), 5000000000ull)); free(records);   // the linear copy of the records, once their work is done

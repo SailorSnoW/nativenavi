@@ -1,6 +1,6 @@
 // A buffer texture below Metal's view alignment (nvn_storage.inc tex_mtl, nvn_pooltab.inc tbuf_lead): its view starts at the aligned boundary below its pool offset, wider by the elements in between, and
 // the shader moves each coordinate by that count from its offset table (the translator's TranslationFlags.MetalBufferImageBias), so accesses land on the texture's own bytes.
-// Assassin's Creed II's occlusion culling wrote its visibility marks two R32 elements early into buffers at pool offsets 8 mod 16 (GitHub PR #1399). The kernels below do what a
+// Unbiased, a game's writes into a buffer at a pool offset of 8 mod 16 land two R32 elements early. The kernels below do what a
 // translated shader does (Instructions.cs BiasBufferImageCoordinate: x = c + bias, or c itself when that sum wraps; a size query gives the width less the bias), and the pool's
 // bytes are checked around the texture. A binding with no table entry reads an aligned copy of the texture's own bytes (tbuf_shadow). DM_TBUF_ALIGN=16 gives every Mac the
 // M4 Pro's alignment, and every view is one Metal accepts, so the test runs under Metal validation

@@ -38,11 +38,14 @@ static void target(recording *r,const tex_t *t,int lv,int slot,const tex_t *othe
 static void finish(recording *r) {
     NVNcommandHandle h=h_nvnCommandBufferEndRecording(&r->cb);state_reset();memset(&R,0,sizeof R);
     uint8_t *lin=nvn_rec_linear(h, NULL);mtl_sub_begin();mtl_exec(lin);
-    int done=mtl_wait(mtl_sub_commit(),5000000000ull);free(lin);   // the linear copy of the records, freed once their work is doneEXPECT("production GPU done",1,done);if(!done)abort();EXPECT("no error in commit feedback",0,mtl_last_commit_error());
+    int done=mtl_wait(mtl_sub_commit(),5000000000ull);free(lin);   // the linear copy of the records, freed once their work is done
+    EXPECT("production GPU done",1,done);
+    if(!done)abort();
+    EXPECT("no error in commit feedback",0,mtl_last_commit_error());
     mtl_pool_del(r->mem);free(r->mem);
 }
 static void seed(const tex_t *t) {
-    id<MTLTexture> m=tex_mtl(t);id<MTLCommandBuffer> cb=q_cb();   // q_cb flushes the host's pending new-texture zeroing first and waits for it; a plain g_q command buffer ran before it, and the zeroing wiped the seed
+    id<MTLTexture> m=tex_mtl(t);id<MTLCommandBuffer> cb=q_cb();   // q_cb flushes the host's pending new-texture zeroing first and waits for it; a plain g_q command buffer would run before it, and the zeroing would wipe the seed
     for(int l=0;l<t->d.levels;l++){MTLRenderPassDescriptor *p=[MTLRenderPassDescriptor renderPassDescriptor];
         if(t->d.format==NVN_FORMAT_RGBA8){p.colorAttachments[0].texture=m;p.colorAttachments[0].level=l;
             p.colorAttachments[0].loadAction=MTLLoadActionClear;p.colorAttachments[0].storeAction=MTLStoreActionStore;p.colorAttachments[0].clearColor=MTLClearColorMake(0,0,1,1);}
@@ -87,7 +90,7 @@ static void colour_case(const char *name,int lv,int sc,int clear_only,int slot,i
     else {h_nvnCommandBufferBindProgram(&r.cb,(const NVNprogram *)&colour_pg,3);h_nvnCommandBufferDrawArrays(&r.cb,NVN_DRAW_PRIMITIVE_TRIANGLES,0,3);}
     finish(&r);NSUInteger pre_w,pre_h;rt_dims(&pre_w,&pre_h);EXPECT("precheck: first target selected width upper bound",W[lv],pre_w);EXPECT("precheck: first target selected height upper bound",H[lv],pre_h);
     if(sc!=3||!clear_only){EXPECT("actual pass effective width",w,g_pass.tw);EXPECT("actual pass effective height",h,g_pass.th);}
-    colour_check(name,&t,lv,clear_only?1:2,w,h,sc==3);   // a scissored clear is drawn as a triangle (clear_color_tri) and fills exactly the scissor rectangle; it used to be rejected (nothing cleared)
+    colour_check(name,&t,lv,clear_only?1:2,w,h,sc==3);   // a scissored clear is drawn as a triangle (clear_color_tri) and fills exactly the scissor rectangle
     if(mrt)colour_check("MRT_unwritten_attachment",&other,-1,0,0,0,0);
 }
 static void plane_case(const char *name,int stencil,int clear_only) {

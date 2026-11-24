@@ -259,7 +259,7 @@ static void event_queued_write(int mode) {
     CHECK(done && *result==after,"the consumer's copy reads the producer's payload"); if(!done) { P(nvnEventSignal)(&event,NVN_EVENT_SIGNAL_MODE_WRITE,1); _Exit(2); }
     P(nvnSyncFinalize)(&produced); P(nvnSyncFinalize)(&consumed);
 }
-// A signal does not cut its recording (issue #2112): two signals with commands between them are one Metal submission, and a wait on the first of them, which is not the
+// A signal does not cut its recording: two signals with commands between them are one Metal submission, and a wait on the first of them, which is not the
 // recording's last, is still encoded behind the in-flight write
 static void event_signal_no_cut(void) {
     printf("CASE signals stay in their recording's submission\n");
@@ -290,7 +290,7 @@ static void event_signal_no_cut(void) {
     CHECK(P(nvnEventGetValue)(&event)==1 && P(nvnEventGetValue)(&second)==7,"both events hold their signalled values");
     P(nvnSyncFinalize)(&produced); P(nvnSyncFinalize)(&consumed); P(nvnEventFinalize)(&second);
 }
-// The submissions of one frame share a command allocator, and one that counts no samples takes no visibility buffer (PR #2090): 24 of them with the GPU held, three times
+// The submissions of one frame share a command allocator, and one that counts no samples takes no visibility buffer: 24 of them with the GPU held, three times
 // the pool, all encode without a wait for the GPU, which would never return here
 static void frame_shares_allocator(void) {
     enum { N=24 };
@@ -320,7 +320,7 @@ static void frame_shares_allocator(void) {
     for(int i=0;i<N;i++) P(nvnSyncFinalize)(&fences[i]);
 }
 // Counting submissions in flight each take a buffer of the visibility ring, which grows, instead of a one-off buffer that joins the residency set and leaves it after the
-// submission: 24 of them, three times the old ring of 8, with none complete; once they are, the next one reuses a ring buffer and the ring does not grow
+// submission: 24 of them, three times a ring of 8, with none complete; once they are, the next one reuses a ring buffer and the ring does not grow
 static void vis_ring_grows(void) {
     enum { N=24 };
     printf("CASE counting submissions in flight take buffers of the visibility ring\n");
@@ -341,7 +341,7 @@ static void vis_ring_grows(void) {
     g_vis_ring_i=-1; g_vis=nil; g_vis_n=0;
     pthread_mutex_unlock(&g_sub_mu);
 }
-// A wait on a sync no fence has reached when it is submitted is already satisfied: the queue's own later work, its fence included, runs (issue #1808)
+// A wait on a sync no fence has reached when it is submitted is already satisfied: the queue's own later work, its fence included, runs
 static void receipt_unfenced(int command_wait) {
     printf("CASE %s wait on a never-fenced sync does not park its queue\n",command_wait?"command-buffer":"queue");
     *source=before; *result=sentinel;

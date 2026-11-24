@@ -38,7 +38,7 @@ def fake_capstone(major):   # the installed capstone's version does not matter t
     return types.SimpleNamespace(__version__=f'{major}.0.0', cs_version=lambda: (major, 0, major << 8))
 
 
-class ToolPath(unittest.TestCase):   # issue #1474: TOOL_PATHS are fallbacks, so the tools the caller's PATH selects are the ones that run
+class ToolPath(unittest.TestCase):   # TOOL_PATHS are fallbacks, so the tools the caller's PATH selects are the ones that run
     def test_caller_tools_win_and_fallbacks_find_the_rest(self):
         with tempfile.TemporaryDirectory() as folder:
             caller, fallback = Path(folder) / 'Project Tools', Path(folder) / 'fallback'   # a space in the caller's folder
@@ -76,7 +76,7 @@ class Prereqs(unittest.TestCase):
 
     def test_missing_tools_are_named(self):
         with self.assertRaisesRegex(nsp.BuildError, r'tools not found: make \(Xcode\)$'): self.check(which=lambda tool, **k: None if tool == 'make' else '/x')
-        for gone in ('xcodegen', 'glslangValidator', 'zstd'):   # what the removed paths ran: no longer asked for
+        for gone in ('xcodegen', 'glslangValidator', 'zstd'):   # tools nothing runs any more: not asked for
             with self.subTest(gone=gone): self.check(which=lambda tool, gone=gone, **k: None if tool == gone else '/x')
 
     def test_missing_cargo_names_rustup(self):   # the host has a Rust library (dm/host/rust)

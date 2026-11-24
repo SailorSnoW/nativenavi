@@ -33,7 +33,8 @@ MODS = {p: load(p, n) for n, p in enumerate(FILES)}
 HEX = re.compile(r'[0-9a-f]+$')
 
 # Execute the driver's actual file discovery and registry without loading a game image.
-source = REPO / 'dm/tools/patch_nso.py'; tree = ast.parse(source.read_text())
+source = REPO / 'dm/tools/patch_nso.py'
+tree = ast.parse(source.read_text())
 start = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'SHARED')   # the shared files, then PATCH_FILES
 end = next(i for i, n in enumerate(tree.body[start:], start) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'BUILD_ID')
 REGISTRY_CODE = compile(ast.Module(body=tree.body[start:end], type_ignores=[]), str(source), 'exec')

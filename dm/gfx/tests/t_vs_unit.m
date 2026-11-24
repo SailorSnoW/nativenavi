@@ -21,7 +21,7 @@ static NSString *k_vs =
 "    if ((in.m_2.x & 3u) == 3u)\n    {\n        return out;\n    }\n"
 "    out.out_c.xyz = out.out_c.xyz * (float3(in.m_2.yzw & uint3(15u)) * 0.0625 + 0.03125) + p.zzz * 0.125;\n    return out;\n}\n";
 static NSString *k_fs = @"#include <metal_stdlib>\nusing namespace metal;\nstruct I { float4 c [[user(locn0)]]; };\nfragment float4 fs(I in [[stage_in]]) { return in.c; }\n";
-// The libraries, as the build makes them: a_* the three compiles of before, u_* the unit's pieces, c_* a unit with another depth line (the control)
+// The libraries, as the build makes them: a_* the three compiles the unit replaces, u_* the unit's pieces, c_* a unit with another depth line (the control)
 static NSString *k_py =
 @"import sys, os, subprocess\nsys.path.insert(0, '../tools')\nimport dmsh_chain, dmsh_entry, dmsh_pull, dmsh_vin, dmsh_side\n"
 "d = sys.argv[1]; src = open(os.path.join(d, 'v.metal')).read()\n"

@@ -1,9 +1,4 @@
-// Feedback snapshots and their per-draw argument substitution include separate texture slots and read-only fragment images; a snapshot is reused until the game's next barrier,
-// and a draw that only samples an attachment nothing in its pass has written reads it directly. With the directory test_dmsh_fetch.py --fixture writes (folded readable-tile library, entry main0_f), a draw that samples the
-// attachment at its own pixel through a projective sample reads it from the tile (fb_tile_plan): a snapshot while its pipeline builds, then none after a barrier, the pass stays
-// open, and the GPU reads what an earlier draw of the pass wrote; not with a viewport smaller than the target. The same for a sample at the draw's pixel position times a uniform
-// 1 / the target's size, set by an inline update (Splatoon Raiders' ink stamps), on an RG8 attachment sampled through (red, green, zero, one): the tile read fills the missing
-// channels as a sample does.
+// Feedback snapshots: reused until the game's next barrier, skipped when nothing in the pass wrote the attachment, a tile read (fb_tile_plan) for a sample at the draw's own pixel.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -48,8 +43,8 @@ static void pixels(id<MTLBuffer> b, unsigned offset, const uint8_t want[4], cons
         valid &= !memcmp((const uint8_t *)b.contents + offset + y * 256 + x * 4, want, 4);
     CHECK(valid, label);
 }
-static uint32_t *g_ubo_words;   // a pool page: the uniform buffer that holds the handle of the TEXU case
-// slot: a texture or image slot, or for a TEXU binding the uniform-buffer slot whose word 0 holds the handle (encode_args and fb_prepare read it through ubo_bind_handle)
+static uint32_t *g_ubo_words;
+// for a TEXU binding: the uniform-buffer slot whose word 0 holds the handle (ubo_bind_handle)
 static void slot_case(NvProg *pr, id<MTLRenderPipelineState> pipeline, int slot, int index) {
     int before = failed, tid = 600 + index;
     NvShader *fs = pr->sh[1]; fs->rf.b[0].reg = slot;
@@ -78,9 +73,7 @@ static void slot_case(NvProg *pr, id<MTLRenderPipelineState> pipeline, int slot,
     CHECK(g_fb_n == 1 && g_fb_src[0] == original && g_fb_use[0] != original,
           "snapshot substitutes a distinct texture for the registered source");
     rp_end();
-    // Overwrite the attachment after the snapshot, then render the sampled value
-    // into a distinct target. This makes a missing snapshot fail deterministically
-    // even on GPUs that happen to tolerate sampling an attached render target.
+    // overwritten after the snapshot: a missing snapshot fails even on GPUs that tolerate sampling an attached target
     clear(MTLClearColorMake(image ? 29 : 0, 1, 0, 1)); rp_end();
     R.rt.color[0] = &output;
     sample(fs, pipeline);
@@ -89,14 +82,12 @@ static void slot_case(NvProg *pr, id<MTLRenderPipelineState> pipeline, int slot,
           "production argument buffer contains the snapshot resource ID");
     readback(destination, result, 0);
     if (image) {
-        // A different slot can write the same resource: a snapshot already available for a reader must never redirect a writer.
         fs->rf.b[0].rw = 1; args_dirty_all();
         sample(fs, pipeline);
         bound = *(uint64_t *)((uint8_t *)fs->ab_buf.contents + fs->ab_off);
         CHECK(bound == original.gpuResourceID._impl, "a writable image bypasses an available snapshot");
         fs->rf.b[0].rw = 0; args_dirty_all();
     }
-    // With a different attachment the following draw restores the original binding.
     fb_prepare(pr);
     CHECK(g_fb_n == 0, "following draw needs no snapshot");
     sample(fs, pipeline);
@@ -110,7 +101,6 @@ static void slot_case(NvProg *pr, id<MTLRenderPipelineState> pipeline, int slot,
     printf("feedback %s %d: %s\n", texu ? "handle in uniform slot" : "slot", slot, before == failed ? "PASS" : "FAIL");
     mtl_tex_release(&source); mtl_tex_release(&output);
 }
-// A registered image view names its own level. A shader that needs a different pixel class keeps its normal image binding.
 static void image_view_case(NvProg *pr) {
     const int tid = 661;
     tex_t source;
@@ -145,14 +135,11 @@ static void image_view_case(NvProg *pr) {
     mtl_tex_release(&source);
     CHECK(serial_get(source.serial) == nil, "releasing the image target removes its serial entry");
 }
-// Mip-chain passes: a draw rendering one level of a texture whose view it samples reads by the levels its sampler's clamp lets it fetch (fb_reach). A clamp to one level other than the
-// attachment's reads that level alone, on either side (an upsample: level n from n + 1); a clamp from below the attachment's, or no mip filter, reads the levels below (a downsample);
-// a clamp starting at the attachment's level (a pin there, a range or a fractional LOD from there up) and the view's base level rendered with no level pinned read a snapshot of the
-// whole view; a range wholly above the attachment's reads the view as it is
+// mip chains (fb_reach): a draw reads the levels its sampler's clamp lets it fetch; one starting at the attachment's level reads a snapshot of the whole view
 static void mip_chain_case(NvProg *pr) {
     const int tid = 671, sid = 672; NvShader *fs = pr->sh[1]; nvn_rbind keep[2] = {fs->rf.b[0], fs->rf.b[1]}; int keep_nb = fs->rf.nb;
     fs->rf.nb = 2; fs->rf.b[0] = (nvn_rbind){.kind=NVN_RB_TEX, .reg=0, .aid=0, .dtt=MTLTextureType2D}; fs->rf.b[1] = (nvn_rbind){.kind=NVN_RB_SAMPT, .reg=0, .aid=1};
-    tex_t chain; id<MTLTexture> original = target_format(&chain, 99800, NVN_FORMAT_RGBA8, 3);   // 4x4, 2x2, 1x1
+    tex_t chain; id<MTLTexture> original = target_format(&chain, 99800, NVN_FORMAT_RGBA8, 3);
     mtl_reg_tex(tid, &chain, NULL);
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
     R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &chain; R.rt.has_cview[0] = 1; S.tex[1][0] = tid | (uint64_t)sid << 20;
@@ -185,8 +172,6 @@ static void mip_chain_case(NvProg *pr) {
     fs->rf.nb = keep_nb; fs->rf.b[0] = keep[0]; fs->rf.b[1] = keep[1];
     mtl_tex_release(&chain);
 }
-// The same clamps read by a draw, with the attachment's level overwritten after its snapshot: each reads the levels its clamp names as they were before this pass
-// (red, green, blue for levels 0, 1, 2); the clamps that need no snapshot take none
 static void mip_pixels_case(id<MTLLibrary> lib) {
     const int tid = 673, sid = 674;
     NvProg *pr = [NvProg new]; NvShader *fs = [NvShader new]; pr->sh[1] = fs;
@@ -201,7 +186,7 @@ static void mip_pixels_case(id<MTLLibrary> lib) {
     id<MTLBuffer> result = [g_dev newBufferWithLength:1024 options:MTLResourceStorageModeShared]; res_add(result);
     mtl_reg_tex(tid, &chain, NULL);
     static const uint8_t colors[3][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}};
-    struct { int level; float lo, hi; int direct; uint8_t want[4]; const char *label; } c[] = {   // the shader asks for LOD 2; the clamp decides
+    struct { int level; float lo, hi; int direct; uint8_t want[4]; const char *label; } c[] = {
         {1, 2, 2, 1, {0, 0, 255, 255}, "a pin above the attachment reads that level, no snapshot"},
         {1, 0, 0, 1, {255, 0, 0, 255}, "a pin below the attachment reads that level, no snapshot"},
         {0, 1, 1, 1, {0, 255, 0, 255}, "a pin above the base attachment reads that level, no snapshot"},
@@ -221,7 +206,7 @@ static void mip_pixels_case(id<MTLLibrary> lib) {
         const uint8_t *k = colors[c[i].level]; clear(MTLClearColorMake(k[0] / 255., k[1] / 255., k[2] / 255., 1));
         uint64_t copies = g_fb_count;
         fb_prepare(pr); rp_end();
-        clear(MTLClearColorMake(1, 0, 1, 1)); rp_end();   // the pass's write to the attachment's level after the snapshot
+        clear(MTLClearColorMake(1, 0, 1, 1)); rp_end();
         R.rt.color[0] = &output; R.rt.has_cview[0] = 0;
         sample(fs, pipeline); readback(destination, result, 0);
         CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error(), "mip-chain sampling submission completed without error");
@@ -233,8 +218,7 @@ static void mip_pixels_case(id<MTLLibrary> lib) {
     }
     S.tex[1][0] = 0; mtl_tex_release(&chain); mtl_tex_release(&output);
 }
-// A pass rendering the base level of the view it samples through a sampler not known here (no combined handle's): a snapshot of the whole view, its levels and layers (2D, a 2D-array
-// view of layers 1-2, a cube), keyed by serial, base level and layer, so a contracted view of the same key takes a snapshot of its own shape and the full one again its own
+// an unknown sampler on the base level: a snapshot of the whole view, keyed by serial, base level and layer
 static void base_level_case(id<MTLLibrary> lib, int first, int sampled, int index, int shape) {
     int before = failed, tid = 780 + index, layers = shape == 2 ? 6 : shape == 1 ? 3 : 1, layer = shape == 2 ? 4 : shape == 1 ? 2 : 0;
     tex_t source = {.magic=MAGIC('T','E','X',0), .serial=99900 + index}, output;
@@ -268,13 +252,13 @@ static void base_level_case(id<MTLLibrary> lib, int first, int sampled, int inde
     R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &source; S.tex[1][0] = tid; R.rt.has_cview[0] = 1; R.rt.cview[0] = attached;
     const uint8_t *k = colors[first]; clear(MTLClearColorMake(k[0] / 255., k[1] / 255., k[2] / 255., 1));
     fb_prepare(pr); CHECK(g_fb_n == 1 && g_fb_use[0].mipmapLevelCount == 4u - first && g_fb_use[0].textureType == (MTLTextureType)fs->rf.b[0].dtt, "the draw samples a snapshot of the whole view, as the type the shader declares"); rp_end();
-    view_t one = view; one.nlevels = 1;   // the same serial, base level and layer, one level
+    view_t one = view; one.nlevels = 1;
     mtl_reg_tex(tid, &source, &one); fb_prepare(pr); rp_end();
     R.rt.color[0] = &output; R.rt.has_cview[0] = 0;
     sample(fs, pipeline); readback(destination, result, 0);
     R.rt.color[0] = &source; R.rt.has_cview[0] = 1; R.rt.cview[0] = attached;
     mtl_reg_tex(tid, &source, &view); fb_prepare(pr); rp_end();
-    for (int m = 0; m < 4; m++) for (int q = 0; q < layers; q++) {   // the pass and later ones overwrite every level and layer
+    for (int m = 0; m < 4; m++) for (int q = 0; q < layers; q++) {
         R.rt.cview[0].base_level = m; R.rt.cview[0].min_layer = q; clear(MTLClearColorMake(1, 0, 1, 1)); rp_end(); }
     R.rt.color[0] = &output; R.rt.has_cview[0] = 0;
     sample(fs, pipeline); readback(destination, result, 1024);
@@ -284,7 +268,7 @@ static void base_level_case(id<MTLLibrary> lib, int first, int sampled, int inde
     printf("feedback base level, shape %d, view base %d, sampled %d: %s\n", shape, first, sampled, before == failed ? "PASS" : "FAIL");
     S.tex[1][0] = 0; mtl_tex_release(&source); mtl_tex_release(&output);
 }
-// The rule without a listed shader: copy once, reuse until a barrier, end the pass when an earlier draw of it read the attachment directly.
+// copy once, reuse until a barrier, end the pass when an earlier draw of it read the attachment directly
 static void reuse_case(NvProg *pr) {
     int before = failed, tid = 650; NvShader *fs = pr->sh[1]; fs->rf.b[0].reg = 0;
     tex_t source; target(&source, 99790);
@@ -313,7 +297,7 @@ static void reuse_case(NvProg *pr) {
     fb_prepare(pr);
     CHECK(g_fb_n == 1 && !g_enc && g_fb_count == copies + 2, "a game barrier makes the next writing draw take a fresh snapshot");
     rp_end();
-    // The depth attachment read, then written in the same pass (only serials matter to the rule: the attachment is named after the pass opens)
+    // only serials matter to the rule: the attachment is named after the pass opens
     { tex_t output, depth; target(&output, 99791); target(&depth, 99792); mtl_reg_tex(651, &depth, NULL);
       R.rt.color[0] = &output; R.rt.depth = NULL; S.tex[1][0] = 651; S.chmask.mask = 0xffffffffu; S.ds.dt = 1; S.ds.dw = 0;
       clear(MTLClearColorMake(0, 0, 0, 1)); R.rt.depth = &depth;
@@ -323,7 +307,7 @@ static void reuse_case(NvProg *pr) {
       CHECK(g_enc != nil, "so does the next one, which writes no depth");
       S.ds.dw = 1; fb_prepare(pr);
       CHECK(!g_enc, "a draw writing depth after a read of it ends the pass");
-      R.rt.depth = NULL; clear(MTLClearColorMake(0, 0, 0, 1)); rp_end();   // that draw read it too, and began the pass it would open: the next pass is a clean one
+      R.rt.depth = NULL; clear(MTLClearColorMake(0, 0, 0, 1)); rp_end();
       clear(MTLClearColorMake(0, 0, 0, 1)); R.rt.depth = &depth; S.tex[1][0] = 0;
       fb_prepare(pr);
       CHECK(g_enc != nil, "a draw writing depth with no read of it in its pass stays");
@@ -339,11 +323,10 @@ static id<MTLLibrary> lib_file(NSString *path) {
     if (!l) fprintf(stderr, "%s: %s\n", path.UTF8String, e.localizedDescription.UTF8String);
     return l;
 }
-// Breath of the Wild's decals: the G-buffer target cleared red, an earlier draw of the pass writes green into its left half, then a draw that samples the target at its screen varying
-// writes the sample's channels rotated (green from blue, blue from red, red from green): red where it read green, blue where it read red
+// target cleared red, an earlier draw writes green into its left half; the draw writes the sample rotated: red where it read green, blue where it read red
 static void tile_case(const char *dir) {
     int before = failed, tid = 660; NSString *d = @(dir);
-    g_msl_dir = d;   // bf_fn loads <key>_bf.metallib from here and specializes @"main0_f"
+    g_msl_dir = d;
     NSData *fj = [NSData dataWithContentsOfFile:[d stringByAppendingPathComponent:@"facts.json"]];
     NSDictionary *facts = fj ? [NSJSONSerialization JSONObjectWithData:fj options:0 error:nil] : nil;
     id<MTLLibrary> vl = lib_file([d stringByAppendingPathComponent:@"fb_vs.metal"]), fl = lib_file([d stringByAppendingPathComponent:@"fb_fs.metal"]);
@@ -371,7 +354,7 @@ static void tile_case(const char *dir) {
     CHECK(green != nil, "the green pipeline compiles");
     tex_t source; id<MTLTexture> attachment = target(&source, 99795);
     mtl_reg_tex(tid, &source, NULL);
-    id<MTLBuffer> zero = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; res_add(zero);   // the variant's argument buffer: the tile read leaves its texture and sampler unread
+    id<MTLBuffer> zero = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; res_add(zero);
     id<MTLBuffer> result = [g_dev newBufferWithLength:1024 options:MTLResourceStorageModeShared]; res_add(result);
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
     R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &source; S.tex[1][0] = tid; S.chmask.mask = 0xffffffffu;
@@ -382,7 +365,7 @@ static void tile_case(const char *dir) {
     CHECK(g_fb_n == 1 && !g_enc && g_fb_count == copies + 1 && g_fb_tile_wait == waits + 1 && g_fb_tseq != g_draw_seq, "while its pipeline builds, the draw takes a snapshot");
     for (int i = 0; i < 1000; i++) { os_unfair_lock_lock(&g_fb_tp_lock); int done = g_fb_tp_n && g_fb_tp[0].done; os_unfair_lock_unlock(&g_fb_tp_lock); if (done) break; usleep(10000); }
     CHECK(g_fb_tp_n == 1 && g_fb_tp[0].done && g_fb_tp[0].ps, "the tile-reading pipeline is built in the background");
-    g_fb_bar++;   // a game barrier: a snapshot would have to be taken again
+    g_fb_bar++;
     clear(MTLClearColorMake(1, 0, 0, 1));
     id first = g_enc;
     enc_r_pso(g_enc, green); enc_r_viewport(g_enc, (MTLViewport){0, 0, 4, 4, 0, 1}); enc_r_scissor(g_enc, (MTLScissorRect){0, 0, 2, 4});
@@ -390,8 +373,8 @@ static void tile_case(const char *dir) {
     fb_prepare(pr);
     CHECK(g_enc == first && g_fb_n == 0 && g_fb_count == copies + 1 && g_fb_tseq == g_draw_seq && g_fb_tfn && g_fb_tile_draws == tiles + 1 && g_fb_tdesc.fbmask == 1 && g_fb_tdesc.fx[0] == 0,
           "after a barrier the draw reads the tile: no snapshot, the pass stays open");
-    {   // bf_fn's numeric memo: the same shader, redirections, mask and map give the function the draw got; another mask is another specialization, not the remembered one
-        int fx[32] = {0}; for (int i = 0; i < 32; i++) fx[i] = g_fb_tdesc.fx[i]; uint8_t lm[8]; memcpy(lm, g_fb_tlmap, 8); // NOLINT(bugprone-signed-char-misuse): these numeric int8_t redirects include the sentinel -1
+    {
+        int fx[32] = {0}; for (int i = 0; i < 32; i++) fx[i] = g_fb_tdesc.fx[i]; uint8_t lm[8]; memcpy(lm, g_fb_tlmap, 8); // NOLINT(bugprone-signed-char-misuse): int8_t redirects include the sentinel -1
         id<MTLFunction> a = bf_fn(fs, fx, g_fb_tdesc.fbmask, lm), b = bf_fn(fs, fx, g_fb_tdesc.fbmask, lm), c = bf_fn(fs, fx, (uint8_t)(g_fb_tdesc.fbmask | 2), lm);
         CHECK(a && a == g_fb_tfn && b == a && c != a, "the readable-tile function is remembered by its numbers, and a different attachment mask is not taken for it");
     }
@@ -402,14 +385,14 @@ static void tile_case(const char *dir) {
     if (ps) { enc_r_pso(g_enc, ps); enc_r_scissor(g_enc, (MTLScissorRect){0, 0, 4, 4}); enc_r_args(g_enc, MTLRenderStageFragment, zero.gpuAddress, 0); enc_r_draw(g_enc, MTLPrimitiveTypeTriangle, 0, 3); }
     rp_end();
     enc_b_copy_texture_buffer(blit(), attachment, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(4, 4, 1), result, 0, 256, 1024);
-    // An image and a sampled texture can share a slot number. Only the sampled binding reads the tile.
+    // an image and a sampled texture can share a slot number: only the sampled binding reads the tile
     fs->rf.b[1] = (nvn_rbind){.kind=NVN_RB_IMG, .reg=0, .aid=1, .dtt=MTLTextureType2D};
     fs->rf.nb = 2; S.img[1][0] = tid; g_fb_bar++;
     clear(MTLClearColorMake(1, 0, 0, 1)); fb_prepare(pr);
     CHECK(g_fb_tseq == g_draw_seq && g_fb_n == 1 && g_fb_src[0] == attachment && g_fb_count == copies + 2,
           "sampled slot 0 reads the tile while image slot 0 snapshots the same attachment");
     rp_end(); fs->rf.nb = 1; S.img[1][0] = 0;
-    // A draw that opens its pass: the first learns the formats of the pass that opens for it and takes a snapshot, the next plans its tile read with no pass open and the pass loads what it reads
+    // a draw that opens its pass: the first learns the pass's formats and snapshots, the next plans its tile read with no pass open
     id<MTLBuffer> result2 = [g_dev newBufferWithLength:1024 options:MTLResourceStorageModeShared]; res_add(result2);
     g_fb_bar++; clear(MTLClearColorMake(1, 0, 0, 1));
     enc_r_pso(g_enc, green); enc_r_viewport(g_enc, (MTLViewport){0, 0, 4, 4, 0, 1}); enc_r_scissor(g_enc, (MTLScissorRect){0, 0, 2, 4}); enc_r_draw(g_enc, MTLPrimitiveTypeTriangle, 0, 3);
@@ -428,13 +411,13 @@ static void tile_case(const char *dir) {
     id<MTLRenderPipelineState> eps = pso_get(pr, nil);
     g_pso_lmap = NULL; g_pso_fsfn = nil; memset(&g_pso_fz, 0, sizeof g_pso_fz);
     CHECK(eps == g_fb_tp[0].ps, "its pipeline is the one built for the open-pass case");
-    udc_note_draw(pr, 1);   // the draw path's note that this draw writes attachment 0: a pass that loaded it and wrote nothing stores nothing
+    udc_note_draw(pr, 1);
     if (eps && g_enc) { enc_r_pso(g_enc, eps); enc_r_viewport(g_enc, (MTLViewport){0, 0, 4, 4, 0, 1}); enc_r_scissor(g_enc, (MTLScissorRect){0, 0, 4, 4}); enc_r_args(g_enc, MTLRenderStageFragment, zero.gpuAddress, 0); enc_r_draw(g_enc, MTLPrimitiveTypeTriangle, 0, 3); }
     rp_end();
     enc_b_copy_texture_buffer(blit(), attachment, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(4, 4, 1), result2, 0, 256, 1024);
     g_fb_bar++; fb_prepare(pr);
     CHECK(g_fb_early_seq == g_draw_seq, "planned again");
-    g_fb_el[g_fb_early_key & 63].pi.dfmt = 1;   // as if the pass it planned for had a depth attachment
+    g_fb_el[g_fb_early_key & 63].pi.dfmt = 1;
     CHECK(rp_begin_ex(0) != nil && !fb_early_after() && g_fb_el[g_fb_early_key & 63].fails == 1 && !g_fb_el[g_fb_early_key & 63].pi.dfmt, "a pass other than the planned one is refused, counted and noted");
     rp_end(); ecopies = g_fb_count; g_fb_noearly = 1; fb_prepare(pr); g_fb_noearly = 0;
     CHECK(!g_enc && g_fb_n == 1 && g_fb_count == ecopies + 1 && g_fb_tseq != g_draw_seq, "and the draw goes back to a snapshot");
@@ -459,7 +442,7 @@ static void tile_case(const char *dir) {
     printf("feedback tile read: %s\n", before == failed ? "PASS" : "FAIL");
     mtl_tex_release(&source);
 }
-// The channel mappings a tile read can stand for: the format's channels in place, the missing ones as they are or as the 0, 0, 1 a sample fills in
+// a tile read stands for the format's channels in place, the missing ones as is or as the 0, 0, 1 a sample fills in
 static void swizzle_case(void) {
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG8Unorm width:4 height:4 mipmapped:NO]; d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
     id<MTLTexture> rg = [g_dev newTextureWithDescriptor:d]; d.pixelFormat = MTLPixelFormatRGBA8Unorm; id<MTLTexture> rgba = [g_dev newTextureWithDescriptor:d];
@@ -468,9 +451,7 @@ static void swizzle_case(void) {
     CHECK(!sw_tile(SW(rg, Red, Green, One, One)) && !sw_tile(SW(rg, Green, Red, Zero, One)) && !sw_tile(SW(rgba, Red, Green, Blue, One)), "not with other channels, swapped ones or alpha 1 of RGBA8");
     #undef SW
 }
-// Splatoon Raiders' ink stamps (GitHub #1063): the RG8 map cleared red, an earlier draw of the pass writes green into its left half, then a draw that samples the map at gl_FragCoord
-// times c[6].xy writes red where it read green, black where it read red, and green where a missing channel read other than 0, 0, 1. Memory holds a scale of 1/8; the inline update
-// of this submission sets 1/4, the map's size: the draw is proven only once that update is queued
+// RG8 map at gl_FragCoord * c[6].xy: memory holds 1/8, this submission's inline update sets 1/4 (the map's size), so the draw is proven only once that update is queued
 static void fpos_case(const char *dir) {
     int before = failed, tid = 661; NSString *d = @(dir);
     g_msl_dir = d;
@@ -504,8 +485,8 @@ static void fpos_case(const char *dir) {
     { void *tv = NULL; tex_fast_rid(tid, &tv); id<MTLTexture> t = (__bridge id<MTLTexture>)tv; MTLTextureSwizzleChannels w = t.swizzle;
       printf("feedback pixel position: the RG8 map is sampled through channel mapping %d %d %d %d\n", (int)w.red, (int)w.green, (int)w.blue, (int)w.alpha); }
     float *mem = NULL; if (posix_memalign((void **)&mem, (size_t)getpagesize(), (size_t)getpagesize())) abort(); memset(mem, 0, (size_t)getpagesize());
-    mem[24] = mem[25] = 0.125f; mtl_pool_add(mem, (uint64_t)getpagesize());   // c[6].xy in memory: 1/8
-    id<MTLBuffer> ub = [g_dev newBufferWithLength:4096 options:MTLResourceStorageModeShared]; res_add(ub); ((float *)ub.contents)[20] = 1;   // the support buffer's render scale (_m5[0].x), and c[6] read by the GPU
+    mem[24] = mem[25] = 0.125f; mtl_pool_add(mem, (uint64_t)getpagesize());
+    id<MTLBuffer> ub = [g_dev newBufferWithLength:4096 options:MTLResourceStorageModeShared]; res_add(ub); ((float *)ub.contents)[20] = 1;
     ((float *)ub.contents)[24] = ((float *)ub.contents)[25] = 0.25f;
     id<MTLArgumentEncoder> ae = [fs->fn newArgumentEncoderWithBufferIndex:0];
     id<MTLBuffer> args = [g_dev newBufferWithLength:MAX(ae.encodedLength, 256ul) options:MTLResourceStorageModeShared]; res_add(args);
@@ -514,7 +495,7 @@ static void fpos_case(const char *dir) {
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
     R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &source; S.tex[1][0] = tid; S.chmask.mask = 0xffffffffu;
     S.ubo[1][0] = (p_bind_buf){.stage=1, .index=0, .addr=(uint64_t)mem, .size=256};
-    S.has_vp = 1; S.vp[0][0] = 0; S.vp[0][1] = 0; S.vp[0][2] = 2; S.vp[0][3] = 2;   // a viewport smaller than the target does not matter to gl_FragCoord
+    S.has_vp = 1; S.vp[0][0] = 0; S.vp[0][1] = 0; S.vp[0][2] = 2; S.vp[0][3] = 2;
     uint64_t copies = g_fb_count, waits = g_fb_tile_wait, tiles = g_fb_tile_draws;
     clear(MTLClearColorMake(1, 0, 0, 1)); fb_prepare(pr);
     CHECK(g_fb_n == 1 && !g_enc && g_fb_count == copies + 1 && g_fb_tile_wait == waits, "with a scale of 1/8 the draw is not its pixel's: a snapshot, no tile-reading pipeline");
@@ -547,16 +528,15 @@ static void fpos_case(const char *dir) {
     printf("feedback pixel-position tile read: %s\n", before == failed ? "PASS" : "FAIL");
     mtl_tex_release(&source); mtl_pool_del(mem); mtl_drain(); free(mem);
 }
-// A frame that snapshots more keys than the cache has entries, in several sizes (Tears of the Kingdom: 4-5 a frame), makes no texture once each size has one: a new key takes an entry
-// whose texture has its format and size. Taking the entries in turn made one for nearly every snapshot (GitHub #931). Entries a later draw can still reuse are taken last
+// more keys than cache entries, in several sizes: a new key takes an entry of its format and size, so no texture is made once each size has one
 static void shape_case(void) {
     for (int i = 0; i < 8; i++) { g_fbc[i] = (fb_cache_t){0}; } g_fbc_use = 0;
     static const NSUInteger size[5][2] = {{64, 32}, {32, 16}, {16, 8}, {64, 32}, {8, 4}};
     NSMutableSet *made = [NSMutableSet set]; int fresh, bad = 0;
     for (int frame = 0; frame < 6; frame++) {
-        g_fb_bar++;   // the game's barrier before each snapshot draw, as in Tears of the Kingdom's shrines
+        g_fb_bar++;
         for (int k = 0; k < 5; k++, g_fb_bar++) {
-            g_draw_seq++;   // each snapshot a draw of its own: an entry handed to the current draw is not taken for another key
+            g_draw_seq++;
             fb_cache_t *e = fb_snap(1000 + frame * 5 + k, 0, 0, MTLPixelFormatRGBA8Unorm, size[k][0], size[k][1], 0, &fresh);
             bad += !e || !fresh || e->snap.width != size[k][0] || e->snap.height != size[k][1];
             if (e) [made addObject:[NSValue valueWithPointer:(__bridge void *)e->snap]];
@@ -571,9 +551,7 @@ static void shape_case(void) {
     CHECK(a2 == a && !fresh, "the live snapshot is reused until the next barrier");
     for (int i = 0; i < 8; i++) { g_fbc[i] = (fb_cache_t){0}; } g_fbc_use = 0;
 }
-// One draw samples two attachments of one format and size while every snapshot entry is live (eight keys since the last barrier, in this submission) and only one entry has that shape:
-// the first attachment's, cached from an earlier draw or copied for this one. Each binding must get a snapshot of its own; the second key took the first one's entry and copied its
-// attachment over it, so both bindings sampled the second attachment (PR #813)
+// two attachments of one shape with one entry of that shape: each binding must get its own snapshot, not the second copied over the first's
 static void same_draw_case(int cached_first) {
     int before = failed, tid = 760 + cached_first * 2, fresh;
     for (int i = 0; i < 8; i++) { g_fbc[i] = (fb_cache_t){0}; } g_fbc_use = 0;
@@ -586,7 +564,7 @@ static void same_draw_case(int cached_first) {
     R.has_rt = 1; R.rt.n = 1;
     R.rt.color[0] = &a; clear(MTLClearColorMake(1, 0, 0, 1)); rp_end();
     R.rt.color[0] = &b; clear(MTLClearColorMake(0, 1, 0, 1)); rp_end();
-    for (int i = 0; i < 8; i++) {   // earlier draws of this submission: the first attachment's snapshot (or another key's of its shape), then seven other shapes
+    for (int i = 0; i < 8; i++) {
         g_draw_seq++;
         fb_cache_t *e = fb_snap(i == 0 && cached_first ? a.serial : 5000 + (uint64_t)i, 0, 0, ta.pixelFormat, 4 + (NSUInteger)i, 4, 0, &fresh);
         CHECK(e && fresh, "an earlier draw takes a snapshot entry");
@@ -607,8 +585,7 @@ static void same_draw_case(int cached_first) {
     mtl_tex_release(&a); mtl_tex_release(&b);
     for (int i = 0; i < 8; i++) { g_fbc[i] = (fb_cache_t){0}; } g_fbc_use = 0;
 }
-// A pool shader may name any registered texture, the depth attachment too, so it counts as reading the attachment (and a later draw writing depth ends the pass) only once a shader has read that
-// texture through a pool, under whichever object: Ocarina of Time keeps its depth textures in the pool every material shader reads, and read none of them there, at about 100 extra passes a frame
+// a pool shader counts as reading the depth attachment only once some shader has read that texture through a pool (else ~100 extra passes a frame)
 static void pool_depth_case(void) {
     tex_t colour, depth, same, other;
     target(&colour, 99800);
@@ -616,7 +593,7 @@ static void pool_depth_case(void) {
     depth.d = (nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D, .format=NVN_FORMAT_DEPTH32F, .width=4, .height=4, .depth=1, .levels=1, .samples=1};
     id<MTLTexture> dt = [g_dev newTextureWithDescriptor:tex_desc(&depth, 0)]; res_add(dt); mtl_tex_init(&depth); serial_put(depth.serial, dt);
     static pool_t pool; depth.pool = &pool; depth.off = 0x1000;
-    same = depth; same.serial = 99802; same.d.flags |= NVN_TEXTURE_FLAGS_IMAGE;   // a second object over the same storage, one Metal texture (alias_key)
+    same = depth; same.serial = 99802; same.d.flags |= NVN_TEXTURE_FLAGS_IMAGE;
     other = depth; other.serial = 99803; other.off = 0x2000;
     NvProg *pr = [NvProg new]; NvShader *fs = [NvShader new]; pr->sh[1] = fs; fs->rf.pool = 1; fs->rf.bindless = 1;
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
@@ -636,7 +613,7 @@ static void pool_depth_case(void) {
     CHECK(!g_enc, "and the next draw writing depth ends it, as a tile-based store would show it the write");
     rp_end(); CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "that submission completed");
 }
-// A replaced pool table comes back only once the submission that may read it has completed, and only at its own size; the readback cache makes room with its oldest buffers instead of turning new sizes away
+// a replaced pool table comes back only once its submission completed, at its own size; the readback cache evicts its oldest buffers
 static void reuse_tables_case(void) {
     uint64_t done0 = g_done, fence0 = g_fence, made0 = g_pool_made, reused0 = g_pool_reused;
     id<MTLBuffer> a = pool_table_take(1000);
@@ -652,8 +629,7 @@ static void reuse_tables_case(void) {
     pool_table_give(b, -1, 0); pool_table_give(c, -1, 0); pool_table_give(d, -1, 0);
     g_done = done0; g_fence = fence0;
 }
-// A cut with earlier work up to cut_busy_limit() stays a boundary for the game's timestamps and does not commit until the GPU has room (read from g_q4's shared event, not stale
-// commit feedback); a report after it takes that boundary's time. With the encode thread on, the segment is split on the submit thread and held on the encode thread until the GPU has room
+// a cut up to cut_busy_limit() waits for GPU room, read from g_q4's shared event (not stale commit feedback); a report after it takes that boundary's time
 static void cut_boundary_case(void) {
     tex_t colour; target(&colour, 99810);
     id<MTLBuffer> rep = [g_dev newBufferWithLength:64 options:MTLResourceStorageModeShared]; res_add(rep);
@@ -675,10 +651,10 @@ static void cut_boundary_case(void) {
             CHECK(g_sclk && g_sclk->nb == 2, "and its timestamp slot");
             clear(MTLClearColorMake(0, 1, 0, 1)); rp_end();
             mtl_sub_counter((uint64_t)rep.contents + 16, 0x10);
-            atomic_fetch_sub(&g_rx_busy_hold, 1);   // now lim - 1 in flight: room for a commit
+            atomic_fetch_sub(&g_rx_busy_hold, 1);
             const char *fbm = getenv("DM_NVN_SUB_IDLE_FB");
             int fb_only = fbm && !strcmp(fbm, "1");
-            if (!fb_only) atomic_fetch_add(&g_seg_inflight, 1);   // stale feedback must not block the shared-event check
+            if (!fb_only) atomic_fetch_add(&g_seg_inflight, 1);
             g_stat_draw += (uint64_t)cut_draws(); sub_cut();
             if (!fb_only) atomic_fetch_sub(&g_seg_inflight, 1);
             CHECK(g_cb != cb0 && g_seg == 2, "below the busy limit: a commit (shared event, not stale feedback)");
@@ -697,7 +673,7 @@ static void cut_boundary_case(void) {
         CHECK(r0[1] && r1[1] > r0[1], "two reports across a boundary read two times");
         return;
     }
-    // Encode thread with submission merging: sub_cut splits the recorded CB and the encode thread holds it while rx_inflight() >= lim, flushing on RO_END once room opens
+    // sub_cut splits the recorded CB; the encode thread holds it while rx_inflight() >= lim, flushing on RO_END
     uint64_t cbs0 = g_rx_cbs;
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
     R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &colour;
@@ -740,11 +716,8 @@ static void cut_boundary_case(void) {
     CHECK(r0[1] && r1[1] > r0[1], "encode thread: two reports across a segment boundary read two times");
 }
 
-// With Metal encoding on its own thread, submissions that reach it while the GPU still runs an earlier command buffer are held and go to the queue in one commit call (nvn_rec.h,
-// held submissions): their notes and signals follow it, and each one's reports still read its own part of the GPU time. Anything else for the queue recorded inside a later
-// submission (an upload batch, here a queue block) goes after the held ones and before that submission's own command buffer, as when each was committed on its own: the first
-// version continued the next submission in the held command buffer, and an upload recorded inside it went to the GPU after the draws recorded before it. The encode thread is held
-// by a queue block until the submissions are recorded, and "an earlier command buffer runs" is the counter raised by hand
+// Submissions reaching the encode thread while the GPU runs go to the queue in one commit (nvn_rec.h, held submissions); each report still reads its own part of the GPU time,
+// and other queue work recorded inside a later submission goes after the held ones and before that submission's command buffer.
 static void merge_case(void) {
     if (!rec_on()) return;
     tex_t colour; target(&colour, 99820);
@@ -760,11 +733,10 @@ static void merge_case(void) {
         state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
         R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &colour;
         clear(MTLClearColorMake(k == 0, k == 1, k == 2, 1)); rp_end();
-        mtl_sub_counter((uint64_t)rep.contents + 16 * (uint64_t)k, 0);   // a timestamp at the end of its (only) segment: its command buffer's end, or its own part of a shared one
+        mtl_sub_counter((uint64_t)rep.contents + 16 * (uint64_t)k, 0);
         f[k] = mtl_sub_commit();
     }
     dispatch_semaphore_signal(gate);
-    // (polled, not waited for: a waiter that wakes on the queue's signal completes the records itself, with its own clock for every report: post_early)
     for (int i = 0; i < 50000 && g_done < f[2]; i++) usleep(100);
     CHECK(g_done >= f[2], "three submissions behind running work complete");
     atomic_fetch_sub(&g_rx_busy_hold, hold_lim);
@@ -773,8 +745,6 @@ static void merge_case(void) {
     CHECK(atomic_load(&g_sub_cmt) >= f[2], "their commit notes are passed");
     uint64_t r[3][2]; memcpy(r, rep.contents, sizeof r);
     CHECK(r[0][1] && r[1][1] >= r[0][1] && r[2][1] >= r[1][1] && r[2][1] > r[0][1], "each one's report reads its own end, not the shared command buffer's");
-    // a queue operation recorded inside the next submission, after its first pass: the held submission goes to the queue before it, and that submission's own command buffer,
-    // which holds the pass, after it (an upload batch flushed in the middle of a submission is committed before the draws it serves, wherever in the submission they were recorded)
     rec_drain(); for (int i = 0; i < 20000 && (atomic_load(&g_rx_fly) || atomic_load(&g_seg_inflight)); i++) usleep(100);
     cbs0 = g_rx_cbs; merged0 = g_rx_merged; __block uint64_t held_at_block = ~0ull; __block int pend_at_block = -1, nb_at_block = -1;
     atomic_fetch_add(&g_rx_busy_hold, hold_lim);
@@ -789,20 +759,18 @@ static void merge_case(void) {
     atomic_fetch_sub(&g_rx_busy_hold, hold_lim);
     CHECK(pend_at_block == 0 && held_at_block == cbs0 + 1 && g_rx_merged - merged0 >= 1 && fa < fb2, "the held submission was committed before the queue operation ran");
     CHECK(nb_at_block == 1, "and alone: the next submission's pass recorded before the queue operation was not in that commit");
-    // the GPU has run out of work but the commit feedback has not reported it yet (its count held up here): the next submission is not held, as the GPU is read through the
-    // encode thread's event (DM_NVN_SUB_IDLE_FB=1 reads that count and holds it)
+    // the GPU idle but commit feedback not reported yet: the next submission is not held (DM_NVN_SUB_IDLE_FB=1 reads that count and holds it)
     rec_drain(); for (int i = 0; i < 20000 && (atomic_load(&g_rx_fly) || atomic_load(&g_seg_inflight)); i++) usleep(100);
     for (int i = 0; i < 20000 && rx_inflight(); i++) usleep(100);
     cbs0 = g_rx_cbs; merged0 = g_rx_merged;
     atomic_fetch_add(&g_rx_fly, hold_lim);
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &colour; clear(MTLClearColorMake(0, 0, 1, 1)); rp_end(); uint64_t fi = mtl_sub_commit();
-    for (int i = 0; i < 50000 && g_done < fi; i++) usleep(100);   // (polled: a drain would send it at once either way)
+    for (int i = 0; i < 50000 && g_done < fi; i++) usleep(100);
     CHECK(g_done >= fi, "a submission after the GPU's work ended completes");
     atomic_fetch_sub(&g_rx_fly, hold_lim);
     const char *fbm = getenv("DM_NVN_SUB_IDLE_FB");
     if (!(fbm && !strcmp(fbm, "1"))) CHECK(g_rx_merged == merged0 && g_rx_cbs == cbs0 + 1, "the GPU is idle before its feedback reports it: the submission went at once, not held");
-    // A blocking mtl_wait on a held final submission wakes the encode thread's idle wait (rec_wake_for_fence) instead of sitting 450 us while the waiter blocks,
-    // while still letting queued submissions before it merge into one commit
+    // a blocking mtl_wait on a held final submission wakes the encode thread (rec_wake_for_fence), still letting earlier ones merge
     rec_drain(); for (int i = 0; i < 20000 && (atomic_load(&g_rx_fly) || atomic_load(&g_seg_inflight)); i++) usleep(100);
     for (int i = 0; i < 20000 && rx_inflight(); i++) usleep(100);
     cbs0 = g_rx_cbs; merged0 = g_rx_merged;
@@ -820,8 +788,7 @@ static void merge_case(void) {
     CHECK(g_rx_merged - merged0 == 2 && g_rx_cbs == cbs0 + 1 && atomic_load(&g_rx_need_fence) >= fw, "blocking waiter keeps queued submissions merged in one commit and wakes flush");
 }
 
-// Output-mapping-only fixture (no rewritable sample): main0 writes magenta to color(0); main0_f remaps
-// that output through OM_0_k. Specialized with OM_0_1, attachment 1 is magenta and attachment 0 stays the clear colour.
+// output mapping only: main0 writes magenta to color(0); with OM_0_1 attachment 1 is magenta, attachment 0 the clear colour
 static void om_case(const char *dir) {
     int before = failed; NSString *d = @(dir);
     NSData *oj = [NSData dataWithContentsOfFile:[d stringByAppendingPathComponent:@"om.json"]];
@@ -883,9 +850,7 @@ static void om_case(const char *dir) {
     CHECK(att1, "attachment 1 is magenta: OM_0_1 moved colour 0");
     printf("feedback output-mapping-only: %s\n", before == failed ? "PASS" : "FAIL");
 }
-// A draw that writes depth and samples its own depth attachment through a bound slot reads a copy taken after its pass ends (fb_depth_snap), reused without ending the pass until the
-// game's next barrier; a draw that leaves depth alone reads the attachment directly, as before. Only serials matter to the rule, as in reuse_case: the stand-in depth texture is RGBA8,
-// filled from the CPU
+// a draw writing depth and sampling its own depth attachment reads a copy taken after its pass ends (fb_depth_snap); the stand-in is RGBA8: only serials matter
 static void depth_snap_case(NvProg *pr) {
     int before = failed; NvShader *fs = pr->sh[1]; fs->rf.b[0].reg = 0;
     tex_t output, depth; target(&output, 99920); id<MTLTexture> dtex = target(&depth, 99921); mtl_reg_tex(652, &depth, NULL);
@@ -901,13 +866,13 @@ static void depth_snap_case(NvProg *pr) {
     CHECK(!g_fb_dread, "and does not count as reading the attachment");
     id<MTLTexture> first = g_fb_use[0];
     blit_barrier(); readback(first, result, 0);
-    R.rt.depth = NULL; clear(MTLClearColorMake(0, 0, 0, 1)); R.rt.depth = &depth;   // the pass that draw opens
+    R.rt.depth = NULL; clear(MTLClearColorMake(0, 0, 0, 1)); R.rt.depth = &depth;
     fb_prepare(pr);
     CHECK(g_enc && g_fb_n == 1 && g_fb_use[0] == first && g_fb_dsnaps == copies + 1, "the next such draw reuses the copy without ending the pass");
     g_fb_bar++;
     fb_prepare(pr);
     CHECK(!g_enc && g_fb_n == 1 && g_fb_dsnaps == copies + 2, "a game barrier makes the next one take a fresh copy");
-    R.rt.depth = NULL; clear(MTLClearColorMake(0, 0, 0, 1)); rp_end();   // that draw writes depth in the pass it opens: the next case starts in a clean one
+    R.rt.depth = NULL; clear(MTLClearColorMake(0, 0, 0, 1)); rp_end();
     clear(MTLClearColorMake(0, 0, 0, 1)); R.rt.depth = &depth; S.ds.dw = 0;
     fb_prepare(pr);
     CHECK(g_enc && g_fb_n == 0 && g_fb_dread && g_fb_dsnaps == copies + 2, "a draw that leaves depth alone reads the attachment directly");
@@ -920,8 +885,7 @@ static void depth_snap_case(NvProg *pr) {
     mtl_tex_release(&output); mtl_tex_release(&depth);
     printf("depth copy: %s\n", before == failed ? "PASS" : "FAIL");
 }
-// A draw that samples the depth attachment after an earlier draw of its pass wrote depth, and writes none itself, ends the pass first (Red Dead Redemption's cloud fog); one that samples
-// it first in its pass leaves the pass open, and a later draw that writes depth then ends it (g_fb_dread)
+// sampling depth after an earlier draw of the pass wrote it ends the pass first; sampling it first leaves the pass open (g_fb_dread)
 static void depth_rebind(NvProg *pr) {
     uint8_t ops[1024]={0}; size_t off=0; p_set_rt targets[2]={{0},R.rt};
     for (int i=0;i<2;i++) { op_hdr h={OP_SET_RT,8+sizeof(p_set_rt)}; memcpy(ops+off,&h,8); memcpy(ops+off+8,&targets[i],sizeof(p_set_rt)); off+=h.size; }
@@ -945,7 +909,7 @@ static void depth_after_write_case(NvProg *pr, int texu) {
     S.ds.dw = 0; depth_binding(texu,654); depth_rebind(pr);
     fb_prepare(pr);
     CHECK(!g_enc && g_fb_n == 0 && g_fb_dsplit == splits + 1, "a draw that samples the depth an earlier draw of its pass wrote ends the pass first");
-    R.rt.depth = NULL; clear(MTLClearColorMake(0, 0, 0, 1)); R.rt.depth = &depth;   // the pass that draw opens
+    R.rt.depth = NULL; clear(MTLClearColorMake(0, 0, 0, 1)); R.rt.depth = &depth;
     fb_prepare(pr);
     CHECK(g_enc && g_fb_dread && g_fb_dsplit == splits + 1, "one that samples it first in its pass reads it there");
     S.ds.dw = 1; depth_binding(texu,0); depth_rebind(pr);
@@ -964,9 +928,7 @@ static void depth_after_write_case(NvProg *pr, int texu) {
     mtl_tex_release(&output); mtl_tex_release(&depth);
     printf("depth after a write: %s\n", before == failed ? "PASS" : "FAIL");
 }
-// The copy of an actual private Depth32Float attachment, or a Depth32Float_Stencil8 one (Octopath Traveler II's), cleared through the production render pass, in a pass with a colour
-// attachment and in a depth-only one: the stand-in above checks the rule, not a depth format, its store or its copy (the colour pass's case from akratch's review of PR #1917).
-// pending: the attachment holds 0.75 from an earlier pass, and the clear to 0.375 still waits to be the load action of the pass the draw opens (no pass is open): the copy lands it first
+// real Depth32Float / Depth32Float_Stencil8 attachments: a pending clear to 0.375 over 0.75 lands before the copy
 static void real_depth_snap_case(NvProg *pr, int colour_pass, int stencil, int pending) {
     int before = failed; NvShader *fs = pr->sh[1]; fs->rf.b[0].reg = 0;
     tex_t colour, depth;
@@ -1005,8 +967,6 @@ static void real_depth_snap_case(NvProg *pr, int colour_pass, int stencil, int p
     mtl_tex_release(&depth);
     printf("real depth copy (%s, %s%s): %s\n", stencil ? "Depth32Float_Stencil8" : "Depth32Float", colour_pass ? "colour pass" : "depth-only pass", pending ? ", clear waiting" : "", before == failed ? "PASS" : "FAIL");
 }
-// A colour snapshot taken while the attachment's clear still waits to be the load action of the pass the draw opens holds the clear: the attachment holds (10, 20, 30, 40) from the CPU,
-// the clear is red, and the draw writes the attachment it samples
 static void pending_clear_case(NvProg *pr) {
     int before = failed; NvShader *fs = pr->sh[1]; fs->rf.b[0].reg = 0;
     tex_t source; id<MTLTexture> st = target(&source, 99950); mtl_reg_tex(656, &source, NULL);
@@ -1071,7 +1031,6 @@ int main(int argc, char **argv) { @autoreleasepool {
     mip_chain_case(pr);
     mip_pixels_case(lib);
     base_level_case(lib, 0, 1, 0, 0); base_level_case(lib, 1, 2, 1, 0); base_level_case(lib, 0, 2, 2, 1); base_level_case(lib, 0, 2, 3, 2);
-    // A texture named by one handle in a uniform buffer (FINAL FANTASY XII THE ZODIAC AGE's limit-break echo): before fb_prepare took TEXU bindings, the draw read the attachment itself
     fs->rf.b[0] = (nvn_rbind){.kind=NVN_RB_TEXU, .aid=0, .dtt=MTLTextureType2D}; slot_case(pr, pipeline, 2, 4);
     fs->rf.b[0] = (nvn_rbind){.kind=NVN_RB_TEX, .aid=0, .dtt=MTLTextureType2D};
     fs->fn = [lib newFunctionWithName:@"mask"];

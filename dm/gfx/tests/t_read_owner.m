@@ -1,8 +1,8 @@
-// ReadTexels on a thread other than the submit thread (GitHub issue #1814): the upload batch is the submit thread's (up_owner_check aborts on any other), so a reader never uploads,
-// syncs or makes a host texture; it takes the texture's storage whenever that holds the content. Tears of the Kingdom's bake::ModuleMgr reads textures on its own thread: the reader
-// found a texture not taken from its storage, the submit thread marked it CPU-written meanwhile, and tex_mtl_ took the packaged path and uploaded on the reader's thread (abort).
+// ReadTexels on a thread other than the submit thread: the upload batch is the submit thread's (up_owner_check aborts on any other), so a reader never uploads, syncs or makes
+// a host texture; it takes the texture's storage whenever that holds the content. A game may read textures on its own thread: the reader finds a texture not taken from its
+// storage, the submit thread marks it CPU-written meanwhile, and tex_mtl_ must not then take the packaged path and upload on the reader's thread (abort).
 // The race is made here by its outcome: each case gives tex_mtl_ the classification the submit thread left, on a thread that is not the submit thread.
-//   a: CPU-written, never resolved (the first upload in the report's crash)
+//   a: CPU-written, never resolved
 //   b: resolved as a GPU texture, then CPU-written (a rewrite the poll found): rebuilt as packaged on the submit thread only
 //   c: never resolved, never classified: read from its storage, left unresolved, so its first use on the submit thread still takes it from its storage
 // An abort in any case fails the test (the process exits on SIGABRT).

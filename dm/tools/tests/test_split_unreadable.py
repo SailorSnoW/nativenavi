@@ -1,5 +1,5 @@
-"""shader_split: a file no reader can read is left out with a red line, and the split goes on (PR #282: one archive of a revision its reader did not know ended a
-whole split with nothing written). The damaged file here is a SARC whose header is cut short, with a BAHS magic so that the scan opens it. No game files needed."""
+"""shader_split: a file no reader can read is left out with a red line, and the split goes on instead of ending with nothing written. The damaged file here is a SARC
+whose header is cut short, with a BAHS magic so that the scan opens it. No game files needed."""
 import contextlib
 import io
 import os
@@ -48,7 +48,8 @@ class ScanFile(unittest.TestCase):
     def test_split_goes_on(self):   # the whole split: the unreadable archive is reported once more at the end, the tables are written and the split exits 0
         rom = self.tmp / 'RomFS'; (rom / 'sub').mkdir(parents=True)
         (rom / 'sub/a.sarc').write_bytes(CUT); (rom / 'b.bin').write_bytes(b'no shaders')
-        main = self.tmp / 'main'; main.write_bytes(b'NSO0' + bytes(0xfc))   # an NSO header of three empty segments
+        main = self.tmp / 'main'
+        main.write_bytes(b'NSO0' + bytes(0xfc))   # an NSO header of three empty segments
         out = [self.tmp / n for n in ('pkg', 'map.tsv', 'facts.tsv', 'pairs.tsv', 'pso.tsv')]
         r = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', rom, main, *out], capture_output=True, text=True, env=dict(os.environ, J='2'))
         self.assertEqual(r.returncode, 0, r.stderr)

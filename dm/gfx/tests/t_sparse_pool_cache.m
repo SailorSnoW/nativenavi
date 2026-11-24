@@ -1,6 +1,6 @@
 // Sparse mappings as notes (treg_sparse_notes): a mapping request that changes a sparse texture's pages, with no registration, serial change or CPU write, reaches the texture
 // ID views, the pool tables and the handle tables at the next submission, and the GPU reads the newly mapped page; a request outside the texture notes nothing; serial changes
-// while a sparse pool exists keep the pool tables. Physical page contents are literal colours. After the fixture of PR #1721 (NicholasDominici)
+// while a sparse pool exists keep the pool tables. Physical page contents are literal colours.
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
@@ -107,8 +107,8 @@ int main(void) { @autoreleasepool {
     CHECK(gpu_read(table, 1) == C, "so does the pool table");
 
     // Views of a sparse texture whose finest level is not mapped. Its host texture is the view of levels [1, 3) (sparse_view), and a texture view's levels count from NVN's level 0:
-    // Resident Evil 4 samples its streamed textures through views of levels 1 + 0 and 2 + 0. The level 2 view started past the host texture's two levels and was left out (the
-    // dummy); the level 1 view read level 2
+    // a game may sample streamed textures through views of levels 1 + 0 and 2 + 0. The level 2 view must not be left out (the dummy) as past the host texture's two levels, nor
+    // the level 1 view read level 2
     const uint32_t D = 0xff0a0b0c, E = 0xff0d0e0f; const uint64_t VO = 0x100000, PO = 0x80000;
     NVNtexture tm; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 256); h_nvnTextureBuilderSetHeight(&tb, 256); h_nvnTextureBuilderSetLevels(&tb, 3);

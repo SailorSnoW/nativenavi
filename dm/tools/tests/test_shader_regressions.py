@@ -1,5 +1,5 @@
 """Shader regressions between two builds of a game's shader libraries (dm/gfx/tools/shader_regressions.py) and the packing script's stop on them (build_app.py
-shader_regressions; GitHub issue #272): a shader that translated in the newest other b-*/ of the same game and fails now is listed, new keys and shaders that failed before are not,
+shader_regressions): a shader that translated in the newest other b-*/ of the same game and fails now is listed, new keys and shaders that failed before are not,
 another game's stamped library is never the previous build, and the packing script stops unless ALLOW_SHADER_REGRESSIONS. Build reports only: no game files, translator or Metal needed.
 Also what a shader that built lost (losses, report_losses), which never stops a build."""
 import contextlib
@@ -66,7 +66,8 @@ class Compare(Base):
 
     def test_nothing_to_compare(self):
         self.build('new', [('a', 'translation failed', FAIL)])
-        (self.lib / 'cas').mkdir(); (self.lib / 'b-empty').mkdir()   # dmsh_build.py's compile cache, a folder without a report
+        (self.lib / 'cas').mkdir()   # dmsh_build.py's compile cache, a folder without a report
+        (self.lib / 'b-empty').mkdir()
         r = self.tool('new')
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn('no earlier build', r.stdout)

@@ -1,11 +1,4 @@
-"""Ampere HMMA.16816 with an f16 accumulator through simdgroup_matrix (dmsh_rewrite.py hmma_msl): the rewrite of the translator's helper dmsh_hmma16816_f16 as spirv-cross
-writes it, its arguments and scratch array, the matrices and shared memory it gives the functions that call it, the compile with the chain's Metal flags, and on this Mac's
-GPU the rewritten body against a CPU reference of PTX mma.m16n8k16 (f16 sources and accumulator): one call on random fragments, four SIMD-groups a threadgroup, and a run
-of calls with TensorPass's flags (an accumulator kept in its slot between calls, A kept from the call before, C = 0, A loaded from shared memory where an LDSM read it,
-plain and transposed). With DMSH_TEST_XLATE (the translator), the flags it gives two chained HMMAs on an LDSM's matrices."""
-import ast
-import collections
-import itertools
+"""Ampere HMMA.16816 with an f16 accumulator through simdgroup_matrix (dmsh_rewrite.py hmma_msl), checked on this Mac's GPU against a CPU reference of PTX mma.m16n8k16."""
 import bisect
 import json
 import os
@@ -40,8 +33,7 @@ struct spvUnsafeArray
     constexpr const threadgroup T& operator [] (size_t pos) const threadgroup { return elements[pos]; }
 };
 '''
-# The helper as spirv-cross writes it (Ocarina of Time's e6be82d835fbe4d3, cut down to its signature and a body of the same shape): lane, block, A (4), B (2), C (2), flags,
-# A's LDSM address, A's four offsets, A's row stride, out D1, the scratch
+# lane, block, A (4), B (2), C (2), flags, A's LDSM address, its four offsets and row stride, out D1, the scratch
 HELPER = '''
 static inline __attribute__((always_inline))
 int dmsh_hmma16816_f16(thread const int& _10, thread const int& _11, thread const int& _12, thread const int& _13, thread const int& _14, thread const int& _15, thread const int& _16, thread const int& _17, thread const int& _18, thread const int& _19, thread const int& _20, thread const int& _21, thread const int& _22, thread const int& _23, thread const int& _24, thread const int& _25, thread const int& _26, thread int& _27, threadgroup spvUnsafeArray<uint, 1024>& _34)
@@ -70,14 +62,8 @@ kernel void check(device const uint *in [[buffer(0)]], device uint *out [[buffer
     out[gid * 2] = uint(d0); out[gid * 2 + 1] = uint(d1);
 }
 '''
-# A run of four calls a SIMD-group, with the flags TensorPass gives them (TensorPass.Flag*): A0's tile lies in shared memory row-major, 48 bytes a row, read as an LDSM's
-# matrices 0..3 at rows 0, 8 and columns 0, 8 (offsets 0, 384, 16, 400); A1 lies there transposed (A1's columns are the rows, 32 bytes apart: matrices at 0, 16, 256, 272).
-#   1. A0 B0 + C       A where the LDSM read it, D left in slot 0          (flags 16 | 4)
-#   2. A0 B1 + slot 0  A kept from call 1, C from slot 0: E0               (1 | 2 | 16)
-#   3. A1 B2           C = 0, A through the scratch, D left in slot 1      (8 | 4 | 1 << 8)
-#   4. A1 B3 + slot 1  A transposed where the LDSM read it, C slot 1: E1   (2 | 16 | 32 | 1 << 8)
-# The registers each call is given are what the translator's body would compute with (a stale A or C included), so the run also checks that the flags are what is read.
-# Input a SIMD-group: halves A0 (16 x 16, row-major), A1, B0..B3 (16 x 8, k-major), C (16 x 8): 1152 halves
+# TensorPass flags: 1. A direct, D to slot 0 (16 | 4)  2. A kept, C slot 0 (1 | 2 | 16)  3. C = 0, A via scratch, D slot 1 (8 | 4 | 1 << 8)  4. A transposed direct, C slot 1 (2 | 16 | 32 | 1 << 8)
+# Each call gets the registers the translator's body would compute with (stale A or C included), so the flags decide what is read.
 SEQ_KERNEL = '''
 static uint pk(device const ushort* p, int i, int j) { return uint(p[i]) | uint(p[j]) << 16; }
 kernel void check_seq(device const ushort *in [[buffer(0)]], device uint *out [[buffer(1)]], uint lane [[thread_index_in_simdgroup]], uint sg [[simdgroup_index_in_threadgroup]],
@@ -112,10 +98,7 @@ kernel void check_seq(device const ushort *in [[buffer(0)]], device uint *out [[
     out[gid * 4] = uint(d2); out[gid * 4 + 1] = uint(e2); out[gid * 4 + 2] = uint(d4); out[gid * 4 + 3] = uint(e4);
 }
 '''
-# Call 4 is given A0's registers on purpose: A1 must come from shared memory (FlagADirect), transposed (FlagATrans)
-# A chain held in slot 0 while calls outside every chain run (Ocarina of Time's agl_ndsr_vr networks, GitHub issue #1537): such a call has slot 0 in its flags
-# and must leave slot 0's accumulator alone. E0 = A0 B0 + C kept in slot 0 (flags 4), then E1 = A1 B2 (C = 0, 8) and + A1 B3 (C through the registers, 0), both outside
-# every chain, then E0 += A0 B1 from slot 0 (2). The same outputs and reference as the run above
+# a call outside every chain carries slot 0 in its flags and must leave slot 0's accumulator alone
 CLOBBER_KERNEL = '''
 static uint pk(device const ushort* p, int i, int j) { return uint(p[i]) | uint(p[j]) << 16; }
 kernel void check_seq(device const ushort *in [[buffer(0)]], device uint *out [[buffer(1)]], uint lane [[thread_index_in_simdgroup]], uint sg [[simdgroup_index_in_threadgroup]],
@@ -168,8 +151,7 @@ static void run(id<MTLDevice> dev, id<MTLComputePipelineState> ps, id<MTLBuffer>
     [ce dispatchThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(128, 1, 1)]; [ce endEncoding]; [cb commit]; [cb waitUntilCompleted];
 }
 '''
-# The GPU check: 64 threadgroups of 128 lanes, random halves in [-1, 1]; the reference is Ampere's: C, then k 0-7 summed in float in order and rounded once to f16,
-# then k 8-15 the same way (dmsh_rewrite.py HMMA_BODY), and every output must match it bit for bit
+# Ampere's order: C, then k 0-7 summed in float and rounded once to f16, then k 8-15 the same way
 RUNNER = HALF + r'''
 int main(int argc, char **argv) {
     @autoreleasepool {
@@ -206,7 +188,6 @@ int main(int argc, char **argv) {
     }
 }
 '''
-# The run of calls: E0 = A0 B0 + A0 B1 + C and E1 = A1 B2 + A1 B3, each two HMMAs with an f16 accumulator in between, bit for bit against the same reference
 SEQ_RUNNER = HALF + r'''
 int main(int argc, char **argv) {
     @autoreleasepool {
@@ -243,11 +224,7 @@ int main(int argc, char **argv) {
 '''
 
 
-# B slots (hmma_bslots): the network's weights, two pairs W and V written once at the top level, then calls through copies of them as spirv-cross writes its arguments:
-#   1. W at the top level: keeps W                    2-4. W in a loop: take W                 5. V in a branch, before any V at the top level: through the scratch
-#   6. V at the top level: keeps V                    7. V in a branch after it: takes V       8. B a call's D1 (written by call 7): through the scratch
-#   9. B written twice (U): through the scratch       10. W through a function with a thread reference (touch): through the scratch
-# The output must be the bits of the same kernel with every call through the scratch
+# hmma_bslots over W and V written once at the top level: kept, taken in a loop or a later branch, or through the scratch; the output must equal the all-scratch kernel
 SLOT_KERNEL = """
 static inline __attribute__((always_inline))
 void touch(thread int& x)
@@ -340,7 +317,7 @@ int main(int argc, char **argv) {
 """
 
 
-def run_libs(test, msls, runner):   # each source compiled to its own library, all run by the runner; its lines
+def run_libs(test, msls, runner):
     with tempfile.TemporaryDirectory() as d:
         d = Path(d); libs = []
         for i, msl in enumerate(msls):
@@ -374,21 +351,21 @@ class HmmaRewrite(unittest.TestCase):
         out = hmma_msl(HEAD + HELPER + KERNEL)
         body = out[out.index('int dmsh_hmma16816_f16('):out.index('kernel void check')]
         self.assertEqual(body.count('simdgroup_multiply_accumulate('), 4)
-        self.assertIn('threadgroup uint* s = &_34[uint(_11)];', body)        # the scratch array at the block offset
-        self.assertIn('uint g = uint(_10) >> 2', body)                        # the lane
-        self.assertIn('s[g * 8 + t] = uint(_12)', body)                       # A0
-        self.assertIn('s[192 + (g + 8) * 4 + t] = uint(_19)', body)           # C1
-        self.assertIn('const int f = int(_20)', body)                         # the flags
-        self.assertIn('_27 = as_type<int>(d1);', body)                        # the out argument
+        self.assertIn('threadgroup uint* s = &_34[uint(_11)];', body)
+        self.assertIn('uint g = uint(_10) >> 2', body)
+        self.assertIn('s[g * 8 + t] = uint(_12)', body)
+        self.assertIn('s[192 + (g + 8) * 4 + t] = uint(_19)', body)
+        self.assertIn('const int f = int(_20)', body)
+        self.assertIn('_27 = as_type<int>(d1);', body)
         self.assertIn('return as_type<int>(d0);', body)
-        self.assertNotIn('_40', body)                                         # the translator's body is gone, the braces of its blocks too
-        self.assertEqual(out.count('static inline __attribute__((always_inline))'), 1)   # spirv-cross's line before it stays, alone
+        self.assertNotIn('_40', body)
+        self.assertEqual(out.count('static inline __attribute__((always_inline))'), 1)
 
     def test_callers_get_their_matrices_and_shared_memory(self):
         out = hmma_msl(HEAD + HELPER + SEQ_KERNEL)
         kernel = out[out.index('kernel void check_seq'):]
-        self.assertIn('{\n    simdgroup_half8x8 dm_acc[16], dm_am[4], dm_bm[2];\n', kernel)   # first in the body
-        self.assertEqual(kernel.count(', scr, dm_acc, dm_am, dm_bm, -1, shm)'), 4)              # every call: the matrices, its B slot (none: four B), then the one other threadgroup array
+        self.assertIn('{\n    simdgroup_half8x8 dm_acc[16], dm_am[4], dm_bm[2];\n', kernel)
+        self.assertEqual(kernel.count(', scr, dm_acc, dm_am, dm_bm, -1, shm)'), 4)
         self.assertIn('thread simdgroup_half8x8 (&acc)[16], thread simdgroup_half8x8 (&am)[4], thread simdgroup_half8x8 (&bm)[2], const int bmode, threadgroup spvUnsafeArray<uint, 1280>& dm_shm)', out)
         self.assertIn('adirect = (f & 16) != 0', out)
 
@@ -406,7 +383,7 @@ class HmmaRewrite(unittest.TestCase):
     def test_b_slots(self):
         out = hmma_msl(HEAD + HELPER + SLOT_KERNEL)
         modes = [int(x) for x in re.findall(r', scr, dm_acc, dm_am, dm_bm, (-?\d+)\)', out)]
-        self.assertEqual(modes, [0, 1, -1, 2, 3, -1, -1, -1])   # W kept and taken in the loop, V in the branch first through the scratch, kept, taken; D1, U and touched W through the scratch
+        self.assertEqual(modes, [0, 1, -1, 2, 3, -1, -1, -1])
         self.assertIn('simdgroup_half8x8 dm_acc[16], dm_am[4], dm_bm[4];', out)
         self.assertIn('thread simdgroup_half8x8 (&bm)[4], const int bmode', out)
 
@@ -418,7 +395,7 @@ class HmmaRewrite(unittest.TestCase):
         with self.assertRaises(ValueError):
             hmma_msl(HEAD + HELPER.replace('thread const int& _26, ', ''))
 
-    def test_block_end_as_a_scan_of_every_character(self):   # block_end steps from brace to brace; it gives what a scan of every character gives, a start past the end and an open block included
+    def test_block_end_as_a_scan_of_every_character(self):   # block_end must give what a scan of every character gives
         def scan(src, start):
             depth = 0
             for i in range(start, len(src)):
@@ -430,11 +407,11 @@ class HmmaRewrite(unittest.TestCase):
             except ValueError: return None
         for src in ('{a{b}c}d', '{{}', 'a{}', '}{}', '', '{'):
             for start in range(len(src) + 2): self.assertEqual(found(src, start), scan(src, start), (src, start))
-        src = HEAD + HELPER + SEQ_KERNEL   # every brace of a shader, and some other characters
+        src = HEAD + HELPER + SEQ_KERNEL
         for start in [i for i, ch in enumerate(src) if ch in '{}'] + list(range(0, len(src), 97)):
             self.assertEqual(found(src, start), scan(src, start), start)
 
-    def test_function_openings_as_rfind_finds_them(self):   # hmma_msl finds a call's function among the openings found once (FUNC_OPEN, bisect): the last line holding only a brace that ends before it
+    def test_function_openings_as_rfind_finds_them(self):
         for src in (HEAD + HELPER + SEQ_KERNEL, '\n{\n{\nx\n{\n', 'x\n{', '\n{\n'):
             opens = [o.start() for o in scope['FUNC_OPEN'].finditer(src)]
             for at in range(len(src) + 1):
@@ -467,16 +444,14 @@ def waiting(i): return (i[0] | 0x3f << 52, i[1])   # waits on every scoreboard (
 
 @unittest.skipUnless(os.environ.get('DMSH_TEST_XLATE'), 'set DMSH_TEST_XLATE to the offline translator')
 class TranslatorFlags(unittest.TestCase):
-    """R2 = thread x * 16 (local size 32: the lane), LDSM.16.M88.4 R36, [R2]: rows 16 bytes apart, matrix m at 128 m. HMMA R46 = R36..39 x R4 + 0, then HMMA R46 = R36..39 x R6 +
-    R46, whose result is stored: the first gets C = 0, A from where the LDSM read it, D left in slot 0; the second A kept, C from slot 0, D to the registers.
-    Encodings: Ocarina of Time's NDVE network (cs_movie.bin), with the registers changed"""
+    """LDSM.16.M88.4 R36, [R2] then two chained HMMAs: the first C = 0, A direct, D left in slot 0; the second A kept, C from slot 0, D to the registers"""
     S2R = (0x000e260000002100, 0x0000000000097919)    # S2R R9, SR_TID.X
     IMAD = (0x000fe200078e02ff, 0x0000001009027824)   # IMAD R2, R9, 16, RZ
     LDSM = (0x000e220000000200, 0x000000000224783b)   # LDSM.16.M88.4 R36, [R2]
     HMMA0 = (0x041ff000000008ff, 0x00000004242e723c)  # HMMA.16816.F16 R46, R36, R4, RZ
     HMMA1 = (0x000fe2000000082e, 0x00000006242e723c)  # HMMA.16816.F16 R46, R36, R6, R46
     STS = (0x000fe8000000c800, 0x0000082e09008388)    # STS.U32 [R9 * 16 + 8], R46
-    STS1 = (0x000fe8000000c800, 0x00000c2f09008388)   # STS.U32 [R9 * 16 + 12], R47: D's two words, as a network stores them
+    STS1 = (0x000fe8000000c800, 0x00000c2f09008388)   # STS.U32 [R9 * 16 + 12], R47
     EXIT = (0x000fea0003800000, 0x000000000000794d)
 
     def test_chain_reuse_and_direct_a(self):
@@ -497,10 +472,10 @@ class TranslatorFlags(unittest.TestCase):
         value = lambda a: int(consts.get(a, a))
         self.assertEqual([value(a) for a in calls[0][10:17] if a != calls[0][11]], [8 | 4 | 16, 0, 128, 256, 384, 16])   # C = 0, D to slot 0, A direct; offsets, stride
         self.assertEqual(value(calls[1][10]), 1 | 2 | 16)                                                               # A kept, C from slot 0
-        copies = dict(re.findall(r'int (_\d+) = (_\d+);', msl))   # spirv-cross passes each argument through a copy of its own
+        copies = dict(re.findall(r'int (_\d+) = (_\d+);', msl))
         root = lambda a: root(copies[a]) if a in copies else a
-        self.assertEqual(root(calls[0][11]), root(calls[1][11]))                                                        # the LDSM's row address
-        self.assertRegex(msl, r'int %s = as_type<int>\(\w+\) \* 16;' % root(calls[0][11]))                              # R2
+        self.assertEqual(root(calls[0][11]), root(calls[1][11]))
+        self.assertRegex(msl, r'int %s = as_type<int>\(\w+\) \* 16;' % root(calls[0][11]))
 
 
 if __name__ == '__main__':

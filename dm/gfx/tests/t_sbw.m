@@ -1,5 +1,5 @@
 // Other GPU writes of a submission (sbw_note / sbw_hits): a storage buffer bound with size 0 counts as the rest of its Metal buffer, kept as an interval,
-// so a uniform block in another buffer can still be read from memory (GitHub issue #534: Breath of the Wild's shrines)
+// so a uniform block in another buffer can still be read from memory
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -10,13 +10,13 @@ static int checks, failed;
 #define CHECK(label,c) do {checks++;if(!(c)){failed++;fprintf(stderr,"FAIL: %s\n",label);}}while(0)
 int main(void){@autoreleasepool{
     id<MTLDevice> dev=MTLCreateSystemDefaultDevice();
-    id<MTLBuffer> pool=[dev newBufferWithLength:0xa04000 options:MTLResourceStorageModeShared];   // BotW's particle pool: 10 MB at 0x70c5d50000
+    id<MTLBuffer> pool=[dev newBufferWithLength:0xa04000 options:MTLResourceStorageModeShared];   // a particle pool: 10 MB at 0x70c5d50000
     void *mb=(__bridge void*)pool;const uint64_t base=0x70c5d50000ull,ub=0x70c38c0000ull;
     CHECK("a sized binding writes its size",sbw_len(64,mb,0x40d80)==64);
     CHECK("a size-0 binding writes the rest of its buffer",sbw_len(0,mb,0x40d80)==0xa04000-0x40d80);
     CHECK("an offset past the buffer writes nothing",sbw_len(0,mb,0xa04000)==0);
     pend_reset();
-    for(int s=0;s<3;s++){uint64_t o=0x40d80+0x400*s;sbw_note(base+o,sbw_len(0,mb,o),SBW_GPU);}   // the three outputs of cs_effect var3 (9f8116baffddaf81)
+    for(int s=0;s<3;s++){uint64_t o=0x40d80+0x400*s;sbw_note(base+o,sbw_len(0,mb,o),SBW_GPU);}   // a compute shader's three outputs
     CHECK("size-0 bindings do not stop the tracking",!g_sbw_over);
     CHECK("nested wide writes merge into one interval",g_nsbw_w==1);
     CHECK("the uniform block in another buffer is not hit",!sbw_hits(ub,ub+0x100));
@@ -136,7 +136,7 @@ int main(void){@autoreleasepool{
     CHECK("once its fence completes, the g_um page is no longer live",!gw_live(addr,addr+8)&&rc_value(addr,&x)&&x==0);
     g_done=was_done; g_gw_all=was_all; memset(g_gwx,0,sizeof g_gwx); if(g_um) memset(g_um,0,UM_N*sizeof *g_um);}
     pend_reset();
-    // Large scenes with thousands of small writable SSBOs (e.g. ~7,500 15 KB terrain chunks in Donkey Kong Bananza's 3D overview map) touch >16,384 unique 4 KB pages in one submission.
+    // Large scenes with thousands of small writable SSBOs (e.g. ~7,500 15 KB terrain chunks) touch >16,384 unique 4 KB pages in one submission.
     // g_sbwp grows dynamically while keeping load <= 50% and preserves g_sbw_list for gw_commit.
     {uint64_t arena=0x8140000000ull, other=0x8021f3e100ull, was_done=g_done, was_all=g_gw_all;
     g_gw_all=0; memset(g_gwx,0,sizeof g_gwx);

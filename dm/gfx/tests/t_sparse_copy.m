@@ -1,8 +1,8 @@
 // GPU copies into a texture of a sparse pool that the host uploads whole (tex_from_storage): the copy reaches the physical memory mapped behind the texture, as the hardware's does
 // (gsb_swz through the page table); a copy into a level of a texture bound from that level (sparse_view) lands in that level (tex_mtl_all); and an upload after a mapping change keeps
-// what earlier copies wrote, also when the copy's command buffer is still running (the upload batch's GPU gather, or on the CPU sp_store_wait). Densha de GO!! Hashiro Yamanote Line
-// streams the finer levels of its sparse ASTC textures in by buffer-to-texture copies, and every upload after a mapping change put back zeros (GitHub #2350). A gather alone leaves the physical pool it reads out of the residency set (gather_only). Run twice: with the GPU
-// deswizzle (the gather on the GPU) and without it (the gather on the CPU). Texel values are literal colours
+// what earlier copies wrote, also when the copy's command buffer is still running (the upload batch's GPU gather, or on the CPU sp_store_wait): a game may stream the finer levels of
+// sparse ASTC textures in by buffer-to-texture copies. A gather alone leaves the physical pool it reads out of the residency set (gather_only). Run twice: with the GPU deswizzle (the
+// gather on the GPU) and without it (the gather on the CPU). Texel values are literal colours
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
@@ -100,7 +100,7 @@ static void run(int gpu, pool_t *virt, pool_t *phys, uint8_t *pmem, pool_t *cpoo
     h_nvnTextureFinalize(&tx);
 }
 // A texture over a physical pool nothing on the GPU writes into, uploaded: its gather reads the pool through a buffer the upload batch holds, and leaves the pool out of the
-// residency set. Through the pool's own buffer (mtl_gpu_addr) every pool behind a gathered texture was wired for good: Resident Evil 4 had 148 pools and 777 MB wired by the forest (#2350)
+// residency set (through the pool's own buffer, mtl_gpu_addr, every pool behind a gathered texture would stay wired for good)
 static void gather_only(int gpu, pool_t *virt, pool_t *gphys, uint8_t *gmem, uint64_t VO, uint64_t P) {
     const uint32_t D = 0xff99aabb;
     const char *how = gpu ? "GPU gather" : "CPU gather";

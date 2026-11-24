@@ -1,8 +1,8 @@
-// Creating and destroying a guest thread must not leak host heap (item 1 of the memory-leak work): guest_thread_init allocates a TLS block and a thread-local region for each thread,
-// and previously the keys were created with a null destructor and nothing was freed at thread exit, leaking 8192 + 0x200 + 0x400 = 9728 bytes per thread.
+// Creating and destroying a guest thread must not leak host heap: guest_thread_init allocates a TLS block and a thread-local region for each thread, 8192 + 0x200 + 0x400 = 9728
+// bytes, which thread exit must free.
 // Method: include the real thread.c directly and replace its calloc / free with the counting versions here; the TLS / thread-local-region keys are created the way the loader does (null destructor), and freeing relies on the extra key thread.c creates itself.
 // Expected values are hard-coded: create and destroy 200 threads, bytes allocated = 200 x (9728 + 16 for recording the pointers) = 1948800, blocks still not freed after all threads exit = 0.
-// Before exiting, each thread overwrites the slots of both keys with other pointers (which is what the guest does: it sets its own thread pointer) - a destructor that frees the value in the slot would crash (the first version of the fix crashed right here on the real host).
+// Before exiting, each thread overwrites the slots of both keys with other pointers (which is what the guest does: it sets its own thread pointer) - a destructor that frees the value in the slot would crash.
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <stdio.h>

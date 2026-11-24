@@ -45,11 +45,11 @@ class Unit(unittest.TestCase):
         self.assertEqual(set(pn), {k for k in pinfo if k.startswith('entry')})   # the keys of the reflection's `pull` that name entry points
         self.assertEqual(u.count('static __attribute__((always_inline)) main0_out dm_vs_body(main0_in in, constant float4& u)\n{\n'), 1)
         self.assertEqual(u.count('static main0_out dm_vs_body_o(main0_in in, constant float4& u)\n{\n    return dm_vs_body(in, u);\n}\n'), 1)
-        self.assertNotIn('noinline', u)   # a noinline body changed the results of an entry that shared it: the out-of-line copy is a plain static function
+        self.assertNotIn('noinline', u)   # a noinline body can change the results of an entry that shares it: the out-of-line copy is a plain static function
         es = dmsh_side.vs_entries(u)
         self.assertEqual(sorted(es), ['main0', 'main0_p', 'main0_v', 'main0_wl', 'main0_z', 'main0_z_wl', 'main0_zp', 'main0_zv'])
         body = lambda n: u[es[n]['body']:es[n]['end']]
-        self.assertEqual(body('main0'), CALL_GL)   # the depth line once, after the call, where the copy had it before each of its two returns
+        self.assertEqual(body('main0'), CALL_GL)   # the depth line once, after the call, not before each of the body's two returns
         self.assertEqual(body('main0_z'), CALL_Z)
         self.assertEqual(es['main0']['params'], 'main0_in in [[stage_in]], constant float4& u [[buffer(0)]]')
         self.assertIn('    float4 m_0 [[attribute(0)]];\n    uint4 m_1 [[attribute(1)]];', u)   # main0_in keeps its attributes for them
@@ -227,7 +227,7 @@ class BuildStep(unittest.TestCase):
 
     def test_one_compile(self):
         got, mtl, lines, ns = self.run_step(source(['float4', 'uint4']))
-        self.assertEqual(mtl.calls, [('mac', ['_b', '_bp', '_bv'], [self.PULLED, self.SHADOWED])])   # where there were three compiles
+        self.assertEqual(mtl.calls, [('mac', ['_b', '_bp', '_bv'], [self.PULLED, self.SHADOWED])])   # one compile for the three libraries
         self.assertEqual(got, {'pull': {'entry': 'main0_p', 'entry_z': 'main0_zp', 'slot': 16, 'inputs': [0, 1], 'entry_wl': 'main0_wl', 'entry_z_wl': 'main0_z_wl'},
                                'vin': {'entry': 'main0_v', 'entry_z': 'main0_zv', 'shadow': [{'location': 1, 'float': 16, 'sint': 17}]}})
         self.assertEqual(lines, [])

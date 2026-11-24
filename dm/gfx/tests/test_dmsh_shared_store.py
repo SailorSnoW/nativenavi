@@ -3,10 +3,8 @@
 dmsh_shared_store16_<id> as spirv-cross writes them, its refusals, the device form tg_spill gives a kernel past Metal's 32 KB, and on this Mac's GPU 64 threads storing
 neighbouring bytes and half-words into one array (every word as the stores leave it) and all of them storing one byte (one of their values, never a mix). With DMSH_TEST_XLATE (the
 translator), a task or mesh shader's index byte through the translator and the rewrite."""
-import ast
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys

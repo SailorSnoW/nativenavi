@@ -1,4 +1,4 @@
-// Server environment queries offline (hle_offline.c, from PR #1199): the takeovers are looked up by their mangled names in the real swforce registrations, so a missing or misspelled
+// Server environment queries offline (hle_offline.c): the takeovers are looked up by their mangled names in the real swforce registrations, so a missing or misspelled
 // one fails, as it would fall through to the SDK's nsd client and abort on a host that serves no nsd service
 #include "../hle_offline.c"
 #include <mach-o/getsect.h>

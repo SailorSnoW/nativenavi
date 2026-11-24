@@ -85,7 +85,7 @@ int main(void) { @autoreleasepool {
     static const int left_half[4] = {0, 0, 4, 8};
     id<MTLSharedEvent> gate = [g_dev newSharedEvent];
     // Every callback moves g_pq_done to ticket - 1, so it is no guard for the allocator: the presents below wait only if the allocator's own completion is checked.
-    // On main both cases fail the reuse check, and the earlier ticket's drawable reads back black (0 in every pixel): its command buffer was encoded again before the GPU ran it
+    // Without that check both cases fail the reuse check, and the earlier ticket's drawable reads back black: its command buffer is encoded again before the GPU ran it
 
     // A dropped frame: ticket 1 on allocator 1, then 3 (2 dropped) on allocator 0, then 4 on allocator 1 again with two presents in flight
     [g_q4 waitForEvent:gate value:1];   // nothing committed to the Metal 4 queue from here runs until the gate opens

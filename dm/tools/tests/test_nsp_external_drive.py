@@ -33,7 +33,8 @@ class ExternalDrive(unittest.TestCase):
     def test_no_nup_or_several_stop(self):
         with self.assertRaises(nsp.BuildError) as e: nsp.nup_file(self.tmp)
         self.assertIn('no NUP', str(e.exception))
-        other = self.tmp / 'notes.nup'; other.write_bytes(b'text')   # named like one, but not a NUP: does not count
+        other = self.tmp / 'notes.nup'   # named like one, but not a NUP: does not count
+        other.write_bytes(b'text')
         with self.assertRaises(nsp.BuildError): nsp.nup_file(self.tmp)
         with self.assertRaises(nsp.BuildError) as e: nsp.nup_file(other)
         self.assertIn('not a NUP file', str(e.exception))
@@ -48,7 +49,8 @@ class ExternalDrive(unittest.TestCase):
 
         def unlink(path, *a, **kw):   # deleting `x` takes `._x` with it (and the other way round), as on an exFAT volume
             real(path, *a, **kw)
-            head, name = os.path.split(path); partner = os.path.join(head, name[2:] if name.startswith('._') else '._' + name)   # a bare name under dir_fd, a full path otherwise
+            head, name = os.path.split(path)   # a bare name under dir_fd, a full path otherwise
+            partner = os.path.join(head, name[2:] if name.startswith('._') else '._' + name)
             try: real(partner, *a, **kw)
             except FileNotFoundError: pass
         with mock.patch('os.unlink', unlink), mock.patch('os.remove', unlink):

@@ -26,8 +26,8 @@ def frame(imm, *body): return img(NOP, sub_sp(imm), *body, add_sp(imm), RET)
 def found(code): return find(code, [(0, len(code))], md)
 def asm(word): i = next(md.disasm(struct.pack('<I', word), 0)); return f'{i.mnemonic} {i.op_str}'
 
-def civ7_block():
-    """Civilization VII main+0x4e8a14: sub sp,sp,#0x98; str x1..x17 at [sp, #0..#0x80]; mov x1,x9; svc #0x29; str x1,[sp,#0x88]; the loads back; add sp,sp,#0x98"""
+def getinfo_block():
+    """sub sp,sp,#0x98; str x1..x17 at [sp, #0..#0x80]; mov x1,x9; svc #0x29 (GetInfo); str x1,[sp,#0x88]; the loads back; add sp,sp,#0x98"""
     saves = [str_sp(r, 8 * (r - 1)) for r in range(1, 18)]
     loads = [ldr_sp(r, 8 * (r - 1)) for r in range(1, 18)]
     return frame(0x98, *saves, MOV_X1_X9, SVC_29, str_sp(1, 0x88), *loads, ldr_sp(8, 0x88))
@@ -35,7 +35,7 @@ def civ7_block():
 
 class OddSpFrames(unittest.TestCase):
     def test_civ7_getinfo_block_found(self):
-        code = civ7_block()
+        code = getinfo_block()
         self.assertEqual(found(code), [(4, len(code) - 8, 0x98)])
 
     def test_aligned_frames_left_alone(self):   # compiled code: every frame a multiple of 16

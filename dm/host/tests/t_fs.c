@@ -1,12 +1,4 @@
-// Save write and save transaction unit test (takes seconds): includes hle_fs.c directly and calls its static implementation; pwrite is replaced by a scriptable fake.
-// All expected values are hand-written from the semantics, not computed by calling the implementation under test:
-//   (1) pwrite returns 0 (can happen when the disk is full) -> WriteFile returns failure after one call (it used to loop forever here);
-//   (2) pwrite writes in pieces (3 bytes first, then the rest) -> success and the file content is complete;
-//   (3) transaction: the failure in (1) causes this transaction's Commit to be rejected and the working directory to return to the committed version; the next transaction writes in the working directory, the committed directory is still the old version before Commit and the new version after Commit;
-//   (4) DM_TEST_FS_FAIL=write:N:errno makes only the Nth save write fail, with writes before and after proceeding normally; that transaction's Commit is rejected, the committed version is unchanged, and the front end receives one notification;
-//      the next transaction commits normally, and the final save = the content of the next transaction;
-//   (5) remounting discards uncommitted content;
-//   (8) a save folder that cannot clone (ENOTSUP: HFS+, exFAT) mounts read-only and tells the front end; recursive deletes unlink symlinks and never empty their targets.
+// Save writes and transactions in hle_fs.c (takes seconds) with a scriptable pwrite. Expected values are hand-written from the semantics; the numbered steps are printed below.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,16 +15,16 @@ static int fake_clonefile(const char *src, const char *dst, uint32_t flags);
 #undef pwrite
 #undef clonefile
 ssize_t pwrite(int, const void *, size_t, off_t);
-static const uint64_t k_user1[2] = {DM_UID0, DM_UID1};   // the save is user 1's
-static int g_clone_enotsup;                   // 1: clonefile fails as on HFS+ and exFAT (ENOTSUP), checked on disk images of both
+static const uint64_t k_user1[2] = {DM_UID0, DM_UID1};
+static int g_clone_enotsup;                   // 1: clonefile fails with ENOTSUP, as on HFS+ and exFAT
 static int fake_clonefile(const char *src, const char *dst, uint32_t flags) {
     if (g_clone_enotsup) { errno = ENOTSUP; return -1; }
     return clonefile(src, dst, flags);
 }
 
-struct dm_flags g_flag; uint64_t g_t0_ns; uint64_t now_ns(void) { return 0; }   // stubs for log timestamps and the read path (not used by the write path)
+struct dm_flags g_flag; uint64_t g_t0_ns; uint64_t now_ns(void) { return 0; }
 void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
-extern int g_nfail, g_lasterr;                                        // front-end notification count (the strong implementation in t_fs_stub.c replaces the weak one in hle_fs.c)
+extern int g_nfail, g_lasterr;                                        // the strong implementation in t_fs_stub.c replaces hle_fs.c's weak one
 static int g_mode, g_calls;                   // 0 write normally; 1 always return 0; 2 write only 3 bytes the first time
 static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off) {
     g_calls++;
@@ -47,14 +39,13 @@ static int same(const char *p, const char *s) {
     char b[64] = {0}; FILE *f = fopen(p, "r"); if (!f) return 0; size_t k = fread(b, 1, sizeof b - 1, f); fclose(f);
     return k == strlen(s) && !memcmp(b, s, k);
 }
-static Result write_save(const char *path, const char *s) {           // open -> set size -> write -> close
+static Result write_save(const char *path, const char *s) {
     uint64_t h; Result r = h_fs_OpenFile(&h, path, MODE_WRITE); if (r) return r;
     h_fs_SetFileSize(h, (int64_t)strlen(s));
     r = h_fs_WriteFile(h, 0, s, strlen(s), NULL); h_fs_CloseFile(h); return r;
 }
 static int read_fs(const char *path, char *out, size_t n) { uint64_t h; size_t got = 0; if (h_fs_OpenFile(&h, path, MODE_READ)) return 0; Result r = h_fs_ReadFile(&got, h, 0, out, n - 1); h_fs_CloseFile(h); out[got] = 0; return !r; }
 
-// A stand-in for the SDK's own mount table: one RAM disk, and what the host asks of it (Unmount of an SDK-owned mount, GitHub issue #1012)
 extern void *(*t_guest_sym)(const char *);
 static int g_sdk_cache_mounted, g_sdk_asked, g_sdk_unmounts, g_sdk_no_is_mounted;
 static int sdk_is_mounted(const char *name) { g_sdk_asked++; return g_sdk_cache_mounted && !strcmp(name, "cache"); }
@@ -64,7 +55,6 @@ static void *sdk_sym(const char *name) {
     if (!strcmp(name, "_ZN2nn2fs7UnmountEPKc")) return (void *)sdk_unmount;
     return NULL;
 }
-// A stand-in for an SDK-owned RAM disk with files, as Nintendo Switch Sports Resort's "vtapi": VoiceText/ holds vt/, and vt/vtpath.ini holds "ini". Each SDK file call is counted
 #define VT_FILE ((uint64_t)0x7bbd001230)   // the SDK's handles: FileAccessor / DirectoryAccessor pointers
 #define VT_DIR ((uint64_t)0x7bbd004560)
 #define VT_INI "vtapi:/VoiceText/vt/vtpath.ini"
@@ -77,7 +67,7 @@ static Result vt_create_file(const char *p, int64_t sz) { (void)sz; return vt_pa
 static Result vt_rename(const char *a, const char *b) { g_vt_calls++; return vt_on(a) && vt_on(b) ? RES_OK : RES_FAIL; }
 static Result vt_open(uint64_t *out, const char *p, int mode) { (void)mode; g_vt_calls++; if (strcmp(p, VT_INI)) return RES_PATH_NOT_FOUND; *out = VT_FILE; return RES_OK; }
 static Result vt_read(size_t *out, uint64_t h, int64_t off, void *buf, size_t sz) {
-    g_vt_calls++; if (h != VT_FILE) abort();   // the SDK's ReadFile takes its handle as a FileAccessor*: anything else would crash on hardware
+    g_vt_calls++; if (h != VT_FILE) abort();   // the SDK's ReadFile dereferences its handle as a FileAccessor*
     size_t k = off >= 3 ? 0 : (size_t)(3 - off) < sz ? (size_t)(3 - off) : sz; memcpy(buf, &"ini"[off], k); *out = k; return RES_OK;
 }
 static Result vt_write(uint64_t h, int64_t off, const void *buf, size_t sz, const void *opt) { (void)off; (void)buf; (void)sz; (void)opt; g_vt_calls++; return h == VT_FILE ? RES_OK : RES_FAIL; }
@@ -133,7 +123,7 @@ int main(void) {
     CHECK(h_fs_OpenFile(&rh, "rom:/data/base", MODE_READ) == RES_OK && rh && !(rh & 15), "a folder file's handle is 16-byte aligned, as a Horizon FileAccessor pointer is (%#llx)", (unsigned long long)rh); h_fs_CloseFile(rh);
     g_nmnt = 0;
     unsetenv("DM_ROMFS_OVERLAY");
-    {   // game files that are neither a folder nor a file (a stale path, a fifo) stop the rom mount with a FATAL line, in a child so the abort does not end this test
+    {   // a stale path or fifo stops the rom mount with FATAL: in a child
         char gone[1200], fifo[1200], out[1200]; snprintf(gone, sizeof gone, "%s/RomFS", root); snprintf(fifo, sizeof fifo, "%s/fifo", root); snprintf(out, sizeof out, "%s/fatal.txt", root);
         mkfifo(fifo, 0644);
         const char *paths[2] = {gone, fifo};
@@ -146,7 +136,7 @@ int main(void) {
         }
     }
 
-    printf("RomFS image\n");   // written by hand in romfs_image.py's layout: /data/a = "hello", /data/b empty directory, /data/c = "xy"
+    printf("RomFS image\n");   // by hand in romfs_image.py's layout: /data/a = "hello", /data/b empty, /data/c = "xy"
     {   uint8_t img[32 + 7 + 5 * 24 + 7] = {0}; uint64_t hd[3] = {39, 5 * 24 + 7, 5};
         img_ent e[5] = {{1, 1, 0, 0, 0, 0}, {2, 3, 0, 4, 0, 0}, {32, 5, 4, 1, 1, 0}, {5, 0, 5, 1, 0, 0}, {37, 2, 6, 1, 1, 0}};
         memcpy(img, "DMROMFS1", 8); memcpy(img + 8, hd, sizeof hd); memcpy(img + 32, "helloxy", 7); memcpy(img + 39, e, sizeof e); memcpy(img + 39 + sizeof e, "dataabc", 7);
@@ -156,12 +146,11 @@ int main(void) {
         uint64_t h; size_t n = 0; int64_t sz = 0; char b[16] = {0};
         CHECK(h_fs_OpenFile(&h, "rom:/data/a", MODE_READ) == RES_OK && h_fs_ReadFile(&n, h, 3, b, 10) == RES_OK && n == 2 && !memcmp(b, "lo", 2), "a read stops at the end of the file (got %zu)", n);
         CHECK(h_fs_GetFileSize(&sz, h) == RES_OK && sz == 5 && h_fs_GetFileOpenMode(h) == MODE_READ, "size 5, open for reading");
-        // the overloads without a bytes-read output must read in full: a short read is a failure, with or without read options
         { const uint32_t opt = 0; memset(b, 0, sizeof b);
           CHECK(h_fs_ReadFileExact(h, 1, b, 4) == RES_OK && !memcmp(b, "ello", 4) && h_fs_ReadFileExactOpt(h, 0, b, 5, &opt) == RES_OK && !memcmp(b, "hello", 5), "full reads without a byte count succeed");
           CHECK(h_fs_ReadFileExact(h, 3, b, 10) != RES_OK && h_fs_ReadFileExactOpt(h, 3, b, 10, &opt) != RES_OK, "short reads without a byte count fail"); }
         h_fs_CloseFile(h);
-        // entry 4: its index has low bits set, which Metroid Prime 4's file device masks off (handle & ~7) as it may of a Horizon pointer
+        // a game's file device may mask a handle's low bits (handle & ~7) as on a Horizon pointer
         CHECK(h_fs_OpenFile(&h, "rom:/data/c", MODE_READ) == RES_OK && !(h & 15) && h_fs_ReadFile(&n, h & ~7ull, 0, b, 10) == RES_OK && n == 2 && !memcmp(b, "xy", 2), "entry 4 still reads after its handle's low bits are masked off (%#llx)", (unsigned long long)h);
         CHECK(h_fs_GetFileSize(&sz, h & ~7ull) == RES_OK && sz == 2, "and is 2 bytes"); h_fs_CloseFile(h & ~7ull);
         CHECK(read_fs("rom:\\data\\c", got, sizeof got) && !strcmp(got, "xy") && read_fs("rom:\\data\\..\\data\\a", got, sizeof got) && !strcmp(got, "hello"), "backslash paths, also through ..");
@@ -187,7 +176,7 @@ int main(void) {
         CHECK(read_fs("rom:\\data\\a", got, sizeof got) && !strcmp(got, "mod") && read_fs("rom:\\data\\c", got, sizeof got) && !strcmp(got, "xy"), "backslash paths reach the overlay folder and the image");
         h = 0; cnt = -1; CHECK(h_fs_OpenDirectory(&h, "rom:\\data", DIRMODE_DIR | DIRMODE_FILE) == RES_OK && h_fs_DirCount(&cnt, h) == RES_OK && cnt == 4, "and list the merged directory (%lld)", (long long)cnt); h_fs_CloseDirectory(h);
         g_nmnt = 0;
-        {   // three folders, the first the highest: one that deletes, the one above, and one whose names differ from the game's in case
+        {   // three folders, highest first: one that deletes, the one above, one differing from the game's in case
             char o2[1100], o3[1100], list[3400], dir[1200];
             snprintf(o2, sizeof o2, "%s/ovdel", root); snprintf(o3, sizeof o3, "%s/ovcase", root);
             snprintf(dir, sizeof dir, "%s/data", o2); int staged = !t_mkdirs(dir); snprintf(dir, sizeof dir, "%s/DATA/B", o3); CHECK(staged && !t_mkdirs(dir), "stage the overlay folders");
@@ -218,7 +207,7 @@ int main(void) {
         CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK, "mount the RomFS"); h_fs_Unmount("rom");
         CHECK(host_mounted("rom") && read_fs("rom:/data/c", got, sizeof got) && !strcmp(got, "xy"), "Unmount leaves the RomFS mounted");
         g_nmnt = 0;
-        {   // an entry's flags byte is 0: an image with another value is not read
+        {   // an entry's flags byte must be 0
             romfs_img *clean = img_open(ip); CHECK(clean != NULL, "the image opens by itself"); if (clean) romfs_image_close(clean);
             e[2].flags = 1; memcpy(img + 39, e, sizeof e); f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
             CHECK(!img_open(ip), "a flag on a file is refused");
@@ -226,12 +215,12 @@ int main(void) {
             CHECK(!img_open(ip), "a flag on a directory is refused");
             e[1].flags = 0; memcpy(img + 39, e, sizeof e);
         }
-        f = fopen(ip, "wb"); fwrite(img, 1, 39 + 50, f); fclose(f);   // cut off inside the index, as a copy stopped partway
+        f = fopen(ip, "wb"); fwrite(img, 1, 39 + 50, f); fclose(f);   // cut off inside the index
         CHECK(!img_open(ip), "a cut-off image is refused");
     }
     snprintf(save, sizeof save, "%s/save", root); snprintf(work, sizeof work, "%s.work", save);
     mkdir(save, 0755); snprintf(p, sizeof p, "%s/a", save); put(p, "old");
-    setenv("DM_SAVE", save, 1); setenv("DM_TEST_FS_FAIL", "write:5:28", 1);   // the 5th save write fails, errno 28 = ENOSPC
+    setenv("DM_SAVE", save, 1); setenv("DM_TEST_FS_FAIL", "write:5:28", 1);   // errno 28 = ENOSPC
     CHECK(h_fs_MountSave("save", k_user1) == RES_OK, "mount the save");
 
     // Save write count: (1)=1st (2)=2nd (3)=3rd (4)=4th/5th/6th/7th (5)=8th
@@ -273,17 +262,17 @@ int main(void) {
 
     printf("⑤ remounting discards uncommitted content\n");
     CHECK(write_save("save:/a", "v9") == RES_OK, "write a=v9 without committing");
-    g_nmnt = 0;                                                        // simulate a process restart: clear the mount table
+    g_nmnt = 0;                                                        // a process restart
     CHECK(h_fs_MountSave("save", k_user1) == RES_OK, "remount");
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "new"), "work directory a is back to the committed version new");
     snprintf(p, sizeof p, "%s/b", work); CHECK(same(p, "7"), "work directory b = the committed 7");
 
     printf("⑥ failed writes are handled without exiting (DM_TEST_FS_FAILAT)\n");
     unsetenv("DM_TEST_FS_FAIL");
-    // 6a Recloning after a refused commit fails: do not exit, the work directory is untouched and the committed version unchanged; the next commit is refused again and the reclone succeeds; the transaction after that commits normally
+    // 6a a failed reclone after a refused commit does not exit; the commit after the next reclone succeeds
     setenv("DM_TEST_FS_FAILAT", "reclone:1", 1);
     CHECK(write_save("save:/a", "bad") == RES_OK, "write a=bad");
-    save_poison(ENOSPC); int nf0 = g_nfail;   // a save write of this transaction failed
+    save_poison(ENOSPC); int nf0 = g_nfail;
     CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 1, "this transaction is refused (injected reclone failure), the process is still alive, front end notified once");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "new"), "committed directory a is still new");
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "bad"), "work directory not deleted (a is still bad)");
@@ -292,7 +281,7 @@ int main(void) {
     snprintf(p, sizeof p, "%s.re", work); CHECK(access(p, F_OK) != 0, "no .re left");
     CHECK(write_save("save:/a", "good") == RES_OK && h_fs_Commit("save") == RES_OK, "next transaction writes a=good, commit succeeds");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "good"), "committed a = good");
-    // 6b Writing the guest name after a rename fails and the rollback fails too: do not exit; the file is in a transactional save, so this transaction's commit is refused and the committed version is unchanged; after recloning everything works
+    // 6b a failed guest-name write and rollback in a transactional save: commit refused, recloning recovers
     setenv("DM_TEST_FS_FAILAT", "guestname:1,renameback:1", 1);
     h_fs_CreateFile("save:/c", 0); CHECK(write_save("save:/c", "c") == RES_OK, "write c");
     CHECK(h_fs_RenameFile("save:/c", "save:/d") != RES_OK, "rename c → d returns failure (both steps injected to fail), the process is still alive");
@@ -301,7 +290,7 @@ int main(void) {
     snprintf(p, sizeof p, "%s/d", save); CHECK(access(p, F_OK) != 0, "committed directory has no d");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "good"), "committed a is still good");
     CHECK(write_save("save:/a", "ok2") == RES_OK && h_fs_Commit("save") == RES_OK, "the next transaction commits as usual");
-    // 6c Cloning the work directory at mount fails: do not exit; mount the committed directory read-only instead. Reads work, writes fail, commits are no-ops, the committed version is unchanged, and the front end is notified once; the next normal mount works as before
+    // 6c a failed work-directory clone at mount: mounted read-only from the committed directory, front end notified once
     setenv("DM_TEST_FS_FAILAT", "mountclone:1", 1); g_nmnt = 0; nf0 = g_nfail;
     t_rmtree(work);
     CHECK(h_fs_MountSave("save", k_user1) == RES_OK && g_nfail == nf0 + 1, "mount returns success, front end notified once (actually %d times)", g_nfail - nf0);
@@ -353,7 +342,7 @@ int main(void) {
         CHECK(rm_tree(lnk) == -1 && errno == ENOTDIR && same(vf, "keep"), "rm_tree of a symlink to a directory refuses it (ENOTDIR) and leaves the target alone");
     }
 
-    {   // Unmount follows who holds the mount: the host's table is permanent, the SDK's entry is released in the SDK, so the name can be mounted again
+    {   // Unmount follows the mount's owner: the host's table is permanent, the SDK's entry is released in the SDK
         CHECK(host_mounted("save"), "the host holds save");
         h_fs_Unmount("cache"); CHECK(1, "Unmount with no SDK in the process is a no-op");
         t_guest_sym = sdk_sym; g_sdk_cache_mounted = 1;

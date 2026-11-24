@@ -63,7 +63,7 @@ int main(void) { @autoreleasepool {
     CHECK(P(nvnQueueInitialize)(&queues[0],&fresh),"queue storage can be initialized again");
     mtl_queue_activate(((queue_t *)&queues[0])->serial);
     CHECK(((queue_t *)&queues[0])->serial != first_serial && !S.bst[0] && !S.prog && !R.has_sc,"reinitializing a queue never inherits finalized program pointers");
-    // A program finalized while queues still have it bound (Fortune's Weave's title screen to opening demo): it leaves the active queue's bindings and every saved
+    // A program finalized while queues still have it bound (as at a scene change): it leaves the active queue's bindings and every saved
     // queue state, so switching back to a queue never combines stages from its reused memory
     NVNprogram bound; P(nvnProgramInitialize)(&bound,&device);
     const prog_t *bp = (const prog_t *)&bound;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """dmsh_rewrite.py bit0_mask: the 0 / -1 mask of a tested bit 0 is written from the bit (`-(x & 1)`), not from its compare (`b ? -1 : 0`), so the compare keeps one user,
 its branch. Apple's GPU compiler for applegpu_g15 and later otherwise can pick a jump it cannot encode (`LLVM ERROR: Failed to encode.`), which ends the compiler service when
-a pipeline with the shader is built: PRAGMATA's pixel shader c4ac3ca598cea32e. With DMSH_TEST_METAL=1 the reduced shader below goes through the Metal compiler and the
+a pipeline with the shader is built. With DMSH_TEST_METAL=1 the reduced shader below goes through the Metal compiler and the
 offline GPU compiler (applegpu-nt, the chain's flags): as translated it must fail to encode (skipped where a later toolchain compiles it), rewritten it must compile."""
 from pathlib import Path
 import json
@@ -21,7 +21,7 @@ MARK = '// bit 0 as a mask (bit0_mask)'
 
 
 def reduced(fill=100):
-    """c4ac3ca598cea32e reduced, in SPIRV-Cross's layout: `fill` uniform reads (they take the slots of the compiler's per-draw constant program), a discard and an early
+    """A pixel shader reduced, in SPIRV-Cross's layout: `fill` uniform reads (they take the slots of the compiler's per-draw constant program), a discard and an early
     return on a per-pixel value, then bit 0 of a uniform word read at the top: its compare _32 feeds the predicate's mask (_40) and a branch around a uniform read"""
     q = '(*spvDescriptorSet0.fp_c3)._m0'
     body = ['    main0_out out = {};', '    float _20 = in.m_1.x;', '    int _21 = as_type<int>((*spvDescriptorSet0.fp_c10)._m0[2].w);',
@@ -58,7 +58,8 @@ def toolchain():
 
 def gpu_compile(msl, flags, arch='applegpu_g16s'):
     """(ok, output) of the MSL as a render pipeline's fragment function through metal, metallib and applegpu-nt, as the compiler service builds it"""
-    sdk = subprocess.run(['xcrun', '-sdk', 'macosx', '--show-sdk-path'], capture_output=True, text=True).stdout.strip(); env = dict(os.environ, SDKROOT=sdk)
+    sdk = subprocess.run(['xcrun', '-sdk', 'macosx', '--show-sdk-path'], capture_output=True, text=True).stdout.strip()
+    env = dict(os.environ, SDKROOT=sdk)
     with tempfile.TemporaryDirectory() as d:
         Path(d, 'k.metal').write_text(msl + VERTEX)
         r = subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', '-w', *flags, 'k.metal', '-o', 'k.air'], capture_output=True, text=True, cwd=d, env=env)
@@ -116,7 +117,8 @@ class Bit0Mask(unittest.TestCase):
 
     def test_each_function_is_read_on_its_own(self):
         # the build's extra entry points repeat a body, with the same temporaries: both copies are rewritten
-        src = reduced(4); twice = src + src.replace('main0_out main0(', 'main0_out main0_u(').split('struct main0_in\n{\n    float4 m_1 [[user(locn0)]];\n};\n\n')[1]
+        src = reduced(4)
+        twice = src + src.replace('main0_out main0(', 'main0_out main0_u(').split('struct main0_in\n{\n    float4 m_1 [[user(locn0)]];\n};\n\n')[1]
         self.assertEqual(twice.count('_40 = _32 ? (-1) : 0;'), 2)
         self.assertEqual(bit0_mask(twice).count('_40 = -_31;'), 2)
         # a bit of one function and a compare of another are no pair

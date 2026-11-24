@@ -1,4 +1,4 @@
-// Residency by command buffer (nvn_mtl.m res_name, PR #2715): no residency set is attached to either queue, and every command buffer committed on g_q or g_q4 names g_res and the
+// Residency by command buffer (nvn_mtl.m res_name): no residency set is attached to either queue, and every command buffer committed on g_q or g_q4 names g_res and the
 // present snapshots' set (useResidencySet) after its last begin; the present's also its drawable's layer set. Real Metal: the queues' addResidencySet and commits and the command
 // buffers' begin, useResidencySet and commit are wrapped, so the calls each command buffer gets are counted whichever path made it (calls, not what the driver keeps resident).
 // Checks, each run with the encode thread off and on (DM_NVN_ENC_THREAD): no set on a queue; a submission with a cut and an upload batch (three command buffers); a present snapshot

@@ -1,6 +1,5 @@
 // A virtual pool's first mapping (nvnMemoryPoolMapVirtual): a whole-pool mapping aliases the pool onto its physical pool only while no address of the pool's own range has left the host.
-// Once a texture, buffer, event or address was made on it, the pool stays sparse and those addresses read the physical pages (issue #2513). Sampler IDs past the sampler pool are empty slots.
-// Based on PR #2519's t_vpool_alias.
+// Once a texture, buffer, event or address was made on it, the pool stays sparse and those addresses read the physical pages. Sampler IDs past the sampler pool are empty slots.
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
@@ -51,7 +50,7 @@ int main(void) { @autoreleasepool {
     NvShader *raw = [NvShader new]; raw->rf.ngptr = 1; raw->rf.gptr[0].reg = 0;
     S.ssbo[0][0] = (p_bind_buf){.addr = ab, .size = 8};
     CHECK("raw pointer source is an unmapped sparse page", !nvn_host_readable(ab, 8));
-    gmem_discover(raw, 0);   // the old direct memcpy here faults on the reservation's PROT_NONE page
+    gmem_discover(raw, 0);   // a direct memcpy here would fault on the reservation's PROT_NONE page
     CHECK("map addressed pool", map_whole(&vb));
     CHECK("addressed pool sparse", vb.vmode == 2 && vb.vp && (NVNbufferAddress)vb.mem == ab);
     CHECK("its address reads the physical pages", !memcmp((const void *)ab, g_phys_mem, POOL_SZ));
@@ -87,7 +86,7 @@ int main(void) { @autoreleasepool {
     CHECK("aliased pool stays aliased", va.vmode == 1 && (const uint8_t *)h_nvnBufferGetAddress(&buf2) == g_phys_mem);
 
     // Sampler IDs past the pool are empty slots; unregistered IDs inside it are still reported
-    // Super Mario Party's pool holds 4000: the end is 4000, not the next numbering's 4096
+    // a pool of 4000: the end is 4000, not the next numbering's 4096
     NVNsamplerPool sp;
     CHECK("sampler pool n=4000", h_nvnSamplerPoolInitialize(&sp, (const NVNmemoryPool *)&g_phys, 0, 4000));
     CHECK("sampler pool end is its size", g_spool_n == 4000);

@@ -1,6 +1,6 @@
 // The guest object side table (hle_os.c objmap_*): linear probing with backward-shift deletion.
-// A key put again after another key's entry before it in its probe run was deleted keeps one entry (with deleted markers it took the
-// marked slot and sat in its run twice: objmap_del removed only the first copy, and objmap_get then still found the old value).
+// A key put again after another key's entry before it in its probe run was deleted keeps one entry (with deleted markers it would take the marked slot and sit in its
+// run twice).
 // Deletion moves back exactly the later entries whose home slot is not after the hole, also across the table's end.
 #include "../hle_os.c"
 #include <assert.h>

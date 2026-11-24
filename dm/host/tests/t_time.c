@@ -1,5 +1,5 @@
-// Clock snapshot arithmetic (hle_time.c, from PR #36): CalculateSpanBetween and CalculateStandardUserSystemClockDifferenceByUser looked up by their mangled names in the real swforce
-// registrations, run on host snapshots and on edited copies; the C library's local-time functions, UTC as on a Switch, against nn::time's local conversion (issue #2784)
+// Clock snapshot arithmetic (hle_time.c): CalculateSpanBetween and CalculateStandardUserSystemClockDifferenceByUser looked up by their mangled names in the real swforce
+// registrations, run on host snapshots and on edited copies; the C library's local-time functions, UTC as on a Switch, against nn::time's local conversion
 #include "../hle_time.c"
 #include <mach-o/getsect.h>
 
@@ -29,7 +29,7 @@ static void check_utc_libc(void) {
     setenv("TZ", "Asia/Seoul", 1); tzset();
     int64_t (*mk)(struct tm *) = section_fn("swhle", "mktime", &n);
     struct tm *(*lt)(const int64_t *, struct tm *) = section_fn("swhle", "localtime_r", &n);
-    const int64_t save = 1794761043;   // Hades II's save header time, 2026-11-15 16:44:03 UTC
+    const int64_t save = 1794761043;   // a save header's time, 2026-11-15 16:44:03 UTC
     struct tm u; time_t sv = (time_t)save; gmtime_r(&sv, &u);
     CHECK(mk && mk(&u) == save, "mktime of a UTC struct tm gives the time back unchanged (TZ=Asia/Seoul)");
     struct tm l; CHECK(lt && lt(&save, &l) == &l && l.tm_hour == 16 && l.tm_min == 44 && l.tm_gmtoff == 0, "localtime_r is UTC (TZ=Asia/Seoul)");
@@ -103,7 +103,7 @@ int main(void) {
     memset(tp, 0xaa, sizeof tp); memset(loc, 0xaa, sizeof loc);
     CHECK(loc_upd && loc_upd(loc, tp) == RES_OK && !memcmp(loc, a + 0xa8, sizeof loc) && !memcmp(tp, none, sizeof tp), "device location: the snapshot's name, a cleared time point");
     CHECK(memcmp(tp + 8, a + 0x90 + 8, 16), "the cleared time point's source ID is not the snapshots' steady clock");
-    // The contexts of the network clock and of the adjustable clocks (PR #1875): each is the user clock's, as the snapshot carries it, within the context's 0x20 bytes
+    // The contexts of the network clock and of the adjustable clocks: each is the user clock's, as the snapshot carries it, within the context's 0x20 bytes
     static const char *ctx_hooks[] = {
         "_ZN2nn4time26StandardNetworkSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE",
         "_ZN2nn4time25AdjustableUserSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE",

@@ -1,10 +1,8 @@
 """Compute shared memory past Metal's 32 KB (dmsh_rewrite.py tg_spill): a kernel whose threadgroup arrays exceed abi.TG_MAX takes them from the device buffer at abi.TG_SLOT, one slice per
-workgroup at its index in the whole grid, with barriers that order device memory; a kernel within the limit is left as it is. The shape is Mario Kart World's DrivePassShaderDefault
-compute shaders (spvUnsafeArray<uint, 12288>, 48 KB). When the Metal compiler is installed, the rewritten kernel is compiled too, and with Xcode it runs over 1,024 workgroups on this Mac's
-GPU, more than run at once: no workgroup may see another's data in its shared memory, as with the index modulo 512 they did."""
-import ast
+workgroup at its index in the whole grid, with barriers that order device memory; a kernel within the limit is left as it is. The shape is a compute shader with a
+spvUnsafeArray<uint, 12288> (48 KB). When the Metal compiler is installed, the rewritten kernel is compiled too, and with Xcode it runs over 1,024 workgroups on this Mac's
+GPU, more than run at once: no workgroup may see another's data in its shared memory."""
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -79,7 +77,7 @@ class TgSpill(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
 
 
-# Each of 64 threads fills 192 words of the 48 KB array with values of its workgroup, and after the barrier sums its neighbour's (the shape of the PR #1242 test)
+# Each of 64 threads fills 192 words of the 48 KB array with values of its workgroup, and after the barrier sums its neighbour's
 GPU_KERNEL = """#include <metal_stdlib>
 using namespace metal;
 """ + ARRAY + """

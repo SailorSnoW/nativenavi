@@ -52,7 +52,9 @@ class PullingInputs(unittest.TestCase):
         v, info = dmsh_pull.variant(shader(['float4'], ids=', uint gl_InstanceIndex [[instance_id]], uint gl_BaseInstance [[base_instance]], uint gl_VertexIndex [[vertex_id]]'))
         self.assertEqual(v.count('dm_fetch(dm_lay, 0u, gl_VertexIndex, gl_InstanceIndex, gl_BaseInstance)'), 2)
         self.assertEqual(v.count('dm_wlb_main0(dm_wl_in(dm_lay, dm_e.x, gl_InstanceIndex, gl_BaseInstance), u, gl_InstanceIndex, gl_BaseInstance, dm_e.x, dm_lay)'), 1)   # the shader's own ids, its vertex ID the endpoint's
-        self.assertNotIn('uint dm_vid [[vertex_id]]', v); self.assertNotIn('uint dm_iid [[instance_id]]', v); self.assertNotIn('uint dm_bi [[base_instance]]', v)   # no second id
+        self.assertNotIn('uint dm_vid [[vertex_id]]', v)   # no second id
+        self.assertNotIn('uint dm_iid [[instance_id]]', v)
+        self.assertNotIn('uint dm_bi [[base_instance]]', v)
         self.compiles(v)
 
     def test_wide_line_entry(self):
@@ -60,7 +62,8 @@ class PullingInputs(unittest.TestCase):
         self.assertEqual((info['entry_wl'], info['entry_z_wl']), ('main0_wl', 'main0_z_wl'))
         for e in ('main0', 'main0_z'):
             f = v[v.index(f'vertex main0_out {e}_wl('):]; f = f[:f.index('\n}\n')]
-            self.assertIn('uint dm_wcorner [[vertex_id]]', f); self.assertEqual(f.count('[[vertex_id]]'), 1)   # the corner, not the endpoint
+            self.assertIn('uint dm_wcorner [[vertex_id]]', f)   # the corner, not the endpoint
+            self.assertEqual(f.count('[[vertex_id]]'), 1)
             self.assertIn('constant dm_wline& dm_wl [[buffer(15)]]', f)
             self.assertIn(f'main0_out out = dm_wlb_{e}(dm_wl_in(dm_lay, dm_e.x, dm_iid, dm_bi), u, dm_lay, dm_e.x, dm_iid, dm_bi), dm_o = dm_wlb_{e}(dm_wl_in(dm_lay, dm_e.y, dm_iid, dm_bi)', f)
             self.assertIn('if (dm_t.x > 0.0f) out = dm_wl_mix(out, dm_o, dm_t.x);', f)
@@ -95,7 +98,7 @@ class PullingInputs(unittest.TestCase):
         self.assertEqual(dmsh_pull.variant(shader(['float4'], extra='constant float4& x [[buffer(16)]];\n'))[1], 'buffer 16 is taken')
         self.assertEqual(dmsh_pull.variant(shader(['float4']).replace('[[attribute(0)]]', '[[attribute(32)]]'))[1], 'an input at attribute 32 or above')
 
-    def test_attributes_past_16(self):   # NVN2's attributes 16-31 (Unreal Engine 5's vertex factories use 16): read through the layout block like the others
+    def test_attributes_past_16(self):   # NVN2's attributes 16-31: read through the layout block like the others
         v, info = dmsh_pull.variant(shader(['float4', 'uint4']).replace('[[attribute(1)]]', '[[attribute(16)]]'))
         self.assertIsNotNone(v, info); self.assertEqual(info['inputs'], [0, 16]); self.assertIn('dm_fetch(dm_lay, 16u,', v)
         self.compiles(v)

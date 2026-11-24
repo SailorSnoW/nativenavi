@@ -1,5 +1,5 @@
 // Argument blocks are valid by binding generation (g_args_gen / g_args_ugen, encode_args_), not by a stage flag the latest encode clears: after a binding change and another shader's
-// encode on the same stage, the first shader writes its block again (PR #2249's sequence); with no change, shaders that take turns on a stage keep their blocks; a uniform-only change
+// encode on the same stage, the first shader writes its block again; with no change, shaders that take turns on a stage keep their blocks; a uniform-only change
 // patches each block once. The shaders are vertex shaders that write storage, drawn one point each in a production render pass: only the draw stages keep a block (a compute
 // stage's block is written at every dispatch). bind_stages never hands back the slot of the bound combined program for a new combination, so OP_BIND_PROGRAM sees the change.
 #include "../nvn/nvn_mtl.m"
@@ -99,7 +99,7 @@ int main(void) { @autoreleasepool {
     CHECK(enc_n() == e0 + 1, "the first encode writes a block");
     RUN(a, pa);   // x[0] += 1
     CHECK(enc_n() == e0 + 1 && reuse_n() == r0 + 1, "the same shader with nothing changed reuses its block");
-    // the sequence of PR #2249: a binding change, another shader of the stage writes its block, then the first shader again
+    // the sequence a stage flag gets wrong: a binding change, another shader of the stage writes its block, then the first shader again
     bind_ssbo(y);
     CHECK(args_changed(0), "a storage binding changes the stage's generation");
     RUN(b, pb);   // y[1] = 0xb

@@ -1,4 +1,4 @@
-"""The game's constants are in its profile, not in host code (AGENTS.md; issue #635: no per-game branch in the host): the host's sources name no game by its title ID in code.
+"""The game's constants are in its profile, not in host code (AGENTS.md: no per-game branch in the host): the host's sources name no game by its title ID in code.
 A comment may cite one. A game build's ID has its own check: docs_patches.py stops on a host row it cannot classify (test_docs.py).
 No game files needed."""
 from pathlib import Path

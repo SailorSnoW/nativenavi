@@ -25,7 +25,7 @@ int main(void) {
     while (atomic_load(&ready) != 8) sched_yield();
     atomic_store(&start, 1);
     for (int i = 0; i < 8; i++) { void *result = NULL; pthread_join(workers[i], &result); CHECK(!result, "concurrent first timestamp conversion"); }
-    // NVN2 (the Switch 2): reports record nanoseconds. nn::gfx's NVN2 GetDuration (Welcome Tour main+0x613610) is the raw difference, taken as a TimeSpan
+    // NVN2 (the Switch 2): reports record nanoseconds. nn::gfx's NVN2 GetDuration is the raw difference, taken as a TimeSpan
     const uint64_t ns[] = {1, 2, 624, 626, 16666667, UINT64_C(1234567890123456789), UINT64_MAX};
     const uint64_t at = UINT64_C(988357000000000), frame = 16666667;
     for (unsigned i = 0; i < sizeof ns / sizeof *ns; i++)

@@ -1,7 +1,5 @@
-"""A store only a dispatch's first invocation makes (dmsh_rewrite.py first_store): recognised exactly, taken out of the shader for the host; anything else stays. The pattern is Splatoon Raiders' Hoian_Proc 029d9c3ec1fcb39f."""
-import ast
+"""A store only a dispatch's first invocation makes (dmsh_rewrite.py first_store): recognised exactly, taken out of the shader for the host; anything else stays."""
 from pathlib import Path
-import re
 import sys
 import unittest
 
@@ -80,8 +78,7 @@ SPLIT = """    float _53 = as_type<float>(gl_WorkGroupID.x);
 
 
 class SplitBlocks(unittest.TestCase):
-    """Mario Kart World's 2ce9071c2f22d74f and 5fea9b7ddb30e8a8: one guarded block a store, two of the values a local set under the same guard. Missed, a workgroup that appended before the
-    reset lost its entries: the scenery list swung between rebuilds (406, 202, 797, 104) and whole groups of trees vanished"""
+    """One guarded block a store, two of the values a local set under the same guard. Missed, a workgroup that appended before the reset lost its entries"""
 
     def test_the_pattern(self):
         out, stores = first_store(SPLIT, [64, 1, 1])
@@ -159,7 +156,7 @@ SETUP = """    float _78 = as_type<float>(gl_WorkGroupID.y);
 
 
 class Rows(unittest.TestCase):
-    """A local size with rows, Mario Kart World's 0823b08c2027a38d: the test on y and x and workgroup z zero is one invocation too. 649e36162cad9e79 does more than stores there: it stays"""
+    """A local size with rows: the test on y and x and workgroup z zero is one invocation too. A shader that does more than stores there stays"""
 
     def test_the_pattern(self):
         out, stores = first_store(ROWS, [8, 8, 1])

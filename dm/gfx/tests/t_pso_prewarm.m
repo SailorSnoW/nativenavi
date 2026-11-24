@@ -200,8 +200,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     NSString *nowarm = [root stringByAppendingPathComponent:@"nowarm"];
     EXPECT("warm 0: exit 0", 0, run_self(@[@"--tool", root], @{@"DM_PSO_PREBUILD": @"tool", @"DM_PSO_PREBUILD_WARM": @"0", @"DM_PSO_ARCHIVE": nowarm, @"DM_PSO_PREBUILD_OUT": @"", @"DM_PSO_MANIFEST": @"", @"DM_PSO_BUNDLE": @"off"}, [root stringByAppendingPathComponent:@"tool5.log"]));
     EXPECT("warm 0: nothing built", 1, ![slurp([root stringByAppendingPathComponent:@"tool5.log"]) containsString:@"prewarm lines"] && mtl4a(nowarm).count == 0);
-    // a compute row: the MTLDevice builds it, the harvest queue captures it in the background; the bundle waits for that capture (a slow one was left out, and written
-    // at exit, where Metal's pipelines-script serializer met a finalized C library and the tool crashed)
+    // a compute row: the MTLDevice builds it, the harvest queue captures it in the background; the bundle waits for that capture (left out, a slow one would be written at exit,
+    // where Metal's pipelines-script serializer meets a finalized C library and crashes)
     NSString *out6 = [root stringByAppendingPathComponent:@"out6"], *list6 = [root stringByAppendingPathComponent:@"six.tsv"], *log6p = [root stringByAppendingPathComponent:@"tool6.log"];
     put(list6, @"C\twarm-cs\n");
     EXPECT("compute row: exit 0", 0, run_self(@[@"--tool", root], @{@"DM_PSO_PREBUILD": @"tool", @"DM_PSO_ARCHIVE": [root stringByAppendingPathComponent:@"work6"], @"DM_PSO_PREBUILD_OUT": out6,

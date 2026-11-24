@@ -1,4 +1,4 @@
-"""Both shader-pair tables must feed vertex padding, its cache dependencies and every vertex variant (#283, #276)."""
+"""Both shader-pair tables must feed vertex padding, its cache dependencies and every vertex variant."""
 import ast
 import collections
 import hashlib

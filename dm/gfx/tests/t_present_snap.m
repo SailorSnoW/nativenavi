@@ -89,8 +89,7 @@ static void pacing_case(void) {
         printf("present %d: %.3f ms, ticket %llu\n", i, ms, (unsigned long long)win.ticket[indices[i]]);
     }
     CHECK("present does not wait for the stalled display", longest < 50);
-    // Window tickets now own logical queue receipts even for snapshots. Wait
-    // until the queue has encoded them and observe actual copies, not receipt IDs.
+    // Window tickets own logical queue receipts even for snapshots. Wait until the queue has encoded them and observe actual copies, not receipt IDs.
     queue_encoded();
     CHECK("full ring copies only its two available snapshot slots", g_snap_v == copies + 2);
     uint64_t start = now_ns(); int idx; h_nvnWindowAcquireTexture((NVNwindow *)&win, NULL, &idx);
@@ -111,7 +110,7 @@ static void pending_copy_case(void) {
     tex_t t = source(0);
     id<MTLSharedEvent> gpu_gate = [g_dev newSharedEvent]; if (!gpu_gate) abort(); [g_q4 waitForEvent:gpu_gate value:1];
     pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; pthread_mutex_unlock(&g_pq_mu);
-    uint64_t v0 = g_snap_v;   // a snapshot keeps its present ticket (LNPANDY/NX2Apple#1117): the copy count tells a snapshot from a fallback
+    uint64_t v0 = g_snap_v;   // a snapshot keeps its present ticket: the copy count tells a snapshot from a fallback
     CHECK("first snapshot queued", present_enqueue(&t, 1. / 60, NULL, NULL) != 0 && g_snap_v == v0 + 1);
     CHECK("second snapshot queued", present_enqueue(&t, 1. / 60, NULL, NULL) != 0 && g_snap_v == v0 + 2);
     present_drop_for_suspend();   // Tickets are free, but the GPU still owns both allocators.
@@ -156,10 +155,9 @@ static void *acquire_thread(void *arg) { @autoreleasepool {
     h_nvnWindowAcquireTexture((NVNwindow *)job->window, NULL, &job->index);
     dispatch_semaphore_signal(job->done);
 } return NULL; }
-// A snapshot present keeps its ticket (LNPANDY/NX2Apple#1117): acquiring that texture again waits until its copy, and with it the frame drawn into it, has run on the GPU,
-// though not for the screen. Before, the ticket was 0 and only the next ring slot paced the acquire; with more ring slots than window textures, or a game that
-// acquires its next texture before presenting the current frame, the game ran frames further ahead of the GPU and rewrote per-frame data queued draws still read
-// (Xenoblade Chronicles 3: the scene one flat colour in a third to a half of the frames)
+// A snapshot present keeps its ticket: acquiring that texture again waits until its copy, and with it the frame drawn into it, has run on the GPU, though not for the screen.
+// With a ticket of 0 only the next ring slot would pace the acquire; with more ring slots than window textures, or a game that acquires its next texture before presenting
+// the current frame, the game would run frames further ahead of the GPU and rewrite per-frame data queued draws still read
 static void ticket_case(void) {
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
     CHECK("prior submission completed", mtl_wait(mtl_sub_commit(), 2000000000ull));
@@ -170,8 +168,8 @@ static void ticket_case(void) {
     mtl_present_test_stall(400000000); uint64_t copies = g_snap_v; int idx;
     h_nvnWindowAcquireTexture((NVNwindow *)&win, NULL, &idx); h_nvnQueuePresentTexture(&fixture_queue, (NVNwindow *)&win, idx);
     queue_encoded(); snap_commit_wait(g_snap_v);
-    // nvnQueueFinish after a snapshot present waits for the copy, not for the screen: by the present's ticket it waited for the stalled display link (400 ms here),
-    // which paces a game that finishes its queue every frame by the screen again
+    // nvnQueueFinish after a snapshot present waits for the copy, not for the screen: by the present's ticket it would wait for the stalled display link (400 ms here), which
+    // paces a game that finishes its queue every frame by the screen again
     uint64_t f0 = now_ns(); h_nvnQueueFinish(&fixture_queue); double fms = (now_ns() - f0) / 1e6; printf("finish: %.3f ms\n", fms);
     CHECK("finish waits for the snapshot's copy, not the stalled display", fms < 200 && g_snap_ev.signaledValue >= copies + 1);
     [g_q4 waitForEvent:gpu_gate value:1];   // holds the queue: the next copy stays unrun until the gate opens

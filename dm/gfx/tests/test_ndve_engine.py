@@ -338,7 +338,7 @@ class EngineSource(unittest.TestCase):
 
     def test_weight_offsets_follow_from_the_layers(self):
         """ndve_offsets' rule (each layer's weights, then its biases, each padded to 256 bytes but the last biases) on the include's layer and shape tables gives the offsets
-        at which Ocarina of Time binds each network dispatch's weights and biases (measured in the game, PR #1894) and ends at the 0x3c320 bytes of weights the NDVE archive's
+        at which Ocarina of Time binds each network dispatch's weights and biases (measured in the game) and ends at the 0x3c320 bytes of weights the NDVE archive's
         network table states"""
         src = INC.read_text()
         kinds = re.findall(r'NK_(\w+)', re.search(r'enum \{ (NK_PACK[^}]*)\}', src).group(1))

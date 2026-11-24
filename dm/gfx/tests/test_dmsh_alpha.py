@@ -2,7 +2,7 @@
 under its constant, dmsh_entry.fs_uint), the output stays
 a library that compiles for the Mac, and shaders without a float colour 0 alpha get none. With --fixture <dir>, writes the replay test's shaders (t_alpha.m): the base
 sources and their side libraries, compiled"""
-import pathlib, re, shutil, subprocess, sys, tempfile, unittest
+import pathlib, shutil, subprocess, sys, tempfile, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
 import dmsh_abi, dmsh_alpha, dmsh_entry, dmsh_side
 

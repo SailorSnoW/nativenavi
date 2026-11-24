@@ -1,6 +1,6 @@
 """A compute shader's local size as the kernel's thread limit (dmsh_rewrite.py max_threads): on the M1 and M2 a compute pipeline allows fewer threads per threadgroup the more
 registers its code takes, so a kernel compiled without the limit can get a dispatch of the Switch shader's local size that its pipeline does not allow, and no invocation runs (Ocarina of
-Time's froxel light injection 9ed48d1011f1b48b, 8x8x8, issue #2425). The rewrite names the local size on the kernel; with dmsh_build.py's compile command the front
+Time's froxel light injection 9ed48d1011f1b48b, 8x8x8). The rewrite names the local size on the kernel; with dmsh_build.py's compile command the front
 end's IR then carries it as the function's work-group size, which the GPU compiler fits the registers to."""
 from pathlib import Path
 import shutil

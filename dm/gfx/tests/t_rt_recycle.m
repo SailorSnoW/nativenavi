@@ -1,4 +1,4 @@
-// Recycled texture memory (nvn_mtl.m rh_texture, rh_place, GitHub issues #1831, #1823): a shared texture in a GPU-only pool is made in a placement heap of its own, an eighth larger (at most
+// Recycled texture memory (nvn_mtl.m rh_texture, rh_place): a shared texture in a GPU-only pool is made in a placement heap of its own, an eighth larger (at most
 // RH_SLACK more) than the texture; once its texture is freed the heap stays resident, and the smallest waiting heap that fits, up to half as large again, takes the next texture, cleared as a new
 // allocation is: one a step of Metal's sizes larger included, COMPRESSIBLE or not. Same-pass feedback snapshots draw from the same heaps. Heaps that wait too long leave the
 // residency set when a submission begins. CPU-visible pools, block-compressed textures and DM_NVN_RT_RECYCLE=0 keep allocations of their own. A pool finalized before its texture
@@ -66,7 +66,7 @@ int main(void) { @autoreleasepool {
     mtl_init(); void *mem = NULL; posix_memalign(&mem, 16384, 64 << 20); memset(mem, 0, 64 << 20);
     pool_t pool = {.magic = MAGIC('P','O','O','L'), .flags = NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS | NVN_MEMORY_POOL_FLAGS_GPU_CACHED | NVN_MEMORY_POOL_FLAGS_COMPRESSIBLE, .mem = mem, .size = 64 << 20};
     mtl_sub_begin();
-    {   // the census with no texture of its own in the residency set: its formats line says so (it printed the unwritten buffer)
+    {   // the census with no texture of its own in the residency set: its formats line says so
         unsigned long long named, queued; int n = census_run("t_rt_recycle", &named, &queued);
         CHECK(n >= 4 && !strcmp(g_census_formats, "none\n"), "a census with no texture: every line, and the formats line says none");
         if (strcmp(g_census_formats, "none\n")) fprintf(stderr, "  formats: %s\n", g_census_formats);
@@ -177,7 +177,7 @@ int main(void) { @autoreleasepool {
         CHECK(waiting() == w0 + 1, "the object's later finalize frees nothing more");
     }
     {   // the census (mem_census, DM_CTL restop) reads the textures a live entry, a finalized serial's entry and the deferred-release queue alone hold, each retained while it reads it
-        // (its tables hold bare pointers, and a texture freed meanwhile crashed a census run during a load), and writes every line. Textures that are no render target: a recycled
+        // (its tables hold bare pointers: a texture freed meanwhile would crash it), and writes every line. Textures that are no render target: a recycled
         // heap's placed textures are left out of these lines
         pool_t cpu = {.magic = MAGIC('P','O','O','L'), .flags = NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED, .mem = (uint8_t *)mem + (32 << 20), .size = 16 << 20},
                other = cpu; other.mem = (uint8_t *)mem + (48 << 20);

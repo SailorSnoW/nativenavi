@@ -1,10 +1,10 @@
-// Storage bounds (GitHub issue #2618): a storage buffer the shader takes by address from a game uniform slot or the push constants (SBUFU / SBUFQ) has no size, and on the console the
+// Storage bounds: a storage buffer the shader takes by address from a game uniform slot or the push constants (SBUFU / SBUFQ) has no size, and on the console the
 // shader reads the GPU's page table as far as it indexes, an unmapped page reading 0. The host binds the Metal buffer that holds the address (mtl_gpu_addr) and gives the shader the
 // memory bound there in its length table (nvn_args.inc sblen_put, dmsh_abi.h DMSH_SBLEN_BANK): the words readable before the address and in all. The kernels below do what a translated
 // shader does with them (Instructions.cs TryGetBoundedStoragePointer: in = idx + before < total, unsigned; a load reads word 0 and gives 0 outside, as a select (dmsh_rewrite.select_guards), a store or an
 // atomic is skipped).
-// Cases: an address inside an ordinary pool (words before it readable too, nothing past the pool), PRAGMATA's hangar binding (a 1 MB sparse pool with one 0x30000-byte run mapped at its
-// base, read 0x50000 bytes: the run, then zeros where its GI voxeliser ef4ad01151918469 read other memory), and a dummy binding (nothing readable). Runs under Metal validation
+// Cases: an address inside an ordinary pool (words before it readable too, nothing past the pool), a binding at the base of a sparse pool (1 MB with one 0x30000-byte run
+// mapped at its base, read 0x50000 bytes: the run, then zeros), and a dummy binding (nothing readable). Runs under Metal validation
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
@@ -112,7 +112,7 @@ int main(void) { @autoreleasepool {
         CHECK("and changes nothing", !memcmp(keep, mem, POOL)); }
     mtl_pool_del(mem); free(mem);
 
-    // 2. PRAGMATA's R53 hangar: a storage buffer at the base of a sparse pool with one run mapped there, read further than the run
+    // 2. A storage buffer at the base of a sparse pool with one run mapped there, read further than the run
     uint8_t *phys = mmap(NULL, VPOOL, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     CHECK("physical storage", phys != MAP_FAILED);
     for (uint32_t i = 0; i < VPOOL / 4; i++) ((uint32_t *)(void *)phys)[i] = 0x85ebca6bu * (i + 7);

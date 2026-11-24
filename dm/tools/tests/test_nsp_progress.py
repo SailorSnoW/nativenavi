@@ -67,7 +67,8 @@ class Json(unittest.TestCase):
         self.assertEqual([e['done'] for e in self.events('progress')], [0, 1])
         self.now += 0.5; self.prog._tick(OneTick())   # the ticker sends it
         self.assertEqual([e['done'] for e in self.events('progress')], [0, 1, 2])
-        self.prog.set(done=3); self.prog.end()   # held back again, then sent before stage_end
+        self.prog.set(done=3)   # held back again, then sent before stage_end
+        self.prog.end()
         es = self.events()
         self.assertEqual([es[-2][k] for k in ('done', 'frac')], [3, 0.99])
         self.assertEqual(es[-1]['ev'], 'stage_end')
@@ -89,7 +90,7 @@ class Json(unittest.TestCase):
         self.assertFalse(es[2]['ok'])
         self.assertTrue('out' in es[3]['msg'] and 'err' in es[3]['msg'])
 
-    def test_game(self):   # which game the app is (issue #1627): the event, then the message for people
+    def test_game(self):   # which game the app is: the event, then the message for people
         app, icon = Path('/b/Zelda.app'), Path('/b/x/extract/v131072/icon.jpg')
         nsp.say_game(0x0400486024DEC000, 'The Legend of Zelda', '1.0', 'org.nativenavi.0400486024dec000', app, icon)
         nsp.say_game(0x0400486024DEC000, 'Zelda', '1.0', 'b', None, None)   # no app path, a game without an icon
@@ -100,7 +101,8 @@ class Json(unittest.TestCase):
         self.assertIn(f'; app: {app}', es[1]['msg'])
         self.assertEqual((es[2]['out'], es[2]['icon']), (None, None))
         self.assertNotIn('; app:', es[3]['msg'])
-        self.prog.mode = 'lines'; nsp.say_game(1, 'Zelda', '1.0', 'b', Path('/b/z.app'), None)   # the human modes get only the message
+        self.prog.mode = 'lines'   # the human modes get only the message
+        nsp.say_game(1, 'Zelda', '1.0', 'b', Path('/b/z.app'), None)
         self.assertNotIn('"ev"', self.out.getvalue().splitlines()[-1])
 
 class ShadersStale(unittest.TestCase):

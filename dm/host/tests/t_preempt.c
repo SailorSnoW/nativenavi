@@ -16,8 +16,7 @@ static int wait_kind;
 static _Atomic int worker_host_work;
 static int worker_ready;
 
-// FFT's SDK auto-clear event wakes one condition waiter. Its private worker
-// queues cannot influence the kernel's priority/FIFO selection.
+// An SDK auto-clear event wakes one condition waiter. Its private worker queues cannot influence the kernel's priority/FIFO selection.
 static thr_t fifo_workers[3];
 static _Atomic int fifo_done;
 static void *fifo_wait(void *arg) {
@@ -121,7 +120,7 @@ static int delayed_wake(unsigned delay, int kind, int exclusion) {
     if (exclusion == 5) worker.pause_req = 1;   // guest suspension
     if (exclusion == 6) { worker_host_work = 1; worker.host_work = &worker_host_work; }   // host GPU work
     thr_t *self = pthread_getspecific(g_keythr); uint64_t self_mask = self->mask;
-    if (exclusion == 7) self->mask = 5;   // the signaller can run on another guest core (Batman: Arkham Knight's job workers, mask 0x5)
+    if (exclusion == 7) self->mask = 5;   // the signaller can run on another guest core (job workers with mask 0x5)
     g_lock();
     worker.handle = h_new(O_THREAD, &worker); worker.all = g_all; g_all = &worker;
     g_unlock();
@@ -156,8 +155,7 @@ static int delayed_wake(unsigned delay, int kind, int exclusion) {
     return ok;
 }
 // The scope of a handoff: the threads the signaller's wake made runnable, and those they wake in turn, each until it blocks.
-// A busy higher-priority peer of the core that the signaller never woke must not hold it (issue #247: Tears of the Kingdom's
-// boot thread waited for its core's busy loaders at every wake; issue #259: Tropical Freeze's job thread for pollers).
+// A busy higher-priority peer of the core that the signaller never woke must not hold it (a boot thread would wait for its core's busy loaders at every wake).
 static thr_t scope_peer[3];
 static uint32_t scope_ev[2][2];   // [event][write, read]
 static _Atomic int scope_payload, scope_release;
@@ -207,7 +205,7 @@ static void scope_until_waiting(thr_t *t) {
     for (;;) { g_lock(); int w = t->wkind == 4; g_unlock(); if (w) break; usleep(100); }
 }
 // kind 0: a busy unrelated peer and one woken worker; 1: a dispatcher that wakes the worker; 2: a woken thread that yields to any thread;
-// 3: a woken thread that waits for a host lock the signaller holds (it never returned before that wait counted as blocked)
+// 3: a woken thread that waits for a host lock the signaller holds (it returns only once that wait counts as blocked)
 static int handoff_scope(int kind) {
     for (int e = 0; e < 2; e++) { uint64_t r[32] = {0}; svc_thread(0x45, r); assert(r[0] == 0); scope_ev[e][0] = r[1]; scope_ev[e][1] = r[2]; }
     atomic_store(&scope_payload, 0); atomic_store(&scope_release, 0);
@@ -305,8 +303,8 @@ static int native_join_handoff(void) {
     return blocked && finished && nesting;
 }
 // A started higher-priority worker whose first act is a service request (a file system call, a blocking IPC on Horizon) gives its core back, and its first request ends only after the
-// starter is back in guest code. Digimon Story Cyber Sleuth's save manager sets a busy flag right after StartThread returns, and the worker clears it as its last act: with the starter
-// held until the worker exited, the flag stayed set for good and every later slot read was refused. The worker reads the flag after its request, then clears it
+// starter is back in guest code. A game may set a busy flag right after StartThread returns that the worker clears as its last act: with the starter held until the worker
+// exited, the flag would stay set for good. The worker reads the flag after its request, then clears it
 static _Atomic int request_busy, request_seen;
 static int request_calls;
 static void *request_work(void *arg) {
@@ -337,7 +335,7 @@ static int service_request_start(int calls) {
     unsigned slot = t.handle - 0x1000; g_h[slot].type = O_FREE; g_h[slot].obj = NULL;
     g_unlock();
     pthread_cond_destroy(&t.cv); pthread_cond_destroy(&t.pcv);
-    // Without a request the starter is held to the end, so the flag stays set (the old behaviour of every file system call); with one the worker sees the flag and clears it
+    // Without a request the starter is held to the end, so the flag stays set; with one the worker sees the flag and clears it
     int ok = calls ? !held && seen == 1 && busy == 0 : held && seen == 0 && busy == 1;
     printf("%s: started worker with %d service requests: starter held to its end %d, worker saw the flag %d, flag afterwards %d\n", ok ? "PASS" : "FAIL", calls, held, seen, busy);
     return ok;

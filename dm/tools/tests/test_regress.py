@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# scripts/regress.py: the parts that need no game, GPU or git revision: the MSL interface reader (GitHub issue #283), the [RED] normalization, the routes, and the comparisons
+# scripts/regress.py: the parts that need no game, GPU or git revision: the MSL interface reader, the [RED] normalization, the routes, and the comparisons
 import fcntl, importlib.util, json, os, tempfile, time, unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -77,12 +77,12 @@ class Regress(unittest.TestCase):
         a = regress.normalize_red('[dm] [RED] shader 0a91af5bef8578e2: 12 bindings at 0x1f00 in /Volumes/NX/games/x [y]/b')
         b = regress.normalize_red('[dm] [RED] shader 1b91af5bef8578e3: 7 bindings at 0x2000 in /tmp/z')
         self.assertEqual(a, b)
-        # Scarlet: one red line, its register zero in one run ("x1=0") and not in the other ("x1=0x1")
+        # one red line, its register zero in one run ("x1=0") and not in the other ("x1=0x1")
         a = regress.normalize_red('[dm] [RED] NVN unimplemented function called: nvnCommandBufferSetConservativeRasterDilate (x0=0x7f3c2a10 x1=0 x2=0x3)')
         b = regress.normalize_red('[dm] [RED] NVN unimplemented function called: nvnCommandBufferSetConservativeRasterDilate (x0=0x7f3c2a10 x1=0x1 x2=0x3)')
         self.assertEqual(a, b)
 
-    def test_red_missing_libraries(self):   # Tears of the Kingdom, 2026-10-28: ~2,000 shaders per run the chain build does not hold, other names each run
+    def test_red_missing_libraries(self):   # thousands of shaders per run the chain build does not hold, other names each run
         M = regress.MISSING_LIB
         lib = '/Volumes/T7/nsp/The Legend of Zelda Tears of the Kingdom/0100F2C0115B6000-work/regress/chain/nvn-a78f966a7b38-922b2b7671c9-7fb6953e58a81bc8/b-a78f966a7b38'
         fused = (f'[dm] [nvn-mtl] [RED] failed to load shader c41c950044f80287_b: cannot open {lib}/c41c950044f80287_b.metallib'
@@ -364,7 +364,7 @@ class Regress(unittest.TestCase):
             check.assert_called_once()
             self.assertEqual(manifest['interface'], current)
 
-    def test_variant_hash_ignores_chain_stamps(self):   # 2026-10-31: DKC Tropical Freeze reported 720 changed shaders whose variants differed only in the stamps
+    def test_variant_hash_ignores_chain_stamps(self):   # variants that differ only in the stamps are no changed shaders
         k = '0123456789abcdef'
         def lib(td, chain='c1', compiler='x1', bindings=(0,), msl='kernel void main0() {}', pull=b'\x01'):
             d = Path(td); stamp = {'chain': chain, 'chain_metal': 'mac', 'chain_compiler': compiler}
@@ -554,7 +554,7 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
             self.assertEqual(regress.heavy_jobs(), ['103 metal /another/build.metal', '104 make dmhost'])
 
     def test_build_profile_runs_only_when_derived(self):
-        # A profile in the build folder without the packing script's derived key must not shadow dm/games' (a leftover lacked OCTOPATH TRAVELER 0's tex_dyn_slots and fps_target)
+        # A profile in the build folder without the packing script's derived key must not shadow dm/games'
         with tempfile.TemporaryDirectory() as td:
             root, gid = Path(td), '0123456789ABCDEF'
             build = root / f'{gid}_build'; (build / 'profile' / gid).mkdir(parents=True); (build / 'profile' / gid / 'game.tsv').write_text('title_id\t' + gid + '\n')
@@ -671,7 +671,7 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
                     self.assertEqual(selected['DM_GAME'], 'game')
                     self.assertTrue((dst / '.done').is_file())
 
-    def test_each_tree_uses_its_own_pso_offline_and_imports(self):   # baseline and candidate trees each run pso_offline in their own process (PR #3190 / #3176: new dmsh_abi constant)
+    def test_each_tree_uses_its_own_pso_offline_and_imports(self):   # baseline and candidate trees each run pso_offline in their own process (a dmsh_abi constant new in one of them)
         import sys
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

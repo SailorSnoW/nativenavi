@@ -1,8 +1,8 @@
 // Compressed-alias pairs (nvn_mtl.m, bc_alias_copy and bcp_*): an uncompressed texture that aliases a block-compressed one (the same guest storage, one 16-byte texel per BC3
 // block, its size in blocks) and the compressed texture stay equal, as the shared storage keeps them on the console. A texture copy into an alias with no texture of its own lands
-// in the compressed texture's blocks (Monster Jam Steel Titans 2's runtime virtual texture); an image store into the alias (Mortal Kombat 11's BC3CompressTexture, PR #2802) or a
-// render pass into it goes into the compressed texture when the dispatch or the pass ends; a copy into the compressed texture goes into the alias; a side is filled from the other
-// before its first write, so a write of a part of it keeps the rest; a read-only image binding writes nothing; a copy into a texture over other storage leaves both alone
+// in the compressed texture's blocks; an image store into the alias or a render pass into it goes into the compressed texture when the dispatch or the pass ends; a copy into
+// the compressed texture goes into the alias; a side is filled from the other before its first write, so a write of a part of it keeps the rest; a read-only image binding
+// writes nothing; a copy into a texture over other storage leaves both alone
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -104,7 +104,7 @@ int main(void) { @autoreleasepool {
     CHECK(g_bc_alias_n == 2, "and is counted");
 
     // An image store into the alias, as image_prepare sees it before a dispatch: the alias, made now, is filled from the compressed texture first; the store goes into the
-    // compressed texture when the dispatch ends (Mortal Kombat 11's BC3CompressTexture writes its RGBA32UI image this way)
+    // compressed texture when the dispatch ends
     NvShader *cs = [NvShader new]; NvProg *pr = [NvProg new]; pr->sh[5] = cs;
     cs->rf.nb = 1; cs->rf.b[0] = (nvn_rbind){.kind = NVN_RB_IMG, .reg = 0, .rw = 1};
     S.img[5][0] = 2;

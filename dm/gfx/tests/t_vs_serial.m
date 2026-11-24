@@ -1,5 +1,5 @@
-// Pipelines that share a vertex function are built one at a time (DM_PSO_VS_SERIAL, vs_enter in nvn_pso.inc): Apple's G16X driver crashed in createVertexProgramVariant's completion block
-// when several threads built pipelines of one vertex function at once. Checks: the stripe follows the library's name and the entry name (a specialized function too, one file loaded twice
+// Pipelines that share a vertex function are built one at a time (DM_PSO_VS_SERIAL, vs_enter in nvn_pso.inc): Apple's G16X driver crashes in createVertexProgramVariant's completion block
+// when several threads build pipelines of one vertex function at once. Checks: the stripe follows the library's name and the entry name (a specialized function too, one file loaded twice
 // is one function); a build of the same function waits for the holder, one of another function does not, a lookup that must not compile never waits, a game thread waits 50 ms at most,
 // a holder that does not return stalls its stripe once (builds go on unguarded) and the stripe guards again when it returns; threads building bases of one vertex function through pso_build
 // are never inside one stripe together, and none is left holding it. `t_vs_serial off` (DM_PSO_VS_SERIAL=0): nothing is guarded.
@@ -133,8 +133,8 @@ int main(int argc, char **argv) { @autoreleasepool {
         EXPECT("it was skipped, not searched", 1, atomic_load(&g_vs_skipped) == skipped0 + 1);
         EXPECT("it left no build pending", 0, g_pbase_pending.n);
         // two such lookups of one base at the same moment (a draw and a background lookup worker): the one that finds the other's job pending waits for its archive result
-        // (PbaseBuild.looked), which the owner that was told to leave it must publish too. It did not, and the waiter waited for ever: the submit thread, in Ocarina of Time
-        // on an M2 Pro, three times in an evening, each at an area load that compiled pipelines in play (picture still, sound on, no red line)
+        // (PbaseBuild.looked), which the owner that was told to leave it must publish too, else the waiter waits for ever (in Ocarina of Time: the submit thread, at an area
+        // load that compiles pipelines in play; picture still, sound on, no red line)
         {   enum { ROUNDS = 3000 }; int stuck = 0, round = 0; dispatch_queue_t cq = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
             for (; round < ROUNDS && !stuck; round++) {
                 dispatch_group_t pair = dispatch_group_create(); _Atomic int *gate = calloc(2, sizeof *gate);   // [0] threads ready, [1] go; leaked when a thread is stuck

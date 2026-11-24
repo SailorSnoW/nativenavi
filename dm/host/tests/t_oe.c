@@ -17,7 +17,7 @@ static void reset(void) { g_mqh = g_mqn = 0; g_focus = 1; g_seen = 1; g_applets 
 static int pop_is(uint32_t want) { uint32_t m = 999; return h_oe_TryPopMsg(&m) && m == want; }
 static int empty(void) { uint32_t m = 999; return !h_oe_TryPopMsg(&m) && m == 999; }
 static int child_kind;
-static void abort_exit(int sig) { (void)sig; dprintf(2, "[RED] t_oe child kind=%d: 10 s watchdog timeout\n", child_kind); _exit(97); } // the old-version die in the child process can be checked, avoiding a crash report or core
+static void abort_exit(int sig) { (void)sig; dprintf(2, "[RED] t_oe child kind=%d: 10 s watchdog timeout\n", child_kind); _exit(97); } // a hang in the child ends here, without a crash report or core
 static void *focus_burst(void *p) { (void)p; for (int i = 0; i < 17; i++) { dm_focus_set(2); dm_focus_set(1); } return NULL; }
 static void *mode_burst(void *p) { (void)p; for (int i = 0; i < 17; i++) dm_set_opmode(i % 2); return NULL; }
 static pthread_mutex_t stage_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -96,7 +96,7 @@ int main(void) {
     dm_focus_set(1); dm_set_opmode(0); dm_focus_set(3); dm_set_opmode(1);
     CHECK(pop_is(15) && pop_is(30) && pop_is(31) && empty(), "after wrapping across 32 slots still deduplicated by 15,30,31 in first-seen order");
     CHECK(child_burst(3), "new change after the consumer pops and before it queries: the new resume is not missed, final focus 1 / mode 0");
-    // Focus handling modes 0 and 3 get no focus notifications (the system suspends the game instead); 1 and 2 do. Super Mario Galaxy 2 sets 3 and deadlocked in its own pause on focus 2
+    // Focus handling modes 0 and 3 get no focus notifications (the system suspends the game instead); 1 and 2 do.
     reset(); g_ntf_opmode = g_ntf_perfmode = 1; h_oe_SetFocusMode(3);
     dm_focus_set(2); dm_focus_set(3);
     CHECK(empty() && h_oe_GetFocus() == 3, "focus mode 3: focus changes queue nothing, the state is still queried as 3");
@@ -108,8 +108,8 @@ int main(void) {
     CHECK(pop_is(15) && empty(), "focus mode 2: focus notification 15");
     h_oe_SetFocusMode(1); dm_focus_set(2);
     CHECK(pop_is(15) && empty(), "focus mode 1: focus notification 15");
-    // Library applets (DM_APPLET): on Horizon an applet the application opens takes its focus, 15 with OutOfFocus on the way in and 15 with InFocus on the way out. Mario Kart 8
-    // Deluxe applies the controller applet's answer only after that InFocus notification (GitHub issue #550). The front end's own state is kept apart from the applet's
+    // Library applets (DM_APPLET): on Horizon an applet the application opens takes its focus, 15 with OutOfFocus on the way in and 15 with InFocus on the way out. A game may
+    // apply the controller applet's answer only after that InFocus notification. The front end's own state is kept apart from the applet's
     reset();
     dm_applet_enter("test"); CHECK(h_oe_GetFocus() == 2 && pop_is(15) && empty(), "applet opens over a game in focus: 15, state 2");
     dm_applet_leave(); CHECK(h_oe_GetFocus() == 1 && pop_is(15) && empty(), "applet closes: 15, state 1");

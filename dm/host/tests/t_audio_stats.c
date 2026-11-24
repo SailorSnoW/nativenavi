@@ -85,7 +85,7 @@ int main(void) {
     atomic_store(&ao(out)->state, STATE_STARTED); atomic_store(&block_report, 1);
     CHECK(render(out, 2000, 1), "PCM and release order at first statistics boundary");
     CHECK(!atomic_load(&callback_io), "callback never enters stdio or its stream lock");
-    if (atomic_load(&callback_io)) { au_close(out, NULL); return 1; } // old code fails here, without waiting for a helper that never logs
+    if (atomic_load(&callback_io)) { au_close(out, NULL); return 1; } // a callback that logs fails here, without waiting for a helper that never logs
     pthread_t logger; CHECK(!pthread_create(&logger, NULL, drain_stats, NULL), "run the watchdog's actual statistics drain");
     CHECK(wait_for(report_entered), "hold the diagnostic writer outside the callback");
     CHECK(render(out, 6000, 1), "a blocked diagnostic writer never stops PCM or guest release events");

@@ -1,4 +1,4 @@
-// Unit test (crash.c alternate stack is freed with the thread): start 2000 short-lived threads each calling crash_thread_init, and expect the heap not to grow with the thread count (2 calls per thread, 64 KiB each; before the fix a 250 MiB leak was measured)
+// Unit test (crash.c alternate stack is freed with the thread): start 2000 short-lived threads each calling crash_thread_init, and expect the heap not to grow with the thread count (2 calls per thread, 64 KiB each)
 #include <pthread.h>
 #include <stdio.h>
 #include <malloc/malloc.h>

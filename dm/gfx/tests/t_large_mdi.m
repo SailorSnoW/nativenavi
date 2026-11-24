@@ -1,4 +1,4 @@
-// Issue #941: the last live indirect draw paints the target. The count is written on the GPU after recording.
+// The last live indirect draw paints the target. The count is written on the GPU after recording.
 #import <Foundation/Foundation.h>
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
@@ -142,7 +142,7 @@ int main(void) {
         pool_builder_t builder = {.mem = pool, .size = bytes, .flags = 0x24};
         if (!h_nvnMemoryPoolInitialize(&physical, (const NVNmemoryPoolBuilder *)&builder))
             return 2;
-        // Monster Hunter Rise keeps both its count and its strided argument records in a sparse virtual pool.
+        // A game may keep both its count and its strided argument records in a sparse virtual pool.
         builder = (pool_builder_t){.size = DM_GAME_APP_POOL + 4 * bytes, .flags = NVN_MEMORY_POOL_FLAGS_VIRTUAL};
         if (!h_nvnMemoryPoolInitialize(&virt, (const NVNmemoryPoolBuilder *)&builder))
             return 2;

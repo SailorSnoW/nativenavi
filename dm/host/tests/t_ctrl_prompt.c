@@ -1,4 +1,4 @@
-// The controller applet's prompt (ctrl_prompt.h, GitHub issue #1640): waiting below the minimum, a joining press that is not an A, A and B, the maximum, nobody left to join,
+// The controller applet's prompt (ctrl_prompt.h): waiting below the minimum, a joining press that is not an A, A and B, the maximum, nobody left to join,
 // the keys, a button held when it opens, the settle phase that keeps the closing press from the game, and a front end's texts with the numbers in
 #include "../ctrl_prompt.h"
 #include <stdio.h>

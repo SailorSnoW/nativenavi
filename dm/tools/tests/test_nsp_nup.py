@@ -151,7 +151,9 @@ class Read(Base):
         self.assertEqual((app, base.kind, sorted(vers), sorted(dlc)), (TID, 0, [VER], [TID + 0x1001]))
 
     def test_damaged_file_refused(self):
-        b = bytearray(self.path.read_bytes()); b[0x90] ^= 1; self.path.write_bytes(b)   # a TOC byte
+        b = bytearray(self.path.read_bytes())
+        b[0x90] ^= 1   # a TOC byte
+        self.path.write_bytes(b)
         with self.assertRaisesRegex(pack_nup.Error, 'SHA-256'): pack_nup.Nup(self.path)
         self.path.write_bytes(b[:-16])
         with self.assertRaisesRegex(pack_nup.Error, 'header says'): pack_nup.Nup(self.path)
@@ -160,8 +162,11 @@ class Read(Base):
         n = self.open(); ndirs, slots, dirs = n.ndirs, list(n.slots), list(n.dirs)
         slots_at = 0x80 + 0x30 + len(n.packages) * 0x40 + ndirs * 0x18 + len(n.files) * 0x50; n.close()
         orig = self.path.read_bytes(); toc_size = struct.unpack_from('<Q', orig, 0x10)[0]
-        def folders(d): _, first, count = dirs[d]; return [first + j for j in range(count) if slots[first + j] < ndirs]   # the slots of d's folder children
-        j = next(j for j in folders(0) if folders(slots[j])); sub = slots[j]   # the base's romfs/, which has a folder
+        def folders(d):   # the slots of d's folder children
+            _, first, count = dirs[d]
+            return [first + j for j in range(count) if slots[first + j] < ndirs]
+        j = next(j for j in folders(0) if folders(slots[j]))   # the base's romfs/, which has a folder
+        sub = slots[j]
         for at, to in ((j, 0), (folders(sub)[0], sub)):   # romfs/ made the root itself; then romfs/dir made romfs/ (a cycle of two)
             b = bytearray(orig); struct.pack_into('<I', b, slots_at + 4 * at, to)
             b[0x18:0x38] = hashlib.sha256(bytes(b[0x80:0x80 + toc_size])).digest(); self.path.write_bytes(b)
@@ -414,7 +419,7 @@ class Pack(Base):
         jp = (b / 'control.nacp').read_bytes()[2 * 0x300:2 * 0x300 + 0x200].split(b'\0')[0]
         self.assertEqual(jp.decode(), 'テス')
 
-    def test_settings_read_the_base_games_languages_when_the_update_has_no_control_data(self):   # a Switch 2 game's settings had no Game language row (LNPANDY/NX2Apple#619)
+    def test_settings_read_the_base_games_languages_when_the_update_has_no_control_data(self):
         sys.path.insert(0, str(REPO / 'dm/games')); import settings
         vars(nsp)['nacp'] = nacp   # main sets it
         n = self.open(); app, base, vers, _ = pack_nup.scan(n)
@@ -477,7 +482,7 @@ class Stop(Exception): pass
 S1, S2 = 0x0100F00000010000, 0x0400F00000010001   # a Switch 2 Edition of a Switch 1 game: the Switch 1 program (index 0) and the Switch 2 program (index 1) of application S1
 
 
-def program_nacp(owner=S1, aoc=S1 + 0x1000):   # a Switch 2 program's NACP: its application (SaveDataOwnerId) and add-on content base, as Super Mario Bros. Wonder's names them
+def program_nacp(owner=S1, aoc=S1 + 0x1000):   # a Switch 2 program's NACP: its application (SaveDataOwnerId) and add-on content base
     b = bytearray(control_nacp('Test Game S2', '\u30c6\u30b9', '1.2.1')); struct.pack_into('<QQ', b, pack_nup.NACP_AOC_BASE, aoc, owner)
     return tlv([(pack_nup.T_NACP, bytes(b))])
 

@@ -1,4 +1,4 @@
-"""The shader libraries' precompiled Metal header (dm/gfx/tools/dmsh_pch.py, GitHub issue #1036): a compile uses it when it builds and gives the same bytes on a test shader, runs
+"""The shader libraries' precompiled Metal header (dm/gfx/tools/dmsh_pch.py): a compile uses it when it builds and gives the same bytes on a test shader, runs
 again without it when it fails, so what a failure reports is the plain compile's, and DMSH_PCH=0 turns it off. With a Metal compiler (each SDK skipped without one), synthetic shaders
 compile to byte-identical output with and without it, in the flags of the real builds; a shader with an error raises as a plain compile does. The source goes on standard input, so a
 library does not depend on its file's name. No game files."""
@@ -77,7 +77,8 @@ class Choice(Tmp):
     def test_each_run_reads_the_source_from_its_start(self):
         read = []
         def run(cmd, stdin, **kw):
-            read.append(stdin.read()); return self.result(len(read) == 1)   # the first run fails, having read the whole source
+            read.append(stdin.read())   # the first run fails, having read the whole source
+            return self.result(len(read) == 1)
         with mock.patch.object(dmsh_pch, 'make', return_value=('/p.pch', None)), mock.patch.object(subprocess, 'run', side_effect=run):
             dmsh_pch.compile(['metal', '-c'], 'a.metal', 'a.air')
         self.assertEqual(read, [b'a', b'a'])

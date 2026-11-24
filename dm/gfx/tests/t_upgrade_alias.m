@@ -1,5 +1,5 @@
 // A usage upgrade replaces one shared image, including every serial naming it. Buffer textures share one view by storage, made with every usage they can take, so neither an image
-// write nor a format view rebuilds it, and texture objects made again every frame over the same range add nothing to the residency set (GitHub issues #1061 and #2423).
+// write nor a format view rebuilds it, and texture objects made again every frame over the same range add nothing to the residency set.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -108,7 +108,7 @@ int main(void) { @autoreleasepool {
         CHECK(g_pfv_upgrades == ups && tex_mtl(&timage) == view && tex_mtl(&ta) == view, "an atomic image write through the IMAGE object rebuilds nothing");
         id<MTLTexture> uview = [view newTextureViewWithPixelFormat:MTLPixelFormatR32Uint];
         CHECK(uview && uview.textureType == MTLTextureTypeTextureBuffer, "an R32UI view of it needs no upgrade");
-        // Unreal's transient buffer textures: a new object over the same range every frame, released after use
+        // Transient buffer textures: a new object over the same range every frame, released after use
         NSUInteger resident = g_res_objects.allObjects.count; int same = 1;
         for (uint64_t i = 0; i < 64; i++) { tex_t tn = ta; tn.serial = 99700 + i; mtl_tex_init(&tn); same &= tex_mtl(&tn) == view; mtl_tex_release(&tn); }
         CHECK(same && g_res_objects.allObjects.count == resident, "64 objects made again over the same range share the view and add nothing to the residency set");

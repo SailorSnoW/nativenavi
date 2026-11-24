@@ -1,6 +1,6 @@
 // Real Metal readback: cached stream bindings survive helper overwrites, encoder/submit changes and pool replacement.
-// Byte-aligned streams preserve their bytes and GPU write ordering (Arkham Knight's Scaleform streams sit at addresses 2 mod 4).
-// A draw that reads past a stream's bound size reads zeros there, not the pool's next bytes (Super Mario Odyssey's 9-vertex draw from a 3-vertex stream).
+// Byte-aligned streams preserve their bytes and GPU write ordering (streams at addresses 2 mod 4).
+// A draw that reads past a stream's bound size reads zeros there, not the pool's next bytes (a 9-vertex draw from a 3-vertex stream).
 #include "../nvn/nvn_mtl.m"
 uint64_t g_t0_ns;
 int dm_guest_as_contains(uintptr_t address) { (void)address; return 0; }   // Tests use host-thread stacks.

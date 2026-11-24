@@ -16,7 +16,7 @@ CONSTS = {'SPIN_PATHS', 'SPIN_STEPS', 'SPIN_STORES', 'SPIN_LSE', 'SPIN_BAD', 'SP
 body = [n for n in tree.body if (isinstance(n, ast.FunctionDef) and n.name in FUNCS) or (isinstance(n, ast.ClassDef) and n.name == 'SpinNo')
         or (isinstance(n, ast.Assign) and any(isinstance(t, ast.Tuple) and any(getattr(e, 'id', None) in CONSTS for e in t.elts) or getattr(t, 'id', None) in CONSTS for t in n.targets))]
 
-# A job queue poll (the shape of Breath of the Wild's main+0xef6354): take the queue's spin lock, look whether the wait is over, release the lock, again.
+# A job queue poll: take the queue's spin lock, look whether the wait is over, release the lock, again.
 #   0x00 T:  cbz x20, X                 0x2c     str w12, [x20, #0x100]     0x50     ldr w13, [x21, #0x90]      (the wait is over: take an item,
 #   0x04     str w11, [x20, #0x100]     0x30     ldrb w14, [x21, #0x98]     0x54     sub w8, w13, w25            store the new cursor, release
 #   0x08 L0: ldr w14, [x9]              0x34     cmp w0, #0                 0x58     add w15, w8, w25            and leave)
@@ -33,7 +33,8 @@ POLL = [0xb4000434, 0xb901028b, 0xb940012e, 0x710005df, 0x54ffffc0, 0x885ffd2e, 
 
 
 def region(words, T, bes):
-    md = Cs(CS_ARCH_ARM64, CS_MODE_ARM); md.detail = True
+    md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+    md.detail = True
     scope = {'re': re, 'struct': struct, 'ARM64_OP_IMM': ARM64_OP_IMM, 'ARM64_OP_MEM': ARM64_OP_MEM, 'ARM64_OP_REG': ARM64_OP_REG,
              'IMG': struct.pack('<' + 'I' * len(words), *words) + bytes(64), 'md': md, 'spin_dec': {}, 'DATA_BLOCKS': [], 'spin_touched': set()}
     exec(compile(ast.Module(body=body, type_ignores=[]), str(TOOLS / 'patch_nso.py'), 'exec'), scope)
@@ -48,8 +49,8 @@ def patched(**at):
 
 class SpinWaits(unittest.TestCase):
     def test_lock_poll_without_clrex(self):
-        # The same poll as Breath of the Wild 1.6.0's compiler writes it (main+0x12c0e48): the acquire's failed test and the release's failed compare go straight back to
-        # the exclusive load (0x18 cbnz w14, L1; 0x74 b.ne U), no clrex; two nops keep the branches below in place
+        # The acquire's failed test and the release's failed compare go straight back to the exclusive load (0x18 cbnz w14, L1; 0x74 b.ne U), no clrex;
+        # two nops keep the branches below in place
         w = patched(o18=0x35ffffee, o1c=0x880e7d2a, o20=0x35ffffae, o24=0xd503201f, o28=0xd503201f, o74=0x54ffffc1)
         g = region(w, 0, [0x80])
         self.assertIsNotNone(g)
@@ -57,11 +58,12 @@ class SpinWaits(unittest.TestCase):
         self.assertNotIn(0x5c, g['R'])
         # no release on the path that skips it; a release of another address; a failed store retried somewhere else than its load
         for off, word in [(0x4c, 0x540001a1), (0x78, 0x880ffd5f), (0x20, 0x35ffff8e)]:
-            broken = list(w); broken[off // 4] = word
+            broken = list(w)
+            broken[off // 4] = word
             self.assertIsNone(region(broken, 0, [0x80]))
 
     def test_lock_wait_without_poll(self):
-        # A lock that heads no poll: its own retry loop waits for the holder, a spin wait as before the lock rules (Mario vs. Donkey Kong's locks, main+0x470fa8)
+        # A lock that heads no poll: its own retry loop waits for the holder, a spin wait of its own
         #   0x00 L: ldaxr w8, [x0] / cbnz w8, L / stxr w9, w10, [x0] / cbnz w9, L / ret
         acq = [0x885ffc08, 0x35ffffe8, 0x88097c0a, 0x35ffffa9, 0xd65f03c0]
         g = region(acq, 0, [0x4, 0xc])
@@ -87,7 +89,7 @@ class SpinWaits(unittest.TestCase):
         self.assertIsNotNone(g)
         self.assertEqual(g['valid'], {0x80})
         self.assertNotIn(0x5c, g['R'])          # the path that takes an item stores a new cursor: not part of the wait
-        self.assertEqual({g['nodes'][a]['kind'] for a in g['R']} >= {'acq', 'rel', 'tst', 'stc'}, True)
+        self.assertTrue({g['nodes'][a]['kind'] for a in g['R']} >= {'acq', 'rel', 'tst', 'stc'})
 
     def test_store_of_a_changing_value(self):   # the wait path stores w14, which the pass writes
         self.assertIsNone(region(patched(o2c=0xb901028e), 0, [0x80]))

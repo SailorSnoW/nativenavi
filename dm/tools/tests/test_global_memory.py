@@ -11,7 +11,7 @@ Every shader reaches one 4 KB buffer at a 40-bit guest address, which c0 holds a
   access into the descriptor's storage buffer (GlobalToStorage), at an offset from the low words.
 - 'pointer': the address is a pointer the shader loads from words 2 / 3 of the buffer, which the translator cannot trace to a descriptor, so the access goes
   through the memory pool table (dmsh_abi.h DMSH_GMEM_MAP_*), whose lookup takes the whole 40-bit address. There an extended address with a negative displacement
-  missed its pool before: its high word came out one too high, 4 GB up.
+  must keep its high word (one too high is 4 GB up, outside its pool).
 """
 import json
 import os
@@ -120,7 +120,7 @@ CASES = [
     ('cas_runtime_pred', 'cas', dict(runtime_pred=True, compare=INIT[0], value=99), (HI, LO), 1),
     ('cas_runtime_pred_false', 'cas', dict(runtime_pred=True, compare=INIT[0], value=99, runs=False), (HI, LO), 0),
     ('cas_32bit_address', 'cas', dict(extended=False, compare=INIT[0], value=99), (0, LO), 1),
-    ('cas_rd_is_ra', 'cas', dict(rd=2, rb=8, compare=INIT[0], value=99), (HI, LO), 1),   # EA SPORTS FC 27's form: ATOM.E.CAS R6, [R6], R8, R9
+    ('cas_rd_is_ra', 'cas', dict(rd=2, rb=8, compare=INIT[0], value=99), (HI, LO), 1),   # Rd = Ra: ATOM.E.CAS R6, [R6], R8, R9
     ('cas_rd_is_rb', 'cas', dict(rd=6, compare=INIT[0], value=99), (HI, LO), 1),
     ('cas_rd_is_rb1', 'cas', dict(rd=7, compare=INIT[0], value=99), (HI, LO), 1),
     ('cas_rd_rz', 'cas', dict(rd=255, compare=INIT[0], value=99), (HI, LO), 1),

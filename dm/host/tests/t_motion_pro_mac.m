@@ -84,9 +84,9 @@ int main(void) { @autoreleasepool {
     removed(a); assert(!a.callback && !g_pro_devices && !g_pro_bound && cleared == 4);
     players(1, 0); found(b); report(b); assert(sent == 18 && player == 0);   // reconnect / merged mode
     TestPro *c = [TestPro new]; found(c); assert(g_pro_bound && g_pro_bound->hid == hid(b));
-    tick += PRO_SILENT_NS; report(c);   // b fell silent without being removed (issue #2237's leftover entry), c streams: c is paired
+    tick += PRO_SILENT_NS; report(c);   // b fell silent without being removed (a leftover entry), c streams: c is paired
     assert(g_pro_bound && g_pro_bound->hid == hid(c) && sent == 21 && player == 0);
-    // A DualShock 4 beside the Pro: each model is paired on its own (the PR's shared count left both unpaired)
+    // A DualShock 4 beside the Pro: each model is paired on its own (a shared count would leave both unpaired)
     TestPro *ds = [TestPro new]; ds.vendor = @0x054C; ds.product = @0x09CC; found(ds);
     gc[PRO_MODEL_DS4] = 1; slot[PRO_MODEL_DS4] = 1; changed();
     assert(g_pro_bound && g_pro_bound->hid == hid(c) && !g_pro_pair[PRO_MODEL_DS4].bound);   // no report 0x11 yet

@@ -77,8 +77,8 @@ int main(void) { @autoreleasepool {
     bp.prog=&cp;emit(OP_BIND_PROGRAM,&bp,sizeof bp);emit(OP_DRAW,&arrays,sizeof arrays);execute();
     int ordered=1;for(int i=0;i<4096;i++)ordered&=output[i+4096]==(uint32_t)(i+0x1200);
     CHECK(ordered,"primitive barrier orders vertex storage writes before the consuming draw");
-    // The barrier also orders the other way: a later draw's storage writes come after the pass's earlier draws (Xenoblade Chronicles 2 rewrites shared bone matrix slots
-    // with a vertex-only draw after ORDER_PRIMITIVES). A barrier from the vertex stage inside the pass is enough when the earlier draws read memory only in their vertex stage or
+    // The barrier also orders the other way: a later draw's storage writes come after the pass's earlier draws (a game may rewrite shared bone matrix slots with a vertex-only
+    // draw after ORDER_PRIMITIVES). A barrier from the vertex stage inside the pass is enough when the earlier draws read memory only in their vertex stage or
     // the barrier orders only primitives; ORDER_FRAGMENTS after a draw that reads in its fragment stage ends the pass; a draw without writes, or a write with no barrier, changes nothing
     static prog_t rd={.serial=910506},rf={.serial=910507},fwp={.serial=910508};NvProg *reader=[NvProg new],*freader=[NvProg new],*fwriter=[NvProg new];
     reader->sh[0]=[NvShader new];reader->sh[0]->fn=[lib newFunctionWithName:@"c"];reader->sh[1]=program->sh[1];serial_put(rd.serial,reader);

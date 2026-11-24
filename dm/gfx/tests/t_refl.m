@@ -1,5 +1,5 @@
 // Reflection conversion unit tests: B reflection json (dmsh_build.py's <key>_b.json, the translation of the original Switch shaders) → C arrays. Every case is written here: the two
-// real-shader cases are cut down from Super Mario Bros. Wonder's translation (chain f0f7a7b25de7), their field values copied from the json text, so the test needs no game files
+// real-shader cases are cut down from a game's translation, their field values copied from the json text, so the test needs no game files
 // Dummy texture type MTLTextureType: 1D=0 1DArray=1 2D=2 2DArray=3 Cube=5 CubeArray=6 3D=7
 #import "../nvn/nvn_refl.h"
 #import <Foundation/Foundation.h>
@@ -75,7 +75,7 @@ int main(void) { @autoreleasepool {
         check("stored image: 3D texture type", MTLTextureType3D, r.b[1].dtt);
         check("stored image: no atomic flag", 0, r.b[1].atom);
     }
-    {   // readable-tile calls (dmsh_fetch.py): one at an interpolated output, one projective, one at the pixel position times c[6].xy (frag_pos, Splatoon Raiders' ink stamps)
+    {   // readable-tile calls (dmsh_fetch.py): one at an interpolated output, one projective, one at the pixel position times c[6].xy (frag_pos)
         NSDictionary *j = @{@"route": @"B", @"stage": @"ps", @"bindings": @[], @"fetch": @{@"calls": @[@{@"fc": @0, @"tex_reg": @1, @"varying_locn": @3},
             @{@"fc": @1, @"tex_reg": @2, @"varying_locn": @4, @"proj": @1}, @{@"fc": @2, @"tex_reg": @3, @"frag_pos": @[@[@0, @6, @0], @[@0, @6, @1]]}]}};
         check("fetch calls: conversion succeeds", 0, nvn_refl_from_json(j, &r, err, sizeof err));
@@ -97,7 +97,7 @@ int main(void) { @autoreleasepool {
         printf("%-60s %s\n", "negative control: PC chain reflection rejected (route A retired)", fail == f0 ? "✓" : "✗");
     }
 
-    // Real shaders of Super Mario Bros. Wonder, cut down: ps_models_p#0 (5c1ca4e7c3e4657c_b, 12 of its 44 bindings: one of each kind and texture type, their argument IDs as the build wrote them)
+    // A real shader, cut down: ps_models_p#0 (12 of its 44 bindings: one of each kind and texture type, their argument IDs as the build wrote them)
     {   int f1 = fail;
         NSString *c1hex = [@"71c49cbf0000803f6f12833a83f9a23e818080bb8180803c0ad7233dcdcccc3dacc52737f343be3dcdcc4c3e800080b79a99993e9a99193fabaa2a3e" stringByPaddingToLength:512 withString:@"0" startingAtIndex:0];   // 256 bytes, 15 words of constants then zeros
         NSDictionary *j = @{@"route": @"B", @"stage": @"ps", @"c1": c1hex, @"vertex_inputs": @[], @"drv_unfillable": @[],
@@ -150,7 +150,7 @@ int main(void) { @autoreleasepool {
         check("B vertex: binding[0] uniform slot 0", 0, r.b[0].reg); check("B vertex: binding[1] uniform slot 3", 3, r.b[1].reg);
         printf("%-60s %s\n", "B vertex vs_models_v#0: 4 attributes (attribute = MSL attribute)", fail == f1 ? "✓" : "✗");
     }
-    {   int f1 = fail;   // an array of handles in a uniform buffer (Paper Mario: The Thousand-Year Door b352f7af1c86e9fa_b, its last four bindings): array<…, 32> takes 32 argument entries each
+    {   int f1 = fail;   // an array of handles in a uniform buffer (a real shader's last four bindings): array<…, 32> takes 32 argument entries each
         NSDictionary *j = @{@"route": @"B", @"bindings": @[
             @{@"kind": @"tex_ubo", @"reg": @11, @"off": @16, @"arg_id": @14, @"msl_name": @"fp_t_cb14_4", @"msl_type": @"texture2d<float>"},
             @{@"kind": @"samp_ubo", @"reg": @11, @"off": @16, @"arg_id": @15, @"msl_name": @"fp_t_cb14_4Smplr", @"msl_type": @"sampler"},
@@ -162,7 +162,7 @@ int main(void) { @autoreleasepool {
         check("B handle array: sampler kind", NVN_RB_SAMPU, r.b[3].kind); check("B handle array: sampler n", 32, r.b[3].n); check("B handle array: bindless", 1, r.bindless);
         printf("%-60s %s\n", "B array of 32 handles in uniform slot 11 (texture + sampler)", fail == f1 ? "✓" : "✗");
     }
-    {   int f1 = fail;   // a SeparateSamplerId (handle type 2, The Witcher 3): the texture from c2, the sampler ID itself in word 0 of uniform slot 7
+    {   int f1 = fail;   // a SeparateSamplerId (handle type 2): the texture from c2, the sampler ID itself in word 0 of uniform slot 7
         NSDictionary *j = @{@"route": @"B", @"bindings": @[
             @{@"kind": @"tex", @"reg": @128, @"arg_id": @0, @"msl_name": @"fp_t_cb720898_2000005A", @"msl_type": @"texture2d<float>"},
             @{@"kind": @"samp_ubo", @"reg": @7, @"off": @0, @"raw_id": @YES, @"arg_id": @1, @"msl_name": @"fp_t_cb720898_2000005ASmplr", @"msl_type": @"sampler"},
@@ -172,7 +172,7 @@ int main(void) { @autoreleasepool {
         check("B sampler ID: a handle's sampler has no raw_id", 0, r.b[2].raw_id);
         printf("%-60s %s\n", "B separate sampler ID in uniform slot 7 (raw_id)", fail == f1 ? "✓" : "✗");
     }
-    {   int f1 = fail;   // handles in a uniform buffer beyond textures: Unreal Engine 5.4 on the Switch 2 keeps images and buffer textures there, and ORs a texture and a sampler word in either order
+    {   int f1 = fail;   // handles in a uniform buffer beyond textures: an engine may keep images and buffer textures there, and OR a texture and a sampler word in either order
         NSDictionary *j = @{@"route": @"B", @"bindings": @[
             @{@"kind": @"img_ubo", @"reg": @0, @"off": @8, @"arg_id": @0, @"msl_name": @"cp_i_cb3_2_", @"msl_type": @"texture_buffer<float, access::write>", @"atomic": @YES},
             @{@"kind": @"tbuf_ubo", @"reg": @1, @"off": @16, @"soff": @0, @"sreg": @2, @"arg_id": @1, @"msl_name": @"cp_tb_cb4_4", @"msl_type": @"texture_buffer<uint>"},

@@ -1,4 +1,4 @@
-"""dm/tools/nso.py, the one loader of code modules: a damaged NSO is an nso.Error before anything its header claims is allocated (GitHub issue #451), never a short image"""
+"""dm/tools/nso.py, the one loader of code modules: a damaged NSO is an nso.Error before anything its header claims is allocated, never a short image"""
 import hashlib
 import os
 from pathlib import Path
@@ -78,7 +78,7 @@ class Load(unittest.TestCase):
         m = nso.load(seg(make_nso(), 2, mo=page(ro + len(RO)) + 0x2000))
         self.assertEqual(m.image[page(ro + len(RO)) + 0x2000:], DATA); self.assertFalse(any(m.image[ro + len(RO):page(ro + len(RO)) + 0x2000]))
 
-    def test_short_segment_is_an_error(self):   # the fuzzing case: an LZ4 stream that decompresses to less than its size, which used to shrink the image without a word
+    def test_short_segment_is_an_error(self):   # the fuzzing case: an LZ4 stream that decompresses to less than its size
         d = make_nso()
         self.error(seg(d, 2, sz=len(DATA) + 0x100), 'data segment', 'decompresses to')
         d = make_nso()

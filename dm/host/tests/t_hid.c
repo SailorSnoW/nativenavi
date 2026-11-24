@@ -1,5 +1,4 @@
-// Players and controllers (GitHub issue #74): the Mac front end's slot assignment (pad_slots.h) and the npads hle_hid.c reports for each player, docked and handheld, with the
-// game's supported npad ids; no controller, window or guest exists in this test (the hid take-overs are called directly)
+// Players and controllers: pad_slots.h's slot assignment and the npads hle_hid.c reports for each player, docked and handheld; the hid take-overs are called directly.
 #include <time.h>
 #include <unistd.h>
 #include <sched.h>
@@ -17,7 +16,7 @@ void dm_amiibo_remove(void) {}
 #undef clock_gettime
 #undef usleep
 #include "../pad_slots.h"
-// The controller applet's prompt (front.h): -1 is no window; a test sets the answer and the players that join while it is up
+// the controller applet's prompt (front.h): -1 is no window
 static int g_prompt_answer = -1, g_prompt_calls, g_prompt_min, g_prompt_max; static uint32_t g_prompt_join;
 int front_ctrl_support(int min, int max) { g_prompt_calls++; g_prompt_min = min; g_prompt_max = max; if (g_prompt_join) dm_pad_players(g_prompt_join); return g_prompt_answer; }
 
@@ -29,20 +28,20 @@ static int hid_clock_gettime(clockid_t clock, struct timespec *ts) { (void)clock
 static int hid_usleep(useconds_t usec) { (void)usec; if (script_hold) script_hold(); return 0; }
 #define CHECK(c, msg) do { checks++; if (!(c)) { fails++; fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); } } while (0)
 int dm_opmode(void) { return g_mode; }
-static uint64_t guest_now = 1000000000ull;   // the guest clock (t_npad_imu_samples moves it)
+static uint64_t guest_now = 1000000000ull;
 uint64_t guest_ns(void) { return guest_now; }
-// The answers' high-water marks (answer_tick) follow the real clock, which never goes back; the tests move the guest clock back and forth, so a test that sets it starts them again
+// answer_tick's high-water marks follow the real clock, which never goes back: a test that moves the guest clock resets them
 static void hwm_clear(void) { memset((void *)&g_hwm_states, 0, sizeof g_hwm_states); memset((void *)&g_hwm_imu, 0, sizeof g_hwm_imu); }
 uint64_t now_ns(void) { return motion_now; }
-static _Atomic uint64_t g_test_lag;   // t_live_edges: the guest clock behind the host one (a freeze), as hle_os.c's g_glag
-static int g_test_pinned;   // t_live_pinned: a frozen or DM_DETCLOCK guest clock, every host time mapped to the guest's now
-uint64_t guest_ns_at_host_time(uint64_t host_ns) { return g_test_pinned ? guest_now : host_ns + guest_now - motion_now; }   // the two test clocks: host now is guest now
+static _Atomic uint64_t g_test_lag;   // the guest clock behind the host one (a freeze), as g_glag
+static int g_test_pinned;   // a frozen or DM_DETCLOCK guest clock: every host time maps to the guest's now
+uint64_t guest_ns_at_host_time(uint64_t host_ns) { return g_test_pinned ? guest_now : host_ns + guest_now - motion_now; }
 int guest_clock_pinned(void) { return g_test_pinned; }
-static uint64_t test_frame;   // presented frames (t_rec moves it)
+static uint64_t test_frame;
 uint64_t dm_guest_frame(void) { return test_frame; }
 void dm_gfx_shot_at(long frame, const char *path) { (void)frame; (void)path; }
 void dm_gfx_texlist(int target) { (void)target; }
-// the guest address space (hle_svc.c): the unit test has none, so every stack is a host stack and the big-stack take-overs (the controller applet) run on it directly (hle_bigstack.c)
+// no guest address space: big-stack take-overs (the controller applet) run on the host stack
 int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }
 void dm_gfx_restop(void) {}
 void dm_gfx_memtrim(void) {}
@@ -52,21 +51,21 @@ void crash_dump_now(const char *why) { (void)why; }
 void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path) { (void)a; (void)n; (void)path; }
 void dm_gfx_texdump_next(const char *path) { (void)path; }
 void dm_gfx_passdump_next(long n) { (void)n; }
-void dm_gfx_addr_note(uint64_t a, char *note, size_t n) { (void)a; if (n) note[0] = 0; }   // DM_CTL "addr" (nvn_mtl.m)
-void dm_gfx_bufsnap(const char *key, uint64_t a, size_t n, const char *path) { (void)key; (void)a; (void)n; (void)path; }   // DM_CTL "bufsnap" (nvn_mtl.m)
-void probe_atrace(uint64_t lo, uint64_t n) { (void)lo; (void)n; }   // DM_CTL "atrace" (probe.c)
-static int applet_depth, applet_opens, applet_closes_at_depth0;   // hle_oe.c: the applet stand-ins open and close their applet around the answer
+void dm_gfx_addr_note(uint64_t a, char *note, size_t n) { (void)a; if (n) note[0] = 0; }
+void dm_gfx_bufsnap(const char *key, uint64_t a, size_t n, const char *path) { (void)key; (void)a; (void)n; (void)path; }
+void probe_atrace(uint64_t lo, uint64_t n) { (void)lo; (void)n; }
+static int applet_depth, applet_opens, applet_closes_at_depth0;
 void dm_applet_enter(const char *name) { (void)name; applet_depth++; applet_opens++; }
 void dm_applet_leave(void) { applet_closes_at_depth0 += --applet_depth == 0; }
 
 static uint64_t buttons_of(uint32_t id, uint32_t style) { NpadState s; fill(&s, id, style); return s.attributes ? s.buttons & 0xffff : 0; }
 static int32_t lx_of(uint32_t id) { NpadState s; fill(&s, id, STYLE_FULLKEY); return s.lx; }
 static void ids(const uint32_t *v, uint64_t n) { h_hid_SetIds(v, n); }
-static NpadState npad_of(uint32_t id, uint32_t style) { NpadState s; fill(&s, id, style); return s; }   // all of it, the rail buttons (bits 24..27) included
+static NpadState npad_of(uint32_t id, uint32_t style) { NpadState s; fill(&s, id, style); return s; }   // rail buttons (bits 24..27) included
 
 static void t_slots(void) {
     pad_slots s; memset(&s, 0, sizeof s);
-    static char a, b, c, d, b2, kbd;   // controllers stand in as distinct addresses
+    static char a, b, c, d, b2, kbd;
     CHECK(pad_slot_take(&s, &a, "Xbox Wireless Controller") == 0, "the first controller is player 1");
     CHECK(pad_slot_take(&s, &b, "DualSense Wireless Controller") == 1, "the second controller is player 2");
     CHECK(pad_slot_take(&s, &a, "Xbox Wireless Controller") == 0, "taking again keeps the slot");
@@ -82,12 +81,11 @@ static void t_slots(void) {
     CHECK(pad_slot_mask(&s) == (1u << DM_PLAYERS) - 1, "every slot held");
     CHECK(pad_slot_take(&s, &many[DM_PLAYERS - 3], "Pro Controller") == -1, "a ninth controller gets no player");
     CHECK(pad_slot_take(&s, NULL, "x") == -1 && pad_slot_free(&s, NULL) == -1, "no owner, no slot");
-    memset(&s, 0, sizeof s);   // DM_KBD_PLAYER=own: the keyboard holds player 1 for good
+    memset(&s, 0, sizeof s);
     CHECK(pad_slot_take(&s, &kbd, "keyboard") == 0 && pad_slot_take(&s, &a, "Xbox Wireless Controller") == 1, "with the keyboard on its own the first controller is player 2");
 }
 
 static void t_npads(void) {
-    // One player (the keyboard, or one controller): as before, everything is player 1 on No1 docked
     g_mode = 1; dm_pad_players(0);
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_FULLKEY && h_hid_GetStyle(&(uint32_t){1}) == 0 && h_hid_GetStyle(&(uint32_t){NPAD_HANDHELD}) == 0, "one player: No1 only");
     CHECK(dm_player_npad(0) == 0 && dm_player_npad(1) == 1 && dm_player_npad(7) == 7, "player n on No n docked");
@@ -95,7 +93,6 @@ static void t_npads(void) {
     CHECK(buttons_of(0, STYLE_FULLKEY) == (DM_BTN_X | DM_BTN_A) && lx_of(0) == -200, "keyboard and player 1's controller are ORed, the stick deflected more wins");
     dm_input_set(0, 0, 0, 0, 0); dm_pad_set(0, 0, 0, 0, 0); buttons_of(0, STYLE_FULLKEY);
 
-    // Two controllers: player 2 on No2 with its own input
     dm_pad_players(0x3);
     CHECK(h_hid_GetStyle(&(uint32_t){1}) == STYLE_FULLKEY, "player 2 is a full-key controller on No2");
     dm_pad_set_player(1, DM_BTN_B, 300, 0, 0, 0); dm_pad_set(DM_BTN_Y, 0, 0, 0, 0);
@@ -110,7 +107,7 @@ static void t_npads(void) {
     arg[0] = 3; arg[1] = 4;
     CHECK(h_hid_ShowCtrl(info, arg) == RES_CTRL_CANCELED && info[0] == 2, "fewer players than the game's minimum: canceled (2202-3101), as the player closing the applet");
     CHECK(g_prompt_calls == 1 && g_prompt_min == 3 && g_prompt_max == 4, "below the minimum the front end's prompt is asked, with the game's minimum and maximum");
-    {   // GitHub issue #1640: with a window the prompt waits for players to join
+    {
         int calls = g_prompt_calls;
         g_prompt_answer = 1; g_prompt_join = 0x7;
         CHECK(h_hid_ShowCtrl(info, arg) == RES_OK && info[0] == 3, "a third player joins while the prompt is up: OK with three");
@@ -128,7 +125,7 @@ static void t_npads(void) {
     CHECK(applet_opens == 8 && applet_depth == 0, "every answer opened and closed its applet");
     arg[0] = 1;
     CHECK(six_connected(0x0100 | 3) && !six_connected(0x0200 | 3), "player 2 has a six-axis sensor, No3 none");
-    {   // GitHub issue #2237: more players than the game's maximum. The applet leaves the players past it out, so the game does not see them and open it again
+    {   // past the game's maximum: the applet leaves them out, so the game does not open it again
         arg[0] = 1; arg[1] = 1;
         CHECK(h_hid_ShowCtrl(info, arg) == RES_OK && info[0] == 1 && dm_players_reported() == 1, "two players, one wanted: the applet answers one and one is reported");
         CHECK(h_hid_GetStyle(&(uint32_t){1}) == 0 && buttons_of(1, STYLE_FULLKEY) == 0, "No2 reads as not connected");
@@ -155,14 +152,12 @@ static void t_npads(void) {
         dm_pad_players(0x3); arg[1] = 4;
     }
 
-    // A one-player game ({No1, Handheld}): player 2's controller plays as player 1, No2 reads as not connected
     ids((const uint32_t[]){0, NPAD_HANDHELD}, 2);
     CHECK(h_hid_GetStyle(&(uint32_t){1}) == 0 && buttons_of(1, STYLE_FULLKEY) == 0, "No2 not reported");
     CHECK(buttons_of(0, STYLE_FULLKEY) == (DM_BTN_Y | DM_BTN_B) && lx_of(0) == 300, "player 2's controller feeds player 1");
     h_hid_ShowCtrl(info, NULL);
     CHECK(info[0] == 1, "the applet reports one player");
 
-    // A four-player game: a fifth controller is not used, nor merged into player 1
     ids((const uint32_t[]){0, 1, 2, 3, NPAD_HANDHELD}, 5);
     dm_pad_players(0x1f); dm_pad_set_player(4, DM_BTN_ZR, 0, 0, 0, 0);
     CHECK(h_hid_GetStyle(&(uint32_t){3}) == STYLE_FULLKEY && h_hid_GetStyle(&(uint32_t){4}) == 0, "players 1..4 reported, player 5 not");
@@ -170,11 +165,9 @@ static void t_npads(void) {
     h_hid_ShowCtrl(info, NULL);
     CHECK(info[0] == 4, "the applet reports four players");
 
-    // Player 2 goes away: No2 disconnected, its input released
     dm_pad_players(0x1);
     CHECK(h_hid_GetStyle(&(uint32_t){1}) == 0 && atomic_load(&g_pad_btn[1]) == 0, "a disconnected player's npad and input are cleared");
 
-    // Handheld mode: player 1 on Handheld, player 2 on No2 (No1 stays empty)
     g_mode = 0; dm_pad_players(0x3); dm_pad_set_player(1, DM_BTN_L, 0, 0, 0, 0);
     CHECK(dm_player_npad(0) == NPAD_HANDHELD && dm_player_npad(1) == 1, "handheld: player 1 on Handheld, player 2 on No2");
     CHECK(h_hid_GetStyle(&(uint32_t){NPAD_HANDHELD}) == STYLE_HANDHELD && h_hid_GetStyle(&(uint32_t){0}) == 0 && h_hid_GetStyle(&(uint32_t){1}) == STYLE_FULLKEY, "handheld styles");
@@ -184,8 +177,7 @@ static void t_npads(void) {
 }
 
 
-// The console mode at run time (dm_set_opmode): player 1 moves between No1 and Handheld (GitHub issue #2143); a pair of Joy-Cons split over two npads gives up the second one in
-// handheld mode and takes it again docked
+// dm_set_opmode: a pair split over two npads gives up the second in handheld mode and takes it again docked
 static void t_opmode(void) {
     g_mode = 1; ids((uint32_t[]){0, 1, NPAD_HANDHELD}, 3); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_FULLKEY && h_hid_GetStyle(&(uint32_t){NPAD_HANDHELD}) == 0, "docked: player 1 is on No1");
@@ -193,7 +185,6 @@ static void t_opmode(void) {
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == 0 && h_hid_GetStyle(&(uint32_t){NPAD_HANDHELD}) == STYLE_HANDHELD, "to handheld: player 1 is on Handheld");
     g_mode = 1;
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_FULLKEY && h_hid_GetStyle(&(uint32_t){NPAD_HANDHELD}) == 0, "back to console: player 1 on No1");
-    // A split pair: left on No1, right on No2 while docked; handheld takes both back
     dm_joy_attach(0, 3); joy_assign(0, 1);
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_JOYLEFT && h_hid_GetStyle(&(uint32_t){1}) == STYLE_JOYRIGHT, "a split pair docked: JoyLeft on No1, JoyRight on No2");
     g_mode = 0;
@@ -203,8 +194,7 @@ static void t_opmode(void) {
     joy_assign(0, 0); dm_joy_attach(0, 0);
 }
 
-// Joy-Cons as devices of their own (dm_joy_attach / dm_joy_set): nothing changes until a front end reports a Joy-Con half; then the pair is a JoyDual npad, splits into JoyLeft and
-// JoyRight when it is put in single assignment (joy_assign: the controller applet does, when it needs another player), keeps the rail buttons, and has vibration handles per Joy-Con. Handheld: unchanged.
+// Joy-Cons as devices (dm_joy_attach / dm_joy_set): a JoyDual npad, split into JoyLeft / JoyRight by single assignment (joy_assign), vibration handles per Joy-Con
 static void t_joycons(void) {
     g_mode = 1; ids((uint32_t[]){0, 1, 2, 3}, 4); dm_pad_players(1);
     h_hid_SetStyles(STYLE_FULLKEY | STYLE_JOYDUAL | STYLE_JOYLEFT | STYLE_JOYRIGHT);
@@ -222,12 +212,10 @@ static void t_joycons(void) {
     { int m; CHECK(vib_targets(h[1], &m) == 1 && m == 1, "the right Joy-Con's JoyDual handle reaches motor 1"); }
     { int m; CHECK(vib_targets(0x10003, &m) == 1 && m == 1 && vib_targets(0x0003, &m) == 1 && m == 0, "the full-key handles the game got before the pair connected still reach both Joy-Cons"); }
 
-    // The game supports no Joy-Con style: the pad's merged state as full-key, as before
     h_hid_SetStyles(STYLE_FULLKEY);
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_FULLKEY, "no Joy-Con style supported: full-key");
     h_hid_SetStyles(STYLE_FULLKEY | STYLE_JOYDUAL | STYLE_JOYLEFT | STYLE_JOYRIGHT);
 
-    // Single assignment: the left Joy-Con stays on No1, the right one takes No2 (no player of its own there)
     joy_assign(0, 1);
     CHECK((atomic_load(&g_single_mask) & 1) && h_hid_GetStyle(&(uint32_t){0}) == STYLE_JOYLEFT && h_hid_GetStyle(&(uint32_t){1}) == STYLE_JOYRIGHT, "single: JoyLeft on No1, JoyRight on No2");
     st = npad_of(1, STYLE_JOYRIGHT);
@@ -237,19 +225,17 @@ static void t_joycons(void) {
     joy_assign(0, 0);
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_JOYDUAL && h_hid_GetStyle(&(uint32_t){1}) == 0, "dual again: one JoyDual npad, No2 empty");
 
-    // The controller applet asks for two players with one pair connected: it splits the pair, as holding the Joy-Cons sideways does on a Switch
+    // the controller applet splits a pair when it needs two players, as holding them sideways does on a Switch
     int32_t info[2]; int8_t arg[8] = {2, 4};
     { int calls = g_prompt_calls;
     CHECK(h_hid_ShowCtrl(info, arg) == RES_OK && info[0] == 2 && h_hid_GetStyle(&(uint32_t){1}) == STYLE_JOYRIGHT, "the applet splits the pair for a second player");
     CHECK(g_prompt_calls == calls && dm_players_reported() == 2, "the split pair is enough: no controller prompt, and the prompt's count (dm_players_reported) sees two players"); }
     joy_assign(0, 0);
 
-    // Handheld mode: player 1's Joy-Cons count as attached to the console (the Handheld npad), and are never split
     g_mode = 0; ids((uint32_t[]){0, 1, NPAD_HANDHELD}, 3);
     CHECK(h_hid_GetStyle(&(uint32_t){NPAD_HANDHELD}) == STYLE_HANDHELD && h_hid_GetStyle(&(uint32_t){0}) == 0, "handheld: player 1's Joy-Cons are the Handheld npad");
     g_mode = 1; ids((uint32_t[]){0, 1, 2, 3}, 4);
 
-    // One Joy-Con alone on player 2: JoyRight on No2; leaving: full-key again
     dm_pad_players(3); dm_joy_attach(1, 2);
     CHECK(h_hid_GetStyle(&(uint32_t){1}) == STYLE_JOYRIGHT, "one right Joy-Con alone: JoyRight on its own npad");
     dm_joy_attach(1, 0); dm_joy_attach(0, 0);
@@ -257,8 +243,7 @@ static void t_joycons(void) {
     dm_haptics_route(0, 0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
 }
 
-// The Switch 2's mouse (JCMS, Nmouse): the game sets up no sensor, so a Jcms handle is made as the SDK makes it (npad id, JcmsType 0 left / 1 right) and there are no pointer
-// handles and no mouse types. The Joy-Con 2 styles: a Joy-Con 2 pair shows JoyDual's Joy-Con 2 form to a game that supports only that
+// Switch 2 mouse (JCMS): with no sensor set up, a Jcms handle is made as the SDK makes it (npad id, JcmsType 0 left / 1 right)
 static void t_jcms(void) {
     g_mode = 1; ids((uint32_t[]){0, 1}, 2); dm_pad_players(1); dm_joy_attach(0, 3);
     uint32_t hl = h_hid_JcmsHandle(&(uint32_t){0}, &(uint32_t){0}), hr = h_hid_JcmsHandle(&(uint32_t){0}, &(uint32_t){1});
@@ -328,14 +313,14 @@ static void t_vibration(void) {
     CHECK(h_hid_VibMountedOunce(&h[1]) && info[0] == 1 && info[1] == 2, "rumble off does not remove a channel or its actuator info");
     h_hid_SendVib(&h[0], &v);
     CHECK(dm_haptics_actual(0, 0).amplitude_low == 0, "rumble off still drops values for a routed channel");
-    dm_haptics_init(vibration_sink, 1); dm_haptics_route(0, 1);   // on again for the cases below
+    dm_haptics_init(vibration_sink, 1); dm_haptics_route(0, 1);
 }
 
 static void t_joycon_vibration_lifetime(void) {
     g_mode = 1; ids((uint32_t[]){0, 1}, 2); dm_pad_players(1);
     h_hid_SetStyles(STYLE_JOYDUAL | STYLE_JOYLEFT | STYLE_JOYRIGHT);
     dm_joy_attach(0, 3); joy_assign(0, 0); dm_haptics_route(0, 1);
-    uint32_t dual[2] = {0}, left = 0, right = 0;   // what a failed lookup leaves is still a handle to send (an invalid one)
+    uint32_t dual[2] = {0}, left = 0, right = 0;
     dm_vibration values[] = {{0.2f, 160, 0, 320}, {0.7f, 160, 0, 320}};
     CHECK(h_hid_VibHandles(dual, 2, &(uint32_t){0}, STYLE_JOYDUAL) == 2, "rumbling pair: one handle per physical motor");
     h_hid_SendVibs(dual, values, 2);
@@ -390,7 +375,6 @@ static void t_rumble_log(void) {
     fflush(stderr); int redirected = dup2(fileno(capture), STDERR_FILENO);
     CHECK(redirected >= 0, "redirect rumble diagnostics");
     if (redirected >= 0) {
-        // Start a reporting interval, then send a batch with one routed and one invalid handle.
         rumble_second++;
         h_hid_SendVib(&(uint32_t){3}, &(dm_vibration){0, 160, 0, 320});
         rumble_second++;
@@ -405,7 +389,6 @@ static void t_rumble_log(void) {
               "diagnostic totals reset once per second and retain the interval peak");
     }
     close(saved); fclose(capture);
-    // Game threads may send and query independently while the rumble setting changes; TSan checks all diagnostic state.
     pthread_t threads[8]; int started = 0;
     for (int i = 0; i < 8; i++) {
         int rc = pthread_create(&threads[started], NULL, i < 4 ? vibration_sender : vibration_query, NULL);
@@ -415,7 +398,6 @@ static void t_rumble_log(void) {
     unsetenv("DM_RUMBLE_LOG");
 }
 
-// Run the actual scripted publisher without waiting: the controller updates during its hold, after which the game reads twice (the first read consumes the press latch).
 static void t_script_hold(void) {
     dm_pad_set(DM_BTN_B, 120, 0, 0, 0);
     CHECK(buttons_of(0, STYLE_FULLKEY) == (DM_BTN_A | DM_BTN_B | DM_BTN_X), "script, controller and keyboard buttons are combined");
@@ -447,41 +429,39 @@ static void t_script(void) {
     g_nsteps = 0; g_steps = NULL;
 }
 
-// DM_REC (GitHub issue #313): player 1's physical input written as DM_KEYS steps, read back by the DM_KEYS parser and played on the scripted path at the game's reads (keys_sync);
-// the game's view of every frame (buttons with their press latch, the shake, sticks) is the same in the recording and the replay, to the recorder's stick
-// steps, also for input that arrived after a frame's read
+// DM_REC: player 1's input recorded as DM_KEYS steps and replayed at the game's reads (keys_sync) gives the game the same view of every frame
 typedef struct { uint64_t btn; int32_t q[4]; } frame_view;
 enum { REC_FRAMES = 64, REC_END = 62 };
 static frame_view rec_live[REC_FRAMES], rec_replay[REC_FRAMES];
-static frame_view game_reads(void) {   // what the game reads in this frame (and consumes: the press latches)
+static frame_view game_reads(void) {
     NpadState s; fill(&s, 0, STYLE_FULLKEY);
     frame_view v = {(s.buttons & 0xffff) | ((atomic_load(&g_btn) | atomic_load(&g_sc_btn) | atomic_load(&g_pad_btn[0])) & DM_BTN_SHAKE)};
     int32_t a[4] = {s.lx, s.ly, s.rx, s.ry}; for (int i = 0; i < 4; i++) v.q[i] = (int32_t)lrint(a[i] * 100.0 / DM_STICK_MAX);
     return v;
 }
-static void live_to(uint64_t f) { while (test_frame < f) { rec_live[test_frame] = game_reads(); test_frame++; } }   // the game reads, then the next frame is presented
-static void replay_frame(void) { if (test_frame < REC_FRAMES) rec_replay[test_frame] = game_reads(); test_frame++; }   // keys_main waits: a frame goes by
-static void replay_late(void) { replay_frame(); replay_frame(); }   // keys_main waits and wakes late: two frames go by
+static void live_to(uint64_t f) { while (test_frame < f) { rec_live[test_frame] = game_reads(); test_frame++; } }
+static void replay_frame(void) { if (test_frame < REC_FRAMES) rec_replay[test_frame] = game_reads(); test_frame++; }
+static void replay_late(void) { replay_frame(); replay_frame(); }
 static void t_rec(void) {
     g_mode = 1; dm_pad_players(1);
     dm_input_set(0, 0, 0, 0, 0); dm_pad_set(0, 0, 0, 0, 0); script_set(0, 0, 0, 0, 0); game_reads();
     char path[512]; snprintf(path, sizeof path, "%s/t_hid_rec.keys", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
     test_frame = 0;
     CHECK(rec_open(path), "DM_REC opens its file");
-    live_to(10); dm_input_set(DM_BTN_A, 0, 0, 0, 0);                         // the keyboard's A
-    live_to(12); dm_pad_set(0, 16384, -8192, 0, 0);                          // the controller's left stick half right, a quarter down
-    live_to(13); dm_pad_set(0, 16400, -8200, 0, 0);                          // drift within a step: no new step
+    live_to(10); dm_input_set(DM_BTN_A, 0, 0, 0, 0);
+    live_to(12); dm_pad_set(0, 16384, -8192, 0, 0);
+    live_to(13); dm_pad_set(0, 16400, -8200, 0, 0);
     live_to(15); dm_input_set(0, 0, 0, 0, 0);
     live_to(20); dm_pad_set(0, 0, 0, 0, 0);
-    live_to(22); dm_input_set(DM_BTN_B, 0, 0, 0, 0); dm_input_set(0, 0, 0, 0, 0);   // B tapped between two reads: the latch hands it to frame 22's read, recorded there
-                 dm_pad_set(0, 0, 0, DM_STICK_MAX, 0); dm_pad_set(0, 0, 0, 0, 0);    // a stick flicked between two reads: the game cannot see it, not recorded
+    live_to(22); dm_input_set(DM_BTN_B, 0, 0, 0, 0); dm_input_set(0, 0, 0, 0, 0);
+                 dm_pad_set(0, 0, 0, DM_STICK_MAX, 0); dm_pad_set(0, 0, 0, 0, 0);
     live_to(40); dm_input_set(DM_BTN_ZR | DM_BTN_SHAKE, 0, 0, 0, 0);
-    live_to(41); script_set(DM_BTN_X, 0, 0, 0, 0);   // scripted input (DM_KEYS, DM_CTL) is never recorded
+    live_to(41); script_set(DM_BTN_X, 0, 0, 0, 0);
                  game_reads(); script_set(0, 0, 0, 0, 0);
     live_to(45); dm_input_set(0, 0, 0, 0, 0);
-    live_to(50); rec_live[50] = game_reads(); dm_input_set(DM_BTN_X, 0, 0, 0, 0); test_frame = 51;   // X arrives after frame 50's read: the game sees it from frame 51, stamped there
+    live_to(50); rec_live[50] = game_reads(); dm_input_set(DM_BTN_X, 0, 0, 0, 0); test_frame = 51;
     live_to(55); dm_input_set(0, 0, 0, 0, 0);
-    live_to(60); dm_input_set(DM_BTN_Y, 0, 0, 0, 0);                         // still held at exit: ends at the exit's frame
+    live_to(60); dm_input_set(DM_BTN_Y, 0, 0, 0, 0);
     live_to(REC_END); dm_rec_finish();
     atomic_store(&g_rec_on, 0); fclose(g_rec_file); g_rec_file = NULL;
     dm_input_set(0, 0, 0, 0, 0); game_reads();
@@ -515,26 +495,22 @@ static void t_rec(void) {
     CHECK(!rec_live[50].btn && !rec_replay[50].btn && rec_replay[51].btn == DM_BTN_X, "input that came after a frame's read reaches the replay's next frame, as it did live");
     CHECK(!atomic_load(&g_sc_btn), "the replay releases everything at its end");
     free(g_steps); g_steps = NULL; g_nsteps = g_cap_steps = 0;
-    // With the step limit raised for long recordings the steps are ordered by a merge sort: repeated groups still interleave, and steps at one time keep their listed order
+    // past the raised step limit a merge sort orders the steps: repeated groups interleave, ties keep their order
     keys_parse("290:A*3/3,291:Left*3/3 291.5:B*3/3\n300:X,300:Y");
     static const uint64_t order[11] = {DM_BTN_A, DM_BTN_LEFT, DM_BTN_B, DM_BTN_A, DM_BTN_LEFT, DM_BTN_B, DM_BTN_A, DM_BTN_LEFT, DM_BTN_B, DM_BTN_X, DM_BTN_Y};
     int ordered = g_nsteps == 11; for (int i = 0; ordered && i < 11; i++) ordered = g_steps[i].btn == order[i];
     CHECK(ordered, "repeats interleave in time order and equal times keep their listed order; spaces and newlines separate steps");
     free(g_steps); g_steps = NULL; g_nsteps = g_cap_steps = 0;
-    // A recording of the earlier format (stamped when input arrived: a press within one frame as ~f0) still plays at the reads: the press latch hands it to its frame's read
     keys_parse("f5:B~f0,\nf6:A~f1,\n");
     g_sync_next = g_sync_held = 0; atomic_store(&g_sync_on, 1); memset(rec_replay, 0, sizeof rec_replay);
     for (test_frame = 0; test_frame < 9; test_frame++) rec_replay[test_frame] = game_reads();
     CHECK(rec_replay[5].btn == DM_BTN_B && rec_replay[6].btn == DM_BTN_A && !rec_replay[4].btn && !rec_replay[7].btn, "a hold of 0 frames reaches its frame's read once");
     free(g_steps); g_steps = NULL; g_nsteps = g_cap_steps = 0;
-    // A list with a step in seconds is played by keys_main. A replay that runs late: two frames go by each time keys_main waits, so the first tap is pressed a frame late and the second is already due when the first is let go. A gap
-    // in the list is a release the game must read, so the second tap is a press of its own (it used to follow without a release, and the game saw one long press)
     keys_parse("f11:A~f2,\nf14:A~f2,\n");
-    memset(rec_replay, 0, sizeof rec_replay); test_frame = 0; script_hold = replay_late; keys_main(NULL); script_hold = NULL; replay_frame();   // the game reads the last frame
+    memset(rec_replay, 0, sizeof rec_replay); test_frame = 0; script_hold = replay_late; keys_main(NULL); script_hold = NULL; replay_frame();
     int presses = 0; for (int i = 1; i < REC_FRAMES; i++) presses += (rec_replay[i].btn & DM_BTN_A) && !(rec_replay[i - 1].btn & DM_BTN_A);
     CHECK(presses == 2, "a late replay keeps the release between two taps: the game reads two presses");
     free(g_steps); g_steps = NULL; g_nsteps = g_cap_steps = 0;
-    // DM_KEYS=@<file>: a recording too long for the environment is read from its file as it is
     FILE *kf = fopen(path, "w"); CHECK(kf != NULL, "the steps file is written");
     if (kf) { for (int i = 0; i < 50000; i++) fprintf(kf, "f%d:A+L0.50/-0.25~f1,\n", 2 * i); fclose(kf); }
     char *kt = keys_file(path); CHECK(kt && strlen(kt) > 1000000, "keys_file reads a recording of more than 1 MiB whole");
@@ -544,7 +520,6 @@ static void t_rec(void) {
     CHECK(!keys_file(path), "a missing steps file reads as none");
 }
 
-// Live controller motion (dm_motion_set): player 1's six-axis sensor reports the controller's tilt and rotation instead of lying flat, and goes back to flat when cleared
 static _Atomic int motion_ready, motion_go;
 static void *motion_sender(void *arg) {
     int p = (int)(intptr_t)arg;
@@ -567,7 +542,7 @@ static void t_motion_threads(void) {
 }
 static void t_motion_live(void) {
     g_mode = 1; dm_pad_players(1);
-    atomic_store(&g_shake_t0, 0); atomic_store(&g_shake_end, 0);   // no shake: the clocks here stand at 1 s, so the cycle t_script's shake finishes would never end
+    atomic_store(&g_shake_t0, 0); atomic_store(&g_shake_end, 0);   // no shake: the clocks stand at 1 s, so t_script's shake cycle would never end
 
     uint32_t h; uint32_t id = 0;
     CHECK(h_hid_SixHandles(&h, 1, &id, STYLE_FULLKEY) == 1, "one six-axis handle for player 1");
@@ -583,7 +558,6 @@ static void t_motion_live(void) {
     dm_motion_clear(0);
     CHECK(h_hid_SixStates(st, 1, &h) == 1 && st[0].acc[0] == 0 && st[0].acc[2] == -1, "cleared: flat again");
 
-    // The same controller slot must drive buttons and motion when a game supports only one player.
     dm_pad_players(3); ids((uint32_t[]){0, NPAD_HANDHELD}, 2);
     dm_motion_set(1, a, w);
     h_hid_SixStates(st, 1, &h);
@@ -623,7 +597,6 @@ static void t_motion_hid(void) {
     dm_motion_clear_hid(0); dm_motion_clear_hid(1); dm_motion_clear(0);
     dm_pad_players(1);
 }
-// Npad IMU (Switch 2): the host serves the layer the SDK's sensor fusion reads from. Enabled with the game's buffer, disabled again; no samples yet (the buffer is never written)
 static void t_npad_imu(void) {
     uint8_t buf[64], samples[2][40]; memset(buf, 0xCD, sizeof buf); memset(samples, 0xAB, sizeof samples);
     CHECK(!h_hid_ImuIs(), "npad imu: off at first");
@@ -634,17 +607,16 @@ static void t_npad_imu(void) {
     CHECK(h_hid_ImuEnable(NULL, 0) == 0 && h_hid_ImuIs() && h_hid_ImuDisable() == 0 && !h_hid_ImuIs(), "npad imu: the state is its own, not the buffer pointer");
 }
 
-// Npad IMU samples (Switch 2): stateless, as the console's ring in shared memory. A call returns the newest min(n, 16) 5 ms ticks on the guest clock, oldest first, numbered by absolute
-// tick + 1; the SDK's fusion skips numbers it has taken (sdk+0x6d7198), so a repeated tick is harmless and every reader gets every tick. Units are the fusion's: m/s^2 and rad/s, with the
-// six-axis state's signs: the SDK negates the acceleration (sdk+0x6d7334) and takes the angular velocity as it is
+// Npad IMU (Switch 2), stateless as the console's ring: the newest min(n, 16) 5 ms ticks, oldest first, numbered by absolute tick + 1 (the fusion skips numbers it has taken).
+// Units m/s^2 and rad/s; the SDK negates the acceleration (sdk+0x6d7334) and takes the angular velocity as it is.
 typedef struct { int64_t sampling, delta_ns; float acc[3], gyro[3]; } TestImuSample;   // acceleration at +0x10, angular velocity at +0x1c (sdk+0x6d7320)
 _Static_assert(sizeof(TestImuSample) == 0x28, "NpadImuSample");
-static int imu_numbered(const TestImuSample *s, int k, int64_t first) {   // k samples numbered first, first + 1, ... each 5 ms apart
+static int imu_numbered(const TestImuSample *s, int k, int64_t first) {
     for (int i = 0; i < k; i++) if (s[i].sampling != first + i || s[i].delta_ns != 5000000) return 0;
     return 1;
 }
 static uint32_t imu_handle; static _Atomic int imu_reader_ok;
-static void *imu_reader(void *arg) {   // reads the newest 16 at a fixed guest time: ticks 585..600, numbers 586..601
+static void *imu_reader(void *arg) {
     (void)arg; TestImuSample s[16]; int ok = 1;
     for (int r = 0; r < 50; r++) ok &= h_hid_ImuSamples(s, 16, imu_handle) == 16 && imu_numbered(s, 16, 586);
     if (ok) atomic_fetch_add(&imu_reader_ok, 1);
@@ -652,23 +624,23 @@ static void *imu_reader(void *arg) {   // reads the newest 16 at a fixed guest t
 }
 static void t_npad_imu_samples(void) {
     g_mode = 1; dm_pad_players(1);
-    setenv("DM_IMU_NOISE", "0", 1); unsetenv("DM_IMU_ACC_SIGN"); unsetenv("DM_IMU_GYRO_SIGN"); imu_env_read();   // exact values and the host's own signs here; t_imu_noise checks the noise
+    setenv("DM_IMU_NOISE", "0", 1); unsetenv("DM_IMU_ACC_SIGN"); unsetenv("DM_IMU_GYRO_SIGN"); imu_env_read();
     atomic_store(&g_shake_t0, 0); atomic_store(&g_shake_end, 0);
-    uint32_t h = 0x20003;   // the SDK's own handle (utility::GetSixAxisSensorHandle, sdk+0x6d8490): full key (style index 3) on No1, the whole controller (device 2)
+    uint32_t h = 0x20003;   // the SDK's own handle (GetSixAxisSensorHandle, sdk+0x6d8490): full key (style index 3) on No1, device 2
     imu_handle = h;
     TestImuSample s[40], t[40]; memset(s, 0xAB, sizeof s);
-    hwm_clear(), guest_now = 2000000000ull;   // tick 400
+    hwm_clear(), guest_now = 2000000000ull;
     CHECK(h_hid_ImuSamples(s, 16, h) == 0 && s[0].sampling == (int64_t)0xABABABABABABABABull, "imu: off, no samples and nothing written");
     uint8_t ring[64]; CHECK(h_hid_ImuEnable(ring, sizeof ring) == 0, "imu: on");
     CHECK(h_hid_ImuSamples(s, 1, h) == 1 && imu_numbered(s, 1, 401), "imu: numbered by absolute tick + 1");
     CHECK(s[0].acc[0] == 0 && s[0].acc[1] == 0 && fabsf(s[0].acc[2] + 9.80665f) < 1e-5f, "imu: at rest (0, 0, -1) G reads (0, 0, -9.80665) m/s^2");
-    {   // the layout the fusion reads: acceleration at +0x10, angular velocity at +0x1c
+    {
         float raw[10]; memcpy(raw, &s[0], sizeof raw);
         CHECK(sizeof(TestImuSample) == 0x28 && fabsf(raw[(0x10 + 8) / 4] + 9.80665f) < 1e-5f && raw[(0x1c + 8) / 4] == 0, "imu: acceleration at +0x10 (z at +0x18), angular velocity at +0x1c");
     }
     CHECK(s[0].gyro[0] == 0 && s[0].gyro[1] == 0 && s[0].gyro[2] == 0, "imu: at rest no rotation");
     CHECK(h_hid_ImuSamples(s, 16, h) == 16 && imu_numbered(s, 16, 386), "imu: the newest 16 ending at the current tick, oldest first");
-    CHECK(h_hid_ImuSamples(t, 16, h) == 16 && !memcmp(s, t, 16 * sizeof *s), "imu: the same tick again gives the same numbers (the fusion skips them)");   // NOLINT(bugprone-suspicious-memory-comparison): the same tick read again is the same bytes, padding included (both buffers zeroed by the host)
+    CHECK(h_hid_ImuSamples(t, 16, h) == 16 && !memcmp(s, t, 16 * sizeof *s), "imu: the same tick again gives the same numbers (the fusion skips them)");   // NOLINT(bugprone-suspicious-memory-comparison): both buffers zeroed by the host, padding included
     CHECK(h_hid_ImuSamples(s, 4, h) == 4 && imu_numbered(s, 4, 398), "imu: at most n: the newest 4");
     CHECK(h_hid_ImuSamples(s, 40, h) == 16 && imu_numbered(s, 16, 386), "imu: never more than the 16 the SDK's ring holds");
     guest_now += 4000000; CHECK(h_hid_ImuSamples(s, 1, h) == 1 && imu_numbered(s, 1, 401), "imu: less than a tick later: the same newest tick");
@@ -677,51 +649,45 @@ static void t_npad_imu_samples(void) {
     hwm_clear(), guest_now = 2000000; CHECK(h_hid_ImuSamples(s, 16, h) == 1 && imu_numbered(s, 1, 1), "imu: at the clock's start, the first tick only, number 1");
     hwm_clear(), guest_now = 2015000000ull;
 
-    // A live controller: its acceleration and rotation, converted. 0.5 rev/s about z is pi rad/s; G x 9.80665 m/s^2 (the fusion negates it into a specific force)
+    // 0.5 rev/s about z is pi rad/s; G x 9.80665 m/s^2
     float a[3] = {0.5f, 0, -0.8660254f}, w[3] = {0, 0, 3.14159265f};
     dm_motion_set(0, a, w);
     CHECK(h_hid_ImuSamples(s, 2, h) == 2 && imu_numbered(s, 2, 403), "imu: live motion keeps the numbering");
     CHECK(fabsf(s[1].acc[0] - 0.5f * 9.80665f) < 1e-4f && fabsf(s[1].acc[2] + 0.8660254f * 9.80665f) < 1e-4f, "imu: live acceleration, G x 9.80665");
     CHECK(fabsf(s[1].gyro[2] - 3.14159265f) < 1e-4f && s[1].gyro[0] == 0, "imu: live rotation, rev/s x 2 pi");
-    // DM_IMU_ACC_SIGN / DM_IMU_GYRO_SIGN = -1 negate either
     setenv("DM_IMU_ACC_SIGN", "-1", 1); setenv("DM_IMU_GYRO_SIGN", "-1", 1); imu_env_read();
     CHECK(h_hid_ImuSamples(s, 1, h) == 1 && fabsf(s[0].acc[0] + 0.5f * 9.80665f) < 1e-4f && fabsf(s[0].gyro[2] + 3.14159265f) < 1e-4f, "imu: both signs flipped by the switches");
     setenv("DM_IMU_GYRO_SIGN", "1", 1); imu_env_read();
     CHECK(h_hid_ImuSamples(s, 1, h) == 1 && s[0].acc[0] < 0 && s[0].gyro[2] > 0, "imu: each sign on its own");
-    setenv("DM_IMU_GYRO_SIGN", "-1", 1); imu_env_read();   // the rest of the tests: negated (main)
+    setenv("DM_IMU_GYRO_SIGN", "-1", 1); imu_env_read();
     dm_motion_clear(0);
 
-    // Another device reads the same clock; a handle whose controller is not connected has no samples
-    uint32_t right = 0x10003;   // another device index of the same controller
+    uint32_t right = 0x10003;
     CHECK(h_hid_ImuSamples(s, 2, right) == 2 && imu_numbered(s, 2, 403), "imu: another device index, the same absolute numbers");
     uint32_t no4 = 0x20003 | 3u << 8; memset(s, 0xAB, sizeof s);
     CHECK(h_hid_ImuSamples(s, 16, no4) == 0 && s[0].delta_ns == (int64_t)0xABABABABABABABABull, "imu: an npad with no controller: no samples, nothing written");
 
-    // Two readers each get the same newest ticks, also at once from two threads
-    hwm_clear(), guest_now = 3000000000ull;   // tick 600
+    hwm_clear(), guest_now = 3000000000ull;
     CHECK(h_hid_ImuSamples(s, 16, h) == 16 && h_hid_ImuSamples(t, 16, h) == 16 && !memcmp(s, t, 16 * sizeof *s) && imu_numbered(s, 16, 586), "imu: two readers, the same ticks");   // NOLINT(bugprone-suspicious-memory-comparison): two reads of one tick are the same bytes
     atomic_store(&imu_reader_ok, 0);
     pthread_t th[2]; for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, imu_reader, NULL);
     for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
     CHECK(atomic_load(&imu_reader_ok) == 2, "imu: concurrent readers each get every tick");
 
-    // Off: none; on again, numbering goes on from absolute time
     CHECK(h_hid_ImuDisable() == 0 && h_hid_ImuSamples(s, 16, h) == 0, "imu: disabled, no samples");
     guest_now += 30 * 5000000ull; h_hid_ImuEnable(ring, sizeof ring);
     CHECK(h_hid_ImuSamples(s, 16, h) == 16 && imu_numbered(s, 16, 616), "imu: on again, numbered by absolute time");
     h_hid_ImuDisable(); hwm_clear(), guest_now = 1000000000ull; dm_pad_players(1);
 }
 
-// The IMU handles the SDK makes itself (GetNpadImuHandles → utility::GetSixAxisSensorHandle, sdk+0x6d8490, not taken over): NpadStyleIndex in byte 0, device in byte 2. Nintendo
-// Switch Sports Resort supports Handheld | JoyDual (0x6), so the keyboard's player 1 is a Joy-Con pair on No1 and its fusion reads 0x5 and 0x10005: those must have samples
+// SDK-made IMU handles: NpadStyleIndex in byte 0, device in byte 2; Handheld | JoyDual shows player 1 as a pair on No1, read as 0x5 and 0x10005
 static void t_imu_sdk_handles(void) {
     g_mode = 1; ids((uint32_t[]){0, 1, 2, 3}, 4); dm_pad_players(1);
     setenv("DM_IMU_NOISE", "0", 1); imu_env_read();
-    // The handle numbering (six_style_bit): style index 3..7 → style bits 0..4; device 2 only for full key and handheld (SDK 22's single sensor)
+    // six_style_bit: style index 3..7 → style bits 0..4; device 2 only for full key and handheld (SDK 22's single sensor)
     CHECK(six_style_bit(0x20003) == 0 && six_style_bit(0x20004) == 1 && six_style_bit(0x10005) == 2 && six_style_bit(0x6) == 3 && six_style_bit(0x10007) == 4, "handles: style index to style bit");
     CHECK(six_style_bit(0x20005) == 2 && six_style_bit(0x20006) == 3 && six_style_bit(0x20007) == 4, "handles: device 2 is taken for every style (SDKs differ in the device they give)");
     CHECK(six_style_bit(0x0) < 0 && six_style_bit(0x2) < 0 && six_style_bit(0x8) < 0 && six_style_bit(0x30003) < 0, "handles: no style index the host knows, or device 3: none");
-    // The host's own handles (GetSixAxisSensorHandles) are in the same numbering, so either kind reaches the IMU
     uint32_t h[2], id = 0;
     CHECK(h_hid_SixHandles(h, 2, &id, STYLE_FULLKEY) == 1 && h[0] == 0x3, "host handles: full key on No1 is style index 3");
     CHECK(h_hid_SixHandles(h, 2, &id, STYLE_JOYDUAL) == 2 && h[0] == 0x5 && h[1] == 0x10005, "host handles: a pair is 0x5 and 0x10005, as the SDK's");
@@ -731,15 +697,14 @@ static void t_imu_sdk_handles(void) {
     uint8_t ring[64]; h_hid_ImuEnable(ring, sizeof ring);
     TestImuSample s[4];
     CHECK(h_hid_SixHandles(h, 1, &id, STYLE_FULLKEY) == 1 && h_hid_ImuSamples(s, 4, h[0]) == 4 && h_hid_ImuSamples(s, 4, 0x20003) == 4, "imu: the host's full-key handle and the SDK's (device 2) both have samples");
-    h_hid_SetStyles(STYLE_HANDHELD | STYLE_JOYDUAL);   // the game's lobby (main+0xa9e940): the keyboard is shown as a pair
+    h_hid_SetStyles(STYLE_HANDHELD | STYLE_JOYDUAL);
     CHECK(h_hid_ImuSamples(s, 4, 0x5) == 4 && h_hid_ImuSamples(s, 4, 0x10005) == 4, "imu: the pair's two SDK handles have samples");
     CHECK(h_hid_ImuSamples(s, 4, 0x20003) == 0, "imu: no full-key controller then: none");
-    {   // an SDK-built pair handle with device 2 reads as the pair's device 0 (six_source takes the side from bit 0), through the six-axis states as through the IMU
+    {   // an SDK-built pair handle with device 2 reads as the pair's device 0 (six_source takes the side from bit 0)
         SixAxisState st6[2];
         CHECK(h_hid_ImuSamples(s, 4, 0x20005) == 4 && six_states(st6, 2, 0x20005) == 2 && st6[0].acc[2] == -1, "six-axis: a pair's device-2 handle has states and samples");
         uint32_t two = 0x20005; CHECK(h_hid_SixStates(st6, 1, &two) == 1, "GetSixAxisSensorStates through it");
     }
-    // Several styles in one set: the style the npad is shown in, two handles when the set holds a two-sensor style
     CHECK(h_hid_SixHandles(h, 2, &id, STYLE_FULLKEY | STYLE_JOYDUAL) == 2 && h[0] == 0x5 && h[1] == 0x10005 && six_connected(h[0]), "host handles: FullKey | JoyDual while shown as a pair: the pair's two");
     CHECK(h_hid_SixHandles(h, 1, &id, STYLE_FULLKEY | STYLE_JOYDUAL) == 1, "host handles: never more than asked");
     g_mode = 0;
@@ -747,14 +712,12 @@ static void t_imu_sdk_handles(void) {
     g_mode = 1; h_hid_SetStyles(0xffffffffu);
     CHECK(h_hid_ImuSamples(s, 4, 0x20003) == 4 && h_hid_ImuSamples(s, 4, 0x5) == 0, "imu: full key supported: the full-key handle, not the pair's");
     CHECK(h_hid_SixHandles(h, 2, &id, STYLE_FULLKEY | STYLE_JOYDUAL) == 2 && h[0] == 0x3 && h[1] == 0x10003 && six_connected(h[0]) && six_connected(h[1]), "host handles: FullKey | JoyDual while shown as full key: full key, two handles as before");
-    // Player 2 on No2 with a live controller: its own motion; No3 without a player: none
     dm_pad_players(3);
     float a2[3] = {0, 0, -1}, w2[3] = {0, 0, 3.14159265f}; dm_motion_set(1, a2, w2);
     CHECK(h_hid_ImuSamples(s, 1, 0x20103) == 1 && fabsf(s[0].gyro[2] + 3.14159265f) < 1e-3f, "imu: player 2's npad (No2) reads player 2's motion");
     CHECK(h_hid_ImuSamples(s, 1, 0x20003) == 1 && s[0].gyro[2] == 0, "imu: player 1's npad does not");
     CHECK(h_hid_ImuSamples(s, 1, 0x20203) == 0, "imu: No3 has no controller: none");
     dm_motion_clear(1); dm_pad_players(1);
-    // A pair split by single assignment: the left Joy-Con on No1 (JoyLeft, 0x6), the right one on No2 (JoyRight, 0x10107), each with its own sensor
     h_hid_SetStyles(STYLE_FULLKEY | STYLE_JOYDUAL | STYLE_JOYLEFT | STYLE_JOYRIGHT);
     dm_joy_attach(0, 3); joy_assign(0, 1);
     float al[3] = {0, 0, -1}, wl[3] = {1, 0, 0}, wr[3] = {0, 1, 0};
@@ -768,13 +731,12 @@ static void t_imu_sdk_handles(void) {
     h_hid_ImuDisable();
 }
 
-// The IMU samples' white noise (the SDK's stillness detector tests the gyro for it, sdk+0x736fb0): on by default, the same for a tick read again, different per device, zero mean
-// with the intended spread, uncorrelated from one tick to the next; DM_IMU_NOISE=0 leaves it out
+// IMU white noise (the SDK's stillness detector tests the gyro for it, sdk+0x736fb0): same for a tick read again, per device, zero mean, uncorrelated; DM_IMU_NOISE=0 off
 static void t_imu_noise(void) {
     g_mode = 1; dm_pad_players(1);
     atomic_store(&g_shake_t0, 0); atomic_store(&g_shake_end, 0);
     unsetenv("DM_IMU_NOISE"); imu_env_read();
-    uint32_t h[2] = {0x20003, 0x10003};   // the SDK's handles of player 1's full-key controller, two device indexes
+    uint32_t h[2] = {0x20003, 0x10003};
     uint8_t ring[64]; h_hid_ImuEnable(ring, sizeof ring);
     enum { N = 4000 }; static float gx[N], az[N];
     double sg = 0, sg2 = 0, sa = 0, sa2 = 0, lag = 0; int differ = 0, again = 1;
@@ -791,7 +753,7 @@ static void t_imu_noise(void) {
     CHECK(fabs(sg / N) < 4 * want_g / sqrt(N) && fabs(gsd - want_g) < 0.1 * want_g, "imu noise: the gyro's is zero-mean, 0.1 deg/s per axis");
     CHECK(fabs(sa / N) < 4 * want_a / sqrt(N) && fabs(asd - want_a) < 0.1 * want_a, "imu noise: the acceleration's is zero-mean, 0.05 mG per axis");
     CHECK(fabs(lag / (N - 1) / (gsd * gsd)) < 0.08, "imu noise: white (no correlation from one tick to the next)");
-    {   // the SDK's stillness test (sdk+0x736850): the lag-1 autocovariance of 64 accelerations (m/s^2) on x and z within 1e-6, for every window of a still controller
+    {   // the SDK's stillness test (sdk+0x736850): lag-1 autocovariance of 64 accelerations within 1e-6
         int still = 1;
         for (int w = 0; w + 64 <= N; w += 16) {
             double m = 0, c = 0; for (int i = w; i < w + 64; i++) m += az[i]; m /= 64;
@@ -818,7 +780,7 @@ static void t_imu_noise(void) {
     setenv("DM_IMU_NOISE", "0,0.2", 1); imu_env_reread();
     CHECK(h_hid_ImuSamples(s, 1, h[0]) == 1 && s[0].gyro[0] == 0 && s[0].acc[2] != 9.80665f && fabsf(s[0].acc[2] - 9.80665f) < 0.02f, "imu noise: acceleration only");
     unsetenv("DM_IMU_NOISE"); imu_env_read();
-    {   // DM_IMU_LOG=<n>: every n-th raw sample and IMU answer is logged (read once); unset or 0: none
+    {
         _Atomic uint64_t c = 0;
         atomic_store(&g_imu_log, -1); unsetenv("DM_IMU_LOG");
         CHECK(!imu_log_due(&c) && !imu_log_due(&c), "imu log: off by default");
@@ -832,15 +794,14 @@ static void t_imu_noise(void) {
     h_hid_ImuDisable(); hwm_clear(), guest_now = 1000000000ull;
 }
 
-// Live motion through the history ring (live_ring): a source at 100 / 125 / 200 / 833 Hz with jittered sample times drives player 1; the IMU answers a game reads once a frame
-// (60 Hz) number their ticks consecutively at 5 ms, end at the clock's tick (the newest sample held past its time), and carry the source's signal at each tick's own time,
-// interpolated (a ramp in the gyro comes out as that ramp, without steps); GetSixAxisSensorStates' history follows the same ticks, newest first
-void *writer(void *arg) {   // t_live_ring's input thread: 1,000 samples 0.1 ms apart, all at or before the fixed host clock
+// Live motion through live_ring: sources at 100-833 Hz with jittered stamps; the IMU answers number their ticks consecutively at 5 ms, end at the clock's tick,
+// and carry the source's signal interpolated at each tick's own time (a gyro ramp comes out as that ramp).
+void *writer(void *arg) {
     (void)arg; float a[3] = {0, 0, -1};
     for (int i = 0; i < 1000; i++) { float w[3] = {0, 0, (float)i * 1e-3f}; dm_motion_set_hid(0, a, w, 90000000000ull - 100000000ull + (uint64_t)i * 100000ull); }
     return NULL;
 }
-static double ramp_rads(uint64_t t_ns) { return 0.5 + 2.0 * (double)(t_ns % 4000000000ull) / 1e9; }   // rad/s, rising 2 rad/s every second
+static double ramp_rads(uint64_t t_ns) { return 0.5 + 2.0 * (double)(t_ns % 4000000000ull) / 1e9; }
 static void t_live_ring(void) {
     g_mode = 1; dm_pad_players(1);
     setenv("DM_IMU_NOISE", "0", 1); imu_env_read();
@@ -851,11 +812,11 @@ static void t_live_ring(void) {
         dm_motion_clear_hid(0); dm_motion_clear(0);
         uint64_t next_sample = t0, next_frame = t0 + 50000000, last_sample_t = 0, rng = 12345 + (uint64_t)ri;
         int64_t prev_last = -1; int ok_num = 1, ok_future = 1, ok_value = 1, ok_mono = 1, ok_delta = 1, ok_states = 1, answers = 0;
-        for (uint64_t t = t0; t < t0 + 1000000000ull; t += 250000) {   // 0.25 ms steps of both clocks
+        for (uint64_t t = t0; t < t0 + 1000000000ull; t += 250000) {
             motion_now = t; guest_now = t;
             if (t >= next_sample) {
                 rng = rng * 6364136223846793005ull + 1442695040888963407ull;
-                uint64_t ts = t - (rng >> 33) % (period / 5 + 1);   // stamped up to a fifth of a period before it arrives
+                uint64_t ts = t - (rng >> 33) % (period / 5 + 1);
                 if (ts > last_sample_t) {
                     float a[3] = {0, 0, -1}, w[3] = {0, 0, (float)ramp_rads(ts)};
                     dm_motion_set_hid(0, a, w, ts); last_sample_t = ts;
@@ -870,11 +831,11 @@ static void t_live_ring(void) {
                     if (i && o[i].sampling != o[i - 1].sampling + 1) ok_num = 0;
                     if (o[i].delta_ns != 5000000) ok_delta = 0;
                     uint64_t tick_t = (uint64_t)(o[i].sampling - 1) * 5000000ull;
-                    // inside the data the gyro is the ramp at the tick's own time (the IMU negates it: -rad/s); past the newest sample, that sample held
+                    // the IMU negates the gyro: -rad/s; past the newest sample, that sample held
                     double want = ramp_rads(tick_t <= last_sample_t ? tick_t : last_sample_t);
                     if (tick_t > t0 + 100000000ull && fabs(o[i].gyro[2] + want) > 1e-3) ok_value = 0;
                 }
-                if (o[k - 1].sampling != (int64_t)(t / 5000000) + 1) ok_future = 0;   // the answer ends at the clock's tick
+                if (o[k - 1].sampling != (int64_t)(t / 5000000) + 1) ok_future = 0;
                 if (o[k - 1].sampling < prev_last) ok_mono = 0;
                 prev_last = o[k - 1].sampling;
                 SixAxisState st[4]; uint32_t hh = 0x3;
@@ -888,7 +849,7 @@ static void t_live_ring(void) {
         snprintf(what, sizeof what, "live ring at %.0f Hz: each tick carries the signal at its own time (interpolated, no steps)", rates[ri]); CHECK(ok_value, what);
         snprintf(what, sizeof what, "live ring at %.0f Hz: the six-axis history follows the same ticks, newest first", rates[ri]); CHECK(ok_states, what);
     }
-    {   // the input thread adds samples while a game thread reads answers (ThreadSanitizer checks the ring's lock in t_hid_tsan); fixed clocks, sample times below them
+    {
         static _Atomic int stop; atomic_store(&stop, 0);
         motion_now = guest_now = 90000000000ull; dm_motion_clear_hid(0);
         pthread_t wr; void *writer(void *); CHECK(!pthread_create(&wr, NULL, writer, NULL), "live ring: writer thread");
@@ -896,19 +857,14 @@ static void t_live_ring(void) {
         pthread_join(wr, NULL);
         CHECK(good, "live ring: answers stay consecutive while samples arrive");
     }
-    // A stream gone stale: back to the flat synthetic sensor at the current tick
     motion_now += MOTION_STALE_NS + 1; guest_now = motion_now;
     TestImuSample o[2]; CHECK(h_hid_ImuSamples(o, 2, h) == 2 && o[1].gyro[2] == 0 && o[1].sampling == (int64_t)(guest_now / 5000000) + 1, "live ring: stale, synthetic again at the current tick");
-    // The ring keeps only LIVE_RING samples: memory is bounded however long a source runs
     CHECK(g_hid_motion[0].count <= LIVE_RING, "live ring: bounded");
     dm_motion_clear_hid(0); h_hid_ImuDisable(); unsetenv("DM_IMU_NOISE"); imu_env_read();
     guest_now = 1000000000ull; motion_now = 1000000000ull;
 }
 
-// The sampling numbers a game reads never go back and keep up with the clock, whatever the live source does: synthetic → live with a first sample stamped late, a player's
-// GameController and HID streams with different latencies taking turns, a game polling faster than the source, a source going stale and coming back, the guest clock's lag
-// changing mid-stream (a freeze), equal and out-of-order stamps. Each read checks: IMU answers and six-axis histories consecutive, ending at the clock's tick or above the last
-// one, and the newest number never below the previous read's
+// Sampling numbers never go back and keep up with the clock whatever the live source does: late first stamps, streams taking turns, faster polling, stale sources, clock lag changes.
 typedef struct { int64_t imu_last, st_last; int ok_mono, ok_consec, ok_clock, ok_finite; } edge_watch;
 static void edge_read(edge_watch *w) {
     TestImuSample o[16]; int k = h_hid_ImuSamples(o, 16, 0x20003);
@@ -933,12 +889,10 @@ static void t_live_edges(void) {
     edge_watch w = {0, 0, 1, 1, 1, 1};
     float a[3] = {0, 0, -1}, w0[3] = {0, 0, 1};
     uint64_t t = 200000000000ull; atomic_store(&g_test_lag, 0);
-    // synthetic, then a first live sample stamped 15 ms (3 ticks) late
     for (int i = 0; i < 10; i++) { edge_clocks(t += 1000000); edge_read(&w); }
     dm_motion_set_hid(0, a, w0, t - 15000000); edge_read(&w);
     for (int i = 0; i < 20; i++) { edge_clocks(t += 4000000); dm_motion_set_hid(0, a, w0, t - 15000000); edge_read(&w); }
     CHECK(w.ok_mono && w.ok_consec && w.ok_clock, "edges: synthetic to live with a late first sample, numbers never go back");
-    // GameController (2 ms late) and HID (20 ms late) streams of player 1 taking turns
     for (int i = 0; i < 40; i++) {
         edge_clocks(t += 8000000);
         if (i % 10 < 5) dm_motion_set(0, a, w0); else dm_motion_clear(0);
@@ -946,40 +900,36 @@ static void t_live_edges(void) {
     }
     CHECK(w.ok_mono && w.ok_consec && w.ok_clock, "edges: GameController and HID streams with different latencies taking turns");
     dm_motion_clear(0);
-    // polling every 1 ms against a 100 Hz source: the numbers follow the clock, not the source
     int64_t first = w.imu_last;
     for (int i = 0; i < 100; i++) { edge_clocks(t += 1000000); if (i % 10 == 0) dm_motion_set_hid(0, a, w0, t - 2000000); edge_read(&w); }
     CHECK(w.ok_mono && w.ok_clock && w.imu_last - first >= 19, "edges: a game polling faster than its source reads numbers that keep up with the clock");
-    // live → stale (no samples for 400 ms) → live again
     for (int i = 0; i < 100; i++) { edge_clocks(t += 4000000); edge_read(&w); }
     for (int i = 0; i < 10; i++) { edge_clocks(t += 4000000); dm_motion_set_hid(0, a, w0, t - 10000000); edge_read(&w); }
     CHECK(w.ok_mono && w.ok_consec && w.ok_clock, "edges: live, stale, live again");
-    // the guest clock frozen for 50 ms (its lag grows), samples arriving meanwhile, then running again
     uint64_t frozen = guest_now;
     for (int i = 0; i < 10; i++) { motion_now = (t += 5000000); dm_motion_set_hid(0, a, w0, t - 3000000); edge_read(&w); }
     atomic_store(&g_test_lag, motion_now - frozen);
     for (int i = 0; i < 20; i++) { edge_clocks(t += 4000000); dm_motion_set_hid(0, a, w0, t - 3000000); edge_read(&w); }
     CHECK(w.ok_mono && w.ok_consec && w.ok_clock && w.ok_finite, "edges: a lag change mid-stream (a freeze) keeps the numbers going");
-    // equal and out-of-order stamps: dropped, nothing goes back
     edge_clocks(t += 4000000); uint64_t st0 = t - 2000000;
     dm_motion_set_hid(0, a, w0, st0); dm_motion_set_hid(0, a, w0, st0); dm_motion_set_hid(0, a, w0, st0 - 1000000); edge_read(&w);
     edge_clocks(t += 4000000); dm_motion_set_hid(0, a, w0, t - 1000000); edge_read(&w);
     CHECK(w.ok_mono && w.ok_consec && w.ok_clock && w.ok_finite, "edges: equal and out-of-order stamps");
-    // the direction between two samples is a rotation (normalized lerp): orthonormal rows
+    // normalized lerp between two directions: orthonormal rows
     {
         motion_sample r2[2] = {{.t = 0, .dir = {1, 0, 0, 0, 1, 0, 0, 0, 1}}, {.t = 10, .dir = {0, 1, 0, -1, 0, 0, 0, 0, 1}}}, o2;
         live_at(r2, 2, 5, &o2);
         float n0 = o2.dir[0] * o2.dir[0] + o2.dir[1] * o2.dir[1] + o2.dir[2] * o2.dir[2], d01 = o2.dir[0] * o2.dir[3] + o2.dir[1] * o2.dir[4] + o2.dir[2] * o2.dir[5];
         CHECK(fabsf(n0 - 1) < 1e-4f && fabsf(d01) < 1e-4f && fabsf(o2.dir[0] - 0.7071f) < 1e-3f && fabsf(o2.dir[1] - 0.7071f) < 1e-3f, "edges: the direction halfway between a quarter turn is the eighth turn, a rotation");
     }
-    {   // half a turn apart (the blend vanishes) or 60 ms apart: the nearer sample's direction, a rotation
+    {
         motion_sample r3[2] = {{.t = 0, .dir = {1, 0, 0, 0, 1, 0, 0, 0, 1}}, {.t = 10, .dir = {-1, 0, 0, 0, -1, 0, 0, 0, 1}}}, o3;
         live_at(r3, 2, 4, &o3); CHECK(o3.dir[0] == 1 && o3.dir[4] == 1 && o3.dir[8] == 1, "edges: half a turn apart, the nearer direction (the earlier one)");
         live_at(r3, 2, 6, &o3); CHECK(o3.dir[0] == -1 && o3.dir[4] == -1, "edges: and the later one past halfway");
         motion_sample r4[2] = {{.t = 0, .dir = {1, 0, 0, 0, 1, 0, 0, 0, 1}}, {.t = 60000000, .dir = {0, 1, 0, -1, 0, 0, 0, 0, 1}}};
         live_at(r4, 2, 20000000, &o3); CHECK(o3.dir[0] == 1 && o3.dir[1] == 0, "edges: samples 60 ms apart: no blend, the nearer direction");
     }
-    {   // the clock going back by more than a second (a reset): the marks start again from it instead of pinning the old numbers
+    {
         uint64_t was = guest_now;
         guest_now += 10000000000ull; edge_read(&w);
         guest_now = was; TestImuSample q[2];
@@ -992,8 +942,7 @@ static void t_live_edges(void) {
     guest_now = 1000000000ull; motion_now = 1000000000ull;
 }
 
-// What the real-controller session showed (Joy-Con 2 pair, DualSense): a first all-zero sample is no reading; a GameController's gyro offset is learned at rest and taken off;
-// LoadSixAxisSensorCalibrationParameter claims a zero bias only for a sensor whose offset is taken off
+// a first all-zero sample is no reading; a GameController's gyro offset is learned at rest; calibration claims a zero bias only where the offset is taken off
 static void t_live_rest(void) {
     g_mode = 1; dm_pad_players(1); hwm_clear();
     uint64_t t = 300000000000ull; motion_now = guest_now = t;
@@ -1005,23 +954,21 @@ static void t_live_rest(void) {
     CHECK(h_hid_SixCalLoad(cal, &h) == RES_SIX_CAL_NONE && cal[0] == 0 && cal[0x743] == 0, "session: a GameController with its offset not learned: no stored calibration (the buffer zeroed)");
     for (int i = 0; i < 150; i++) { motion_now = guest_now = (t += 15000000); dm_motion_set(0, a, off); }
     CHECK(g_motion[0].rest.have, "session: the GameController's offset learned at rest (two agreeing seconds)");
-    for (int i = 0; i < 60; i++) { motion_now = guest_now = (t += 15000000); dm_motion_set(0, a, off); }   // past the ramp
+    for (int i = 0; i < 60; i++) { motion_now = guest_now = (t += 15000000); dm_motion_set(0, a, off); }
     SixAxisState st; CHECK(six_states(&st, 1, h) == 1 && fabsf(st.gyro[0]) < 1e-4f && fabsf(st.gyro[2]) < 1e-4f, "session: and taken off its six-axis state");
-    // a gap of 150 ms breaks the rest window; a stale stream forgets the offset
     unsigned n_before = g_motion[0].rest.n; motion_now = guest_now = (t += 150000000); dm_motion_set(0, a, off);
     CHECK(g_motion[0].rest.n <= 1 && n_before >= 1 && g_motion[0].rest.have, "session: a gap starts the rest window again, the offset kept");
     motion_now = guest_now = (t += MOTION_STALE_NS + 1); dm_motion_set(0, a, off);
     CHECK(!g_motion[0].rest.have, "session: a stale stream forgets the offset");
     for (int i = 0; i < 150; i++) { motion_now = guest_now = (t += 15000000); dm_motion_set(0, a, off); }
     memset(cal, 0xAB, sizeof cal); CHECK(h_hid_SixCalLoad(cal, &h) == 0 && cal[0] == 0 && cal[0x743] == 0, "session: then a zero bias");
-    // a later all-zero sample on a fresh stream is a reading (a free fall), kept
     unsigned c0 = g_motion[0].count; motion_now = guest_now = (t += 15000000); dm_motion_set(0, z, z);
     CHECK(g_motion[0].count == c0 + 1 || g_motion[0].count == LIVE_RING, "session: zeros on a live stream are kept (free fall)");
     dm_motion_clear(0);
     CHECK(!g_motion[0].rest.have, "session: a controller leaving forgets the offset (another may take the player)");
     dm_motion_set_hid(0, a, off, t); CHECK(h_hid_SixCalLoad(cal, &h) == 0, "session: a HID stream (its front end takes the offset off): zero bias");
     dm_motion_clear_hid(0); CHECK(h_hid_SixCalLoad(cal, &h) == 0, "session: no live source: zero bias");
-    {   // DM_IMU_AXES: the IMU samples' axes permuted, rotation times the map's determinant
+    {
         setenv("DM_IMU_NOISE", "0", 1); setenv("DM_IMU_AXES", "y,-x,z", 1); imu_env_read();
         float tilt[3] = {0.5f, 0, -0.8660254f}, turn[3] = {0, 0, 3.14159265f}; uint8_t ring[64]; h_hid_ImuEnable(ring, sizeof ring);
         motion_now = guest_now = (t += 5000000); dm_motion_set_hid(0, tilt, turn, t);
@@ -1035,13 +982,12 @@ static void t_live_rest(void) {
     guest_now = motion_now = 1000000000ull;
 }
 
-// A single Joy-Con the game is shown as a pair (Switch Sports Resort supports Handheld | JoyDual): both pair handles read that Joy-Con's own stream (upright, a pair's frame), not
-// the merged pad stream (a sideways Joy-Con's frame); shown as full key it reads the merged stream; a right Joy-Con split as JoyRight reads its own
+// a single Joy-Con shown as a pair reads its own stream on both handles (upright frame), not the merged sideways one
 static void t_single_joy_as_pair(void) {
     g_mode = 1; dm_pad_players(1); hwm_clear(); setenv("DM_IMU_NOISE", "0", 1); imu_env_read();
     uint64_t t = 400000000000ull; motion_now = guest_now = t;
     uint8_t ring[64]; h_hid_ImuEnable(ring, sizeof ring);
-    dm_joy_attach(0, 2);   // the right Joy-Con alone
+    dm_joy_attach(0, 2);
     float a[3] = {0, 0, -1}, side[3] = {0.5f, 0, 0}, own[3] = {0, 0.7f, 0};
     dm_motion_set_hid(0, a, side, t); dm_motion_set_joy(0, 1, a, own, t);
     TestImuSample q[1];
@@ -1053,11 +999,10 @@ static void t_single_joy_as_pair(void) {
     h_hid_SetStyles(STYLE_FULLKEY | STYLE_JOYDUAL | STYLE_JOYLEFT | STYLE_JOYRIGHT);
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_JOYRIGHT && h_hid_ImuSamples(q, 1, 0x10007) == 1 && fabsf(q[0].gyro[1] + 0.7f) < 1e-4f, "a game with JoyRight: its own stream, as before");
     unsetenv("DM_IMU_NOISE"); imu_env_read();
-    {   // interpolated live ticks are untouched; held ones (past the newest sample) get a dither under the real floor, so no two ticks in a row are alike
+    {   // held ticks get a dither under the real floor, so no two ticks in a row are alike
         dm_motion_clear_joy(0, 1); float w1[3] = {0, 0.7f, 0}, w2[3] = {0, 0.8f, 0};
         motion_now = guest_now = (t += 1000000000ull); dm_motion_set_joy(0, 1, a, w1, t - 20000000); dm_motion_set_joy(0, 1, a, w2, t - 10000000);
         TestImuSample r[4]; CHECK(h_hid_ImuSamples(r, 4, 0x10007) == 4, "dither: four ticks");
-        // ticks at t-15, -10 (the newest sample), -5, 0 ms: the first is interpolated exactly, the newest-sample tick and those after it are held and dithered
         CHECK(fabsf(r[0].gyro[1] + 0.75f) < 1e-6f, "dither: an interpolated tick is the controller's own value, untouched");
         int alike = 0; for (int i = 1; i < 4; i++) alike |= !memcmp(&r[i].gyro, &r[i - 1].gyro, sizeof r[i].gyro) || !memcmp(&r[i].acc, &r[i - 1].acc, sizeof r[i].acc);   // NOLINT(bugprone-suspicious-memory-comparison): held ticks must differ in their bits (the dither)
         CHECK(!alike && fabsf(r[3].gyro[1] + 0.8f) < 1e-3f && fabsf(r[3].acc[2] - 9.80665f) < 1e-3f, "dither: held ticks differ from each other, and stay at the held value");
@@ -1065,8 +1010,6 @@ static void t_single_joy_as_pair(void) {
     dm_motion_clear_joy(0, 1); dm_motion_clear_hid(0); dm_joy_attach(0, 0); h_hid_SetStyles(0xffffffffu); h_hid_ImuDisable(); guest_now = motion_now = 1000000000ull;
 }
 
-// An intact pair whose one half pauses (a Joy-Con 2 skipping reports past the stale time): that half's handle lies flat, not the pad's merged stream (a sideways frame); a pad
-// whose Joy-Cons never reported their own motion still gets the merged one
 static void t_pair_half_pause(void) {
     g_mode = 1; dm_pad_players(1); hwm_clear(); setenv("DM_IMU_NOISE", "0", 1); imu_env_read();
     uint64_t t = 800000000000ull; motion_now = guest_now = t;
@@ -1075,33 +1018,29 @@ static void t_pair_half_pause(void) {
     float a[3] = {0, 0, -1}, wl[3] = {0, 0.3f, 0}, wr[3] = {0, 0.7f, 0}, side[3] = {0.5f, 0, 0};
     TestImuSample q[1];
     dm_joy_attach(0, 3); dm_motion_set_joy(0, 0, a, wl, t); dm_motion_set_joy(0, 1, a, wr, t); dm_motion_set_hid(0, a, side, t);
-    motion_now = guest_now = (t += 400000000ull);   // 400 ms on: the right one and the merged stream go on, the left one paused
+    motion_now = guest_now = (t += 400000000ull);
     dm_motion_set_joy(0, 1, a, wr, t); dm_motion_set_hid(0, a, side, t);
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[0]) < 1e-4f && fabsf(q[0].gyro[1]) < 1e-4f, "paused half: flat, not the merged stream's sideways frame");
     CHECK(h_hid_ImuSamples(q, 1, 0x10005) == 1 && fabsf(q[0].gyro[1] + 0.7f) < 1e-4f, "paused half: the other half keeps its own");
-    for (int i = 0; i < 50; i++) { motion_now = guest_now = (t += 100000000ull); dm_motion_set_joy(0, 1, a, wr, t); dm_motion_set_hid(0, a, side, t); }   // 5 s more
+    for (int i = 0; i < 50; i++) { motion_now = guest_now = (t += 100000000ull); dm_motion_set_joy(0, 1, a, wr, t); dm_motion_set_hid(0, a, side, t); }
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[0]) < 1e-4f && fabsf(q[0].gyro[1]) < 1e-4f, "paused half: still flat after 5 s, no cliff to the merged stream");
     dm_motion_set_joy(0, 0, a, wl, t);
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[1] + 0.3f) < 1e-4f, "paused half: its own again once it reports");
-    dm_joy_attach(0, 1); motion_now = guest_now = (t += 1000000);   // the right one detached: the left alone (no single style, shown as a pair), its own stream on both handles
+    dm_joy_attach(0, 1); motion_now = guest_now = (t += 1000000);
     dm_motion_set_joy(0, 0, a, wl, t); dm_motion_set_hid(0, a, side, t);
     CHECK(h_hid_ImuSamples(q, 1, 0x10005) == 1 && fabsf(q[0].gyro[0]) < 1e-4f, "a detached half: not the merged stream either (the pair lost it: flat)");
     dm_joy_attach(0, 0); dm_motion_clear_joy(0, 0); dm_motion_clear_joy(0, 1);
-    dm_joy_attach(0, 3); motion_now = guest_now = (t += 1000000);   // Joy-Cons whose controller gives no per-Joy-Con motion: the merged stream
+    dm_joy_attach(0, 3); motion_now = guest_now = (t += 1000000);
     dm_motion_set_hid(0, a, side, t);
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[0] + 0.5f) < 1e-4f, "no per-Joy-Con motion at all: the merged stream, as before");
     dm_joy_attach(0, 0); dm_motion_clear_hid(0); unsetenv("DM_IMU_NOISE"); imu_env_read();
     h_hid_SetStyles(0xffffffffu); h_hid_ImuDisable(); guest_now = motion_now = 1000000000ull;
 }
 
-// Playout delay (DM_IMU_DELAY, motion_lag): a live stream at 33 Hz (Joy-Con 2: sample times from the controller's clock, arrivals up to 4 ms late) or 67 Hz (GameController:
-// sample times are the jittered arrivals). The signal is a ramp of the gyro (1 rad/s per second of sample time), so a tick reads its data time: exactly the ramp at its time
-// minus the delay when it lies between two real samples, less when it holds one. The game reads 16 ticks every 16.7 ms and takes each tick once (by sampling number), as the
-// fusion does
+// Playout delay (DM_IMU_DELAY, motion_lag) at 33 Hz (controller clock stamps) and 67 Hz (jittered arrivals): a gyro ramp of 1 rad/s per second makes each tick read its data time.
 typedef struct { unsigned total, held, bad_seq, back, jump; uint64_t delay_min, delay_max; } delay_stats;
 static uint32_t delay_rng(uint32_t *x) { *x = *x * 1664525u + 1013904223u; return *x >> 8; }
 static uint64_t applied_delay(tick_hwm *w, uint32_t h) { int at = hwm_slot(w, h); return at < 0 ? 0 : atomic_load(&w->delay[at]); }
-// delays: the DM_IMU_DELAY values to switch through, one per segment of seg_s seconds ("" for auto); counts the ticks after the first settle_s of each segment
 static delay_stats live_delay_run(double hz, int joy_clock, const char *const *delays, int nd, double seg_s, double settle_s, uint64_t t0) {
     delay_stats st = {0, 0, 0, 0, 0, ~0ull, 0};
     const uint64_t period = (uint64_t)(1e9 / hz), jitter = 4000000, frame = 16666667, seg_ns = (uint64_t)(seg_s * 1e9);
@@ -1112,7 +1051,7 @@ static delay_stats live_delay_run(double hz, int joy_clock, const char *const *d
     int64_t last = 0; int seg = -1; double prev_data = -1; int prev_interp = 0;
     for (uint64_t t = t0; t < t0 + (uint64_t)nd * seg_ns; t += 500000) {
         int now_seg = (int)((t - t0) / seg_ns);
-        if (now_seg >= nd) break;   // the loop's bound already ends at the last segment; said here so that delays[] is never read past it
+        if (now_seg >= nd) break;   // delays[] is never read past the last segment
         if (now_seg != seg) { seg = now_seg; if (*delays[seg]) setenv("DM_IMU_DELAY", delays[seg], 1); else unsetenv("DM_IMU_DELAY"); imu_env_read(); }
         motion_now = guest_now = t;
         while (arr <= t) {
@@ -1131,8 +1070,8 @@ static delay_stats live_delay_run(double hz, int joy_clock, const char *const *d
             uint64_t tau = (uint64_t)(q[i].sampling - 1) * SIX_PERIOD_NS;
             double data = -q[i].gyro[1], expect = ((double)(tau - d) - (double)t0) / 1e9;
             int interp = fabs(data - expect) < 2e-5;
-            if (prev_data >= 0 && data < prev_data - 2e-5) st.back++;   // the data a game takes never goes back (replayed)
-            if (prev_data >= 0 && interp && prev_interp && data - prev_data > 0.006) st.jump++;   // nor skips ahead: 5 ms a tick, 5% more while the delay settles
+            if (prev_data >= 0 && data < prev_data - 2e-5) st.back++;
+            if (prev_data >= 0 && interp && prev_interp && data - prev_data > 0.006) st.jump++;
             prev_data = data; prev_interp = interp;
             if (tau < t0 + (uint64_t)seg * seg_ns + (uint64_t)(settle_s * 1e9)) continue;
             st.total++; if (!interp) st.held++;
@@ -1154,7 +1093,7 @@ static void t_live_delay(void) {
         snprintf(what, sizeof what, "delay auto at %.0f Hz: %u of %u ticks held (under 2%%), the rest exactly between their two samples", rates[ri], st.held, st.total);
         CHECK(st.total > 350 && st.held * 50 < st.total, what);
         snprintf(what, sizeof what, "delay auto at %.0f Hz: %.3f..%.3f ms, about one sample interval, at most 40", rates[ri], st.delay_min / 1e6, st.delay_max / 1e6);
-        CHECK(st.delay_min >= (uint64_t)(1e9 / rates[ri]) && st.delay_max <= 40000000ull && st.delay_max <= (uint64_t)(1e9 / rates[ri]) + 4500000ull, what);   // the spacing, the 4 ms jitter, the test's 0.5 ms step
+        CHECK(st.delay_min >= (uint64_t)(1e9 / rates[ri]) && st.delay_max <= 40000000ull && st.delay_max <= (uint64_t)(1e9 / rates[ri]) + 4500000ull, what);
         CHECK(!st.bad_seq && !st.back && !st.jump, "delay auto: the ticks contiguous, their data never replayed nor skipped (the delay slews in from the stream's start)");
         const char *off[] = {"0"};
         delay_stats so = live_delay_run(rates[ri], ri == 0, off, 1, 1, 0.5, 720000000000ull + (uint64_t)ri * 10000000000ull);
@@ -1174,9 +1113,7 @@ static void t_live_delay(void) {
     setenv("DM_IMU_DELAY", "0", 1); unsetenv("DM_IMU_NOISE"); imu_env_read();
     h_hid_ImuDisable(); guest_now = motion_now = 1000000000ull;
 }
-// A stream swapped behind a handle (a one-player game: player 2's controller takes over from player 1's, motion_pick) with a different delay (33 Hz Joy-Con-like, then 67 Hz),
-// the game reading on through the swap, or pausing its reads for just under or just over LIVE_DELAY_IDLE_NS (1 s): the data it takes never goes back, and while it reads on,
-// never jumps ahead (the delay slews from 34 to 17 ms)
+// a stream swapped behind a handle (motion_pick) with another delay: the data never goes back, and while reads go on never jumps (the delay slews from 34 to 17 ms)
 static void swap_run(double pause_s, delay_stats *st) {
     const uint64_t t0 = 820000000000ull + (uint64_t)(pause_s * 1e10), frame = 16666667, swap = t0 + 2000000000ull, pause_end = swap + (uint64_t)(pause_s * 1e9), end = pause_end + 1000000000ull;
     dm_motion_clear_hid(0); dm_motion_clear_hid(1); hwm_clear();
@@ -1184,16 +1121,16 @@ static void swap_run(double pause_s, delay_stats *st) {
     uint32_t rng = 777; uint64_t next = t0, nf = t0 + frame, prev_d = 0, prev_t = 0; int64_t last = 0; double prev_data = -1;
     for (uint64_t t = t0; t < end; t += 500000) {
         motion_now = guest_now = t;
-        if (t >= next) {   // the sample's time: up to 4 ms before now (its transport)
+        if (t >= next) {
             uint64_t stamp = t - delay_rng(&rng) % 4000000; float w[3] = {0, (float)((double)(int64_t)(stamp - t0) / 1e9), 0};
             dm_motion_set_hid(t < swap ? 0 : 1, a, w, stamp); next += t < swap ? 30303030ull : 14925373ull;
         }
         if (t < nf) continue;
         nf += frame;
-        if (t >= swap && t < pause_end) continue;   // the game reads nothing
+        if (t >= swap && t < pause_end) continue;
         TestImuSample q[16]; int k = h_hid_ImuSamples(q, 16, 0x20003);
         uint64_t d = applied_delay(&g_hwm_imu, 0x20003);
-        // the delay moves at most 5% of the time since the last read (a read after more than 1 s takes its target at once)
+        // the delay moves at most 5% of the time since the last read (after more than 1 s it takes its target at once)
         if (prev_t && t - prev_t <= 1000000000ull && (d > prev_d ? d - prev_d : prev_d - d) > (uint64_t)((double)(t - prev_t) * 0.05) + 1000) st->jump++;
         if (d < st->delay_min) st->delay_min = d;
         if (d > st->delay_max) st->delay_max = d;
@@ -1224,13 +1161,12 @@ static void t_live_delay_swap(void) {
     h_hid_ImuDisable(); guest_now = motion_now = 1000000000ull;
 }
 
-// The IMU conversion end to end, as the SDK's fusion takes it (UpdateSensorFusion feeds nn::imu the sample's acceleration, at +0x10, negated and its angular velocity, at +0x1c, as it is):
-// a controller lying still, then tilted slowly about x (30 deg/s for 1.5 s), then still again. Integrating the fusion's angular velocity turns the first acceleration into the last
-// one (no drift: the gyro and the accelerometer agree in axes, sign and scale), and the still stretches carry no rotation. DM_IMU_GYRO_SIGN=-1 (the other sign) shows as drift
+// End to end as the SDK's fusion takes it (+0x10 acceleration negated, +0x1c angular velocity): integrating a slow 30 deg/s tilt turns the first acceleration into the last.
+// DM_IMU_GYRO_SIGN=-1 shows as drift.
 static double imu_conversion_drift(int *still_ok) {
     hwm_clear(); dm_motion_clear_hid(0);
     uint8_t ring[64]; h_hid_ImuEnable(ring, sizeof ring);
-    const uint64_t t0 = 840000000000ull, period = 15000000;   // a 67 Hz controller
+    const uint64_t t0 = 840000000000ull, period = 15000000;
     const double w = 30 * M_PI / 180, tilt0 = 1.0, tilt1 = 2.5, end = 3.5;
     uint64_t next = t0, nf = t0 + 16666667; int64_t last = 0; int have = 0; double f[3] = {0}, f_end[3] = {0};
     *still_ok = 1;
@@ -1248,7 +1184,7 @@ static double imu_conversion_drift(int *still_ok) {
             if (q[i].sampling <= last) continue;
             last = q[i].sampling;
             double a[3] = {q[i].acc[0], q[i].acc[1], q[i].acc[2]}, n = sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-            double om[3] = {q[i].gyro[0], q[i].gyro[1], q[i].gyro[2]};   // what nn::imu gets: the angular velocity as it is (its acceleration is the sample's negated)
+            double om[3] = {q[i].gyro[0], q[i].gyro[1], q[i].gyro[2]};
             for (int j = 0; j < 3; j++) a[j] = -a[j];
             double tick_s = (double)((uint64_t)(q[i].sampling - 1) * SIX_PERIOD_NS - t0) / 1e9;
             if ((tick_s > 0.3 && tick_s < tilt0 - 0.1) || tick_s > tilt1 + 0.3) *still_ok &= fabs(om[0]) < 1e-3 && fabs(om[1]) < 1e-3 && fabs(om[2]) < 1e-3;
@@ -1273,11 +1209,10 @@ static void t_imu_conversion(void) {
     double flipped = imu_conversion_drift(&still_ok);
     snprintf(what, sizeof what, "IMU conversion: the other gyro sign shows as drift (%.0f deg)", flipped);
     CHECK(flipped > 60, what);
-    setenv("DM_IMU_ACC_SIGN", "-1", 1); setenv("DM_IMU_GYRO_SIGN", "-1", 1); setenv("DM_IMU_DELAY", "0", 1); imu_env_read();   // main's for the rest
+    setenv("DM_IMU_ACC_SIGN", "-1", 1); setenv("DM_IMU_GYRO_SIGN", "-1", 1); setenv("DM_IMU_DELAY", "0", 1); imu_env_read();
     guest_now = motion_now = 1000000000ull;
 }
 
-// The six-axis states path (GetSixAxisSensorStates) reads the newest state each frame: no delay by default (DM_SIX_DELAY=0), only the IMU path's; DM_SIX_DELAY sets its own
 static void t_live_delay_paths(void) {
     g_mode = 1; dm_pad_players(1); hwm_clear(); setenv("DM_IMU_NOISE", "0", 1);
     unsetenv("DM_IMU_DELAY"); unsetenv("DM_SIX_DELAY"); imu_env_read();
@@ -1287,11 +1222,11 @@ static void t_live_delay_paths(void) {
     for (int i = 0; i < 40; i++) { uint64_t t = t0 + (uint64_t)i * 30000000ull; motion_now = guest_now = t; float w[3] = {0, (float)(i * 0.03), 0}; dm_motion_set_hid(0, a, w, t); }
     motion_now = guest_now += 20000000;   // 20 ms after the newest sample (1.17 rad/s at its time)
     SixAxisState six[1]; TestImuSample q[1];
-    const float rev = (float)(1 / (2 * M_PI));   // the states carry revolutions a second
+    const float rev = (float)(1 / (2 * M_PI));
     CHECK(six_states(six, 1, 0x20003) == 1 && fabsf(six[0].gyro[1] - 1.17f * rev) < 1e-5f, "states path: the newest sample, no delay");
     CHECK(h_hid_ImuSamples(q, 1, 0x20003) == 1 && q[0].gyro[1] > -1.17f + 1e-3f, "IMU path: delayed (data from before the newest sample)");
     setenv("DM_SIX_DELAY", "30", 1); setenv("DM_IMU_DELAY", "0", 1); imu_env_read(); hwm_clear();
-    // 30 ms late: 10 ms before the newest sample, two thirds of the way from 1.14 to 1.17
+    // 30 ms late: two thirds of the way from 1.14 to 1.17
     CHECK(six_states(six, 1, 0x20003) == 1 && fabsf(six[0].gyro[1] - 1.16f * rev) < 1e-4f, "DM_SIX_DELAY=30: the states path 30 ms late");
     CHECK(h_hid_ImuSamples(q, 1, 0x20003) == 1 && fabsf(q[0].gyro[1] + 1.17f) < 1e-4f, "DM_IMU_DELAY=0: the IMU path at the present (the newest sample)");
     setenv("DM_SIX_DELAY", "x", 1); imu_env_read();
@@ -1299,7 +1234,7 @@ static void t_live_delay_paths(void) {
     unsetenv("DM_SIX_DELAY"); setenv("DM_IMU_DELAY", "0", 1); unsetenv("DM_IMU_NOISE"); imu_env_read();
     dm_motion_clear_hid(0); h_hid_ImuDisable(); guest_now = motion_now = 1000000000ull;
 }
-// A frozen or DM_DETCLOCK guest clock maps every sample to one time: the answers carry the newest sample, not the oldest, whatever the delay
+// a frozen or DM_DETCLOCK guest clock: the answers carry the newest sample, whatever the delay
 static void t_live_pinned(void) {
     g_mode = 1; dm_pad_players(1); hwm_clear(); setenv("DM_IMU_NOISE", "0", 1); unsetenv("DM_IMU_DELAY"); imu_env_read();
     uint8_t ring[64]; h_hid_ImuEnable(ring, sizeof ring);
@@ -1307,7 +1242,7 @@ static void t_live_pinned(void) {
     for (int i = 0; i < 20; i++) { uint64_t t = t0 + (uint64_t)i * 30000000ull; motion_now = guest_now = t; float w[3] = {0, (float)i, 0}; dm_motion_set_hid(0, a, w, t); }
     TestImuSample q[16]; h_hid_ImuSamples(q, 16, 0x20003);
     CHECK(applied_delay(&g_hwm_imu, 0x20003) > 0, "pinned: the delay was in use before the freeze");
-    g_test_pinned = 1; motion_now += 10000000;   // the host goes on, the guest clock stays
+    g_test_pinned = 1; motion_now += 10000000;
     int k = h_hid_ImuSamples(q, 16, 0x20003), newest = 1;
     for (int i = 0; i < k; i++) newest &= fabsf(q[i].gyro[1] + 19.f) < 1e-4f;
     CHECK(k > 0 && newest, "pinned: every tick carries the newest sample, not the oldest");
@@ -1321,8 +1256,6 @@ static void t_live_pinned(void) {
     dm_motion_clear_hid(0); h_hid_ImuDisable(); guest_now = motion_now = 1000000000ull;
 }
 
-// Joy-Cons shown as a pair (Switch Sports Resort's styles: Handheld | JoyDual). A real pair is KIND_DUAL, each handle its own half; a pair that loses a half leaves the missing
-// half's handle flat (no jump to the other controller); a pair in another slot of a one-player game (merged into player 1) also gives each handle its own half
 static void t_pair_halves(void) {
     g_mode = 1; dm_pad_players(1); hwm_clear(); setenv("DM_IMU_NOISE", "0", 1); imu_env_read();
     uint32_t ids_was = atomic_load(&g_ids_supported);
@@ -1335,20 +1268,19 @@ static void t_pair_halves(void) {
     CHECK(npad_resolve(0).kind == KIND_DUAL, "a real L + R pair in a JoyDual game resolves as KIND_DUAL");
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[1] + 0.3f) < 1e-4f, "pair: device 0 reads the left Joy-Con");
     CHECK(h_hid_ImuSamples(q, 1, 0x10005) == 1 && fabsf(q[0].gyro[1] + 0.7f) < 1e-4f, "pair: device 1 reads the right Joy-Con");
-    dm_joy_attach(0, 2);   // the left one goes away
+    dm_joy_attach(0, 2);
     CHECK(h_hid_ImuSamples(q, 1, 0x10005) == 1 && fabsf(q[0].gyro[1] + 0.7f) < 1e-4f, "lost half: the right handle keeps its own Joy-Con");
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[1]) < 1e-4f && fabsf(q[0].acc[2] - 9.80665f) < 1e-3f, "lost half: the left handle lies flat, not the right Joy-Con's stream");
-    dm_joy_attach(0, 0); dm_joy_attach(0, 2);   // a right Joy-Con alone from the start
+    dm_joy_attach(0, 0); dm_joy_attach(0, 2);
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[1] + 0.7f) < 1e-4f, "single Joy-Con from the start: both handles read it again");
     dm_joy_attach(0, 0); dm_motion_clear_joy(0, 0); dm_motion_clear_joy(0, 1);
-    // A one-player game with the pair on player 2: player 1 (no Joy-Cons) is shown as JoyDual, each handle reads its half
     ids((const uint32_t[]){0, NPAD_HANDHELD}, 2); dm_pad_players(0x3);
     dm_joy_attach(1, 3); dm_motion_set_joy(1, 0, a, wl, t); dm_motion_set_joy(1, 1, a, wr, t); dm_motion_set_hid(1, a, (float[3]){0.5f, 0, 0}, t);
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[1] + 0.3f) < 1e-4f && fabsf(q[0].gyro[0]) < 1e-4f, "merged pair: device 0 reads player 2's left Joy-Con");
     CHECK(h_hid_ImuSamples(q, 1, 0x10005) == 1 && fabsf(q[0].gyro[1] + 0.7f) < 1e-4f, "merged pair: device 1 reads its right Joy-Con");
-    dm_joy_attach(1, 2);   // the left one goes away there too
+    dm_joy_attach(1, 2);
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[1]) < 1e-4f && fabsf(q[0].gyro[0]) < 1e-4f, "merged pair that lost a half: the left handle lies flat");
-    dm_joy_attach(1, 0); dm_joy_attach(1, 2);   // a single right Joy-Con in player 2's slot: both handles read it, not the sideways merged stream
+    dm_joy_attach(1, 0); dm_joy_attach(1, 2);
     CHECK(h_hid_ImuSamples(q, 1, 0x5) == 1 && fabsf(q[0].gyro[1] + 0.7f) < 1e-4f && fabsf(q[0].gyro[0]) < 1e-4f, "merged single Joy-Con: its own stream (the upright frame), not the merged one");
     dm_joy_attach(1, 0); dm_motion_clear_joy(1, 0); dm_motion_clear_joy(1, 1); dm_motion_clear_hid(1);
     dm_pad_players(1); atomic_store(&g_ids_supported, ids_was);
@@ -1356,7 +1288,6 @@ static void t_pair_halves(void) {
     h_hid_SetStyles(0xffffffffu); h_hid_ImuDisable(); guest_now = motion_now = 1000000000ull;
 }
 
-// A still, clean live source (identical samples, as a quantized sensor at rest) at 33 and 67 Hz: the game never gets two identical ticks in a row, and the values stay within the dither
 static void t_live_still_dither(void) {
     g_mode = 1; dm_pad_players(1); hwm_clear(); unsetenv("DM_IMU_NOISE"); imu_env_read();
     uint8_t ring[64]; h_hid_ImuEnable(ring, sizeof ring);
@@ -1372,9 +1303,8 @@ static void t_live_still_dither(void) {
             if (t >= nf) {
                 nf += 16666667; TestImuSample q[16]; int k = h_hid_ImuSamples(q, 16, 0x20003);
                 for (int i = 0; i < k; i++) {
-                    if (q[i].sampling <= last_num) continue;   // a tick the fusion took already
-                    if (have && !memcmp(q[i].acc, prev.acc, sizeof prev.acc) && !memcmp(q[i].gyro, prev.gyro, sizeof prev.gyro)) run_ok = 0;   // NOLINT(bugprone-suspicious-memory-comparison): two ticks with the same bits are what the fusion counts as a held sample
-                    // the rest learner may take the gyro offset away (an HID source), so check each tick against the one before: the dither is all that moves
+                    if (q[i].sampling <= last_num) continue;
+                    if (have && !memcmp(q[i].acc, prev.acc, sizeof prev.acc) && !memcmp(q[i].gyro, prev.gyro, sizeof prev.gyro)) run_ok = 0;   // NOLINT(bugprone-suspicious-memory-comparison): identical bits are what the fusion counts as a held sample
                     if (have && (fabsf(q[i].acc[2] - prev.acc[2]) > 1e-3f || fabsf(q[i].gyro[0] - prev.gyro[0]) > 1e-3f)) val_ok = 0;
                     prev = q[i]; have = 1; last_num = q[i].sampling;
                 }
@@ -1387,7 +1317,7 @@ static void t_live_still_dither(void) {
     dm_motion_clear_hid(0); h_hid_ImuDisable(); guest_now = motion_now = 1000000000ull;
 }
 
-// Six-axis sensor information the fusion's initialization reads (sdk+0x6d7e28): 0xc8 bytes (sdk+0x6d7e58 copies them), gyro half then acceleration half
+// six-axis sensor information (sdk+0x6d7e28): 0xc8 bytes, gyro half then acceleration half
 static void t_six_ic_info(void) {
     uint8_t ic[0xd0]; memset(ic, 0xAB, sizeof ic); uint32_t h = 0;
     float f[0xc8 / 4];
@@ -1400,7 +1330,7 @@ static void t_six_ic_info(void) {
     CHECK(ic[0xc8] == 0xAB, "ic information: nothing past 0xc8 written");
     CHECK(!h_hid_SixNewly(&h), "newly assigned: no");
     h_hid_SixNewlyReset(&h);
-    // Calibration: nothing stored reads the ideal sensor's (all zero: zero bias, so the fusion counts its bias as calibrated); a stored parameter reads back for its device only
+    // nothing stored reads all zero, so the fusion counts its bias as calibrated
     uint8_t cal[0x744], back[0x744], zero[0x744] = {0}; memset(back, 0xAB, sizeof back);
     for (size_t i = 0; i < sizeof cal; i++) cal[i] = (uint8_t)i;
     CHECK(h_hid_SixCalLoad(back, &h) == 0 && !memcmp(back, zero, sizeof zero), "calibration: none stored, the ideal sensor's (zero bias), all 0x744 bytes");
@@ -1409,21 +1339,18 @@ static void t_six_ic_info(void) {
     uint32_t other = 1u << 16; memset(back, 0xAB, sizeof back);
     CHECK(h_hid_SixCalLoad(back, &other) == 0 && !memcmp(back, zero, sizeof zero), "calibration: another device has its own (none stored: zero bias)");
     memset(back, 0xAB, sizeof back);
-    {   // one sensor, one parameter: the host's full-key handle (device 0) and the SDK's (device 2) store and load the same
+    {   // the host's full-key handle (device 0) and the SDK's (device 2) are one sensor
         uint32_t host0 = 0x3, sdk2 = 0x20003; uint8_t cal2[0x744]; memset(cal2, 0x5A, sizeof cal2);
         CHECK(h_hid_SixCalStore(&sdk2, cal2) == 0 && h_hid_SixCalLoad(back, &host0) == 0 && !memcmp(back, cal2, sizeof cal2), "calibration: stored through device 2, loaded through device 0");
         CHECK(h_hid_SixCalStore(&host0, cal) == 0 && h_hid_SixCalLoad(back, &sdk2) == 0 && !memcmp(back, cal, sizeof cal), "calibration: and the other way");
         memset(back, 0xAB, sizeof back);
     }
-    uint32_t bad = 9u << 8, dev3 = 3u << 16;   // as the SDK's VerifyValidSixAxisSensorHandle (sdk+0x6d8440)
+    uint32_t bad = 9u << 8, dev3 = 3u << 16;
     CHECK(h_hid_SixCalStore(&bad, cal) == 0x58aca && h_hid_SixCalLoad(back, &bad) == 0x58aca, "calibration: an id that is no npad is refused");
     CHECK(h_hid_SixCalStore(&dev3, cal) == 0xd6ca && back[0] == 0xAB, "calibration: a device index past 2 is refused");
 }
 
-// A game that supports no full-key style (Nintendo Switch Sports Resort's lobby: Handheld | JoyDual, 0x6): a controller that is not a Joy-Con pair (the keyboard, a Pro-like pad)
-// is shown on No1..No8 as a dual Joy-Con pair, the supported style that has its buttons and both sticks, so GetNpadStyleSet only answers supported styles; the states, six-axis
-// sensors and IMU samples, vibration handles and the controller applet's answer follow. The Handheld npad and a game that
-// supports full-key (or no style with a whole controller's buttons): unchanged
+// No full-key style supported (Handheld | JoyDual, 0x6): a whole controller is shown as a JoyDual pair on No1..No8, so GetNpadStyleSet only answers supported styles.
 static void t_unsupported_style(void) {
     g_mode = 1; ids((uint32_t[]){0, 1, 2, 3, NPAD_HANDHELD}, 5); dm_pad_players(1);
     h_hid_SetStyles(0xffffffffu);
@@ -1437,7 +1364,6 @@ static void t_unsupported_style(void) {
     CHECK(!npad_of(0, STYLE_FULLKEY).attributes, "no full-key state for it");
     dm_input_set(0, 0, 0, 0, 0); npad_of(0, STYLE_JOYDUAL);
 
-    // Six-axis sensors and the npad IMU: a sensor per half, each with samples
     uint32_t h[2], id = 0;
     CHECK(h_hid_SixHandles(h, 2, &id, STYLE_JOYDUAL) == 2 && six_connected(h[0]) && six_connected(h[1]), "two six-axis sensors, connected");
     { uint64_t was = guest_now; guest_now = 2000000000ull; uint8_t ring[64]; TestImuSample s[4];
@@ -1445,7 +1371,6 @@ static void t_unsupported_style(void) {
       CHECK(h_hid_ImuSamples(s, 4, 0x5) == 4 && imu_numbered(s, 4, 398) && h_hid_ImuSamples(s, 4, 0x10005) == 4 && imu_numbered(s, 4, 398), "IMU samples for the SDK's pair handles (style index 5), device index 0 and 1");
       h_hid_ImuDisable(); guest_now = was; }
 
-    // Vibration: type 5 handles, routed to player 1's motors, as are the full-key handles it got before
     dm_haptics_init(vibration_sink, 1); dm_haptics_route(0, 1);
     CHECK(h_hid_VibHandles(h, 2, &id, STYLE_JOYDUAL) == 2 && (h[0] & 0xff) == 5 && h[1] == (h[0] | 1u << 16), "JoyDual vibration handles: type 5, two motors");
     { int m; CHECK(vib_targets(h[1], &m) == 1 && m == 1 && vib_targets(0x0003, &m) == 1 && m == 0, "they reach player 1's motors, and so do the full-key handles it got before"); }
@@ -1459,10 +1384,8 @@ static void t_unsupported_style(void) {
     CHECK(h_hid_GetStyle(&(uint32_t){NPAD_HANDHELD}) == STYLE_HANDHELD && h_hid_GetStyle(&(uint32_t){1}) == STYLE_JOYDUAL, "handheld mode: the Handheld npad stays Handheld, player 2 is JoyDual on No2");
     g_mode = 1; dm_pad_players(1);
 
-    // Back to a set with full-key: full-key again
     h_hid_SetStyles(0x1f);
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_FULLKEY, "0x6 back to 0x1f: full-key again");
-    // Other sets: Handheld only, and the Joy-Con styles without full-key
     h_hid_SetStyles(STYLE_HANDHELD);
     CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_FULLKEY, "Handheld only: docked No1 keeps full-key (no supported style has a whole controller's buttons on No1)");
     g_mode = 0; CHECK(h_hid_GetStyle(&(uint32_t){NPAD_HANDHELD}) == STYLE_HANDHELD, "Handheld only, handheld mode: the Handheld npad"); g_mode = 1;
@@ -1475,9 +1398,8 @@ static void t_unsupported_style(void) {
 
 int main(void) {
     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
-    setenv("DM_IMU_DELAY", "0", 1);   // the tests of the live history read it at the present; t_live_delay checks the playout delay
-    // The plumbing tests (streams, interpolation, dither, pairs) were written with the samples negated: they keep that (DM_IMU_*_SIGN=-1); t_npad_imu_samples and
-    // t_imu_conversion check the host's own signs
+    setenv("DM_IMU_DELAY", "0", 1);
+    // these plumbing tests were written with the samples negated (DM_IMU_*_SIGN=-1)
     setenv("DM_IMU_ACC_SIGN", "-1", 1); setenv("DM_IMU_GYRO_SIGN", "-1", 1);
     t_npad_imu();
     t_slots();
@@ -1510,8 +1432,8 @@ int main(void) {
     t_pair_half_pause();
     t_six_ic_info();
     t_rec();
-    {   // DM_PAD_PRESS_TO_JOIN=1: the lowest free slot at the first press, not the slot a controller of that name held before
-        pad_slots q = {0}; static char x, y, z;   // distinct addresses
+    {
+        pad_slots q = {0}; static char x, y, z;
         CHECK(pad_slot_take_lowest(&q, &x, "Pro Controller") == 0, "press: the first to press is player 1");
         CHECK(pad_slot_take_lowest(&q, &y, "Pro Controller") == 1, "press: the next is player 2, even of the same model");
         CHECK(pad_slot_take_lowest(&q, &x, "Pro Controller") == 0, "press: pressing again keeps the slot");

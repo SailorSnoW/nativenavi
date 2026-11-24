@@ -97,7 +97,7 @@ class Images(unittest.TestCase):
         image.pack(self.src, self.dst)
         self.assertNotEqual(image.file_identity(self.dst), identity)
 
-    def test_reuse_survives_a_new_device_number(self):   # macOS numbers a volume at each mount: the Data volume went from 16777234 to 16777232 across a reboot, with the same inode, size and times
+    def test_reuse_survives_a_new_device_number(self):   # macOS numbers a volume at each mount: a reboot can change it with the same inode, size and times
         (self.src / 'a').write_bytes(b'data')
         image.pack(self.src, self.dst, reuse=True)
         digest, identity = image.source_digest(self.src, image.entries(self.src)), image.file_identity(self.dst)
@@ -134,7 +134,7 @@ class Images(unittest.TestCase):
         self.assertTrue(self.valid()); self.assertEqual(self.content('A'), b'upper')
         self.assertEqual(self.content('a'), b'lower')
 
-    def test_dump_tool_listings_are_left_out(self):   # an FTP dump's .listing in every folder (Nintendo Switch Sports Resort's dump): not a game file
+    def test_dump_tool_listings_are_left_out(self):   # an FTP dump's .listing in every folder: not a game file
         (self.src / 'Parameter/P').mkdir(parents=True)
         (self.src / 'Parameter/P/Body00.bgyml').write_bytes(b'b')
         for d in ('', 'Parameter', 'Parameter/P'): (self.src / d / '.listing').write_bytes(b'-r--r--r-- 1 ftp ftp')

@@ -1,6 +1,5 @@
 """Extended multiplication (dmsh_rewrite.py mul_extended): scalar spvMulExtended calls reach overloads outside spirv-cross's optnone template, and on this Mac's GPU their low and
 high halves match 64-bit products for literal (power of two or not) and variable multipliers, unsigned and signed, including overflow; vector calls keep the template."""
-import ast
 from pathlib import Path
 import re
 import shutil

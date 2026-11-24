@@ -1,7 +1,7 @@
 // A slot reused while lock-free readers use it: one thread keeps registering, protecting and retiring pools over one arena, of changing sizes so a slot's page arrays are
 // both reused and grown, while other threads write the arena directly (the fault hook), prepare host writes into it (the pre-write hook) and ask whether it was written
 // (nvn_dirty_since_cached with a kept handle). Every write must land without a hang or a crash, and every pool, once retired, leaves the arena writable. Under ThreadSanitizer
-// (tsan-dirty-reuse) the run must also be free of races: a reader that found a slot live read its start, end and arrays while add_range rewrote them for the next pool.
+// (tsan-dirty-reuse) the run must also be free of races: a reader that found a slot live must not read its start, end and arrays while add_range rewrites them for the next pool.
 #include "../nvn/nvn_dirty.h"
 #include "../../host/dm.h"
 #include <pthread.h>

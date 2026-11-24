@@ -1,4 +1,4 @@
-"""The tested Metal compiler as a requirement (GitHub issue #242): dm/gfx/tools/own_compilers.py requires the pinned spirv-cross, and stops on another Metal
+"""The tested Metal compiler as a requirement: dm/gfx/tools/own_compilers.py requires the pinned spirv-cross, and stops on another Metal
 compiler with a message naming the Xcode to install, unless DM_ALLOW_OTHER_METAL=1; a missing compiler or another translator still fails as dmsh_build.py reports it.
 The packing script checks the Metal compiler before an NVN game's shader steps (check_metal), and ALLOW_OTHER_METAL / --allow-other-metal skips the check and passes the override to the
 shader step. No Xcode, translator or game files needed: the tools' fingerprints are stand-ins."""
@@ -45,7 +45,7 @@ class CheckTools(unittest.TestCase):
             self.assertTrue(msg.startswith('[RED] '), msg)
             for want in (key, OTHER, LOCKED[key], f'Xcode {own_compilers.XCODE_VERSION}', 'macOS 26.6', 'xcodebuild -downloadComponent MetalToolchain', 'DM_ALLOW_OTHER_METAL=1', '#242'): self.assertIn(want, msg)
 
-    def test_other_metal_says_to_select_the_tested_xcode(self):   # a newer Xcode selected downloads its own toolchain again (GitHub issue #717)
+    def test_other_metal_says_to_select_the_tested_xcode(self):   # a newer Xcode selected downloads its own toolchain again
         sel = ' (selected: Xcode 27.3 in /Applications/Xcode.app/Contents/Developer)'
         with mock.patch.object(own_compilers, 'selected_xcode', lambda: sel):
             msg = own_compilers.other_metal_message([('metal_macosx', LOCKED['metal_macosx'], OTHER)])

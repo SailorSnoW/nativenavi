@@ -174,7 +174,7 @@ int main(void) {
     motion_fill(&s, acc, gyro, ang, dir);
     CHECK(near(acc[2], -1, 1e-5f) && near(dir[0], 1, 1e-4f) && near(dir[4], 1, 1e-4f) && near(dir[8], 1, 1e-4f), "flat: identity direction");
 
-    // a quarter turn of yaw over one second (pi/2 rad/s): gyro 0.25 rev/s, angle 0.25 rev, the controller's x axis now points along world y (as the old shake's convention)
+    // a quarter turn of yaw over one second (pi/2 rad/s): gyro 0.25 rev/s, angle 0.25 rev, the controller's x axis now points along world y
     motion_reset(&s);
     run(&s, &id, 0, 0, -1, 0, 0, (float)M_PI / 2, 1, 0.5f);
     motion_fill(&s, acc, gyro, ang, dir);
@@ -205,8 +205,7 @@ int main(void) {
     motion_fill(&s, acc, gyro, ang, dir);
     CHECK(near(-dir[2], sinf(r), 0.02f), "primed from the first sample's gravity");
 
-    // A source held upright (found on a phone) starts with gravity on -y, parallel to the old heading reference.
-    // All six axis-aligned poses must map their measured gravity to world down on the first sample.
+    // A source held upright starts with gravity on -y. All six axis-aligned poses must map their measured gravity to world down on the first sample.
     for (int axis = 0; axis < 3; axis++) for (int sign = -1; sign <= 1; sign += 2) {
         float a[3] = {0}, w[3] = {0}; a[axis] = (float)sign;
         motion_reset(&s); motion_update(&s, &id, a, w, 0, 0.5f);

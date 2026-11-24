@@ -1,4 +1,4 @@
-// SetThreadActivity (SVC 0x32) / GetThreadContext3 (0x33): once a pause has returned success, the thread must not run guest code until the resume (Horizon's contract, which IL2CPP's
+// SetThreadActivity (SVC 0x32) / GetThreadContext3 (0x33): once a pause has returned success, the thread must not run guest code until the resume (Horizon's contract, which a
 // stop-the-world collector relies on). The stale `paused` flag cases drive the three ways a pause reaches a thread: inside an SVC, in guest code (the SIGUSR2 handler), in host code.
 // Build with -DDM_TEST_MODULE_OF: module_of below reports "guest code" through a thread-local flag, so the handler stops a worker only while it spins "in guest code".
 // Each case prints PASS or FAIL with its reasons and all of them run; every wait is bounded, so a hang is a failure.
@@ -233,7 +233,7 @@ static int resume_then_pause_while_handler_parked(void) {
 }
 
 // 5. The target exits and its handle is closed while a pause waits for it (the requester lets go of G to signal and wait): the requester holds a reference,
-//    so the object outlives the loop and is freed when it ends. Before, thread_exit freed it under the requester (ASan: heap-use-after-free in svc_thread_impl)
+//    so the object outlives the loop and is freed when it ends
 static int exit_and_close_during_pause(void) {
     cs_t c = {.name = "exit_and_close_during_pause"};
     wk_t *w = worker_start(M_HOST_EXIT); thr_t *t = &w->t; pthread_t th = w->th;

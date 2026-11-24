@@ -1,7 +1,6 @@
-// First use of dirty-page tracking from several threads at once, in a fresh process (PR #2225): eight threads register their first pools together while another
-// thread keeps doing host pre-writes (a file read into guest memory). Every pool must be tracked and see a direct write (through the fault hook) and a host write
-// (through the pre-write hook). Under ThreadSanitizer (tsan-dirty-init) the run must also be free of races: setup used to run at the first registration behind a plain
-// flag, and the pre-write thread read crash.c's hook table while that registration grew it.
+// First use of dirty-page tracking from several threads at once, in a fresh process: eight threads register their first pools together while another thread keeps doing
+// host pre-writes (a file read into guest memory). Every pool must be tracked and see a direct write (through the fault hook) and a host write (through the pre-write hook).
+// Under ThreadSanitizer (tsan-dirty-init) the run must also be free of races: the pre-write thread must not read crash.c's hook table while the first registration grows it.
 #include "../nvn/nvn_dirty.h"
 #include "../../host/dm.h"
 #include <pthread.h>

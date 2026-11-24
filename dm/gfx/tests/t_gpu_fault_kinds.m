@@ -1,4 +1,4 @@
-// What macOS records for each kind of bad GPU read (issue #1289): each case runs in a child process of its own, as macOS stops taking a process's command buffers after a
+// What macOS records for each kind of bad GPU read: each case runs in a child process of its own, as macOS stops taking a process's command buffers after a
 // few faults, and the parent prints the case's Metal error with the fields of the `gpuEvent-<process>-*.ips` report macOS writes for a GPU fault (address, read or
 // write, sideband, requestor, page-table level, data master). A freed or evicted object faults at its own address; a binding whose address is 0 reads at 0 plus the
 // offset. The M6 reads 0 with no error from a buffer at address 0, 64, a freed one and past a buffer's end, and faults at a freed texture's own address (data master

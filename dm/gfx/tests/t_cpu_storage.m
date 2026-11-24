@@ -1,7 +1,7 @@
 // An uncompressed 2D texture the CPU wrote, over storage the GPU has not written (nvn_storage.inc tex_cpu_content): its storage is its content at first use, flushed or not, and a later CPU
 // write is uploaded. Once the GPU writes its storage it becomes a GPU texture with the content it has (cpu_unc_drop), and CPU writes are no longer uploaded. Over storage the GPU already
-// writes it stays a GPU texture, unless the CPU has rewritten that storage since. Mario Kart World's terrain patches: R16, RG8, RGBA8, R11G11B10F and RGBA16 in a CPU_CACHED pool, never
-// flushed, were zeros and every patch a flat plane. Ocarina of Time's terrain height and blend maps lie in the pool its normal maps are drawn into: zeros, and holes in the ground.
+// writes it stays a GPU texture, unless the CPU has rewritten that storage since. Ocarina of Time's terrain height and blend maps lie in the pool its normal maps are drawn into: read
+// as zeros, they leave holes in the ground.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -130,7 +130,7 @@ int main(void) {
         mtl_tex_release(&upper);
         teardown(&f);
 
-        // A span's sliver inside a texture (gws_sliver): less than a page of it, not covering it. Ocarina of Time's terrain tiles, GitHub issue #1566
+        // A span's sliver inside a texture (gws_sliver): less than a page of it, not covering it, as Ocarina of Time's terrain tiles have
         setup(&f, 7040, CACHED, NVN_FORMAT_RGBA8, 0);
         tex_t drawn = texture_at(&f, 7041, 0x40000, 68, NVN_FORMAT_RGBA8, 0);   // 40,960 bytes: it ends 8 KB into its third page
         uintptr_t pg = (uintptr_t)getpagesize(), drawn_end = (uintptr_t)drawn.mem + drawn.L.size, shared = drawn_end & ~(pg - 1);

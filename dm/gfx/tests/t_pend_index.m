@@ -1,6 +1,5 @@
-// The index of the writes a submission queues (pend_add, pend_last, pend_since): writes of every size are found by the granule chains, newest first, with no count after which the
-// submission counts as a write anywhere. Large writes (over more than PEND_SPAN pages) once had a list of their own that stopped at 256 (Mortal Kombat 11 passed it), and that every lookup
-// scanned. CPU only: no Metal device is needed, so CI runs it
+// The index of the writes a submission queues (pend_add, pend_last, pend_since): writes of every size, large ones (over more than PEND_SPAN pages) too, are found by the
+// granule chains, newest first, with no count after which the submission counts as a write anywhere. CPU only: no Metal device is needed, so CI runs it
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

@@ -64,7 +64,7 @@ static void buffer_upload(uint8_t *phys) {
     h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, 4096); h_nvnTextureBuilderSetHeight(&tb, 4096);
     h_nvnTextureBuilderSetLevels(&tb, 13);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE);
-    h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&g_sparse, vo);
+    h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&g_sparse, vo);
     CHECK("copy destination placement texture", h_nvnTextureInitialize(&tx, &tb));
     uint32_t want[128 * 128];
     for (unsigned run = 0; run < 2; run++) {
@@ -112,7 +112,7 @@ int main(void) { @autoreleasepool {
     CHECK("sparse pool", h_nvnMemoryPoolInitialize((NVNmemoryPool *)&g_sparse, (const NVNmemoryPoolBuilder *)&pb));
     buffer_upload(phys);
     NVNtextureBuilder tb = {0}; NVNtexture tx; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetTarget(&tb, NVN_TEXTURE_TARGET_2D); h_nvnTextureBuilderSetWidth(&tb, W); h_nvnTextureBuilderSetHeight(&tb, W);
-    h_nvnTextureBuilderSetLevels(&tb, LEVELS); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&g_sparse, 0);
+    h_nvnTextureBuilderSetLevels(&tb, LEVELS); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&g_sparse, 0);
     CHECK("sparse texture", h_nvnTextureInitialize(&tx, &tb));
     const tex_t *T = (const tex_t *)&tx;
     uint32_t tw, th, td; int nt = nvn_tex_sparse_tiles(&T->d, &tw, &th, &td); CHECK("tiled levels", nt == 6 && tw == TW && th == TW);
@@ -181,7 +181,7 @@ int main(void) { @autoreleasepool {
     (void)resolve(&tx); CHECK("after an overflow the tile is mapped", ps->slot[5]);
     CHECK("and holds its pages", same(m, 0, 5 * TW, 0, TW, TW, lin[0], W));
     // GPU-written: tiles and no uploads
-    NVNtexture gx; h_nvnTextureBuilderSetLevels(&tb, 1); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE | NVN_TEXTURE_FLAGS_COMPRESSIBLE); h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&g_sparse, 1ull << 30);
+    NVNtexture gx; h_nvnTextureBuilderSetLevels(&tb, 1); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE | NVN_TEXTURE_FLAGS_COMPRESSIBLE); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&g_sparse, 1ull << 30);
     CHECK("GPU-written sparse texture", h_nvnTextureInitialize(&gx, &tb));
     CHECK("a virtual pool's addresses are not on the flush list, where they would read as written at once", !nvn_ft_tracked(((const tex_t *)&gx)->serial));
     id<MTLTexture> g = resolve(&gx);
@@ -209,7 +209,7 @@ int main(void) { @autoreleasepool {
     CHECK("a new place reads what the GPU wrote to the memory", same_at(m, 10 * TW, 0, TW, TW, lin[0], W, TW, 0));
     CHECK("and the place already there", same_at(m, 9 * TW, 0, TW, TW, lin[0], W, TW, 0));
     // A tile cut by the level's edge (4032 wide: tile 31 holds 64 texels) is uploaded only in part, so it shares nothing: the whole tile of the same page gets all of it
-    NVNtexture ex; h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetWidth(&tb, W - TW / 2); h_nvnTextureBuilderSetHeight(&tb, 2 * W); h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&g_sparse, 3ull << 30);
+    NVNtexture ex; h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetWidth(&tb, W - TW / 2); h_nvnTextureBuilderSetHeight(&tb, 2 * W); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&g_sparse, 3ull << 30);
     CHECK("a texture of cut tiles", h_nvnTextureInitialize(&ex, &tb));
     const tex_t *EX = (const tex_t *)&ex; id<MTLTexture> em = resolve(&ex); CHECK("placement sparse too", em.isSparse);
     {   size_t ew = W - TW / 2, eh = 2 * W; uint32_t *el = malloc(ew * eh * 4); uint8_t *es = malloc(EX->L.size);
@@ -224,7 +224,7 @@ int main(void) { @autoreleasepool {
         CHECK("the whole tile holds all of the page", same(em, 0, 0, 0, TW, TW, el, (unsigned)ew));
         free(el); free(es); }
     // Small: the whole upload, as before
-    NVNtexture sx; h_nvnTextureBuilderSetWidth(&tb, 512); h_nvnTextureBuilderSetHeight(&tb, 512); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&g_sparse, 2ull << 30);
+    NVNtexture sx; h_nvnTextureBuilderSetWidth(&tb, 512); h_nvnTextureBuilderSetHeight(&tb, 512); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&g_sparse, 2ull << 30);
     CHECK("small sparse texture", h_nvnTextureInitialize(&sx, &tb));
     CHECK("stays whole", !resolve(&sx).isSparse);
     // The physical pool's Finalize gives back the heap tiles kept for its memory

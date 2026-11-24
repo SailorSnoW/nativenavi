@@ -1,14 +1,14 @@
 """The typed-output entry point main0_u (dmsh_entry.fs_uint) as the build cuts it (dmsh_build.py ps_libraries): every pixel shader of a known shape gets it, in the side library <key>_bx
 with its alpha test and logic operation entry points, and the base <key>_b keeps main0 alone, with no function constant. With --fixture <dir>, writes the GPU test's libraries
 (t_typed_outputs.m: every mix of float, unsigned and signed targets, and the alpha test of a float colour 0 beside integer targets, through pso_desc, with the bits read back)"""
-import pathlib, shutil, subprocess, sys, tempfile, unittest
+import pathlib, shutil, sys, tempfile, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import dmsh_entry, dmsh_side, dmsh_reflect, pso_offline   # noqa: E402
 from test_dmsh_alpha import compile_lib   # noqa: E402
 
 # Colours 0 to 2 written from bits that are a normal float, so a float target keeps them too (no NaN to canonicalize, no denormal to flush): 0.25, -0.5, 1.0, 3.0 and -3.0. Colour 3 holds
-# bits no float target would keep, as the BC block encoders write (agl's BC4 encoder in Breath of the Wild and Tears of the Kingdom): a NaN with a payload, all ones, the smallest denormal
+# bits no float target would keep, as the BC block encoders write (agl's BC4 encoder): a NaN with a payload, all ones, the smallest denormal
 # and a negative denormal, which an integer target takes through main0's float output as they are
 MAIN = '''#include <metal_stdlib>
 using namespace metal;

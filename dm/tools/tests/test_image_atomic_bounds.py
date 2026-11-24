@@ -1,16 +1,5 @@
-"""Native Metal image atomic contract (MSL 3.1 texture atomics behind the IGN bounds guard),
-using synthetic shaders only.
-
-Portable tests require Python. To exercise the actual rebuilt offline compiler:
-  DMSH_TEST_XLATE=/absolute/path/to/dmsh_xlate python3 -m unittest discover \
-    -s dm/tools/tests -p test_image_atomic_bounds.py -v
-Requires spirv-val on PATH (spirv-cross is the in-repo build, dm/gfx/tools/spirv_cross_bin); optionally DMSH_TEST_METAL=1 on Mac
-also compiles and links each generated MSL file with the build's own flags.
-Set DMSH_TEST_GPU=1 with DMSH_TEST_METAL=1 to execute the returning buffer
-fixtures (buffer, 2D, 2D-array and 3D textures) on a Mac GPU and check returned
-values and surrounding sentinels.
-No game inputs are used.
-"""
+"""Native Metal image atomics behind the bounds guard, on synthetic shaders. DMSH_TEST_XLATE=<dmsh_xlate> runs the real translator (spirv-val on PATH);
+DMSH_TEST_METAL=1 also compiles the MSL, and with DMSH_TEST_GPU=1 runs the returning fixtures on the GPU."""
 import ast
 import importlib.util
 import json
@@ -33,12 +22,11 @@ sys.path.insert(0, str(ROOT / 'dm/gfx/tools'))
 import dmsh_chain   # noqa: E402  (the build's Metal compile)
 import dmsh_abi   # noqa: E402
 TBIAS_BANK = dmsh_abi.TBIAS_BANK
-SPIRV_CROSS = ROOT / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'   # the build dmsh_build.py runs (dmsh_chain.SPIRV_CROSS)
-XC = dmsh_chain.CROSS_MSL  # dmsh_build.XC without fragment padding
+SPIRV_CROSS = ROOT / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'
+XC = dmsh_chain.CROSS_MSL
 
 
 def cross(spv, msl):
-    """spirv-cross as dmsh_build runs it (MSL 3.2): image atomics must come out as native texture atomics"""
     subprocess.run([str(SPIRV_CROSS), *XC, str(spv), '--output', str(msl)], check=True)
     source = atomic.check_msl(msl.read_text())
     assert ('.atomic_fetch_' in source or re.search(r'<ulong, access::read_write>.*\.atomic_(max|min)\(', source, re.S)) and 'access::read_write' in source, msl
@@ -46,7 +34,6 @@ def cross(spv, msl):
 
 
 def offset(coord, extent):
-    """Reference algebra, not a substitute for executing the compiler fixture."""
     if not all((x & 0xffffffff) < n for x, n in zip(coord, extent)):
         return None
     return coord[0] + extent[0] * (coord[1] + extent[1] * coord[2])
@@ -62,10 +49,10 @@ def synthetic_shader(x, y, layer=0, *, array=True, mode=0, discard=True, reducti
     instructions = [mov(0, x), mov(1, y), mov(2, layer), mov(3, cas[0] if cas else 1)]
     dim = (4 if array else 3) if dim is None else dim
     if cas:
-        # SUATOM.CAS R4, [R0..R2], R3, R4: compare with R3, swap in R4, the old texel into R4.
+        # SUATOM.CAS R4, [R0..R2], R3, R4: compare with R3, swap in R4, the old texel into R4
         assert not reduction and not discard and bindless is None
         instructions.append(mov(4, cas[1]))
-        # Bit 54 set, as in the real encoding (0xEAC...): clear, the word also matches SUATOM's pattern.
+        # bit 54 set, as in the real encoding (0xEAC...): clear, the word also matches SUATOM's pattern
         op = base('SuatomCas') | (1 << 54) | (mode << 49) | (0x48 << 36) | (dim << 33) | (3 << 20) | (7 << 16) | 4
     elif reduction:
         op = base('Sured') | (mode << 49) | (0x48 << 36) | (dim << 33) | (2 << 24) | (7 << 16) | 3
@@ -73,20 +60,19 @@ def synthetic_shader(x, y, layer=0, *, array=True, mode=0, discard=True, reducti
         op = base('Suatom') | (mode << 49) | (0x48 << 36) | (dim << 33) | (2 << 29) | (3 << 20) | (7 << 16) | (255 if discard else 4)
     op |= size << (20 if reduction else 51)
     if bindless is not None:
-        assert reduction  # This fixture uses SURED.B's non-returning form.
+        assert reduction
         if bindless == 'cbuf':
-            # LDC.32 R4, c[2][0x120], RZ: the descriptor for image slot zero.
+            # LDC.32 R4, c[2][0x120], RZ: image slot zero's descriptor
             instructions.append(base('Ldc') | (4 << 48) | (2 << 36) | (0x120 << 20) | (7 << 16) | (255 << 8) | 4)
             handle = 4
         else:
             assert bindless == 'unresolved'
-            handle = 3  # The constant in R3 cannot resolve to a descriptor.
+            handle = 3
         op = base('SuredB') | (handle << 39) | (mode << 49) | (dim << 33) | (2 << 24) | (size << 20) | (7 << 16) | 3
     assert ((op >> 49) & 3) == mode
     instructions.append(op)
     if consume_result:
         assert not discard and not reduction and bindless is None
-        # A valid second atomic consumes R4, including when the first coordinate is invalid.
         instructions += [mov(0, 0), mov(1, 0), mov(2, 0)]
         instructions.append(base('Suatom') | (0x48 << 36) | (dim << 33) | (4 << 20) | (7 << 16) | 255)
     instructions.append(base('Exit') | (7 << 16) | 15)
@@ -109,22 +95,20 @@ def instructions(path):
 
 
 def buffer_image_bias(defs, coord_id):
-    """A buffer image's coordinate as the translator moves it (TranslationFlags.MetalBufferImageBias; Instructions.cs BiasBufferImageCoordinate): s32(before ? c : c + bias),
-    before = c + bias < bias (unsigned), bias a u32 of the offset table (dmsh_abi.h DMSH_TBIAS_BANK). Checks that dataflow and returns the constant c"""
-    op, cast = defs[coord_id]; assert op == 124  # OpBitcast to s32
-    op, select = defs[cast[2]]; assert op == 169  # OpSelect(before, c, moved)
-    op, before = defs[select[2]]; assert op == 176  # OpULessThan(moved, bias)
+    """s32(before ? c : c + bias), before = c + bias < bias (unsigned), bias a u32 of the offset table (DMSH_TBIAS_BANK); returns the constant c"""
+    op, cast = defs[coord_id]; assert op == 124  # OpBitcast
+    op, select = defs[cast[2]]; assert op == 169  # OpSelect
+    op, before = defs[select[2]]; assert op == 176  # OpULessThan
     op, original = defs[select[3]]; assert op == 124
-    op, moved = defs[select[4]]; assert op == 128 and moved[2] == select[3]  # OpIAdd(c, bias)
+    op, moved = defs[select[4]]; assert op == 128 and moved[2] == select[3]  # OpIAdd
     assert before[2] == select[4] and before[3] == moved[3]
-    op, load = defs[moved[3]]; assert op == 61  # the bias: a load of the table
-    op, chain = defs[load[2]]; assert op == 65 and len(chain) == 6  # OpAccessChain table, 0, index / 4, index % 4
+    op, load = defs[moved[3]]; assert op == 61  # OpLoad
+    op, chain = defs[load[2]]; assert op == 65 and len(chain) == 6  # OpAccessChain
     op, constant = defs[original[2]]; assert op == 43
     return constant[2]
 
 
 def check_coordinate_guard(ops, expected):
-    """Verify actual emitted dataflow, not merely a guard-opcode census."""
     defs, blocks, predecessors, branches, pointers = {}, {}, {}, [], []
     current = None
     for op, args in ops:
@@ -141,7 +125,7 @@ def check_coordinate_guard(ops, expected):
     pointer_block, pointer = pointers[0]
     coord_id = pointer[3]
     op, coord = defs[coord_id]
-    if len(expected) == 1:  # Native texture-buffer indexing keeps a scalar coordinate, moved by the image's offset (buffer_image_bias)
+    if len(expected) == 1:
         assert buffer_image_bias(defs, coord_id) == (expected[0] & 0xffffffff)
     else:
         assert op == 80
@@ -193,7 +177,7 @@ class Portable(unittest.TestCase):
         self.assertLess(part.index('context.BranchConditional(inside'), part.index('context.ImageTexelPointer'))
         self.assertIn('context.ULessThan(compareType, coords, extent)', part)
         self.assertNotIn('context.IMul(uintType, height, layer)', part)
-        self.assertEqual(part.count('pCoords ='), 2)  # scalar/vector construction only; never folded
+        self.assertEqual(part.count('pCoords ='), 2)
         self.assertIn('context.HostCapabilities.MetalImageAtomics', part)
         self.assertIn('texOp.Type != SamplerType.Texture3D', part)
         self.assertIn('texOp.Format != TextureFormat.R32Uint', part)
@@ -237,11 +221,9 @@ class Compiler(unittest.TestCase):
                     phis = [args for op, args in ops if op == 245]
                     self.assertEqual(len(phis), 1)
                     phi = phis[0]
-                    # The valid edge supplies the actual old texel; the invalid edge supplies zero.
                     self.assertEqual(definitions[phi[2]][0], 239)
                     self.assertEqual(definitions[phi[4]][0], 43)
                     self.assertEqual(definitions[phi[4]][1][2], 0)
-                    # Debug translation may pass the phi through a local and a bitcast.
                     dependencies = {}
                     for op, args in ops:
                         if op in (61, 83, 124):
@@ -260,8 +242,7 @@ class Compiler(unittest.TestCase):
                     self.compile_metal(msl, work, key, gpu=('buffer' if image == 'buf' else image, 6 if x == 0 else 3))
 
     def test_compare_and_swap(self):
-        # Texel 0 holds 3. A CAS at x swaps in 7 when it compares equal and returns the old texel,
-        # which a second atomic adds to texel 0: 7 + 3 = 10 (swapped), 3 + 3 = 6 (compared unequal), 3 (outside).
+        # texel 0 holds 3; CAS swaps in 7 on equal and a second atomic adds the old texel to texel 0: 10 (swapped), 6 (unequal), 3 (outside)
         with tempfile.TemporaryDirectory(prefix='dm-image-atomic-cas-') as temp:
             work = Path(temp)
             for dim, image in ((1, 'buf'), (3, '2d'), (4, '2darray'), (5, '3d')):
@@ -284,8 +265,7 @@ class Compiler(unittest.TestCase):
                         self.compile_metal(msl, work, key, gpu=('buffer' if image == 'buf' else image, expected))
 
     def test_descriptor_sized_formats(self):
-        # Sd32 takes its format from the descriptor. Validate that original
-        # format before the legacy translator can default it to R32Sint.
+        # Sd32 takes its format from the descriptor: validate it before the translator can default it to R32Sint
         with tempfile.TemporaryDirectory(prefix='dm-image-atomic-format-') as temp:
             work = Path(temp)
             for reduction, bindless in ((False, None), (True, None), (True, 'cbuf')):
@@ -323,7 +303,7 @@ class Compiler(unittest.TestCase):
         if os.environ.get('DMSH_TEST_METAL') != '1':
             return
         for sdk in ('macosx',):
-            metal = dmsh_chain.MAC_METAL   # the build's own compile
+            metal = dmsh_chain.MAC_METAL
             air = work / (key + '.' + sdk + '.air')
             library = work / (key + '.' + sdk + '.metallib')
             subprocess.run([*metal,str(msl),'-o',str(air)],check=True)
@@ -338,17 +318,15 @@ class Compiler(unittest.TestCase):
                         str(ROOT / 'dm/gfx/tests/t_atomic_return.m'), '-framework', 'Foundation',
                         '-framework', 'Metal', '-o', str(executable)], check=True)
                 shape, expected = gpu
-                table = re.search(r'_c%d\s*\[\[id\((\d+)\)\]\]' % TBIAS_BANK, msl.read_text())   # a buffer image's offset table (buffer_image_bias)
+                table = re.search(r'_c%d\s*\[\[id\((\d+)\)\]\]' % TBIAS_BANK, msl.read_text())
                 image = re.search(r'texture_buffer<[^>]*>\s+\w+\s*\[\[id\((\d+)\)\]\]', msl.read_text())
                 self.assertEqual(table is not None, shape == 'buffer', key)
                 self.assertEqual(image is not None, shape == 'buffer', key)
-                for bias in ((0, 2) if table else (None,)):   # 2: the image at word 2 of its view, as the host binds one at a pool offset 8 mod 16
+                for bias in ((0, 2) if table else (None,)):   # 2: word 2 of its view, as the host binds one at a pool offset 8 mod 16
                     subprocess.run([str(executable), str(library), str(expected), shape, *([str(bias), table.group(1), image.group(1)] if table and image else [])], check=True,
                                    env=dict(os.environ, MTL_DEBUG_LAYER='1'))
 
     def test_dimension_routes(self):
-        # 1D routes retain the existing y=0 normalization; buffer images stay
-        # scalar; 3D images keep all three coordinates.
         shapes = [('1d', (1, 0)), ('buffer', (1,)), ('1darray', (1, 0, 2)),
                   ('2d', (1, 2)), ('2darray', (1, 2, 3)), ('3d', (1, 2, 3))]
         with tempfile.TemporaryDirectory(prefix='dm-image-atomic-dim-') as temp:
@@ -385,36 +363,34 @@ class Compiler(unittest.TestCase):
                         img={'0': dict(type='2darray', fmt='R32Uint')}, local=[1, 1, 1], debug=True)]))
                     result = subprocess.run([os.environ['DMSH_TEST_XLATE'], str(jp), str(work)], capture_output=True, text=True)
                     spv = work / (key + '.spv')
-                    if size in (0, 1, 6):  # U32, S32, descriptor-sized32.
+                    if size in (0, 1, 6):
                         self.assertEqual(result.returncode, 0, result.stderr)
                         subprocess.run(['spirv-val', '--target-env', 'vulkan1.1', str(spv)], check=True)
                         msl = work / (key + '.metal')
                         cross(spv, msl)
                         self.compile_metal(msl, work, key)
-                    elif size == 2:  # U64: a max with no result is Metal's 64-bit texture atomic (dmsh_atomic.wide_atomics); every other form is refused (PR #1801)
+                    elif size == 2:
                         if result.returncode == 0:
-                            # Universal SPIR-V, not Vulkan: the 32-bit atomic pair on the rg32ui texel is a marker for the Metal rewrite, which Vulkan's
-                            # texel-pointer format rule (R32 / R64 only) refuses; it never reaches a Vulkan driver.
+                            # universal SPIR-V: Vulkan's texel-pointer rule (R32 / R64 only) refuses the rg32ui marker pair for the Metal rewrite
                             subprocess.run(['spirv-val', '--target-env', 'spv1.3', str(spv)], check=True)
                             msl = work / (key + '.metal')
                             self.assertIn('texture2d_array<ulong, access::read_write>', cross(spv, msl))
                             self.compile_metal(msl, work, key)
-                        else:  # Maxwell's SURED (InstEmitSurface.EmitSured) keeps the 32-bit gate; SUATOM forms other than a max / min with no result name the 64-bit rule
+                        else:
                             self.assertRegex(result.stderr, 'Metal 64-bit image atomics|require a 32-bit integer source size')
                             self.assertFalse(spv.exists())
-                    else:  # S64, descriptor-sized64, float and half2.
+                    else:
                         self.assertNotEqual(result.returncode, 0, key)
                         self.assertIn('require a 32-bit integer source size', result.stderr)
                         self.assertFalse(spv.exists())
 
     def test_buffer_image_load_store_moved(self):
-        # SULD.D R4, [R0] of buffer image slot 0, then SUST.D [R1], R4: both coordinates move by the image's element offset (buffer_image_bias), from one table entry
         table = (RYU / 'Decoders/InstTable.cs').read_text()
         def base(name):
             m = re.search(r'Add\("([01x]{64})", InstName\.' + name + r'\s*,', table); assert m, name
             return int(m[1].replace('x', '0'), 2)
         def mov(reg, value): return base('Mov32i') | ((value & 0xffffffff) << 20) | (7 << 16) | (15 << 12) | reg
-        surface = (0x48 << 36) | (1 << 33) | (4 << 20) | (7 << 16)   # image slot 0 (c2 byte 0x120), a 1D buffer (SuDim 1), 32 bits
+        surface = (0x48 << 36) | (1 << 33) | (4 << 20) | (7 << 16)   # image slot 0 (c2 byte 0x120), 1D buffer (SuDim 1), 32 bits
         program = [mov(0, 5), mov(1, 6), base('SuldD') | surface | (0 << 8) | 4, base('SustD') | surface | (1 << 8) | 4, base('Exit') | (7 << 16) | 15]
         words = []
         for i, instruction in enumerate(program):
@@ -434,24 +410,22 @@ class Compiler(unittest.TestCase):
             self.assertEqual(buffer_image_bias(defs, reads[0][3]), 5)
             self.assertEqual(buffer_image_bias(defs, writes[0][1]), 6)
             res = json.loads((work / 'ldst.res.json').read_text())
-            self.assertEqual([i.get('tbx') for i in res['images']], [0])   # Program.cs: the image's index in the offset table
+            self.assertEqual([i.get('tbx') for i in res['images']], [0])
             msl = work / 'ldst.metal'
             subprocess.run([str(SPIRV_CROSS), *XC, str(spv), '--output', str(msl)], check=True)
             source = msl.read_text()
             self.assertRegex(source, r'_c%d\s*\[\[id\(\d+\)\]\]' % TBIAS_BANK)
-            self.assertEqual(len(re.findall(r'_c%d\)\._m0\[0\]\.x' % TBIAS_BANK, source)), 4, source)   # entry 0, read in each access's sum and again in its comparison (spirv-cross inlines the load)
+            self.assertEqual(len(re.findall(r'_c%d\)\._m0\[0\]\.x' % TBIAS_BANK, source)), 4, source)   # entry 0, read in each access's sum and comparison (spirv-cross inlines the load)
             self.compile_metal(msl, work, 'ldst')
 
     def test_buffer_texture_fetch_and_size_moved(self):
-        # TLD R4, R0 of a buffer texture in texture slot 0 (c2 byte 0x20), TXQ R5 of its size, then SUST.D of each to buffer image slot 0: the fetch's coordinate moves by the
-        # texture's table entry (taken first: 0), the size query gives the view's width less it, and the stores' coordinates move by the image's (1)
         table = (RYU / 'Decoders/InstTable.cs').read_text()
         def base(name):
             m = re.search(r'Add\("([01x]{64})", InstName\.' + name + r'\s*,', table); assert m, name
             return int(m[1].replace('x', '0'), 2)
         def mov(reg, value): return base('Mov32i') | ((value & 0xffffffff) << 20) | (7 << 16) | (15 << 12) | reg
         texture = (0x8 << 36) | (1 << 31) | (7 << 16)   # texture slot 0 (c2 word 8), 1D (TexDim 0), component x
-        surface = (0x48 << 36) | (1 << 33) | (4 << 20) | (7 << 16)   # image slot 0 (c2 byte 0x120), a 1D buffer (SuDim 1), 32 bits
+        surface = (0x48 << 36) | (1 << 33) | (4 << 20) | (7 << 16)   # image slot 0 (c2 byte 0x120), 1D buffer (SuDim 1), 32 bits
         program = [mov(0, 5), mov(1, 6), mov(2, 7), base('Tld') | texture | (255 << 20) | (0 << 8) | 4, base('Txq') | texture | (1 << 22) | (255 << 8) | 5,
                    base('SustD') | surface | (1 << 8) | 4, base('SustD') | surface | (2 << 8) | 5, base('Exit') | (7 << 16) | 15]
         words = []
@@ -470,13 +444,13 @@ class Compiler(unittest.TestCase):
             fetches = [args for op, args in ops if op == 95]; sizes = [args for op, args in ops if op == 104]; writes = [args for op, args in ops if op == 99]   # OpImageFetch, OpImageQuerySize, OpImageWrite
             self.assertEqual((len(fetches), len(sizes), len(writes)), (1, 1, 2))
             self.assertEqual(buffer_image_bias(defs, fetches[0][3]), 5)
-            def entry(load_id):   # the table entry a bias load reads: OpAccessChain table, 0, index / 4, index % 4
+            def entry(load_id):
                 op, load = defs[load_id]; self.assertEqual(op, 61)
                 op, chain = defs[load[2]]; self.assertEqual(op, 65)
                 return 4 * defs[chain[4]][1][2] + defs[chain[5]][1][2]
             op, fetch_cast = defs[fetches[0][3]]; op, select = defs[fetch_cast[2]]; op, moved = defs[select[4]]
             self.assertEqual(entry(moved[3]), 0)
-            less = [args for op, args in ops if op == 130 and args[2] == sizes[0][1]]   # OpISub(size, bitcast(bias))
+            less = [args for op, args in ops if op == 130 and args[2] == sizes[0][1]]   # OpISub
             self.assertEqual(len(less), 1)
             op, bias_cast = defs[less[0][3]]; self.assertEqual(op, 124)
             self.assertEqual(entry(bias_cast[2]), 0)
@@ -484,7 +458,7 @@ class Compiler(unittest.TestCase):
             op, write_cast = defs[writes[0][1]]; op, select = defs[write_cast[2]]; op, moved = defs[select[4]]
             self.assertEqual(entry(moved[3]), 1)
             res = json.loads((work / 'tbuf.res.json').read_text())
-            self.assertEqual([t.get('tbx') for t in res['textures']], [0])   # Program.cs: each one's index in the offset table
+            self.assertEqual([t.get('tbx') for t in res['textures']], [0])
             self.assertEqual([i.get('tbx') for i in res['images']], [1])
             msl = work / 'tbuf.metal'
             subprocess.run([str(SPIRV_CROSS), *XC, str(spv), '--output', str(msl)], check=True)
@@ -538,7 +512,7 @@ class Compiler(unittest.TestCase):
             res = json.loads((work / 'rows.res.json').read_text())
             self.assertTrue(res['textures'][0]['row_bias'])
             self.assertEqual(res['textures'][0]['tbx'], 0)
-            self.assertEqual(res['images'][0]['tbx'], 2)   # row lead and logical width precede the writable image's offset
+            self.assertEqual(res['images'][0]['tbx'], 2)
             ops = instructions(spv)
             defs = {a[1]: (op, a) for op, a in ops if op in (43, 61, 65, 80, 95, 124, 128, 169, 176, 194, 196, 197, 199)}
             fetch = next(a for op, a in ops if op == 95)
@@ -547,7 +521,7 @@ class Compiler(unittest.TestCase):
             op, x = defs[xcast[2]]; self.assertEqual(op, 199)
             op, ycast = defs[coords[3]]; self.assertEqual(op, 124)
             op, y = defs[ycast[2]]; self.assertEqual(op, 194)
-            self.assertEqual(x[2], y[2])   # both coordinates split the same moved linear index
+            self.assertEqual(x[2], y[2])
             self.assertEqual(defs[x[3]][1][2], 16383)
             self.assertEqual(defs[y[3]][1][2], 14)
             def depends_on_add(value, seen=None):

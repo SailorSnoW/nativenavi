@@ -1,4 +1,4 @@
-// #702: real pass setup, pipeline lookup and literal GPU plane readback, without game files.
+// Real pass setup, pipeline lookup and literal GPU plane readback, without game files.
 #include "../nvn/nvn_mtl.m"
 #include "../nvn/nvn_pso_ds.h"
 void *front_metal_layer(void) { return NULL; }
@@ -209,7 +209,7 @@ static void prediction_made_base(id<MTLLibrary> lib) {
 }
 
 // A key that already drew with a stand-in asked for its own build then (pso_pend_demand): the prediction leaves it out of its candidates instead of asking whether its base
-// is made (a descriptor on the submit thread) in every submission until that build lands (issue #2438). Its attachment-free variant, with no stand-in, is still handed over
+// is made (a descriptor on the submit thread) in every submission until that build lands. Its attachment-free variant, with no stand-in, is still handed over
 static void prediction_standin(id<MTLLibrary> lib, id<MTLLibrary> other) {
     NvProg *p = program(lib); static prog_t pg = {.serial = 980102}; serial_put(pg.serial, p);
     state_reset(); S.prog = &pg; memset(&g_pass, 0, sizeof g_pass); g_pass.cfmt[0] = 70; g_pass.dfmt = g_pass.sfmt = 260; g_pass.samples = 1;

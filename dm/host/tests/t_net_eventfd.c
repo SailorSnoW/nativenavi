@@ -43,7 +43,7 @@ int main(void) {
     sk_pollfd w = {fd, SK_POLLOUT, 0};   // writable whenever it is open
     assert(h_sk_Poll(&w, 1, 0) == 1 && w.revents == SK_POLLOUT);
 
-    // Select is Poll over its sets (Minecraft's NetherNet sets its descriptor's bit in a 1024-bit fd_set on the stack and waits on it this way)
+    // Select is Poll over its sets (a game may set its descriptor's bit in a 1024-bit fd_set on the stack and wait on it this way)
     uint64_t rs[16] = {0}, ws[16] = {0}; int64_t tv[2] = {0, 20000};
     rs[fd >> 6] |= 1ull << (fd & 63);
     t0 = guest_ns();

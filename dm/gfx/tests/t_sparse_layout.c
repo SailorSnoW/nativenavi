@@ -1,5 +1,5 @@
-// Storage sizes of sparse (flag 0x20) 2D textures with the automatic block height, against the sizes of the pre-swizzled level data the games ship: Yoshi's Crafted World's
-// streamed DXT and BGRA8 textures (one level each) and Monster Hunter Rise's 1024×1024 ASTC 6×6 (48 GOBs wide, level 1 at 0x90000). A non-sparse texture keeps the automatic block height
+// Storage sizes of sparse (flag 0x20) 2D textures with the automatic block height, against the sizes of the pre-swizzled level data games ship: streamed DXT and BGRA8
+// textures (one level each) and a 1024×1024 ASTC 6×6 (48 GOBs wide, level 1 at 0x90000). A non-sparse texture keeps the automatic block height
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,8 +28,8 @@ int main(void) {
     g_n++; if (l1 != 0x90000 || g0 != 48) g_fail++;
     printf("1024x1024 ASTC 6x6 sparse: level 0 %u GOBs wide, level 1 at %#llx (want 48, 0x90000) %s\n", g0, (unsigned long long)l1, l1 == 0x90000 && g0 == 48 ? "✓" : "✗");
     // Tiles decoded one by one (nvn_deswizzle_tile, the placement sparse textures of nvn_sparse.inc sparse_sync) read what the whole level reads: a sparse BC6H 2D array (16-byte blocks,
-    // 256x256 texels a tile, Mario Kart World's terrain format) and a sparse RGBA8 texture (128x128), each with level 0 one tile short of square, both GOB orders; the mip tail decoded
-    // from its own bytes (nvn_deswizzle_from) reads what the whole texture reads
+    // 256x256 texels a tile) and a sparse RGBA8 texture (128x128), each with level 0 one tile short of square, both GOB orders; the mip tail decoded from its own bytes
+    // (nvn_deswizzle_from) reads what the whole texture reads
     static const struct { int format; uint32_t w, h, layers, levels; } tc[] = {{0x50, 1024, 768, 2, 5}, {0x25, 512, 384, 1, 4}};
     for (int g2 = 0; g2 < 2; g2++) for (unsigned c = 0; c < 2; c++) {
         nvn_texdesc d = { .target = tc[c].layers > 1 ? 4 : 1, .format = tc[c].format, .flags = 0x20, .width = tc[c].w, .height = tc[c].h, .depth = tc[c].layers, .levels = tc[c].levels, .gob_order = (uint16_t)g2 };
@@ -59,7 +59,7 @@ int main(void) {
         g_n++; if (!ok) g_fail++;
         printf("%ux%ux%u format %#x %s GOB order: %d tiled levels of %ux%u, tiles and tail decode as the whole %s\n", d.width, d.height, tc[c].layers, d.format, g2 ? "Switch 2" : "X1", nt, tw, th, ok ? "✓" : "✗");
     }
-    // Sparse 3D textures take the standard 3D tile (sparse_tile_h3, sparse_tile_d3). Metroid Prime Remastered's lighting volumes map fixed tile indices of each 16-slice slab, BC1 and BC6H alike: those tiles
+    // Sparse 3D textures take the standard 3D tile (sparse_tile_h3, sparse_tile_d3). A game may map fixed tile indices of each 16-slice slab, BC1 and BC6H alike: those tiles
     // must be one and the same box of texels in both formats, and exactly that box, in exactly that slab
     static const struct { int format; uint64_t size; uint32_t tw, per_slab, ntiles, tiles[12]; } vol[] = {
         {0x42, 0x1700000, 128, 16, 6, {5, 6, 7, 9, 10, 11}},   // BC1: 4x4 tiles a slab

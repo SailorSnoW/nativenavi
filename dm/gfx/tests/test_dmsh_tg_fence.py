@@ -1,5 +1,5 @@
-"""Warp-synchronous shared memory: Ampere compilers drop the barrier in small scans whose lanes run in lockstep (Unreal's GPU radix sort downsweep, Orbitals' d032ce5090303e01:
-STS, then LDS of the neighbouring lane's word, then STS). For one thread such a load and its own earlier store do not alias, so Metal may move the load above the store.
+"""Warp-synchronous shared memory: Ampere compilers drop the barrier in small scans whose lanes run in lockstep (a radix sort's downsweep: STS, then LDS of the
+neighbouring lane's word, then STS). For one thread such a load and its own earlier store do not alias, so Metal may move the load above the store.
 The translator (SharedMemoryFence.cs) calls dmsh_tg_fence() before each shared memory load that some path reaches from a store with no barrier between, and dmsh_rewrite.py
 tg_fence makes the helper's body a simdgroup-scope memory fence (not an execution barrier), and in a compute kernel a call at the top level of main0 with no return before it a
 SIMD-group barrier (a fence does not make another lane's store visible on Apple's GPUs). The rewrite is tested on its own; the placement needs DMSH_TEST_XLATE (the translator)
@@ -89,12 +89,12 @@ class Rewrite(unittest.TestCase):
         for src in (PLAIN, PLAIN + '\nvoid dmsh_tg_fence_extra() {}\n', PLAIN + '\n// dmsh_tg_fence();\n'):
             with self.subTest(src=src): self.assertEqual(tg_fence(src), src)
 
-    def test_a_helper_nothing_calls_is_rewritten_too(self):   # the declaration decides, as before the name was looked for first
+    def test_a_helper_nothing_calls_is_rewritten_too(self):   # the declaration decides, not its calls
         src = (SCAN % 64).replace('    dmsh_tg_fence();\n', '')
         self.assertNotIn('dmsh_tg_fence();', src)
         self.assertEqual(helper_body(tg_fence(src)), FENCE)
 
-    def test_a_kernel_call_in_uniform_control_flow_becomes_a_simdgroup_barrier(self):   # agl's NDSR network fa3033d05c0a41d6: a fence left 0.1 % of its pixels racing
+    def test_a_kernel_call_in_uniform_control_flow_becomes_a_simdgroup_barrier(self):   # agl's NDSR network fa3033d05c0a41d6: a fence alone leaves 0.1 % of its pixels racing
         out = tg_fence(SCAN % 64, kernel=True)
         self.assertNotIn('dmsh_tg_fence();', out)
         self.assertEqual(out.count(dmsh_rewrite.TG_BARRIER), 2)
@@ -158,7 +158,7 @@ class Placement(unittest.TestCase):
         body = msl[msl.index('kernel void main0'):]
         return body.count('dmsh_tg_fence();'), body
 
-    def test_the_downsweep_gets_a_fence_before_each_load(self):   # STS / LDS / STS / LDS, Orbitals' shape: both loads read what the lanes stored just before
+    def test_the_downsweep_gets_a_fence_before_each_load(self):   # STS / LDS / STS / LDS: both loads read what the lanes stored just before
         n, body = self.fences([STS, LDS, WORK, STS, LDS, WORK, EXIT])
         self.assertEqual(n, 2)
         for at in [m.start() for m in re.finditer(r'dmsh_tg_fence\(\);', body)]:
@@ -187,7 +187,7 @@ class Placement(unittest.TestCase):
 
     def test_a_chain_of_hmmas_takes_one_fence_before_its_first(self):
         # LDSM; STS; HMMA; HMMA: the first HMMA reads A from shared memory where the LDSM read it (dmsh_rewrite.hmma_msl, FlagADirect), so it follows the store; the second
-        # stores only to its own scratch, so nothing is pending for the next. Each HMMA of Ocarina of Time's movie networks took a fence when a call counted as a store
+        # stores only to its own scratch, so nothing is pending for the next (a call counted as a store would give each HMMA of Ocarina of Time's movie networks a fence)
         import test_dmsh_hmma as h
         t = h.TranslatorFlags
         code = b''.join(h.inst(*h.waiting(i)) for i in (t.S2R, t.IMAD, t.LDSM, t.STS, t.HMMA0, t.HMMA1, t.STS, t.STS1)) + h.inst(*t.EXIT)

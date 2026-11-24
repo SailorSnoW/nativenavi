@@ -1,7 +1,7 @@
 // A texture the pool walk leaves out for good (the budget is full, no shader has read its ID) holds a stand-in in the tables until its first read: its own smallest levels, or its
-// last level cut down to every n-th block when it has none that small (pool_stand, issue #1969). Below the budget the entry stays the dummy, as the walk goes on and makes the
-// texture; so does a texture of a type that has no stand-in and an unwritten render target. A read makes the texture and lets the stand-in go, as does another registration.
-// DM_NVN_POOL_STANDIN=0: the dummy everywhere, as before
+// last level cut down to every n-th block when it has none that small (pool_stand). Below the budget the entry stays the dummy, as the walk goes on and makes the texture; so
+// does a texture of a type that has no stand-in and an unwritten render target. A read makes the texture and lets the stand-in go, as does another registration.
+// DM_NVN_POOL_STANDIN=0: the dummy everywhere
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

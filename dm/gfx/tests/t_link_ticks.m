@@ -88,9 +88,8 @@ static void acquire_lateness(void) {
     CHECK(line_end && !strcmp(line_end + 1, "0\t@late_ms\t1.250\n"), "a link wake 1.25 ms after the slot logs 1.250 ms");
     free(rows);
 }
-// Present snapshots (mtl_snap_on, fixed for the process: run as "t_link_ticks snap"): the acquire takes the display link's wait as without them, the ring slot wait only on top.
-// It used to wait for a free slot alone, and the link frees slots by dropping frames, so a game ran ahead of its present interval (Donkey Kong Bananza at the 30 fps cap: 43-65 fps).
-// While the link is stalled the slot time paces instead (no link wait)
+// Present snapshots (mtl_snap_on, fixed for the process: run as "t_link_ticks snap"): the acquire takes the display link's wait as without them, the ring slot wait only on top
+// (the slot wait alone lets a game run ahead of its present interval, as the link frees slots by dropping frames). While the link is stalled the slot time paces instead (no link wait)
 static int snap_case(void) {
     setenv("DM_RT", "0", 1); setenv("DM_PRESENT_SNAP", "2", 1); setenv("DM_FPS_TARGET", "0", 1);
     g_dm_present_link = 1; g_link = (CAMetalDisplayLink *)[NSObject new]; g_link_mode = 1;

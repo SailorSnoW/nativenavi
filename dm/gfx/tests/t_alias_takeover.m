@@ -1,10 +1,10 @@
 // The sharing table's takeover (nvn_owner.m, own_alias_take_over_locked; own_alias_publish runs it): when a new shared texture takes over storage, an entry a live texture object still resolves to stays, and one nothing resolves to any more goes once
 // no lookup has found it for ALIAS_IDLE submissions. Whether a live object resolves to it is one lookup in g_by_serial_held, which every writer of g_by_serial keeps (serial_put,
 // serial_del, tex_put and the upgrade's in-place replacement): two serials naming one object count twice and the object stays held until both go. Last, a takeover past 1,000
-// held entries with 20,000 serials in the table, which walked the serial table for each entry before (it prints the time).
+// held entries with 20,000 serials in the table (it prints the time).
 // The candidates come from the owner's index by pool and 64 KB cell, which its writers keep (own_alias_put_locked, own_alias_del_locked, the takeover, a pool drop): an entry that starts in an earlier cell is found, one in the same
 // cell that ends before the new texture is not, one that spans several of the new texture's cells goes once and, spared, is looked at once, another pool's entries are not met, and a removal or a pool drop
-// leaves no cell behind. Last, a takeover with 100,000 entries in the table, which walked the table's whole capacity before (it prints the time).
+// leaves no cell behind. Last, a takeover with 100,000 entries in the table (it prints the time).
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

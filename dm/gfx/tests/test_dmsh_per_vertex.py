@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / 'dm/gfx/tools'))
 import dmsh_chain  # noqa: E402
 import dmsh_rewrite  # noqa: E402
 
-# The shape SPIRV-Cross gives Resident Evil 4's pixel shader 5b7f35045f5c8614: attribute 2 read at all three vertices, weighed with the barycentric coordinates' y and z
+# A pixel shader as SPIRV-Cross writes it: attribute 2 read at all three vertices, weighed with the barycentric coordinates' y and z
 SRC = """#include <metal_stdlib>
 #include <simd/simd.h>
 

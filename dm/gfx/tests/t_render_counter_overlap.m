@@ -53,18 +53,6 @@ static void init_program(NVNprogram *program, NvProg *compiled) {
     // use the public NVN entry points and the real serial ownership table.
     prog_t *p = (prog_t *)program; p->serial = nvn_new_serial(); serial_put(p->serial, compiled);
 }
-static NVNcommandHandle record(NVNtexture *texture, NVNprogram *program, int wait, int draw, unsigned offset) {
-    P(nvnCommandBufferBeginRecording)(&command);
-    if (wait) P(nvnCommandBufferWaitEvent)(&command, &event, NVN_EVENT_WAIT_MODE_EQUAL, 1);
-    const NVNtexture *colors[] = {texture}; const float viewport[] = {0, 0, W, H}, blue[] = {0, 0, 1, 1};
-    P(nvnCommandBufferSetRenderTargets)(&command, 1, colors, NULL, NULL, NULL);
-    P(nvnCommandBufferSetViewports)(&command, 0, 1, viewport); P(nvnCommandBufferSetScissor)(&command, 0, 0, W, H);
-    P(nvnCommandBufferClearColor)(&command, 0, blue, 15);
-    if (program) P(nvnCommandBufferBindProgram)(&command, program, 3);
-    if (draw) P(nvnCommandBufferDrawArrays)(&command, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3);
-    P(nvnCommandBufferCopyTextureToBuffer)(&command, texture, NULL, &region, output + offset, 0);
-    return P(nvnCommandBufferEndRecording)(&command);
-}
 int main(void) { @autoreleasepool {
     if (setvbuf(stdout, NULL, _IONBF, 0)) abort(); mtl_init(); NSError *error = nil;
     id<MTLLibrary> library = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"

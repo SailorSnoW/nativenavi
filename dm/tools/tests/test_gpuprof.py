@@ -31,7 +31,7 @@ LOG = [
     rp(1200, 2, 200.0, 22, 2048, 2048, 0, 1, 500, 700.0, 0, 16384, 0, 252),
     rp(1200, 3, 10.0, 23, 32, 32, 1, 0, 1, 900.0, 4, 4, 70, 0),
     f'{P}frame 1200: render 0.91 ms, compute / copy 0.00 ms over 4 encoders (4 render passes, attachments load 5.5 MB store 49.0 MB), first start to last end 0.91 ms',
-    # an older host's line without the ledger and formats still parses
+    # a line without the ledger and formats still parses
     f'{P}F1800    0    50.0 us render pass 30 800x450 colors 1 depth 0 loads 0 draws 2 start +0.0 seg 0',
     '[dm] [nvn-mtl] [ab] phase 0 base: 90 frames, GPU p50 9.00 / p90 10.00 / mean 9.10 ms, frame p50 16.60 / p90 17.00 / mean 16.70 ms; per frame: attachments load 300 MB store 400 MB, passes 150.0',
     '[dm] [nvn-mtl] [ab] phase 1 BARRIER: 90 frames, GPU p50 8.00 / p90 9.00 / mean 8.10 ms, frame p50 16.60 / p90 16.90 / mean 16.65 ms; per frame: attachments load 300 MB store 400 MB, passes 150.0',

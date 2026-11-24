@@ -88,7 +88,8 @@ class WorkDir(unittest.TestCase):
     def test_the_builds_own_profile_is_not_taken_as_registered(self):
         # a derived profile in the folder this script writes them to, reached through DM_GAMES_DIR (DM_GAMES_FIRST as a derived build sets it): main would take it for a
         # registered one, and derive it onto itself
-        own = self.nups / f'{TID:016X}_build' / 'profile'; (own / f'{TID:016X}').mkdir(parents=True)
+        own = self.nups / f'{TID:016X}_build' / 'profile'
+        (own / f'{TID:016X}').mkdir(parents=True)
         mine = game.by_title(TID); assert mine, 'no profile for the game'
         text = (mine.dir / 'game.tsv').read_text(encoding='utf-8')
         (own / f'{TID:016X}' / 'game.tsv').write_text(text + 'own_copy\tyes\n', encoding='utf-8')

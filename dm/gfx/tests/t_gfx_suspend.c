@@ -111,8 +111,7 @@ int main(void) {
     CHECK("suspend drains graphics once", atomic_load(&drains) == 1);
     dispatch_semaphore_signal(finish_prepare);
     if (!reached(prepared, "the prepare step finishes in the background")) return 1;
-    // Submit now owns a queued continuation and may return before GPU replay.
-    // Suspension constrains replay, not whether the guest has enqueued work.
+    // Submit owns a queued continuation and may return before GPU replay. Suspension constrains replay, not whether the guest has enqueued work.
     CHECK("queued work stays outside the GPU while suspended", dispatch_semaphore_wait(committed, dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC)) != 0);
     CHECK("no submission commits while graphics are suspended", atomic_load(&commits) == 0);
     dm_gfx_suspend(0);

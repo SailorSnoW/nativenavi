@@ -1,4 +1,4 @@
-"""Offer the resolution control only when the rewritten build supports it, and the game's upscaler choice only to games whose shader map holds their own upscaler (an NDSR pack's network: game.py upscaler_keys). The profile is Ocarina of Time's: dynamic resolution by its rewriter stub, 60 fps at most, agl's NDSR pack."""
+"""Offer the resolution control only when the rewritten build supports it, and the upscaler choice only to games whose shader map holds their own upscaler (game.py upscaler_keys)."""
 from pathlib import Path
 import sys,tempfile,unittest
 from unittest.mock import patch

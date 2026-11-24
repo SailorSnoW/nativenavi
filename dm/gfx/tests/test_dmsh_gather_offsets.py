@@ -2,7 +2,6 @@
 in plain and array forms, or one gather when the offsets form a 2x2 square (gather_quad). On this Mac's GPU a compute shader's rewritten gathers match texel reads in every lane, on two
 runs, and a square's one gather matches its four gathers bit for bit at positions inside, between and outside the texels, clamped and repeating."""
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys

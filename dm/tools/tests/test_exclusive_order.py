@@ -34,7 +34,7 @@ class ExclusiveOrder(unittest.TestCase):
             code = img(NOP, w, NOP)
             self.assertEqual(find(code, [(0, len(code))]), [], name)
 
-    def test_a_whole_loop(self):   # Breath of the Wild 1.6.0 main+0x13a0784: ldxr w9,[x23]; cbnz w9; stxr w9,w8,[x23]; cbnz w9: the load and the store
+    def test_a_whole_loop(self):   # ldxr w9,[x23]; cbnz w9; stxr w9,w8,[x23]; cbnz w9: the load and the store
         code = img(0x885F7EE9, 0x35FFFFE9, 0x88097EE8, 0x35FFFFA9)
         self.assertEqual(find(code, [(0, len(code))]), [0, 8])
 

@@ -65,6 +65,23 @@ int main(int ac, char **av) { @autoreleasepool {
 '''
 
 
+def run_on_gpu(test, kernel):
+    """RUNNER on kernel as spirv-cross writes it and with the search built once (dmsh_rewrite.raw_noinline): every lookup reads what the pool table names"""
+    noinline = raw_noinline(kernel)
+    test.assertIn('static __attribute__((noinline))\nint dmsh_raw_find(', noinline)
+    for form, src in (('inline', kernel), ('noinline', noinline)):
+        with tempfile.TemporaryDirectory() as w:
+            w = Path(w)
+            (w / 'k.metal').write_text(src)
+            r = subprocess.run(MAC_METAL + [str(w / 'k.metal'), '-o', str(w / 'k.air')], capture_output=True, text=True)
+            test.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', str(w / 'k.air'), '-o', str(w / 'k.metallib')], check=True)
+            (w / 'r.m').write_text(RUNNER)
+            subprocess.run(['clang', '-fobjc-arc', '-framework', 'Metal', '-framework', 'Foundation', str(w / 'r.m'), '-o', str(w / 'r')], check=True, capture_output=True)
+            out = subprocess.run([str(w / 'r'), str(w / 'k.metallib')], capture_output=True, text=True)
+            test.assertIn('bad 0 of 1280', out.stdout, form + ': ' + out.stdout + out.stderr)
+
+
 @unittest.skipUnless(os.environ.get('DMSH_TEST_XLATE'), 'set DMSH_TEST_XLATE to the offline translator')
 class RawLast(Translated):
     def msl(self):
@@ -95,19 +112,7 @@ class RawLast(Translated):
                   f'kernel void k(const device {m.group(2)}& map [[buffer(0)]], const device uint2* addr [[buffer(1)]], device int* out [[buffer(2)]], uint id [[thread_position_in_grid]])\n'
                   '{\n    uint last = 0u;\n    for (int s = 0; s < 20; s++)\n    {\n        int lo = int(addr[id * 20 + s].x), hi = int(addr[id * 20 + s].y);\n'
                   f'        out[id * 20 + s] = {m.group(1)}(lo, hi, map, last);\n    }}\n}}\n')
-        noinline = raw_noinline(kernel)
-        self.assertIn('static __attribute__((noinline))\nint dmsh_raw_find(', noinline)
-        for form, kernel in (('inline', kernel), ('noinline', noinline)):   # as spirv-cross writes it, and with the search built once (dmsh_rewrite.raw_noinline)
-            with tempfile.TemporaryDirectory() as w:
-                w = Path(w)
-                (w / 'k.metal').write_text(kernel)
-                r = subprocess.run(MAC_METAL + [str(w / 'k.metal'), '-o', str(w / 'k.air')], capture_output=True, text=True)
-                self.assertEqual(r.returncode, 0, r.stderr[-3000:])
-                subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', str(w / 'k.air'), '-o', str(w / 'k.metallib')], check=True)
-                (w / 'r.m').write_text(RUNNER)
-                subprocess.run(['clang', '-fobjc-arc', '-framework', 'Metal', '-framework', 'Foundation', str(w / 'r.m'), '-o', str(w / 'r')], check=True, capture_output=True)
-                out = subprocess.run([str(w / 'r'), str(w / 'k.metallib')], capture_output=True, text=True)
-                self.assertIn('bad 0 of 1280', out.stdout, form + ': ' + out.stdout + out.stderr)
+        run_on_gpu(self, kernel)
 
 
 LDG128 = ((LDG[0] & ~(7 << 9)) | 6 << 9, (LDG[1] & ~(0xff << 16)) | 12 << 16)   # LDG.E.128 R12, [R5.64 + UR4]: size bits 73..75 = 6 (B128), R12..R15
@@ -170,27 +175,15 @@ class RawVector(Translated):
                   '{\n    uint last = 0u;\n    spvUnsafeArray<uint, 3> vec;\n    for (int s = 0; s < 20; s++)\n    {\n        int lo = int(addr[id * 20 + s].x), hi = int(addr[id * 20 + s].y);\n'
                   f'        vec[0] = vec[1] = vec[2] = 0xdeadu; int w = {m.group(1)}(lo, hi, map, last, vec);\n'   # a miss must not leave them as they were
                   '        out[id * 20 + s] = (w == 0 && vec[0] == 0u && vec[1] == 0u && vec[2] == 0u) || (vec[0] == uint(w) + 1u && vec[1] == uint(w) + 2u && vec[2] == uint(w) + 3u) ? w : int(0xdead);\n    }\n}\n')
-        noinline = raw_noinline(kernel)
-        self.assertIn('static __attribute__((noinline))\nint dmsh_raw_find(', noinline)
-        for form, kernel in (('inline', kernel), ('noinline', noinline)):   # as spirv-cross writes it, and with the search built once (dmsh_rewrite.raw_noinline)
-            with tempfile.TemporaryDirectory() as w:
-                w = Path(w)
-                (w / 'k.metal').write_text(kernel)
-                r = subprocess.run(MAC_METAL + [str(w / 'k.metal'), '-o', str(w / 'k.air')], capture_output=True, text=True)
-                self.assertEqual(r.returncode, 0, r.stderr[-3000:])
-                subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', str(w / 'k.air'), '-o', str(w / 'k.metallib')], check=True)
-                (w / 'r.m').write_text(RUNNER)
-                subprocess.run(['clang', '-fobjc-arc', '-framework', 'Metal', '-framework', 'Foundation', str(w / 'r.m'), '-o', str(w / 'r')], check=True, capture_output=True)
-                out = subprocess.run([str(w / 'r'), str(w / 'k.metallib')], capture_output=True, text=True)
-                self.assertIn('bad 0 of 1280', out.stdout, form + ': ' + out.stdout + out.stderr)
+        run_on_gpu(self, kernel)
 
 
 
 @unittest.skipUnless(os.environ.get('DMSH_TEST_XLATE'), 'set DMSH_TEST_XLATE to the offline translator')
 class RawVectorPair(Translated):
-    """Two LDG.128 in one block (lunks on PR #1813): the first's words 1..3 unused, the second's word 0 unused and its word 2 used. The first load's follower scan took the
-    second's word 2 as its own (same word count, word > 0), so it read the first load's gmem_vec and the second load's memory was never read. Each LDG's words now carry
-    their own group (Operation.GlobalVectorGroup): the first is one vector call, the second's word a scalar lookup of its own address"""
+    """Two LDG.128 in one block: the first's words 1..3 unused, the second's word 0 unused and its word 2 used. The first load's follower scan must
+    not take the second's word 2 as its own (same word count, word > 0): each LDG's words carry their own group (Operation.GlobalVectorGroup), so the first is one
+    vector call and the second's word a scalar lookup of its own address"""
     def msl(self):
         a = (LDG128[0] & ~0xf, LDG128[1])   # predicate PT (64..67 = 0, stored as 7 - P): no branch around the load, so both loads are in one block
         b = (a[0], (a[1] & ~(0xff << 16) & ~(0xffffff << 40)) | 16 << 16 | 0x40 << 40)   # LDG.E.128 R16, [R5.64 + UR4 + 0x40]

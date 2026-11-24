@@ -1,6 +1,6 @@
 // Uploads from a large pool (BIG_MIN) read their storage through a zero-copy buffer of the upload batch (up_big_src), which the batch makes resident and retires. One texture
-// needs one such buffer: a second is made only when taking its staging flushed the batch that held the first. Before, every staged upload made two, and a scene load of Switch
-// Sports Resort (855 textures, 908 MB) added twice its storage to the residency set. Checks the count and every texel, for small textures in one batch and for 64 MB ones whose
+// needs one such buffer: a second is made only when taking its staging flushed the batch that held the first. Checks the count and every texel, for small textures in one
+// batch and for 64 MB ones whose
 // staging splits the batches (UP_BATCH_BYTES). A buffer copy over a texture's storage: after it completes, only that texture is uploaded again (its pages stamped at completion,
 // post_run); in the same submission, a texture already uploaded and one not yet uploaded, both read after the run of copies has ended, show the copied texels (b2b_flush: the
 // copy is committed before the upload batch that reads it), including a destination accessed before the copy in that submission. A CPU upload waits for the copy before reading

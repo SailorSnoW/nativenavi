@@ -1,18 +1,6 @@
-// The NVN resource owner (nvn_owner.m) on its own: linked without the replay layer, whose four hooks are recorded or set here instead (what is dropped and whether it stays resident,
-// which object's last count went, which serial changed, the submission being encoded). What it holds to, as the tables behaved before they moved out of nvn_mtl.m:
-// a live serial's registration, replacement and removal; where tex_put sends a serial (live table for a live texture object or an external texture from 2^62 up, ghost table for a
-// finalized one); a finalize, and a copy's finalize that ends nothing; ghost replacement in place; the ghost table kept by use (past NGHOST the least recently used entry goes once
-// idle, by frames or, with the frame standing still, by submissions; a working set larger than NGHOST stays while used and drains GHOST_TRIM a commit once idle); texture pins and
-// program pins; a view's entry counting its parent; renaming an object everywhere; and after every step the held counts against the tables (own_check_locked). The owner releases
-// nothing itself: everything it lets go goes to own_hook_drop, which nvn_mtl.m releases once the submission in flight completes, so what a lookup returned outlives the change that
-// dropped it. Each ghost serial has one place in the list of use.
-// sRGB / linear views (tex_mtl_'s twins): the old sequence, publish then serial_del when the parent turned out gone, left a finalized serial resolving to the stale view (the evidence,
-// kept as a case); own_view_put publishes only while the parent is shared, and own_view_drop_stale takes a stale view's live or ghost entry (with its place in the list) only while it still
-// names the view, in each order of finalize, publish, the parent leaving and resolution.
-// The sharing table (own_alias_*): a lookup publishes in its own hold, a registration takes the storage over, goes in and publishes in one hold (and a second registration under the
-// key takes the first), the takeover spares entries a live entry or pin holds or a lookup found within ALIAS_IDLE submissions and takes the rest (a ghost entry keeps its texture
-// resolving), a pool drop takes that pool's entries, an upgrade renames the sharing table with the serial tables and publishes the asking serial's view in the same hold; a pool drop
-// or an upgrade between a twin's lookup and its publication refuses it; own_check_locked also checks the sharing table's index, set and last lookups
+// The NVN resource owner (nvn_owner.m) alone, its four replay-layer hooks recorded here; after every step own_check_locked checks the held counts against the tables.
+// The owner releases nothing itself: all it lets go goes to own_hook_drop, released once the submission in flight completes.
+// Kept as a case: publishing a view first and calling serial_del once the parent turns out gone leaves a finalized serial resolving to the stale view.
 #import <Metal/Metal.h>
 #include "../nvn/nvn_owner.h"
 #include <stdio.h>
@@ -20,15 +8,13 @@
 static int checks, failed;
 #define CHECK(c, label) do { checks++; if (!(c)) { failed++; fprintf(stderr, "FAIL: %s (line %d)\n", label, __LINE__); } } while (0)
 
-// The replay layer's side, recorded
-static NSMutableArray *g_dropped;   // what the owner let go, kept alive here as the deferred release keeps it until the submission completes
+static NSMutableArray *g_dropped;   // kept alive as the deferred release keeps it until the submission completes
 static NSMutableArray<NSNumber *> *g_dropped_keep;
-// The owner's change generation and its last note, read as the replay layer's caches read them
 static uint64_t last_note(void) { uint64_t s = ~0ull; own_note_at(atomic_load(&g_ser_gen), &s); return s; }
 #define g_changed_n ((int)atomic_load(&g_ser_gen))
 #define g_changed_last (last_note())
-static uint64_t g_sub = 1;          // the submission being encoded
-static uint64_t g_frame = 1;        // the frame being replayed
+static uint64_t g_sub = 1;
+static uint64_t g_frame = 1;
 void own_hook_drop(id o, int keep_resident) { [g_dropped addObject:o]; [g_dropped_keep addObject:@(keep_resident)]; }
 uint64_t own_hook_submission(void) { return g_sub; }
 uint64_t own_hook_frame(void) { return g_frame; }
@@ -36,15 +22,15 @@ static NSMapTable *g_parts;   // object → the part own_hook_parts names (a pac
 void own_hook_parts(id o, void (^add)(id part)) { id p = g_parts ? [g_parts objectForKey:o] : nil; if (p) add(p); }
 static int dropped(id o, int keep) { for (NSUInteger i = 0; i < g_dropped.count; i++) if (g_dropped[i] == o && g_dropped_keep[i].intValue == keep) return 1; return 0; }
 static int ndropped(id o, int keep) { int n = 0; for (NSUInteger i = 0; i < g_dropped.count; i++) n += g_dropped[i] == o && g_dropped_keep[i].intValue == keep; return n; }
-static int retire(id o) { pthread_mutex_lock(&g_smu); int r = own_retire_locked(o); pthread_mutex_unlock(&g_smu); return r; }   // the drain's question, once the fence has passed
+static int retire(id o) { pthread_mutex_lock(&g_smu); int r = own_retire_locked(o); pthread_mutex_unlock(&g_smu); return r; }
 static uint32_t waiting(void) { pthread_mutex_lock(&g_smu); uint32_t n = own_stats_locked().retire_wait; pthread_mutex_unlock(&g_smu); return n; }
 
 static int live(uint64_t k) { return serial_get(k) != nil; }
 static int ghost(uint64_t k) { __block int r = 0; pthread_mutex_lock(&g_smu); own_each_locked(^(uint64_t s, id o, int g) { (void)o; if (s == k && g) r = 1; }); pthread_mutex_unlock(&g_smu); return r; }
 static uint32_t ghost_n(void) { pthread_mutex_lock(&g_smu); uint32_t n = own_stats_locked().ghost; pthread_mutex_unlock(&g_smu); return n; }
 static uint64_t ghost_puts(void) { pthread_mutex_lock(&g_smu); uint64_t n = own_stats_locked().ghost_puts; pthread_mutex_unlock(&g_smu); return n; }
-static void idle(void) { g_frame += GHOST_IDLE; }   // every ghost entry unused for GHOST_IDLE frames
-static void trim_all(void) { for (int i = 0; i < 4096 && ghost_n() > NGHOST; i++) own_ghost_trim(); }   // commits until the idle entries past NGHOST have gone
+static void idle(void) { g_frame += GHOST_IDLE; }
+static void trim_all(void) { for (int i = 0; i < 4096 && ghost_n() > NGHOST; i++) own_ghost_trim(); }
 static int holds(id o) { pthread_mutex_lock(&g_smu); int r = entry_holds((__bridge void *)o); pthread_mutex_unlock(&g_smu); return r; }
 static int live_holds(id o) { pthread_mutex_lock(&g_smu); int r = serial_table_holds((__bridge void *)o); pthread_mutex_unlock(&g_smu); return r; }
 static void step(const char *label) {
@@ -52,19 +38,18 @@ static void step(const char *label) {
     checks++; if (!ok) { failed++; fprintf(stderr, "FAIL: held counts against the tables after %s: %s\n", label, why); }
 }
 static tex_t texture(uint64_t serial) { return (tex_t){.magic = MAGIC('T','E','X',0), .serial = serial}; }
-static void tex_live(tex_t *t) { pthread_mutex_lock(&g_smu); own_tex_live_put_locked(t); pthread_mutex_unlock(&g_smu); }   // mtl_tex_init's part
-static int tex_end(tex_t *t) { pthread_mutex_lock(&g_smu); int r = own_tex_end_locked(t); pthread_mutex_unlock(&g_smu); if (r >= 0) serial_del(t->serial); return r; }   // mtl_tex_release's part
-// Sharing-table keys: a 4x4 texture of a format at an offset of a (fake) pool, padding zeroed
+static void tex_live(tex_t *t) { pthread_mutex_lock(&g_smu); own_tex_live_put_locked(t); pthread_mutex_unlock(&g_smu); }
+static int tex_end(tex_t *t) { pthread_mutex_lock(&g_smu); int r = own_tex_end_locked(t); pthread_mutex_unlock(&g_smu); if (r >= 0) serial_del(t->serial); return r; }
 static alias_key akey(uint64_t pool, int64_t off, NVNformat f) {
     alias_key k; memset(&k, 0, sizeof k); k.pool = pool; k.off = off;
     k.d = (nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = f, .width = 4, .height = 4, .depth = 1, .levels = 1, .samples = 1}; return k;
 }
-static NSMapTable *g_keys;   // object → the key share() put it under (each object its own 64 KB cell of pool 0x5000)
+static NSMapTable *g_keys;   // each object its own 64 KB cell of pool 0x5000
 static alias_key key_of(id o) {
     NSNumber *n = [g_keys objectForKey:o]; if (!n) { n = @(g_keys.count); [g_keys setObject:n forKey:o]; }
     return akey(0x5000, (int64_t)n.intValue << ALIAS_CELL, NVN_FORMAT_RGBA8);
 }
-static void share(id o, int on) { alias_key k = key_of(o); pthread_mutex_lock(&g_smu); if (on) own_alias_put_locked(&k, o, 0); else own_alias_del_locked(&k); pthread_mutex_unlock(&g_smu); }   // as a registration / a pool drop would
+static void share(id o, int on) { alias_key k = key_of(o); pthread_mutex_lock(&g_smu); if (on) own_alias_put_locked(&k, o, 0); else own_alias_del_locked(&k); pthread_mutex_unlock(&g_smu); }
 static int shared(id o) { pthread_mutex_lock(&g_smu); int r = own_shared_locked(o); pthread_mutex_unlock(&g_smu); return r; }
 static int has(const alias_key *k) { pthread_mutex_lock(&g_smu); int r = own_alias_get_locked(k) != nil; pthread_mutex_unlock(&g_smu); return r; }
 static own_alias_stats ast(void) { pthread_mutex_lock(&g_smu); own_alias_stats s = own_alias_stats_locked(); pthread_mutex_unlock(&g_smu); return s; }
@@ -113,7 +98,7 @@ int main(void) { @autoreleasepool {
         step("two serials");
     }
 
-    {   // where tex_put sends a texture serial, finalizing, and a copy's finalize
+    {   // where tex_put sends a texture serial (live from 2^62 up or a live object; ghost when finalized)
         uint64_t ext = (1ull << 62) + 93021, fk = 93023; tex_t lt = texture(93022); tex_live(&lt);
         id e = [NSObject new], l = [NSObject new], f = [NSObject new];
         tex_put(ext, e); tex_put(lt.serial, l); tex_put(fk, f);
@@ -131,7 +116,7 @@ int main(void) { @autoreleasepool {
         CHECK(tex_end(&copy) == -1 && own_tex_live(lt.serial) && live(lt.serial), "a copy's finalize ends nothing while the object the texture was initialized in holds it");
         CHECK(tex_end(&lt) == 1 && !own_tex_live(lt.serial) && !live(lt.serial) && !ghost(lt.serial) && !holds(l), "the object's own finalize ends the texture; it does not move to the ghost table");
         step("finalize");
-        tex_t own = texture(93024), moved; tex_live(&own); moved = own; own.magic = 0;   // the object the texture was initialized in no longer holds it (the game moved or freed it)
+        tex_t own = texture(93024), moved; tex_live(&own); moved = own; own.magic = 0;
         CHECK(tex_end(&moved) == 1 && !own_tex_live(moved.serial), "a copy outliving the object it was initialized in ends the texture");
         tex_put(lt.serial, l);
         CHECK(ghost(lt.serial) && tex_get(lt.serial) == l, "the finalized serial put again (a replayed record) goes to the ghost table");
@@ -139,15 +124,15 @@ int main(void) { @autoreleasepool {
         serial_del(ext);
     }
 
-    {   // the ghost table: past NGHOST, the least recently used entry goes once it is idle; one in use stays
+    {   // ghost table: past NGHOST the least recently used idle entry goes; one in use stays
         enum { BASE = 940000 };
-        idle();   // the earlier cases' entries go first
+        idle();
         NSMutableArray *objs = [NSMutableArray array];
         for (int i = 0; i <= NGHOST; i++) { id o = [NSObject new]; [objs addObject:o]; tex_put(BASE + (uint64_t)i, o); }
         CHECK(ghost_n() == NGHOST + 1 && ghost(BASE) && holds(objs[0]), "past NGHOST, entries used within GHOST_IDLE frames stay: the NGHOST + 1st evicts none of them");
         step("ghost table past NGHOST");
         int notes = g_changed_n;
-        idle(); tex_get(BASE + 1);   // one of them used again
+        idle(); tex_get(BASE + 1);
         tex_put(BASE + NGHOST + 1, [NSObject new]);
         CHECK(!ghost(BASE) && !holds(objs[0]) && dropped(objs[0], 0), "once idle, the least recently used goes at the next put: dropped, no longer held");
         CHECK(ghost(BASE + 1) && !ghost(BASE + 2) && ghost(BASE + 3), "one used again lately is passed over for the next least recently used");
@@ -156,13 +141,13 @@ int main(void) { @autoreleasepool {
         CHECK(ghost_n() == NGHOST, "a commit evicts nothing at NGHOST");
         step("ghost eviction");
     }
-    {   // more finalized serials than NGHOST resolved every frame (Ocarina of Time streaming an area in): none goes while in use and none is put again; once idle they go,
+    {   // more finalized serials than NGHOST resolved every frame: none goes while used; once idle,
         // GHOST_TRIM a commit at most, until the table is back at NGHOST
         enum { BASE = 941000, N = 4 * NGHOST };
         for (int i = 0; i < N; i++) tex_put(BASE + (uint64_t)i, [NSObject new]);
         uint64_t puts = ghost_puts(); int found = 0;
         for (int f = 0; f < 2 * GHOST_IDLE; f++) {
-            g_frame++; g_sub += 25; own_ghost_trim();   // 25 submissions a frame, each commit trimming
+            g_frame++; g_sub += 25; own_ghost_trim();
             for (int i = 0; i < N; i++) found += tex_get(BASE + (uint64_t)i) != nil;
         }
         CHECK(found == N * 2 * GHOST_IDLE && ghost_puts() == puts, "finalized serials resolved every frame stay past NGHOST: every lookup found, no put");
@@ -174,9 +159,9 @@ int main(void) { @autoreleasepool {
         CHECK(ghost_n() == NGHOST && ghost(BASE + N - 1) && !ghost(BASE), "commits take the table back to NGHOST, least recently used first");
         step("ghost working set idle");
     }
-    {   // with the frame standing still (no present), GHOST_IDLE_SUBS submissions without a use make an entry idle
+    {   // frame standing still: GHOST_IDLE_SUBS submissions without a use make an entry idle
         enum { BASE = 946000, EXTRA = 64 };
-        for (int i = 0; i < NGHOST + EXTRA; i++) tex_put(BASE + (uint64_t)i, [NSObject new]);   // the last case's entries, idle, go as these come
+        for (int i = 0; i < NGHOST + EXTRA; i++) tex_put(BASE + (uint64_t)i, [NSObject new]);
         CHECK(ghost_n() == NGHOST + EXTRA && ghost(BASE), "entries put in this frame and submission all stay");
         g_sub += GHOST_IDLE_SUBS - 1; own_ghost_trim();
         CHECK(ghost_n() == NGHOST + EXTRA, "not idle one submission short of GHOST_IDLE_SUBS");
@@ -213,7 +198,7 @@ int main(void) { @autoreleasepool {
         step("pin before the object");
     }
 
-    {   // program pins (the caller holds the submission lock; this test has one thread)
+    {   // program pins (the caller holds the submission lock; one thread here)
         uint64_t ps = 93041; id pr = [NSObject new]; prog_t p = {.serial = ps};
         serial_put(ps, pr); mtl_prog_release(&p);
         CHECK(!live(ps), "an unpinned program's release removes its entry at once");
@@ -245,7 +230,7 @@ int main(void) { @autoreleasepool {
             CHECK(!holds(view) && !holds(base), "and lets both go with it");
             step("view removed");
             uint64_t a = (1ull << 62) + 93052, b = 93053, c = (1ull << 62) + 93054;
-            tex_put(a, base); tex_put(b, base); mtl_tex_pin(c); tex_put(c, base); serial_del(c);   // a live name, a ghost name and a pin
+            tex_put(a, base); tex_put(b, base); mtl_tex_pin(c); tex_put(c, base); serial_del(c);
             pthread_mutex_lock(&g_smu); int named = own_rename_locked(base, base2, b); pthread_mutex_unlock(&g_smu);
             CHECK(named && tex_get(a) == base2 && tex_get(b) == base2 && tex_get(c) == base2, "a rename moves the live name, the ghost name and the pin");
             CHECK(!holds(base) && live_holds(base2) && holds(base2), "and the counts with them");
@@ -254,7 +239,7 @@ int main(void) { @autoreleasepool {
         }
     }
 
-    {   // sRGB / linear views of a shared texture (tex_mtl_'s twins); share() puts the parent in the sharing table and takes it out, as a registration and a pool drop do
+    {   // sRGB / linear twins: own_view_put publishes only while the parent is shared
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:4 height:4 mipmapped:NO];
         d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
@@ -262,10 +247,10 @@ int main(void) { @autoreleasepool {
         id<MTLTexture> (^view_of)(id<MTLTexture>) = ^(id<MTLTexture> p) { return [p newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB]; };
         CHECK(b && b2 && view_of(b), "two shared textures and a view of one");
         if (b && b2) {
-            alias_key kb = key_of(b);   // the parent's key
-            {   // the evidence: the old sequence (publish, find the parent gone, serial_del) on a finalized serial leaves the stale view reachable, as serial_del ends a live entry only
+            alias_key kb = key_of(b);
+            {
                 uint64_t k = 93061; id<MTLTexture> v = view_of(b);
-                share(b, 1); tex_put(k, v); share(b, 0);   // the parent leaves on another thread between the lookup and the check
+                share(b, 1); tex_put(k, v); share(b, 0);
                 CHECK(tex_get(k) == v, "old sequence: a reader between the publish and the check resolves the view of a parent already gone");
                 serial_del(k);
                 CHECK(tex_get(k) == v && ghost(k) && holds(v) && holds(b), "old sequence: after serial_del the finalized serial still resolves to the stale view, which holds its parent");
@@ -273,7 +258,7 @@ int main(void) { @autoreleasepool {
                 CHECK(own_view_drop_stale(k, v) == 1 && !tex_get(k) && !ghost(k) && !holds(v) && !holds(b) && dropped(v, 0), "own_view_drop_stale takes the stale view's ghost entry");
                 step("old twin sequence cleared");
             }
-            {   // own_view_put: published only while the parent is shared
+            {
                 uint64_t fk = 93062; tex_t lt = texture(93063); tex_live(&lt);
                 id<MTLTexture> v = view_of(b);
                 int notes = g_changed_n;
@@ -294,10 +279,10 @@ int main(void) { @autoreleasepool {
                 CHECK(own_view_drop_stale(fk, v) == 0, "and so does a view whose parent is pinned");
                 mtl_tex_unpin(pk);
                 step("valid views");
-                // stale-entry rejection: the view a caller resolved is stale, but the serial's entry changed meanwhile: the new entry stays
+                // the serial's entry changed meanwhile: the new entry stays
                 id y = [NSObject new]; tex_put(lt.serial, y);
                 CHECK(own_view_drop_stale(lt.serial, lv) == 1 && serial_get(lt.serial) == y && live_holds(y), "a stale view whose live entry was replaced meanwhile: the replacement stays");
-                tex_t again = texture(fk); tex_live(&again); tex_put(fk, y);   // the serial is live again, and its live entry is another object
+                tex_t again = texture(fk); tex_live(&again); tex_put(fk, y);
                 CHECK(own_view_drop_stale(fk, v) == 1 && serial_get(fk) == y && ghost(fk) && tex_get(fk) == y, "with a live entry that is not the view, the ghost entry is not touched (the live one resolves)");
                 CHECK(tex_end(&again) == 1, "the serial's object finalizes again");
                 CHECK(own_view_drop_stale(fk, v) == 1 && !ghost(fk) && !tex_get(fk) && !holds(v), "then the stale view's ghost entry goes");
@@ -306,7 +291,7 @@ int main(void) { @autoreleasepool {
                 tex_end(&lt);
                 step("views removed");
             }
-            {   // orders of finalize, publish, the parent leaving and resolution
+            {
                 tex_t t = texture(93065); tex_live(&t);
                 id<MTLTexture> v = view_of(b);
                 share(b, 1);
@@ -319,7 +304,7 @@ int main(void) { @autoreleasepool {
                 CHECK(own_view_drop_stale(t.serial, v) == 1 && !tex_get(t.serial) && !holds(b), "that resolution takes it");
                 CHECK(own_view_put(t.serial, &kb, view_of(b)) == 0 && !tex_get(t.serial), "the parent gone before the publish: nothing is published");
                 step("orders");
-                // parent replacement (an upgrade): every name of the parent moves to the upgraded texture, which takes its place in the sharing table; a view of the old one is stale
+                // an upgrade moves every name of the parent to the new texture; a view of the old one is stale
                 share(b, 1); tex_t u = texture(93066); tex_live(&u); id<MTLTexture> uv = view_of(b); uint64_t pn = (1ull << 62) + 93067;
                 tex_put(pn, b); CHECK(own_view_put(u.serial, &kb, uv) == 1, "a view and its parent's own name");
                 pthread_mutex_lock(&g_smu); own_rename_locked(b, b2, pn); id under = own_alias_get_locked(&kb); pthread_mutex_unlock(&g_smu);
@@ -329,11 +314,11 @@ int main(void) { @autoreleasepool {
                 CHECK(own_view_drop_stale(u.serial, uv) == 1 && !serial_get(u.serial) && !holds(b), "the view of the old parent is stale: it goes, and the old parent with it");
                 CHECK(own_view_put(u.serial, &kb, view_of(b)) == 0, "a view of the old parent made after the rename is refused (its key names the new texture)");
                 CHECK(own_view_put(u.serial, &kb, view_of(b2)) == 1 && [(id<MTLTexture>)serial_get(u.serial) parentTexture] == b2, "made again on the upgraded parent");
-                tex_end(&u); serial_del(pn); share(b, 0);   // b's key, which names b2 now
+                tex_end(&u); serial_del(pn); share(b, 0);
                 CHECK(!shared(b2) && !has(&kb), "the upgraded parent leaves with its key");
                 step("parent upgraded, view made again");
             }
-            {   // a ghost entry taken away leaves no place in the list: the serial put again has one place, as the most recently used, and goes in its turn
+            {   // a ghost entry taken away leaves no place in the use list
                 uint64_t k = 93070; id<MTLTexture> v = view_of(b); id x = [NSObject new];
                 share(b, 1); own_view_put(k, &kb, v); share(b, 0);
                 own_view_drop_stale(k, v); tex_put(k, x);
@@ -348,7 +333,7 @@ int main(void) { @autoreleasepool {
         }
     }
 
-    {   // the sharing table: lookups, registration, takeover, pool drops, upgrades, and their interleavings with finalize and resolution
+    {   // the sharing table: lookups, registration, takeover, pool drops, upgrades, and their interleavings
         enum { P = 0x7000, Q = 0x8000 };
         alias_key ka = akey(P, 0, NVN_FORMAT_RGBA8), kr = akey(P, 0, NVN_FORMAT_R32F), kg = akey(P, 0, NVN_FORMAT_RG16F), kq = akey(Q, 0, NVN_FORMAT_RGBA8);
         id a = [NSObject new], a2 = [NSObject new], r = [NSObject new];
@@ -360,10 +345,10 @@ int main(void) { @autoreleasepool {
         step("registration");
         tex_t s3 = texture(97003); tex_live(&s3);
         CHECK(own_alias_take(s3.serial, &ka) == a && serial_get(s3.serial) == a, "a lookup publishes the shared texture under the serial");
-        tex_t f = texture(97004);   // finalized: no live texture object
+        tex_t f = texture(97004);
         CHECK(own_alias_take(f.serial, &ka) == a && ghost(f.serial) && tex_get(f.serial) == a, "a finalized serial's lookup goes to the ghost table");
         step("lookups");
-        // the takeover: another description over the bytes. a is held by live entries: spared whatever its last lookup
+        // takeover: another description over the bytes; a is held by live entries, so spared
         g_sub += ALIAS_IDLE + 1;
         tex_t s4 = texture(97005); tex_live(&s4);
         CHECK(own_alias_publish(s4.serial, &kr, r) == r && has(&ka) && has(&kr), "the takeover spares an entry live serials hold");
@@ -381,7 +366,6 @@ int main(void) { @autoreleasepool {
         CHECK(ast().taken == taken + 1 + !has(&kr) && g_changed_n > notes, "the takeover is counted and reported");
         CHECK(has(&kr), "the entry s4 holds live stays");
         step("takeover");
-        // a lookup refreshes an entry's last lookup
         tex_end(&s4); g_sub += ALIAS_IDLE + 1;
         tex_t s6 = texture(97007); tex_live(&s6);
         CHECK(own_alias_take(s6.serial, &kr) == r, "a lookup of the idle entry");
@@ -389,7 +373,7 @@ int main(void) { @autoreleasepool {
         id a3 = [NSObject new]; tex_t s7 = texture(97008); tex_live(&s7);
         CHECK(own_alias_publish(s7.serial, &ka, a3) == a3 && has(&kr), "the lookup's mark spares it from the next takeover");
         step("lookup marks");
-        {   // replacement under a key retires the old texture: replaced in the map alone, it stayed in the set of shared textures and was released at once
+        {   // replaced in the map alone, it would stay in the shared set and be released at once
             alias_key kx = akey(Q, 1 << 20, NVN_FORMAT_RGBA8); id x1 = [NSObject new], x2 = [NSObject new];
             pthread_mutex_lock(&g_smu); own_alias_put_locked(&kx, x1, g_sub); own_alias_put_locked(&kx, x2, g_sub); id now = own_alias_get_locked(&kx); pthread_mutex_unlock(&g_smu);
             CHECK(now == x2 && shared(x2) && !shared(x1) && dropped(x1, 0), "a texture put over a key's entry replaces it, and the old one is retired");
@@ -398,8 +382,7 @@ int main(void) { @autoreleasepool {
             CHECK(del && !again && !shared(x2), "removal: once");
             step("removal");
         }
-        // a pool drop: that pool's entries go, another pool's stay, and so do the serial entries that named their textures (each a note; the pool's memory is gone on NVN, so a
-        // texture object finalized after its pool keeps nothing: Ocarina of Time's shadow target, docs/reference/memory.md); a lookup after it finds nothing
+        // a pool drop: that pool's entries go; on NVN its memory is gone, so a texture finalized after its pool keeps nothing (docs/reference/memory.md)
         id q = [NSObject new]; tex_t s8 = texture(97009); tex_live(&s8);
         own_alias_publish(s8.serial, &kq, q);
         own_alias_stats before = ast();
@@ -412,9 +395,8 @@ int main(void) { @autoreleasepool {
         CHECK(gone == before.n - 1 && after.n == 1 && has(&kq) && after.evicted == before.evicted + gone, "a pool drop takes the pool's entries, counted, and leaves another pool's");
         CHECK(!own_alias_take(s7.serial + 100, &ka) && !serial_get(s7.serial) && !live_holds(a3) && !shared(a3) && after.pool_entries > before.pool_entries, "after it a lookup finds nothing, and the serial that held a texture of the pool holds it no more");
         step("pool drop");
-        {   // a pool's live texture objects: their entries go whatever they hold (here a packaged texture, which the sharing table never names), and so does a finalized serial's entry
-            // that holds the package's texture (the GPU's first write over its storage hands it to the package's serials, own_hook_parts); another pool's texture keeps its entry, and
-            // the object's own Finalize, later, finds nothing to end
+        {   // a pool's live texture objects' entries go whatever they hold, and so does a finalized serial's entry
+            // that holds the package's texture (own_hook_parts); the object's later Finalize finds nothing to end
             const uint64_t R = 0x7000, S = 0x8000;
             id pkg = [NSObject new], ptex = [NSObject new], other = [NSObject new];
             g_parts = [NSMapTable strongToStrongObjectsMapTable]; [g_parts setObject:ptex forKey:pkg];
@@ -422,7 +404,7 @@ int main(void) { @autoreleasepool {
             l.pool = (void *)(uintptr_t)R; o2.pool = (void *)(uintptr_t)S; f.pool = (void *)(uintptr_t)R;
             tex_live(&l); tex_live(&o2); tex_live(&f);
             tex_put(l.serial, pkg); tex_put(o2.serial, other);
-            tex_end(&f); tex_put(f.serial, ptex);   // finalized before its pool, and resolved since: a ghost entry
+            tex_end(&f); tex_put(f.serial, ptex);
             CHECK(live(l.serial) && live(o2.serial) && ghost(f.serial), "the pool's live object, another pool's, and a finalized one");
             step("pool index");
             own_alias_stats b0 = ast(); uint64_t g0 = atomic_load(&g_ser_gen);
@@ -439,7 +421,7 @@ int main(void) { @autoreleasepool {
             step("pool finalize: the index emptied");
             g_parts = nil;
         }
-        // a twin's lookup (peek), then its parent's pool goes, then the publication: refused
+        // a twin's lookup, then its parent's pool goes, then the publication: refused
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:4 height:4 mipmapped:NO];
         d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
@@ -479,7 +461,7 @@ int main(void) { @autoreleasepool {
         step("sharing table torn down");
     }
 
-    {   // retirement eligibility: the queue's fence has passed (completion); the owner says whether the object may leave the residency set (no entry, pin or view's entry holds it)
+    {   // retirement: after the fence, the owner says whether the object may leave the residency set (no entry, pin or view's entry holds it)
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:4 height:4 mipmapped:NO];
         d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
@@ -487,23 +469,23 @@ int main(void) { @autoreleasepool {
         if (p) {
             uint64_t lk = (1ull << 62) + 98001, gk = 98002, pk = (1ull << 62) + 98003; [g_dropped removeAllObjects]; [g_dropped_keep removeAllObjects];
             id<MTLTexture> v = [p newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
-            tex_put(lk, v);   // a live entry holds a view of p
+            tex_put(lk, v);
             CHECK(retire(p) == 0 && waiting() == 1, "a parent a live view's entry holds waits");
             step("retire: a view's parent waits");
             serial_del(lk);
             CHECK(!waiting() && ndropped(p, 0) == 1 && retire(p) == 1, "the view's entry gone, the parent is handed back to retirement (behind the submission then in flight) and is eligible");
             step("retire: handed back");
-            tex_put(gk, p);   // a ghost entry
+            tex_put(gk, p);
             CHECK(retire(p) == 0, "a ghost entry keeps it too");
-            mtl_tex_pin(pk); tex_put(pk, p); serial_del(pk);   // and a pin, after its entry went
-            idle(); for (int i = 0; i < NGHOST; i++) tex_put(990000 + (uint64_t)i, [NSObject new]);   // idle, the ghost entry goes as newer ones come
+            mtl_tex_pin(pk); tex_put(pk, p); serial_del(pk);
+            idle(); for (int i = 0; i < NGHOST; i++) tex_put(990000 + (uint64_t)i, [NSObject new]);
             trim_all();
             CHECK(!ghost(gk) && waiting() == 1 && retire(p) == 0, "with the ghost entry evicted, the pin still holds it: it keeps waiting");
             int before = ndropped(p, 0);
             mtl_tex_unpin(pk);
             CHECK(!waiting() && ndropped(p, 0) == before + 2, "the last unpin hands it back (besides the pin's own drop)");
             step("retire: ghost and pin");
-            // a shared texture: when its last entry goes it is not handed back, as the sharing table keeps it resident and retires it itself when it lets it go
+            // a shared texture's last entry going does not hand it back: the sharing table retires it itself
             share(p, 1); tex_put(lk, p);
             CHECK(retire(p) == 0, "a shared texture a live entry holds waits");
             before = ndropped(p, 0); serial_del(lk);
@@ -519,7 +501,7 @@ int main(void) { @autoreleasepool {
         }
     }
 
-    {   // teardown: every ghost serial, idle, evicted as NGHOST new ones come, then those taken away as stale views; nothing is held, every count is gone
+    {   // teardown: nothing is held, every count is gone
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         id<MTLTexture> p = [dev newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:4 height:4 mipmapped:NO]];
         NSMutableArray *views = [NSMutableArray array];
@@ -538,8 +520,8 @@ int main(void) { @autoreleasepool {
         }
     }
 
-    {   // The memory report's count of what only the sharing table keeps (issue #2629): each texture's bytes once, however many keys name it; the part made to be drawn into;
-        // the longest any has gone without a lookup; textures a serial, a view's serial or a pin holds are left out
+    {   // memory report of what only the sharing table keeps: each texture's bytes once, however many keys name it;
+        // textures a serial, a view's serial or a pin holds are left out
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         if (dev) {
             MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:64 height:64 mipmapped:NO];

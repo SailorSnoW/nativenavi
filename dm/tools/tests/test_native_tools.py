@@ -47,7 +47,7 @@ class NativeTools(unittest.TestCase):
                 self.assertEqual(macho_archs(exe.read_bytes()), ['arm64', 'x86_64'])
                 self.assertTrue(exe.stat().st_mode & 0o111, f'{exe} is not executable')
 
-    def test_no_weak_imports(self):   # the arm64 translator of 641636e2 called pipe2 (macOS 27) unchecked and faulted at address 0 on macOS 26
+    def test_no_weak_imports(self):
         for exe in (XLATE,):
             with self.subTest(exe=exe.name):
                 self.assertEqual(weak_imports(exe.read_bytes()), {'arm64': [], 'x86_64': []},

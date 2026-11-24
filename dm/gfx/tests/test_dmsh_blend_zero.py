@@ -186,7 +186,7 @@ class BlendZero(unittest.TestCase):
         self.assertNotIn(dmsh_abi.BLEND_BUFFER, (dmsh_abi.ALPHA_BUFFER, dmsh_abi.LOGIC_BUFFER, 0))
 
     def test_rounding_rule(self):
-        flags = f32(66.5 / 255)   # Sonic Frontiers' G-buffer flags
+        flags = f32(66.5 / 255)   # a G-buffer's flags
         self.assertEqual(flags, 0.260784327983856201171875)
         self.assertEqual((nvidia_unorm(flags, 255), apple_unorm(flags, 255)), (66, 67))
         differ = 0

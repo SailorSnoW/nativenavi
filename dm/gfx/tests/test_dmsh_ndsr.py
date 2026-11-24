@@ -5,7 +5,6 @@ dmsh_rewrite.hmma_msl as every translated shader does. On the CPU: the pass reco
 interleaved patches), and refuses every change of the graph, leaving the source as it was. On this Mac's GPU: the translated kernel against the rewritten one in one pass and in
 two (DMSH_SPLIT_FC false, then true, the words at DMSH_SPLIT_SLOT), bit for bit on random weights and windows."""
 from pathlib import Path
-import os
 import random
 import shutil
 import struct

@@ -37,7 +37,7 @@ int main(void) { @autoreleasepool {
     m.hasGravityAndUserAcceleration = YES;
     m.gravity = (GCAcceleration){0, 0, -1}; m.userAcceleration = (GCAcceleration){0.25, 0, 0};
     for (int i = 0; i < 4; i++) m.valueChangedHandler((id)m);
-    assert(!samples);   // Nonzero acceleration alone must not qualify a constant rotation rate (NX2Apple #971).
+    assert(!samples);   // Nonzero acceleration alone must not qualify a constant rotation rate.
     m.rotationRate = (GCRotationRate){0, 1, 0}; m.valueChangedHandler((id)m);
     assert(samples == 1 && player == 2 && acc[0] == 0.25f && acc[2] == -1 && rot[1] == 1);
     m.hasGravityAndUserAcceleration = NO; m.rotationRate = (GCRotationRate){0};

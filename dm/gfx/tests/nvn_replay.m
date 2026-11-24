@@ -1,12 +1,5 @@
-// nvn_replay: replays a frame captured with DM_NVN_CAPTURE (dm/gfx/nvn/nvn_capture.inc) against this tree's replay layer, and compares the presented frame's digest with
-// the one the live run took. Built like the gfx tests, which include nvn_mtl.m (and hle_nvn.c) in one translation unit: the replayer reaches the replay layer's own tables
-// and the host's pool / program / descriptor-pool side tables without any entry point added to them for it.
-//   make -C dm/gfx/tests GAME=<id> nvn_replay
-//   ./nvn_replay <capture> [--repeat n] [--max-pixels n] [--warm n] [--png path] [--texdump dir] [--writes] [--made]
-// --repeat n: n replays, each in a fresh process; --warm n: n replays in one process, each after the one before (the replay layer keeps its state; see docs/development.md)
-// --max-pixels n: a replay whose frame differs from the live one in at most n pixels still counts as a match (the replay noise of the game's frame; default 0, bit for bit)
-// Exit status: 0 the replayed frame equals the live one (within --max-pixels), 1 it differs, 2 the capture cannot be replayed by this build (another game, record layout or shader
-// interface, a corrupt file): a [RED] line says which.
+// Replays a DM_NVN_CAPTURE frame against this tree's replay layer and compares its digest with the live run's (docs/development.md#frame-capture-and-replay).
+// Exit status: 0 same frame (within --max-pixels), 1 different, 2 the capture cannot be replayed by this build (a [RED] line says why).
 #import <Foundation/Foundation.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -22,7 +15,7 @@ module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t *g_mod; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
-void crash_install(void);   // host crash.c: the fault handler that also takes the dirty tracker's write faults on pool pages (nvn_dirty.c)
+void crash_install(void);   // host crash.c: its fault handler also takes the dirty tracker's write faults on pool pages
 
 #define RFAIL(...) do { fprintf(stderr, "[RED] nvn_replay: " __VA_ARGS__); fputc('\n', stderr); exit(2); } while (0)
 typedef struct { cap_chunk c; uint8_t *d; } chunk;
@@ -34,10 +27,9 @@ static tex_t *rp_to; static uint32_t rp_nto;
 static prog_t *rp_pr; static cap_prog *rp_prc; static uint32_t rp_npr;
 static dpool_t *rp_dp; static uint32_t rp_ndp;
 static sync_t *rp_sy; static uint32_t rp_nsy;
-static uint8_t **rp_seg; static uint32_t rp_nseg;   // the segments of the submit being decoded
-static uint64_t rp_bad;   // fields that did not decode
+static uint8_t **rp_seg; static uint32_t rp_nseg;
+static uint64_t rp_bad;
 
-// Pool blocks whose bytes after the frame differ from the live run's, and the record fields that read or write them (the pool comparison after the first replay)
 static nvn_hmap g_diffblk = {.klen = 8}; static uint32_t g_scan_op; static uint64_t g_scan_hits[OP_COUNT_];
 static int scan_addr(void *ctx, uint64_t *field, uint64_t len, int writable) {
     (void)ctx; (void)writable; uint64_t v = *field; if (!cap_is_addr(v)) return 1;
@@ -47,8 +39,7 @@ static int scan_addr(void *ctx, uint64_t *field, uint64_t len, int writable) {
 }
 static int scan_obj(void *ctx, int kind, uint64_t *field, uint8_t *payload, uint32_t size) { (void)ctx; (void)kind; (void)field; (void)payload; (void)size; return 1; }
 
-// --writes: pool ranges the GPU writes in a submission (copies, fills, storage buffers) and the later records of the same submission that read
-// them, by op: what a replay layer reading pool memory on the CPU while it encodes would see differently depending on how far the GPU has got
+// --writes: pool ranges the GPU writes in a submission and the later records of it that read them
 typedef struct { uint64_t r, lo, hi; uint32_t op; } raw_w; static raw_w *g_rw; static size_t g_nrw, g_rwcap; static int g_raw_write; static uint32_t g_raw_op;
 static uint64_t g_raw_hits[OP_COUNT_][OP_COUNT_];
 static int raw_addr(void *ctx, uint64_t *field, uint64_t len, int writable) {
@@ -69,7 +60,7 @@ static void raw_walk(const uint8_t *seg, uint32_t len, const uint8_t **segs, con
     uint8_t *b = malloc(len + 8); memcpy(b, seg, len);
     for (uint32_t o = 0; o + 8 <= len;) { op_hdr h; memcpy(&h, b + o, 8); if (h.size < 8 || o + h.size > len) break; g_raw_op = h.op < OP_COUNT_ ? h.op : 0;
         if ((h.op == OP_CALL || h.op == OP_JUMP) && depth < 8) { uint64_t v; memcpy(&v, b + o + 8, 8); uint64_t i = cap_obj_index(v); if (i < nseg) raw_walk(segs[i], lens[i], segs, lens, nseg, depth + 1); if (h.op == OP_JUMP) break; o += h.size; continue; }
-        g_raw_write = 0; cap_rec_fields(h.op, b + o + 8, h.size, &g_raw, NULL);   // reads first (a copy reads its source), then the writes
+        g_raw_write = 0; cap_rec_fields(h.op, b + o + 8, h.size, &g_raw, NULL);
         g_raw_write = 1; cap_rec_fields(h.op, b + o + 8, h.size, &g_raw, NULL); g_raw_write = 0;
         o += h.size; }
     free(b);
@@ -101,7 +92,7 @@ static int dec_obj(void *ctx, int kind, uint64_t *field, uint8_t *payload, uint3
     *field = (uint64_t)(uintptr_t)p; return 1;
 }
 
-static const char *head_get(const char *head, size_t n, const char *key, char *out, size_t on) {   // value of "key\tvalue\n" in the header text
+static const char *head_get(const char *head, size_t n, const char *key, char *out, size_t on) {
     size_t kl = strlen(key);
     for (size_t i = 0; i < n;) {
         const char *e = memchr(head + i, '\n', n - i); size_t ln = e ? (size_t)(e - head - i) : n - i;
@@ -110,7 +101,7 @@ static const char *head_get(const char *head, size_t n, const char *key, char *o
     }
     return NULL;
 }
-static void apply_env(const char *head, size_t n) {   // the live run's DM_* settings, so the replay takes the same paths (a setting given to the replayer wins)
+static void apply_env(const char *head, size_t n) {   // the live run's DM_* settings, so the replay takes the same paths (the replayer's own win)
     static const char *const skip[] = {"DM_NVN_SHOT", "DM_NVN_TSV", "DM_KEYS", "DM_CTL", "DM_WINDOW", "DM_METAL_HUD", "DM_PSO_PREBUILD"};
     for (size_t i = 0; i < n;) {
         const char *e = memchr(head + i, '\n', n - i); size_t ln = e ? (size_t)(e - head - i) : n - i;
@@ -123,9 +114,9 @@ static void apply_env(const char *head, size_t n) {   // the live run's DM_* set
     }
 }
 
-static void map_region(uint32_t idx, const cap_regn *h, const uint8_t *bytes) {   // a fresh mapping at the same offset within 64 KiB as the live one (alignment the replay layer may depend on)
+static void map_region(uint32_t idx, const cap_regn *h, const uint8_t *bytes) {   // the same offset within 64 KiB as the live mapping: the replay layer may depend on that alignment
     if (idx >= rp_nrg) { rp_rg = realloc(rp_rg, (idx + 1) * sizeof *rp_rg); memset(rp_rg + rp_nrg, 0, (idx + 1 - rp_nrg) * sizeof *rp_rg); rp_nrg = idx + 1; }
-    size_t lead = (size_t)(h->old_lo & 0xffff), len = (size_t)h->size + lead + 0x30000;   // room for the alignment and the pool buffers' page rounding
+    size_t lead = (size_t)(h->old_lo & 0xffff), len = (size_t)h->size + lead + 0x30000;
     uint8_t *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (m == MAP_FAILED) RFAIL("cannot map region %u (%llu bytes)", idx, (unsigned long long)h->size);
     uint8_t *base = (uint8_t *)(((uintptr_t)m + 0xffff) & ~(uintptr_t)0xffff) + lead;
@@ -134,7 +125,7 @@ static void map_region(uint32_t idx, const cap_regn *h, const uint8_t *bytes) { 
 }
 
 static int rp_pools_added;
-static void add_pools(const uint8_t *d, size_t n) {   // the replay layer's pool list, as hle_nvn.c registers a pool (MemoryPoolInitialize)
+static void add_pools(const uint8_t *d, size_t n) {
     for (size_t o = 0; o + sizeof(cap_padd) <= n; o += sizeof(cap_padd)) {
         cap_padd a; memcpy(&a, d + o, sizeof a);
         if (!dec_addr(NULL, &a.mem, 0, 0) || !a.mem) RFAIL("a pool lies in no captured region");
@@ -143,9 +134,8 @@ static void add_pools(const uint8_t *d, size_t n) {   // the replay layer's pool
     }
 }
 
-// Fill a texture from a TPIX chunk: made as the replay layer makes it (tex_mtl), then each level and slice copied in from the captured bytes
-static int opt_writes, opt_made;   // --writes: GPU writes and the reads after them in each submission; --made: list the textures the frame made itself
-static nvn_hmap g_filled = {.klen = 8};   // host textures the capture's contents filled
+static int opt_writes, opt_made;
+static nvn_hmap g_filled = {.klen = 8};
 static void fill_tex(const uint8_t *d, size_t n) {
     cap_tpix h; if (n < sizeof h) RFAIL("short texture chunk");
     memcpy(&h, d, sizeof h); cap_tex_fields(&h.t, &rp_dec, NULL);
@@ -167,7 +157,7 @@ static void fill_tex(const uint8_t *d, size_t n) {
     [e endEncoding]; [cb commit]; [cb waitUntilCompleted];
 }
 
-static void check_programs(const char *cap_chain) {   // every program resolves to shaders with the interface the records were made for
+static void check_programs(const char *cap_chain) {
     int missing = 0;
     for (uint32_t i = 0; i < rp_npr; i++) {
         NvProg *o = prog_get(&rp_pr[i]); uint64_t now[6]; cap_iface(o, now);
@@ -186,14 +176,14 @@ static void check_programs(const char *cap_chain) {   // every program resolves 
 
 int main(int argc, char **argv) { @autoreleasepool {
     const char *path = NULL, *png = NULL, *tdir = NULL, *maxpx_arg = "0"; int repeat = 1, warm = 1, index = 1;
-    setvbuf(stdout, NULL, _IOLBF, 0); crash_install();   // pool pages the replay writes may be write-protected by the dirty tracker, as in the host
+    setvbuf(stdout, NULL, _IOLBF, 0); crash_install();   // pool pages the replay writes may be write-protected by the dirty tracker
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--repeat") && i + 1 < argc) repeat = MAX(1, atoi(argv[++i]));
         else if (!strcmp(argv[i], "--png") && i + 1 < argc) png = argv[++i];
         else if (!strcmp(argv[i], "--max-pixels") && i + 1 < argc) maxpx_arg = argv[++i];
-        else if (!strcmp(argv[i], "--texdump") && i + 1 < argc) tdir = argv[++i];   // every colour target of each replay as <dir>/r<n>_<serial*100+level>.png (DM_NVN_TEXDUMP), to compare replays target by target
+        else if (!strcmp(argv[i], "--texdump") && i + 1 < argc) tdir = argv[++i];
         else if (!strcmp(argv[i], "--warm") && i + 1 < argc) warm = MAX(1, atoi(argv[++i]));
-        else if (!strcmp(argv[i], "--index") && i + 1 < argc) index = MAX(1, atoi(argv[++i]));   // (the n-th fresh replay of --repeat)
+        else if (!strcmp(argv[i], "--index") && i + 1 < argc) index = MAX(1, atoi(argv[++i]));
         else if (!strcmp(argv[i], "--writes")) opt_writes = 1;
         else if (!strcmp(argv[i], "--made")) opt_made = 1;
         else if (argv[i][0] != '-' && !path) path = argv[i];
@@ -201,7 +191,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     }
     if (!path) { fprintf(stderr, "usage: %s <capture> [--repeat n] [--max-pixels n] [--warm n] [--png path] [--texdump dir] [--writes] [--made]\n", argv[0]); return 2; }
     uint64_t maxpx = strtoull(maxpx_arg, NULL, 10);
-    if (repeat > 1) {   // each replay in a fresh process: a replay in the same process starts from the replay layer's state the one before left (--warm), which changes the frame
+    if (repeat > 1) {   // a replay in the same process starts from the state the one before left (--warm), which changes the frame
         int ok = 0, worst = 0;
         for (int k = 1; k <= repeat; k++) {
             char idx[16]; snprintf(idx, sizeof idx, "%d", k); const char *args[16]; int na = 0;
@@ -209,7 +199,7 @@ int main(int argc, char **argv) { @autoreleasepool {
             if (png) { args[na++] = "--png"; args[na++] = png; }
             if (tdir) { args[na++] = "--texdump"; args[na++] = tdir; }
             args[na] = NULL;
-            pid_t pid; extern char **environ; int st = 0; char self[1024]; uint32_t sn = sizeof self;   // this executable by its path (argv[0] may have come from PATH)
+            pid_t pid; extern char **environ; int st = 0; char self[1024]; uint32_t sn = sizeof self;
             if (_NSGetExecutablePath(self, &sn)) strlcpy(self, argv[0], sizeof self);
             if (posix_spawn(&pid, self, NULL, NULL, (char *const *)args, environ) || waitpid(pid, &st, 0) < 0) RFAIL("cannot run %s", self);
             int rc = WIFEXITED(st) ? WEXITSTATUS(st) : 2; ok += rc == 0; worst = MAX(worst, rc);
@@ -218,9 +208,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         return worst;
     }
     uint64_t tl0 = now_ns();
-    // The capture's textures and programs keep the live run's serials, and the replay layer's own objects (the per-stage combined programs of bind_stages) take theirs from
-    // the same counter and the same serial table: counted from 1 here, a combined program took a captured texture's serial, and that texture resolved to the program
-    // (Pokemon Scarlet: -[NvProg width] in rt_dims). Serials of a live run stay far below 2^61 (external textures take 2^62 and up)
+    // Captured serials are kept, and the replay layer's own objects take theirs from the same counter: start far above them (live serials stay below 2^61, external ones take 2^62 up).
     nvn_serial_floor(1ull << 61);
     cap_reader rd; int lr = cap_load(&rd, path);
     if (lr <= 0) RFAIL("%s: %s", path, lr < 0 ? "not a capture of format 1" : "cannot read");
@@ -241,7 +229,6 @@ int main(int argc, char **argv) { @autoreleasepool {
         }
         rp_ch = realloc(rp_ch, (rp_nch + 1) * sizeof *rp_ch); rp_ch[rp_nch++] = (chunk){c, d}; }
     cap_unload(&rd);
-    // header: game, layout, chain; then the live run's settings
     char *head = NULL; size_t hn = 0; const char *lay = NULL; size_t ln = 0; const char *stat = ""; size_t sn = 0;
     for (size_t i = 0; i < rp_nch; i++) { if (rp_ch[i].c.tag == CAP_HEAD) { head = (char *)rp_ch[i].d; hn = rp_ch[i].c.raw; } else if (rp_ch[i].c.tag == CAP_LAYT) { lay = (const char *)rp_ch[i].d; ln = rp_ch[i].c.raw; }
         else if (rp_ch[i].c.tag == CAP_STAT) { stat = (const char *)rp_ch[i].d; sn = rp_ch[i].c.raw; } }
@@ -252,7 +239,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     uint64_t mtl_frame = head_get(head, hn, "mtl_frame", v, sizeof v) ? strtoull(v, NULL, 10) : 0;
     if (strcmp(title, DM_GAME_ID)) RFAIL("the capture is of %s, this replayer is built for %s (make GAME=%s nvn_replay)", title, DM_GAME_ID, title);
     if (!cap_layout_matches(lay, ln)) RFAIL("the capture's record layout differs from this build's (nvn_obj.h changed since the capture): capture again");
-    if (!head_get(head, hn, "iface", v, sizeof v) || atoi(v) != CAP_IFACE)   // the shader interface hashes check_programs compares (nvn_capture.inc cap_iface)
+    if (!head_get(head, hn, "iface", v, sizeof v) || atoi(v) != CAP_IFACE)
         RFAIL("the capture's shader interface hashes are of another kind (%s, this build %d: before 2 they hashed nvn_refl.h's struct bytes): capture again", head_get(head, hn, "iface", v, sizeof v) ? v : "none", CAP_IFACE);
     printf("capture %s: %s frame %s, build %s, host %s, chain %s (this build: chain %s)\n", path, title, frame, build, commit, chain, DMSH_CHAIN);
     apply_env(head, hn);
@@ -280,7 +267,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     if (!pres) RFAIL("%s: no present (the capture did not finish)", path);
     rp_po = calloc(rp_npo + 1, sizeof *rp_po); rp_to = calloc(rp_nto + 1, sizeof *rp_to); rp_pr = calloc(rp_npr + 1, sizeof *rp_pr); rp_prc = calloc(rp_npr + 1, sizeof *rp_prc);
     rp_dp = calloc(rp_ndp + 1, sizeof *rp_dp); rp_sy = calloc(rp_nsy + 1, sizeof *rp_sy);
-    for (size_t i = 0; i < rp_nch; i++) {   // pools first: descriptor pools and textures point at them
+    for (size_t i = 0; i < rp_nch; i++) {
         cap_chunk *c = &rp_ch[i].c; const uint8_t *d = rp_ch[i].d; if (c->tag != CAP_POBJ) continue;
         for (size_t o = 0; o + sizeof(cap_pobj) <= c->raw; o += sizeof(cap_pobj)) { cap_pobj p; memcpy(&p, d + o, sizeof p);
             uint64_t m = p.mem; dec_addr(NULL, &m, 0, 0); rp_po[p.index] = (pool_t){MAGIC('P', 'O', 'O', 'L'), p.flags, (uint8_t *)(uintptr_t)m, p.size, NULL, p.vmode}; }
@@ -293,13 +280,12 @@ int main(int argc, char **argv) { @autoreleasepool {
         if (c->tag == CAP_DPOL) for (size_t o = 0; o + sizeof(cap_dpol) <= c->raw; o += sizeof(cap_dpol)) { cap_dpol p; memcpy(&p, d + o, sizeof p);
             uint64_t po = p.pool; dec_obj(NULL, CAP_K_POOL, &po, NULL, 0); rp_dp[p.index] = (dpool_t){(const pool_t *)(uintptr_t)po, p.off, p.n}; }
     }
-    // pointers into the tables are fixed now (no more realloc): decode the texture objects, install the program keys and descriptor-pool bases in hle_nvn.c's side tables
+    // pointers into the tables are fixed now (no more realloc)
     for (uint32_t i = 0; i < rp_nto; i++) cap_tex_fields(&rp_to[i], &rp_dec, NULL);
-    for (uint32_t i = 0; i < rp_npr; i++) if (rp_pr[i].serial) { prog_keys_t *k = pk_get(rp_pr[i].serial);   // keyed by serial, as SetShaders keys them
+    for (uint32_t i = 0; i < rp_npr; i++) if (rp_pr[i].serial) { prog_keys_t *k = pk_get(rp_pr[i].serial);
         memcpy(k->key, rp_prc[i].key, sizeof k->key); k->ok = rp_prc[i].ok; }
     for (size_t i = 0; i < rp_nch; i++) if (rp_ch[i].c.tag == CAP_DPOL) for (size_t o = 0; o + sizeof(cap_dpol) <= rp_ch[i].c.raw; o += sizeof(cap_dpol)) { cap_dpol p; memcpy(&p, rp_ch[i].d + o, sizeof p);
         if (g_ntpb < NDPOOL) g_tpb[g_ntpb++] = (struct dpool_base){&rp_dp[p.index], p.tex_base}; if (g_nspb < NDPOOL) g_spb[g_nspb++] = (struct dpool_base){&rp_dp[p.index], p.samp_base}; }
-    // how the replay layer held each texture: live ones are initialized (kept in the serial table, not the small ghost ring), CPU-written ones uploaded from their pools
     uint64_t nlive = 0, ncpu = 0;
     for (size_t i = 0; i < rp_nch; i++) if (rp_ch[i].c.tag == CAP_TKND) for (size_t o = 0; o + sizeof(cap_tknd) <= rp_ch[i].c.raw; o += sizeof(cap_tknd)) {
         cap_tknd *k = (cap_tknd *)(rp_ch[i].d + o); cap_tex_fields(&k->t, &rp_dec, NULL);
@@ -325,16 +311,16 @@ int main(int argc, char **argv) { @autoreleasepool {
         for (int a = 0; a < OP_COUNT_; a++) for (int b = 0; b < OP_COUNT_; b++) if (g_raw_hits[a][b]) printf(" %d→%d×%llu", a, b, (unsigned long long)g_raw_hits[a][b]);
         printf("\n"); memset(g_raw_hits, 0, sizeof g_raw_hits);
     }
-    const uint8_t *lpix = NULL; uint64_t lpixn = 0;   // the live frame's pixels (captures made before LPIX have only its digest)
+    const uint8_t *lpix = NULL; uint64_t lpixn = 0;
     for (size_t i = 0; i < rp_nch; i++) if (rp_ch[i].c.tag == CAP_LPIX) { lpix = rp_ch[i].d; lpixn = rp_ch[i].c.raw; }
     char live[65]; cap_hex(pres->sha256, live); int same_all = 1, ok_all = 1; uint64_t worst_px = 0;
     for (int rep = 0; rep < warm; rep++) {
-        uint64_t exec_ns = 0, setup_ns = 0, pass0 = 0, draw0 = 0, frame_no = rep == 0 && mtl_frame ? mtl_frame : 1000000 + (uint64_t)rep;   // the first replay takes the live frame number (frame-keyed diagnostics)
+        uint64_t exec_ns = 0, setup_ns = 0, pass0 = 0, draw0 = 0, frame_no = rep == 0 && mtl_frame ? mtl_frame : 1000000 + (uint64_t)rep;
         if (tdir) { char tp[1200]; snprintf(tp, sizeof tp, "%s/r%d_%%d.png", tdir, index + rep); dm_gfx_texdump_next(tp); g_td_frame = (long)frame_no; }
-        if (rep) for (uint32_t r = 0; r < rp_nrg; r++) if (rp_rg[r].mem) memcpy(rp_rg[r].mem, rp_rg[r].orig, (size_t)rp_rg[r].size);   // back to the state at the first submit
+        if (rep) for (uint32_t r = 0; r < rp_nrg; r++) if (rp_rg[r].mem) memcpy(rp_rg[r].mem, rp_rg[r].orig, (size_t)rp_rg[r].size);
         for (uint32_t s = 1; s <= nsub; s++) {
             uint64_t t0 = now_ns();
-            for (size_t i = 0; i < rp_nch; i++) {   // what changed before this submit, in the order it was captured
+            for (size_t i = 0; i < rp_nch; i++) {
                 cap_chunk *c = &rp_ch[i].c; uint8_t *d = rp_ch[i].d; if (c->submit != s) continue;
                 if (c->tag == CAP_PADD && s > 1) add_pools(d, c->raw);
                 else if (c->tag == CAP_PDIF) for (size_t o = 0; o + 24 <= c->raw;) { uint32_t r; uint64_t off, len; memcpy(&r, d + o, 4); memcpy(&off, d + o + 8, 8); memcpy(&len, d + o + 16, 8);
@@ -343,7 +329,6 @@ int main(int argc, char **argv) { @autoreleasepool {
                 else if (c->tag == CAP_SREG) for (size_t o = 0; o + sizeof(cap_sreg) <= c->raw; o += sizeof(cap_sreg)) { cap_sreg e; memcpy(&e, d + o, sizeof e); mtl_reg_samp(e.sid, &e.p); }
                 else if (c->tag == CAP_TPIX) fill_tex(d, c->raw);
             }
-            // this submit's segments: copied, decoded (calls and jumps point at the copies), handed to the replay as the host hands the game's handles
             uint32_t nh = 0; const uint32_t *top = NULL; rp_nseg = 0;
             for (size_t i = 0; i < rp_nch; i++) { cap_chunk *c = &rp_ch[i].c; if (c->submit != s) continue;
                 if (c->tag == CAP_SEGM) { uint32_t idx, len; memcpy(&idx, rp_ch[i].d, 4); memcpy(&len, rp_ch[i].d + 4, 4); if (idx >= rp_nseg) { rp_seg = realloc(rp_seg, (idx + 1) * sizeof *rp_seg); rp_nseg = idx + 1; }
@@ -367,10 +352,9 @@ int main(int argc, char **argv) { @autoreleasepool {
         }
         tex_t pt = {0}; uint64_t pv = pres->tex; if (!dec_obj(NULL, CAP_K_TEX, &pv, NULL, 0)) RFAIL("the presented texture is not in the capture"); pt = *(const tex_t *)(uintptr_t)pv;
         uint8_t md[32]; uint64_t bytes; uint32_t w, h, pf; char out[65], pngp[1100]; cap_buf mine = {0};
-        snprintf(pngp, sizeof pngp, "%s", png ? png : ""); if (!png) snprintf(pngp, sizeof pngp, "%s.replay%d.png", path, index + rep);   // one image per replay: replays of one build can be compared too
+        snprintf(pngp, sizeof pngp, "%s", png ? png : ""); if (!png) snprintf(pngp, sizeof pngp, "%s.replay%d.png", path, index + rep);
         if (!cap_digest(&pt, md, &bytes, &w, &h, &pf, pngp, &mine)) RFAIL("the presented texture cannot be read back");
         cap_hex(md, out); int same = !memcmp(md, pres->sha256, 32); same_all &= same;
-        // which pixels differ from the live frame: their count, the largest difference of one byte, and the box around them
         uint64_t npx = 0; uint32_t big = 0, x0 = UINT32_MAX, x1 = 0, y0 = UINT32_MAX, y1 = 0; int have_px = !same && lpix && lpixn == mine.n && w == pres->width && h == pres->height && pf == pres->pixfmt && w && h;
         if (have_px) { size_t bpp = (size_t)(mine.n / ((uint64_t)w * h));
             for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) { const uint8_t *a = lpix + ((size_t)y * w + x) * bpp, *b = mine.p + ((size_t)y * w + x) * bpp; uint32_t d = 0;
@@ -379,7 +363,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         int ok = same || (have_px && npx <= maxpx); ok_all &= ok; if (have_px) worst_px = MAX(worst_px, npx);
         cap_buf_free(&mine);
         if (g_td_frame == (long)frame_no && !g_td_done) td_dump();
-        if (rep == 0) {   // textures the GPU writes that the frame made itself (no captured content): a second replay starts from what this one left in them
+        if (rep == 0) {   // textures the frame made itself: a second replay starts from what this one left in them
             __block uint64_t n = 0, bytes = 0;
             pthread_mutex_lock(&g_smu);
             own_each_locked(^(uint64_t ser, id o, int ghost) {
@@ -390,7 +374,7 @@ int main(int argc, char **argv) { @autoreleasepool {
             pthread_mutex_unlock(&g_smu);
             printf("render targets and images the frame made without captured content: %llu (%.1f MB)\n", (unsigned long long)n, bytes / 1048576.0);
         }
-        if (1) {   // pool blocks after the frame against the live run's: written live but not here = the CPU wrote them while the frame ran (or a GPU write the replay missed)
+        if (1) {   // written live but not here = the CPU wrote them while the frame ran, or a GPU write the replay missed
             uint64_t live_only = 0, rep_only = 0, both = 0, blocks = 0; uint32_t worst = 0, worst_n = 0; nvn_hm_clear(&g_diffblk, NULL);
             for (size_t i = 0; i < rp_nch; i++) { if (rp_ch[i].c.tag != CAP_PHSH) continue; const uint8_t *d = rp_ch[i].d;
                 for (size_t o = 0; o + 8 <= rp_ch[i].c.raw;) { uint32_t r, nb; memcpy(&r, d + o, 4); memcpy(&nb, d + o + 4, 4); o += 8; uint32_t rn = 0;
@@ -400,7 +384,7 @@ int main(int argc, char **argv) { @autoreleasepool {
                         if (h1 == lh) continue;
                         rn++; if (lh != h0 && h1 == h0) live_only++; else if (lh == h0) rep_only++; else both++; uint64_t key = (uint64_t)r << 32 | k; nvn_hm_put(&g_diffblk, &key, (void *)1); }
                     if (rn > worst_n) { worst_n = rn; worst = r; } } }
-            if (g_diffblk.n && rep == 0) {   // which records touch them (unbounded buffer bindings are taken as their first 4 KiB)
+            if (g_diffblk.n && rep == 0) {   // unbounded buffer bindings are taken as their first 4 KiB
                 cap_ops sc = {scan_addr, scan_obj};
                 for (size_t i = 0; i < rp_nch; i++) { if (rp_ch[i].c.tag != CAP_SEGM) continue; uint32_t len; memcpy(&len, rp_ch[i].d + 4, 4); uint8_t *b = malloc(len); memcpy(b, rp_ch[i].d + 8, len);
                     for (uint32_t o = 0; o + 8 <= len;) { op_hdr h; memcpy(&h, b + o, 8); if (h.size < 8 || o + h.size > len) break; g_scan_op = h.op < OP_COUNT_ ? h.op : 0; cap_rec_fields(h.op, b + o + 8, h.size, &sc, NULL); o += h.size; }

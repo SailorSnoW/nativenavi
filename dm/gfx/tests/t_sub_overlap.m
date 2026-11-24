@@ -1,6 +1,6 @@
 // With Metal encoding on its own thread (DM_NVN_ENC_THREAD), a submission's end hands its records to the encode thread and returns: the replay translates the next submission while
-// the encode thread finishes this one. It used to wait for the encode thread (rec_drain) at the end of every submission, and Ocarina of Time makes about 30 a frame (one at each event
-// signal), so the GPU sat idle before most of them. What needs the work committed waits for the submission's note
+// the encode thread finishes this one. Ocarina of Time makes about 30 submissions a frame (one at each event signal): waiting for the encode thread (rec_drain) at the end of each
+// would leave the GPU idle before most of them. What needs the work committed waits for the submission's note
 // (g_sub_cmt): a present of the game's own texture (no snapshot), before its display command buffer. The encode thread is held inside a submission by a queue block here.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }

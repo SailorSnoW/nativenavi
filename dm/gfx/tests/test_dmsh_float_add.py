@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """dmsh_rewrite.py float_add_msl: a float add to storage memory (RED.F32's compare-and-swap loop, InstEmitMemory EmitAtomicAddF32) as one native atomic_fetch_add on a device
 atomic_float. The loop as spirv-cross writes it is replaced and any other loop is left alone; a later read of its retry flag still gets false. On this Mac's GPU 8,192 threads
-adding into the same four words, through the loop and through the rewrite, reach the exact sums. test_dmsh_ampere_alu.py FloatRed checks that the translator's own loop is the one rewritten (PR #1930)."""
+adding into the same four words, through the loop and through the rewrite, reach the exact sums. test_dmsh_ampere_alu.py FloatRed checks that the translator's own loop is the one rewritten."""
 from pathlib import Path
 import shutil
 import subprocess

@@ -1,8 +1,5 @@
-// A runtime branch chooses one of two cube inputs. An unused input may retain
-// a 2D descriptor from an earlier pass: production tex_fit must bind a valid
-// zero cube without diagnosing the binding itself as a rendering error.
-// The same for a 3D input holding a 2D texture or 2D array (Batman: Arkham Knight's
-// volume slots): the zero 3D texture.
+// A runtime branch chooses one of two cube inputs. An unused input may retain a 2D descriptor from an earlier pass: production tex_fit must bind a valid zero cube without
+// diagnosing the binding itself as a rendering error. The same for a 3D input holding a 2D texture or 2D array: the zero 3D texture.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

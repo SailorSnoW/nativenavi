@@ -1,10 +1,6 @@
-// Short timed waits as polls, through real thread SVCs on one guest thread.
-// Drive the run/gap clock explicitly: a CI deschedule longer than SPIN_GAP_NS
-// legitimately resets the run, so 20 ms of wall time need not include a backoff.
-// Host condition waits still use the real clock and pthread timed waits. Sleep
-// requests are observed without waiting: the frozen poll clock would otherwise
-// make sleep_precise repeat each real sleep until its iteration limit, which
-// exhausted the watchdog on CI.
+// Short timed waits as polls, through real thread SVCs on one guest thread. The run/gap clock is driven explicitly: a CI deschedule longer than SPIN_GAP_NS legitimately
+// resets the run, so 20 ms of wall time need not include a backoff. Host condition waits still use the real clock and pthread timed waits. Sleep requests are observed
+// without waiting: the frozen poll clock would otherwise make sleep_precise repeat each real sleep until its iteration limit and exhaust the watchdog.
 #include "../dm.h"
 #include <assert.h>
 #include <stdatomic.h>
@@ -78,7 +74,7 @@ static void poll_run(int64_t wait_ns, int sleep_too, uint32_t event) {
     poll_step(wait_ns, sleep_too, event);   // exactly 2 ms: the wait (and any yield) backs off
     assert(backoffs() == b0 + 1 + sleep_too);
 }
-// A run of SleepThread(ns) with 10 us of guest work between the sleeps, as Unity 6's idle job workers poll their queue: the guest's own sleeps for steps * 10 us, then one more
+// A run of SleepThread(ns) with 10 us of guest work between the sleeps, as an engine's idle job workers poll their queue: the guest's own sleeps for steps * 10 us, then one more
 static void sleep_run(int64_t ns, int steps, int expect_backoff) {
     atomic_fetch_add(&poll_clock, 30000);   // guest work ends the previous run
     uint64_t b0 = backoffs();

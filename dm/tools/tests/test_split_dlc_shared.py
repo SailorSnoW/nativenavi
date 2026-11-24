@@ -1,6 +1,5 @@
-"""shader_split merge_keys: a shader found in both the game and an add-on (/aoc/<index>/) is the game's row whatever the scan order, so the game's rows are the same with or without
-any DLC (issue #2439: PRAGMATA's re_dlc_000.pak holds 45 of the game's shaders, and aoc/ sorts before re_chunk_000.pak). Otherwise the first copy is kept, and two copies of one key
-that differ are still red. No game files needed."""
+"""shader_split merge_keys: a shader found in both the game and an add-on (/aoc/<index>/) is the game's row whatever the scan order, so the game's rows are the same with
+or without any DLC. Otherwise the first copy is kept, and two copies of one key that differ are still red. No game files needed."""
 import os
 import sys
 import unittest
@@ -8,7 +7,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
-_had = os.environ.get('DM_GAME'); os.environ['DM_GAME'] = '0400486024DEC000'   # shader_split loads a profile at import; other tests expect no default game
+_had = os.environ.get('DM_GAME')   # shader_split loads a profile at import; other tests expect no default game
+os.environ['DM_GAME'] = '0400486024DEC000'
 import shader_split as ss
 if _had is None: del os.environ['DM_GAME']
 else: os.environ['DM_GAME'] = _had

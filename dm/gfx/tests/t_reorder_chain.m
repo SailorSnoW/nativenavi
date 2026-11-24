@@ -228,8 +228,8 @@ static void compare_pair(const char *name,const result *o,const result *r,unsign
     for(int k=0;k<1024;k+=4) bad+=memcmp((const uint8_t *)o+k,(const uint8_t *)r+k,4)!=0;
     EXPECT("full range/state/control flow differing pixels (out of 256)",all_independent?0:different,bad);
 }
-// A submission that draws into the render target it inherited: its draws before its first target change count toward the segment cut (sub_cut). The count used to start at
-// that first change, so a submission of cut_draws() draws into the inherited target and then a target change made no cut there
+// A submission that draws into the render target it inherited: its draws before its first target change count toward the segment cut (sub_cut). Counted from that first
+// change, a submission of cut_draws() draws into the inherited target and then a target change would make no cut there
 static void inherited_target_case(void) {
     tex_t a=texture(8,1,0),b=texture(8,1,0); chain setup=make_chain(),c=make_chain();
     clear(&setup,&a,0,NULL,0,0,0); draw_prog(&setup,0,0); emit(&setup,OP_END,NULL,0);

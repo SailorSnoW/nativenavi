@@ -93,8 +93,7 @@ class TailCall(unittest.TestCase):
 
     def test_unframed_mid_function_pointer_jump_rejected(self):
         self.assertFalse(self.check([0xf9400812, 0xaa0103e0, 0xd61f0240, 0x94000400], 2))
-        # The broader rule proposed in #188 accepts an unframed guarded block.
-        # Keep the framed fallback's boundary even when a null guard is present.
+        # Even with a null guard, an unframed block is outside the framed fallback's boundary.
         self.assertFalse(self.check([0xb4000061, 0xf9400812, 0xd61f0240, 0x94000400], 2))
 
     def test_padded_straight_line_pointer_tail(self):
@@ -177,7 +176,7 @@ class TailCall(unittest.TestCase):
 
     def test_n_byte_framed_thunk_with_error_blocks(self):
         self.assertTrue(self.check(FRAME, 8))
-        # Callee-saved spills around the frame pair and their restores in the epilogue, as on Ori
+        # Callee-saved spills around the frame pair and their restores in the epilogue
         spills = [0xd10143ff,  # sub sp, sp, #0x50
                   0xa9025ff8,  # stp x24, x23, [sp, #0x20]
                   0xa90357f6,  # stp x22, x21, [sp, #0x30]

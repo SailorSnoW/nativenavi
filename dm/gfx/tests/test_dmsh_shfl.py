@@ -1,4 +1,4 @@
-"""SHFL's lane/offset is b[4:0], for Maxwell and Ampere and all four modes (PR #2044).
+"""SHFL's lane/offset is b[4:0], for Maxwell and Ampere and all four modes.
 
 Synthetic shaders read b and c from shared memory, shuffle the lane ID, and store the result and predicate. The GPU check uses the production translator,
 SPIRV-Cross and Metal flags, including segmented/clamped shuffles, high bits through bit 31 and an immediate lane. UP uses clamp zero: its separate

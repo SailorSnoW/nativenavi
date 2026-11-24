@@ -75,7 +75,8 @@ class Bench(unittest.TestCase):
             os.environ.pop('DM_PSO_BUNDLE', None)   # exercise the default regardless of the caller's archive override
             root = Path(d); gid = '01007EF00011E000'; build = root / f'{gid}_build'
             (build / 'run/save').mkdir(parents=True); (build / 'run/save/sentinel').write_text('original')
-            (build / 'extract/v0/RomFS').mkdir(parents=True); (build / 'pso/mac').mkdir(parents=True)   # the offline archive the Mac app bundles
+            (build / 'extract/v0/RomFS').mkdir(parents=True)
+            (build / 'pso/mac').mkdir(parents=True)   # the offline archive the Mac app bundles
             (root / 'variant/patched_v0').mkdir(parents=True)
             (root / 'variant/msl').mkdir(); (root / 'variant/pso').mkdir(); (root / 'variant/shmap.tsv').write_text('# synthetic\n')
             host = root / 'variant/host'

@@ -1,12 +1,11 @@
-// Texture pool tables of one type holding textures of another (pool_fit, pool_bridge_pair). To Maxwell 2D, 2D-array, cube and cube-array textures are all layers, and a shader may
-// declare a pool's element type differently from the texture the game registered: PRAGMATA's Character_CabinDisplay material samples its five sprite slots as texture2d_array
-// through the pool, and the sprites are 2D textures (Cabin's monitor face, ps ecd01ea9b68f5390). A table held textures of its own type only, so the face read zero. Now a table of
-// another layered type holds a view that covers what Metal can serve, for an ID a shader read through a table of that type (the read bitmap's section of the type, pool_seen_t):
+// Texture pool tables of one layered type holding views of textures of another (pool_fit, pool_bridge_pair): Maxwell treats 2D, 2D-array, cube and cube-array textures all as
+// layers, so a shader may read a pool through another type than the registered texture's. A table of another layered type holds a view that covers what Metal can serve, for
+// an ID a shader read through a table of that type (the read bitmap's section of the type, pool_seen_t):
 //   2D in a 2D-array table: one layer; a 2D array in a 2D table: layer 0; a cube (held as a 6-layer 2D array) in a cube table: a cube view, in a 2D-array table: its 6 faces;
 //   a 6-layer 2D array in a cube table: a cube; a cube array (12 faces) in a 2D-array or cube-array table.
-// What no view serves holds the dummy (zero), as for slot binds (tex_fit): a 2D texture or a 3D texture in a cube table, a non-square array in a cube table. An ID read only through
-// its own type's table is not bridged elsewhere. A shader reads each bridged texel through the table. Fails without pool_fit: entries are the dummy and the reads are zero.
-// The views are one per table type: a table stands while nothing is registered, so its view of an ID stays when a table of a third type takes the ID (fails with one view per ID)
+// What no view serves holds the dummy (zero), as slot binds do (tex_fit): a 2D texture or a 3D texture in a cube table, a non-square array in a cube table. An ID read only
+// through its own type's table is not bridged elsewhere. One view per table type: a table stands while nothing is registered, so its view of an ID stays when a table of a
+// third type takes the ID
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -126,8 +125,8 @@ int main(void) { @autoreleasepool {
     uint64_t r1 = pool_fit(10, cur, A); void *v1 = g_treg[10].palt[pool_lk(A)]; uint64_t r2 = pool_fit(10, cur, A);
     os_unfair_lock_unlock(&g_rmu);
     CHECK(r1 && r1 == r2 && g_treg[10].palt[pool_lk(A)] == v1, "the view is cached: no new view for the same texels");
-    // An ID given a texture of another type: the marks of the types shaders read the old one through go, the read mark stays (Resident Evil 4 puts its 1x1 default 2D texture into
-    // the IDs of cubes it lets go). Kept, the next cube table reported the 2D texture as read through it, with no shader reading it. One of the same type keeps them (the bridges stand)
+    // An ID given a texture of another type: the marks of the types shaders read the old one through go (else the next cube table would report a 2D texture put in a cube's
+    // ID as read through it), the read mark stays. One of the same type keeps them (the bridges stand)
     mtl_reg_tex(12, &t[5], NULL);
     CHECK(pool_seen_t(12, D2), "a 2D array replaced by a 2D array: its 2D read mark stays");
     unsigned logged = g_pool_tlog_n;

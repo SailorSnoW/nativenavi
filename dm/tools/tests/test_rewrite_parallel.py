@@ -66,8 +66,8 @@ class RewriteWorkers(unittest.TestCase):
                 p.communicate(timeout=5)
 
     def test_workers_cannot_lose_the_pool_sigterm(self):
-        # Pool.terminate's one SIGTERM must end a worker wherever it lands. A worker with the rewriter's Python handler could lose it while starting and hang the rewrite in about 1 of 6,000
-        # small pools under load, too rare and too slow to catch by repeating them. So check what rules it out: blocked from the fork on, then the default action, unblocked, before any job.
+        # Pool.terminate's one SIGTERM must end a worker wherever it lands; one with the rewriter's Python handler could lose it while starting, too rarely to catch by
+        # repeating. So check what rules it out: blocked from the fork on, then the default action, unblocked, before any job.
         script = pool_helper() + '''
 import json, os, signal, sys
 TERM = signal.SIGTERM

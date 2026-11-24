@@ -1,7 +1,7 @@
 """build_app.py's chain files (chain_header, chain_tables): the one chain version header (dm/gfx/nvn/dmsh_chain.h) is written again when stale and left
 alone when current, and the committed one is current; only the c1 / uniform extent tables that are missing (they are not committed) or do not name the library's stamp (its chain version
-and profile inputs) are made (GitHub issue #78), none without a stamped library, and no step's reuse key counts them; the tools that make them read only the shader build's outputs
-(an exFAT drive's AppleDouble `._<name>` beside each, PR #555); no game files, keys or Xcode needed (temporary files only in a
+and profile inputs) are made, none without a stamped library, and no step's reuse key counts them; the tools that make them read only the shader build's outputs
+(an exFAT drive's AppleDouble `._<name>` beside each); no game files, keys or Xcode needed (temporary files only in a
 temporary folder)."""
 import importlib.util
 import json
@@ -129,7 +129,7 @@ class Tables(Base):
 
 
 class TableTools(unittest.TestCase):
-    def test_appledouble_files_are_not_shaders(self):   # macOS writes a binary ._<name> beside each file on an exFAT / FAT drive; c1_guard.py read ._<key>_b.metal as UTF-8 and stopped
+    def test_appledouble_files_are_not_shaders(self):   # macOS writes a binary ._<name> beside each file on an exFAT / FAT drive, which c1_guard.py must not read as UTF-8
         lib = Path(tempfile.mkdtemp()) / 'b-0123456789ab'; lib.mkdir(); self.addCleanup(shutil.rmtree, lib.parent)
         key = '00112233aabbccdd'
         (lib / f'{key}_b.metal').write_text('fragment float4 main0(constant cb& fp_c1) { int _5 = in.v; return (fp_c1)._m0[_5]; }\n')
@@ -183,8 +183,9 @@ class TableTools(unittest.TestCase):
 
     def test_memo_holds_across_a_chain_change(self):
         # a reflection names its chain version, which neither tool reads: after a chain change the shaders whose MSL and reflection are otherwise the same keep their answers
-        # (Ocarina of Time: both analyses ran whole, 86 s, after every chain change)
-        lib = self.memo_lib(); memo = lib.parent / 'memo'
+        # (Ocarina of Time: otherwise both analyses run whole, 86 s, after every chain change)
+        lib = self.memo_lib()
+        memo = lib.parent / 'memo'
         for f in lib.glob('*_b.json'): f.write_text(json.dumps(dict(json.loads(f.read_text()), chain='0123456789ab'), indent=1))
         plain = {tool: self.table(lib, tool, memo) for tool in ('c1_guard', 'cb_extent')}
         new = lib.parent / 'b-ba9876543210'; shutil.copytree(lib, new)
@@ -207,7 +208,7 @@ class TableTools(unittest.TestCase):
         self.assertEqual(self.table(lib, 'c1_guard', memo), ['00112233aabbccdd'])
         self.assertEqual(path.read_text().splitlines()[0], head)
 
-    def test_memo_of_another_abi_header_is_not_taken(self):   # cb_extent.py's binding kinds come from dmsh_abi.h through dmsh_abi.py: a header-only edit kept a warm memo's row
+    def test_memo_of_another_abi_header_is_not_taken(self):   # cb_extent.py's binding kinds come from dmsh_abi.h through dmsh_abi.py: a header-only edit must not keep a warm memo's row
         tree = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, tree)
         for f in ('dm/gfx/tools/c1_guard.py', 'dm/gfx/tools/cb_extent.py', 'dm/gfx/tools/dmsh_abi.py', 'dm/gfx/nvn/dmsh_abi.h', 'dm/tools/romfs.py', 'dm/tools/shader_lib.py'):
             (tree / f).parent.mkdir(parents=True, exist_ok=True); shutil.copy(REPO / f, tree / f)
@@ -229,7 +230,7 @@ class TableTools(unittest.TestCase):
         self.assertEqual(rows(), [])
 
 
-class TableDifference(unittest.TestCase):   # the row the build error names when a split table differs from the profile's (GitHub issue #1263)
+class TableDifference(unittest.TestCase):   # the row the build error names when a split table differs from the profile's
     HEAD = b'# header\n'
 
     def test_changed_row(self):
@@ -248,7 +249,7 @@ class TableDifference(unittest.TestCase):   # the row the build error names when
 
 
 
-class TranslatorKey(Base):   # the shader step's key takes the translator by its bytes: a commit switched and back rewrote the same bytes with a new mtime, and each worktree has its own path; either rebuilt every shader (PR #2496)
+class TranslatorKey(Base):   # the shader step's key takes the translator by its bytes: a checkout switched and back writes the same bytes with a new mtime, and each worktree has its own path
     class Keyed(Exception): pass
 
     def key(self, xlate):   # build_shaders' reuse key, with the other inputs fixed

@@ -1,5 +1,5 @@
-"""The in-repo spirv-cross (dm/gfx/tools/spirv_cross_bin, GitHub issue #242): the shader tools run it rather than the one on PATH, the lock records its fingerprint, it is the
-release build.sh pins, it runs on both Mac architectures, and SPIRV-Cross's licences are beside it. No Xcode or game files needed."""
+"""The in-repo spirv-cross (dm/gfx/tools/spirv_cross_bin): the shader tools run it rather than the one on PATH, the lock records its fingerprint, it is the release
+build.sh pins, it runs on both Mac architectures, and SPIRV-Cross's licences are beside it. No Xcode or game files needed."""
 import os
 from pathlib import Path
 import re

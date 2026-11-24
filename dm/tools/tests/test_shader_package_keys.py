@@ -1,6 +1,6 @@
-"""The shader package's records carry their keys, and dmsh_build.py finds a map row's record by its key, not by the row's index (issue #1841: a package from an older shader_split.py run
-than the map translated every row after a dropped one from its neighbour's bytes; Ocarina of Time's present pass ran a terrain pixel shader and showed black). shader_split.py writes the
-key at record +0x08; dmsh_build.py's record_index indexes a package by it and rec_of stops on a key the package does not hold. No game files."""
+"""The shader package's records carry their keys, and dmsh_build.py finds a map row's record by its key, not by the row's index: a package from an older shader_split.py
+run than the map would translate every row after a dropped one from its neighbour's bytes. shader_split.py writes the key at record +0x08; dmsh_build.py's record_index
+indexes a package by it and rec_of stops on a key the package does not hold. No game files."""
 import ast
 import os
 from pathlib import Path
@@ -49,7 +49,7 @@ class Lookup(unittest.TestCase):
     def package(self, recs, name='ps_lib.bin'):
         (Path(self.tmp.name) / name).write_bytes(b''.join(recs)); self.ns['packs'].clear()
 
-    def test_records_are_read_from_the_file_at_their_offsets(self):   # record_index keeps no package in memory (GitHub issue #1036); a record runs from its marker to the next, the last to the end
+    def test_records_are_read_from_the_file_at_their_offsets(self):   # record_index keeps no package in memory; a record runs from its marker to the next, the last to the end
         recs = [record('11' * 8, b'\x01' * 40), record('22' * 8, b'\x02' * 7), record('33' * 8, b'\x03' * 100)]
         path = Path(self.tmp.name) / 'pkg.bin'
         for data, want in ((b'header' + b''.join(recs), {'11' * 8: recs[0], '22' * 8: recs[1], '33' * 8: recs[2]}), (b'', {})):
@@ -58,7 +58,7 @@ class Lookup(unittest.TestCase):
             try: self.assertEqual({k: os.pread(fd, e - o, o) for k, (o, e) in index.items()}, want)
             finally: os.close(fd)
 
-    def test_a_row_finds_its_record_by_key_whatever_its_index(self):   # #1841: the map's rows renumbered after a dropped shader, the package from the split before
+    def test_a_row_finds_its_record_by_key_whatever_its_index(self):   # the map's rows renumbered after a dropped shader, the package from the split before
         recs = [record('aa' * 8, b'a'), record('bb' * 8, b'b'), record('cc' * 8, b'c')]
         self.package(recs)
         self.ns['loc'].update({'aa' * 8: ('ps_lib.bin', 0), 'cc' * 8: ('ps_lib.bin', 1)})
@@ -74,7 +74,7 @@ class Lookup(unittest.TestCase):
             self.ns['rec_of']('dd' * 8)
         self.assertNotIn('carry no keys', str(cm.exception.code))
 
-    def test_a_package_from_before_records_carried_keys_stops_the_build(self):   # the old layout: 0x30 zero bytes after the marker
+    def test_a_package_from_before_records_carried_keys_stops_the_build(self):   # a package without keys: 0x30 zero bytes after the marker
         self.package([b'BTCDBTCD' + bytes(0x30) + b'a', b'BTCDBTCD' + bytes(0x30) + b'b'])
         self.ns['loc']['aa' * 8] = ('ps_lib.bin', 0)
         with self.assertRaisesRegex(SystemExit, r'come from different shader_split\.py runs \(its records carry no keys: it was split before they did\)'):
@@ -125,7 +125,8 @@ class Split(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             t = Path(t); rom = t / 'RomFS'; (rom / 'Lib').mkdir(parents=True)
             (rom / 'Lib/agl_ndsr.pck').write_bytes(ndsr([0x0461, 0x1462]))
-            main = t / 'main'; main.write_bytes(b'NSO0' + bytes(0xfc))   # an NSO header of three empty segments
+            main = t / 'main'
+            main.write_bytes(b'NSO0' + bytes(0xfc))   # an NSO header of three empty segments
             out = [t / n for n in ('pkg', 'map.tsv', 'facts.tsv', 'pairs.tsv', 'pso.tsv')]
             r = subprocess.run([sys.executable, TOOLS / 'shader_split.py', rom, main, *out], capture_output=True, text=True, env=dict(os.environ, J='1'))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -136,7 +137,7 @@ class Split(unittest.TestCase):
                 recs = re.split(b'(?=BTCDBTCD)', (out[0] / name).read_bytes())[1:]
                 rec = recs[int(k)]
                 self.assertEqual(rec[8:16].hex(), key)
-                self.assertEqual(rec.find(fz.ss.CTL_MAGIC, 0x38), 0x38 + struct.unpack_from('<I', rec, 0x2c)[0])   # the control section right after the code area, as before
+                self.assertEqual(rec.find(fz.ss.CTL_MAGIC, 0x38), 0x38 + struct.unpack_from('<I', rec, 0x2c)[0])   # the control section right after the code area
 
 
 if __name__ == '__main__':

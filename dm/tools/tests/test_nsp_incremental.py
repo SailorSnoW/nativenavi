@@ -81,7 +81,7 @@ class DeriveProfile(Base):
         self.assertEqual(game.Game(self.pdir).builds()['v65536']['main'], BID2)
         self.assertEqual(self.derive(), '1.1.0'); self.assert_kept()   # still kept on a third run
 
-    def test_a_module_the_version_does_not_ship_is_left_out(self):   # Mario Kart World 1.0.0 has no subsdk1, which the 1.8.0 profile loads
+    def test_a_module_the_version_does_not_ship_is_left_out(self):   # a version without the subsdk1 the profile's build loads
         (self.src / 'game.tsv').write_text((self.src / 'game.tsv').read_text().replace('modules\tmain\n', 'modules\tmain subsdk1 sdk\n'))
         nso(self.ex / 'ExeFS/sdk', BID)
         self.derive(mods=('main', 'subsdk1', 'sdk'))
@@ -92,7 +92,7 @@ class DeriveProfile(Base):
         nso(self.ex / 'ExeFS/subsdk1', BID2); self.derive(mods=('main', 'subsdk1', 'sdk'))   # a version that ships it keeps the profile's list
         self.assertEqual(game.Game(self.pdir).words('modules'), ['main', 'subsdk1', 'sdk'])
 
-    def test_a_module_main_imports_that_the_list_leaves_out_is_added(self):   # Absolum: subsdk2 was the movie module in 1.1.2; 1.2.1 ships it as subsdk0, and no subsdk2 (issue #1211)
+    def test_a_module_main_imports_that_the_list_leaves_out_is_added(self):   # a module renamed in another version: subsdk2 shipped as subsdk0, and no subsdk2
         (self.src / 'game.tsv').write_text((self.src / 'game.tsv').read_text().replace('modules\tmain\n', 'modules\tmain subsdk2 sdk\n'))
         nso(self.ex / 'ExeFS/sdk', BID); nso(self.ex / 'ExeFS/subsdk0', 'ee' * 16); nso(self.ex / 'ExeFS/subsdk1', 'ff' * 16)
         self.imported = {'subsdk0': 'NintendoSDK_movie'}
@@ -120,15 +120,17 @@ class DeriveProfile(Base):
         self.assertEqual(game.Game(self.pdir).words('modules'), ['main'])
 
     def test_a_profile_is_never_derived_onto_its_own_folder(self):
-        own = self.tmp / 'profile' / f'{TID:016X}'; shutil.copytree(self.src, own)   # this script's own profile, where its derived copy would go
+        own = self.tmp / 'profile' / f'{TID:016X}'   # this script's own profile, where its derived copy would go
+        shutil.copytree(self.src, own)
         before = {p.name: p.read_bytes() for p in own.iterdir()}
-        with self.assertRaises(nsp.BuildError):   # before: the folder's files were deleted, then copied from themselves (Chained Echoes: FileNotFoundError, its tables gone)
+        with self.assertRaises(nsp.BuildError):   # deriving onto itself would delete the folder's files, then copy them from themselves
             nsp.derive_profile(game.Game(own), own, 'v65536', self.ex, ['main'], shader_only=True)
         self.assertEqual({p.name: p.read_bytes() for p in own.iterdir()}, before)
 
     def test_the_same_profile_in_another_checkout_keeps_later_stages(self):
         self.derive(); self.later_stages()
-        other = self.tmp / 'checkout2' / 'games' / f'{TID:016X}'; shutil.copytree(self.src, other)   # the repository cloned again, or a front end's own copy of it
+        other = self.tmp / 'checkout2' / 'games' / f'{TID:016X}'   # the repository cloned again, or a front end's own copy of it
+        shutil.copytree(self.src, other)
         nsp.derive_profile(game.Game(other), self.pdir, 'v65536', self.ex, ['main'])
         self.assert_kept()
         self.assertNotIn(str(self.tmp), (self.pdir / 'game.tsv').read_text())
@@ -155,7 +157,7 @@ class DeriveProfile(Base):
                 self.derive(); self.later_stages(); self.derive(); self.assert_kept()
                 self.derive(**kw); self.assert_fresh()   # pyright: ignore[reportArgumentType]  (each keyword set has its own value type)
 
-    def test_a_file_the_split_does_not_read_refreshes_the_copies_and_keeps_later_stages(self):   # an edit of a table the split does not read used to wipe the split's tables
+    def test_a_file_the_split_does_not_read_refreshes_the_copies_and_keeps_later_stages(self):   # an edit of a table the split does not read keeps the split's tables
         changes = {
             'source chain header': lambda: (self.src / 'dmsh_chain.h').write_text('#define DMSH_CHAIN "new"\n'),
             'new source file': lambda: (self.src / 'bf_want.tsv').write_text('# new\n'),
@@ -265,7 +267,7 @@ class DlcOnlyShaders(Base):
                 tables.joinpath('shader_facts.tsv').write_text(facts)
                 self.assertEqual(nsp.dlc_only_shader_change(g, tables), want)
 
-    def test_a_shader_the_dlc_shares_with_the_game(self):   # issue #2439: the split gives a shared shader the game's row (merge_keys), so both directions are DLC-only changes
+    def test_a_shader_the_dlc_shares_with_the_game(self):   # the split gives a shared shader the game's row (merge_keys), so both directions are DLC-only changes
         tables = self.tmp / 'new-tables'; tables.mkdir()
         game_rows = 'vs_sdf.bin\t0\tvertex\tbase\t/re_chunk_000.pak#1#SDF#var0\nvs_sdf.bin\t1\tvertex\tshared\t/re_chunk_000.pak#1#SDF#var619\n'
         dlc_rows = 'vs_other.bin\t0\tvertex\tdlc\t/aoc/1/re_dlc_000.pak#2#SDF#var1\n'
@@ -325,7 +327,10 @@ class SplitShaders(Base):
             self.assertEqual(g.table(n).read_text(), old[n])
             self.assertEqual(game.Game(self.pdir).table(n).read_text(), self.tables[n])
         # A new DLC extraction, even of the same file sizes, must perform the strict comparison again.
-        dlc = self.tmp / 'aoc/7'; dlc.mkdir(parents=True); asset = dlc / 'shader'; asset.write_bytes(b'bytes')
+        dlc = self.tmp / 'aoc/7'
+        dlc.mkdir(parents=True)
+        asset = dlc / 'shader'
+        asset.write_bytes(b'bytes')
         self.go(g, own=False, dlc_roms=[dlc], derive_dlc=promote); self.assertEqual(self.splits, 2)
         self.redump(asset)
         self.go(g, own=False, dlc_roms=[dlc], derive_dlc=promote); self.assertEqual(self.splits, 3)
@@ -485,8 +490,8 @@ class SplitShaders(Base):
 
     def test_damaged_reuses_only_the_same_extraction(self):
         # --allow-damaged: a repaired copy keeps every path and size, which is all 'tree' sees, so a damaged RomFS is keyed by its files' times as well ('stat': an extraction writes
-        # them again) and by the damage check's list. Before, a damaged build never reused, and its None key kept the shader step from reusing too: Ocarina of Time's three damaged
-        # textures cost every build the split (56 s) and all 42,848 shaders restored from the cache (about ten minutes)
+        # them again) and by the damage check's list, so a damaged build reuses its split and its shaders (Ocarina of Time's three damaged textures would otherwise cost
+        # every build the split and the restore of every shader)
         g = self.own()
         with mock.patch.object(nsp, 'ALLOW_DAMAGED', True):
             k = self.go(g); self.assertEqual(k, nsp.package_key(self.pkg))   # the shader step's key: its libraries are reused while the package is the same
@@ -567,7 +572,7 @@ class ShaderProfileKey(Base):   # the shader step's key takes the profile's shad
         env = dict(os.environ, DM_GAME=f'{TID:016X}', DM_GAMES_DIR=str(self.tmp / 'games'))
         return nsp.fingerprint(nsp.shader_profile_key(sys.executable, REPO, env, game.Game(self.src)))
 
-    def test_files_no_shader_build_reads_keep_the_key(self):   # a note edit used to restore every library
+    def test_files_no_shader_build_reads_keep_the_key(self):   # a note edit restores no library
         before = self.key()
         (self.src / 'README.md').write_text('# a note\n')
         (self.src / 'pso_manifest.tsv').write_text('S\tk2\tpixel\n')

@@ -78,7 +78,7 @@ int main(void) { @autoreleasepool {
     atomic_store(&g_cur_frame, 5); gp_begin(nil, 'C', nil); gp_end(nil); g_fence = 50;
     atomic_store(&g_cur_frame, 6); gp_begin(nil, 'C', nil); [event complete];
     CHECK(event.registrations == 4 && heap.resolutions == 4, "sparse and consecutive selection both report per frame");
-    // An upload flush ending its own encoder inside a profiled draw pass (#531) leaves the pass's label alone; the pass's own end still stamps it.
+    // An upload flush ending its own encoder inside a profiled draw pass leaves the pass's label alone; the pass's own end still stamps it.
     ProfileRender *pass = [ProfileRender new]; ProfileCompute *upload = [ProfileCompute new];
     atomic_store(&g_cur_frame, 7); gp_begin(nil, 'C', nil); CHECK(g_gp_state == 0, "the frame after a report reopens the heap");
     atomic_store(&g_cur_frame, 10); gp_begin(pass, 'R', nil); int k = g_gp_cur;

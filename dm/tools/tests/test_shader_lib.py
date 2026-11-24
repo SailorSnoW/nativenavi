@@ -152,10 +152,12 @@ class Write(Base):   # dmsh_build.py writes the image from functions that read i
         files['path.json'] = str(self.root / 'on-disk'); (self.root / 'on-disk').write_bytes(b'from a path'); files['bytes.tsv'] = b'given'
         shader_lib.write(files, str(self.image))
         self.assertEqual(sorted(calls), sorted(data))   # each once
-        self.assertNotIn(threading.get_ident(), threads); self.assertGreater(len(threads), 1)
+        self.assertNotIn(threading.get_ident(), threads)
+        self.assertGreater(len(threads), 1)
         got = {p.name: p.read_bytes() for p in romfs.Path(str(self.image)).iterdir()}
         self.assertEqual(got, {**data, 'path.json': b'from a path', 'bytes.tsv': b'given'})
-        plain = self.root / 'plain.img'; shader_lib.write({**data, 'path.json': b'from a path', 'bytes.tsv': b'given'}, str(plain))   # the bytes themselves, on no thread
+        plain = self.root / 'plain.img'
+        shader_lib.write({**data, 'path.json': b'from a path', 'bytes.tsv': b'given'}, str(plain))   # the bytes themselves, on no thread
         self.assertEqual(plain.read_bytes(), self.image.read_bytes())
 
     def test_a_function_that_fails_or_has_no_bytes_leaves_no_image(self):

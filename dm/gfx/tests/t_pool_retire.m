@@ -2,7 +2,7 @@
 // submission after it, as a game that stops submitting out of focus (Ocarina of Time) still remakes virtual pool runs. A submission open when the pool goes keeps it until that
 // submission completes, and one in flight when it goes keeps it until its feedback. The residency set holds what a drain took out of it until its next commit, which with no
 // submission to come is made off the submit thread (defer_idle_commit). A commit that lands between pool_gone_release's read of the open flag and its read of g_fence leaves the
-// buffer at that submission's own fence, neither the one before it nor the one after (a hook between the two reads stands in for it; PR #2328).
+// buffer at that submission's own fence, neither the one before it nor the one after (a hook between the two reads stands in for it).
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

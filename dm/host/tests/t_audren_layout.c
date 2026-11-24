@@ -1,7 +1,5 @@
-// The renderer's output as the host takes it from the SDK's command list (hle_audren.c capture, which audren.rs does): the command headers and the DeviceSink of SDK 21 on.
-// audren.rs's own tests (cargo test in dm/host/rust) check its readers alone: truncated and invalid headers, the resampler's history, inputs outside the mix buffers.
-// A list generated before the game's first update need not be whole (a zeroed command in it): such a list is a silent frame and nothing is decided or reported from it; a malformed
-// list after the first one that walks is reported and never yields PCM. Also the update lock read off the SDK's code, each renderer's own blocks, and the render thread's pacing.
+// The renderer's output as hle_audren.c captures it from the SDK's command list (SDK 21+ headers and DeviceSink), the update lock read off the SDK's code, and render pacing.
+// A list before the game's first update may hold zeroed commands: a silent frame, nothing reported; a malformed list after the first that walks never yields PCM.
 #include "../hle.h"
 #include <assert.h>
 #include <errno.h>
@@ -17,7 +15,7 @@ static kern_return_t render_policy_set(thread_t, thread_policy_flavor_t, thread_
 #undef thread_policy_set
 #undef pthread_cond_timedwait_relative_np
 
-// Synthetic render loops must not promote the test runner. One short-lived pthread below exercises the real Mach boundary.
+// Synthetic render loops must not promote the test runner; one short-lived pthread exercises the real Mach boundary.
 static struct { int live, started, active, fail, sets, resets; } policy;
 static kern_return_t render_policy_set(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t p, mach_msg_type_number_t n) {
     if (policy.live) return thread_policy_set(thread, flavor, p, n);
@@ -43,10 +41,8 @@ static struct {
 } pace;
 static _Alignas(8) uint8_t pace_sys[0x300];
 static void *pace_sym(const char *name);
-// test_renderer_blocks: the renderer each appended block came from; the output holds what it is given and plays none of it
 static int blocks_on; static aout_buf *blocks[AR_MAX][NBUF]; static int blocks_n[AR_MAX];
 static void blocks_exec(void *obj, void *state);
-// test_update_lock: the module's functions by name
 static struct { const char *name; void *p; } lock_syms[4];
 void *guest_sym(const char *name) {
     for (size_t i = 0; i < sizeof lock_syms / sizeof *lock_syms; i++) if (lock_syms[i].name && !strcmp(lock_syms[i].name, name)) return lock_syms[i].p;
@@ -62,7 +58,7 @@ void dm_host_lock(pthread_mutex_t *m) { pthread_mutex_lock(m); }
 uint64_t now_ns(void) { return pace.now; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 void *dm_pcmout_open_sink(void) { return NULL; }
-int dm_audio_output_channels(void) { return 2; }   // the stereo route; the six-channel resampler is checked directly below
+int dm_audio_output_channels(void) { return 2; }
 int dm_audio_route(void) { return 2; }
 void dm_pcmout_close(void *k) { (void)k; assert(!policy.active); policy.started = 0; }
 void dm_pcmout_start(void *k) { (void)k; assert(!policy.active); policy.started = 1; }
@@ -85,14 +81,13 @@ int dm_pcmout_append(void *k, void *b) {
     if (blocks_n[r] == NBUF) atomic_store(&t_ar->open, 0);
     return 1;
 }
-// Advance by whole device callbacks. Fractional resampling is carried across callbacks,
-// so 44.1 kHz consumes alternating counts of 48 kHz samples as CoreAudio does.
+// whole device callbacks: 44.1 kHz consumes alternating counts of 48 kHz samples, as CoreAudio does
 static uint64_t next_callback(void) { return (uint64_t)(pace.callbacks + 1) * pace.device_frames * 1000000000ull / pace.rate; }
 static void pace_advance(uint64_t until) {
     while (next_callback() <= until) {
         int before = pace.played / SAMPLES;
         pace.played = (int)((uint64_t)++pace.callbacks * pace.device_frames * 48000 / pace.rate);
-        assert(pace.played <= pace.appended * SAMPLES);   // no zero-fill needed
+        assert(pace.played <= pace.appended * SAMPLES);
         if (pace.played / SAMPLES - before > 1) pace.bursts++;
     }
     pace.now = until;
@@ -114,12 +109,12 @@ uint32_t hle_dup_readable_handle(uint32_t h) { return h; }
 
 static int32_t mix[NMIX * SAMPLES];
 _Alignas(8) static uint8_t list[0x20 + NCMD * 0x140];
-static uint8_t *put(uint8_t *q, int id, int size) {   // a command as SDK 21 on writes it: enabled, command ID, size; no magic
+static uint8_t *put(uint8_t *q, int id, int size) {   // SDK 21+: enabled, command ID, size; no magic
     memset(q, 0, (size_t)size);
     q[0] = 1; q[1] = (uint8_t)id; *(int16_t *)(q + 2) = (int16_t)size;
     return q + size;
 }
-// ncmd - 1 commands of 0x40 bytes, then the DeviceSink (ID 0x14, 0x140 bytes) with two inputs, mix buffers 0 and 1
+// ncmd - 1 commands of 0x40 bytes, then the DeviceSink (ID 0x14, 0x140 bytes) with inputs on mix buffers 0 and 1
 static size_t build(int ncmd) {
     memset(list, 0, sizeof list);
     *(uint32_t *)(list + 4) = (uint32_t)ncmd; *(const int32_t **)(list + 8) = mix; *(uint32_t *)(list + 0x10) = NMIX; *(uint32_t *)(list + 0x14) = SAMPLES; *(uint32_t *)(list + 0x18) = 48000;
@@ -130,7 +125,6 @@ static size_t build(int ncmd) {
     *(int16_t *)(sink + 0x12c) = 0; *(int16_t *)(sink + 0x12e) = 1;
     return (size_t)(q - list);
 }
-// What the code under test logs between the two calls
 static char caught[2048]; static FILE *caught_file; static int caught_saved;
 static void catch_log(void) {
     caught_file = tmpfile(); assert(caught_file);
@@ -142,7 +136,7 @@ static const char *caught_log(void) {
     assert(fseek(caught_file, 0, SEEK_SET) == 0); size_t bytes = fread(caught, 1, sizeof caught - 1, caught_file); caught[bytes] = 0; fclose(caught_file);
     return caught;
 }
-static void test_headers(void) {   // a list shorter than its header gives no frame (the command headers themselves: audren.rs commands_are_whole_or_refused)
+static void test_headers(void) {
     int16_t out[FRAME_MAX * DM_AUDIO_SINK_CHANNELS];
     build(NCMD);
     for (size_t n = 0; n < 0x20; n++) assert(capture(&g_ar[0], list, n, out) == 0);
@@ -152,12 +146,11 @@ static void test(int incomplete) {
     for (int s = 0; s < SAMPLES; s++) { mix[s] = 1000; mix[SAMPLES + s] = -1000; }
     int16_t out[FRAME_MAX * DM_AUDIO_SINK_CHANNELS];
 
-    // An empty startup list is a silent frame.
     size_t n = build(NCMD);
     *(uint32_t *)(list + 4) = 0;
     assert(capture(&g_ar[0], list, 0x20, out) == 0);
     if (incomplete) {
-        // The third command is zeroed, as in a list generated before the game's first update. Several such frames are silent, and none is reported as malformed.
+        // the third command zeroed: several silent frames, none reported as malformed
         n = build(NCMD);
         memset(list + 0x20 + 2 * 0x40, 0, 0x40);
         catch_log();
@@ -166,17 +159,16 @@ static void test(int incomplete) {
         assert(strstr(text, "does not walk") && !strstr(text, "[RED]") && !strstr(text, "by command ID:"));
     }
 
-    // The SDK starts with short valid lists: their sink plays before the first full list's sink scan.
     n = build(2);
     int got = capture(&g_ar[0], list, n, out);
     assert(g_scan.sink_id == 0x14);
     assert(got == SAMPLES);
     for (int s = 0; s < SAMPLES; s++) assert(out[DM_AUDIO_SINK_CHANNELS * s + 6] == 1000 && out[DM_AUDIO_SINK_CHANNELS * s + 7] == -1000);
     n = build(NCMD);
-    assert(capture(&g_ar[0], list, n, out) == SAMPLES);   // and the full frames after them
+    assert(capture(&g_ar[0], list, n, out) == SAMPLES);
 }
 
-// A sink under another ID (an SDK that numbers its commands differently): the first full list's one command of DeviceSink's size with 1 to 6 inputs is taken as the sink
+// a sink under another ID: the first full list's one command of DeviceSink's size with 1-6 inputs
 static void test_sink_id(void) {
     for (int s = 0; s < SAMPLES; s++) { mix[s] = 1000; mix[SAMPLES + s] = -1000; }
     int16_t out[FRAME_MAX * DM_AUDIO_SINK_CHANNELS];
@@ -189,13 +181,11 @@ static void test_sink_id(void) {
     for (int s = 0; s < SAMPLES; s++) assert(out[DM_AUDIO_SINK_CHANNELS * s + 6] == 1000 && out[DM_AUDIO_SINK_CHANNELS * s + 7] == -1000);
 }
 
-// Malformed lists after the first list that walks must leave the histogram/sink scan pending
-// and must never produce PCM, even when a valid sink precedes the malformed tail.
 static void test_malformed(int bad) {
     int16_t out[FRAME_MAX * DM_AUDIO_SINK_CHANNELS];
     size_t n = build(NCMD);
     *(uint32_t *)(list + 4) = 1;
-    assert(capture(&g_ar[0], list, 0x20 + 0x40, out) == 0);   // a first list that walks, without a sink or histogram
+    assert(capture(&g_ar[0], list, 0x20 + 0x40, out) == 0);
     int sink_id = g_scan.sink_id;
     n = build(NCMD);
     if (bad < 2) memset(list + 0x20 + (size_t)bad * 0x40, 0, 0x40);
@@ -214,19 +204,16 @@ static void test_malformed(int bad) {
     assert(g_scan.sink_id == sink_id);
     for (size_t i = 0; i < sizeof out / sizeof *out; i++) assert(out[i] == 1234);
 
-    // A subsequent valid full list still finds the sink and yields stereo.
     n = build(NCMD);
     for (int i = 0; i < SAMPLES; i++) { mix[i] = 700; mix[SAMPLES + i] = -900; }
     assert(capture(&g_ar[0], list, n, out) == SAMPLES);
     for (int i = 0; i < SAMPLES; i++) assert(out[DM_AUDIO_SINK_CHANNELS * i + 6] == 700 && out[DM_AUDIO_SINK_CHANNELS * i + 7] == -900);
-    // Validation also applies after the histogram has already been logged.
     *(uint32_t *)(list + 4) = NCMD + 1; memset(list + n, 0, 0x40);
     assert(capture(&g_ar[0], list, n + 0x40, out) == 0);
 }
 
 static void test_histogram(void) {
-    // 64 IDs x 1000 commands need 566 bytes of histogram text, more than its 512-byte buffer.
-    // Disabled commands keep this a formatter test without dereferencing sink payloads.
+    // 64 IDs x 1000 commands need 566 bytes of histogram text, past its 512-byte buffer
     enum { COUNT = 64000, SIZE = 0x10 };
     size_t len = 0x20 + COUNT * SIZE;
     uint8_t *cl = calloc(1, len); assert(cl);
@@ -245,36 +232,32 @@ static void test_histogram(void) {
     free(cl);
 }
 
-// Two renderers open at once: an SDK call that names only the system finds its own renderer, and a system not seen yet is the one open renderer whose system is not known
+// two renderers: a call naming only the system finds its own; an unseen system is the one open renderer of unknown system
 static void test_two_renderers(void) {
     uint8_t x, y, z; memset(g_ar, 0, sizeof g_ar);
     g_ar[0].handle[0] = &x; g_ar[1].handle[0] = &y;
-    assert(ar_of_sys(&z) == NULL);   // two unknown: not a guess
+    assert(ar_of_sys(&z) == NULL);
     g_ar[0].sys = &x;
     assert(ar_of_sys(&x) == &g_ar[0]);
     assert(ar_of_sys(&y) == &g_ar[1] && g_ar[1].sys == &y);
     assert(ar_of_sys(&y) == &g_ar[1]);
-    assert(ar_of_sys(&z) == NULL);   // no renderer left to be it
-    // The 3:2 upsampler's history is each renderer's own (ar_t.rs): audren.rs each_renderer_resamples_with_its_own_history
+    assert(ar_of_sys(&z) == NULL);
     memset(g_ar, 0, sizeof g_ar);
 }
 
-// Six channels (the 5.1 route): the sink's six inputs come out in order, six int16 per sample; an output of 2 keeps the stereo downmix
 static void test_stereo_unchanged(void);
 static void test_six_channels(void) {
     for (int j = 0; j < 6; j++) for (int s = 0; s < SAMPLES; s++) mix[j * SAMPLES + s] = 1000 * (j + 1);
     size_t n = build(NCMD);
-    uint8_t *sink = list + 0x20 + (NCMD - 1) * 0x40;   // build() puts the sink after NCMD - 1 filler commands
+    uint8_t *sink = list + 0x20 + (NCMD - 1) * 0x40;
     *(uint32_t *)(sink + 0x128) = 6;
     for (int j = 0; j < 6; j++) ((int16_t *)(sink + 0x12c))[j] = (int16_t)j;
     static int16_t out[FRAME_MAX * DM_AUDIO_SINK_CHANNELS];
     assert(capture(&g_ar[0], list, n, out) == SAMPLES);
     for (int s = 0; s < SAMPLES; s++) for (int j = 0; j < 6; j++) assert(out[DM_AUDIO_SINK_CHANNELS * s + j] == 1000 * (j + 1));
-    // A mono sink on the six-channel output: on the front pair, as on stereo; the other four silent
     *(uint32_t *)(sink + 0x128) = 1;
     assert(capture(&g_ar[0], list, n, out) == SAMPLES);
     for (int s = 0; s < SAMPLES; s++) for (int j = 0; j < 6; j++) assert(out[DM_AUDIO_SINK_CHANNELS * s + j] == (j < 2 ? 1000 : 0));
-    // A center above PCM16 range must cancel the front before stereo clipping.
     for (int j = 0; j < 6; j++) for (int i = 0; i < SAMPLES; i++) mix[j * SAMPLES + i] = j == 0 ? -30000 : j == 2 ? 60000 : 0;
     *(uint32_t *)(sink + 0x128) = 6;
     assert(capture(&g_ar[0], list, n, out) == SAMPLES);
@@ -283,8 +266,6 @@ static void test_six_channels(void) {
     puts("audren six channels: the sink's six inputs in order, six per sample; a mono sink on the front pair");
 }
 
-// Golden PCM from current main's stereo-only capture, over three frames with cancellation and clipping.
-// This locks down mixing, 32 kHz resampling history and final clamp order independently of the new surround path.
 static void test_stereo_unchanged(void) {
     const uint64_t golden[] = {0xb2c91fe377e1ac44ull, 0x9dfef1ca9df24ea6ull};
     for (int r = 0; r < 2; r++) {
@@ -310,8 +291,7 @@ static void test_stereo_unchanged(void) {
     puts("audren stereo: 48 kHz and 32 kHz PCM match the pre-surround golden output, including clipping and resampler history");
 }
 
-// Issue #1336: AudioOut queues a block's pointer and copies its samples when the sound card asks, so a block is the renderer's own until it comes back released.
-// Renderer 0 queues all its blocks and none plays; renderer 1 then renders (blocks_exec marks each frame with its renderer) and renderer 0's blocks must still hold its samples
+// AudioOut copies a block's samples only when the card asks, so it stays the renderer's own until released
 static void blocks_exec(void *obj, void *state) {
     (void)obj; (void)state;
     for (int i = 0; i < SAMPLES * DM_AUDIO_SINK_CHANNELS; i++) t_ar->frame[i] = (int16_t)(ar_index(t_ar) + 1);
@@ -349,7 +329,7 @@ static void *policy_thread(void *unused) {
     mach_timebase_info_data_t tb; assert(mach_timebase_info(&tb) == KERN_SUCCESS);
     fprintf(stderr, "Mach audio policy readback: period %u computation %u constraint %u, timebase %u/%u\n", p.period, p.computation, p.constraint, tb.numer, tb.denom);
     assert((uint64_t)p.period * tb.numer / tb.denom == 5000000);
-    // XNU may raise computation to half the constraint; the accepted budget is not guaranteed to equal the request.
+    // XNU may raise computation to half the constraint
     assert((uint64_t)p.computation * tb.numer / tb.denom >= 1000000 && p.computation <= p.constraint);
     assert(p.constraint == p.period && p.preemptible);
     render_rt_end();
@@ -358,7 +338,6 @@ static void *policy_thread(void *unused) {
     return NULL;
 }
 static void test_render_policy(void) {
-    // Failure and the diagnostic opt-out must still publish every renderer's PCM, without an unmatched policy reset.
     unsetenv("DM_AUDREN_RT");
     test_renderer_blocks(); assert(policy.sets == 2 && policy.resets == 2);
     policy.fail = 1;
@@ -372,17 +351,17 @@ static void test_render_policy(void) {
     puts("audren scheduling: real worker policy set/read/reset; setup/teardown outside real-time; PCM preserved on rejection and opt-out");
 }
 
-// The update lock is read off Update, else off UpdateImpl; a miss keeps the caller's offset and is a red line. Built from prologues of the forms the SDKs have (`bl` into a PLT stub or straight to the function)
+// The update lock is read off Update, else UpdateImpl; a miss keeps the caller's offset and is a red line.
 enum { F_UPDATE, F_IMPL = 16, F_STUB = 32, F_TICK = 36, F_SDK_LOCK, F_OTHER_LOCK, F_CODE };
 static uint32_t lock_code[F_CODE];
 static void *lock_got __attribute__((aligned(8)));
-static void lock_fn(int at, int off, int target) {   // pacibsp; add x19, x0, #off; mov x20, x0; mov x0, x19; bl target (no add: bl target first, as the tick call of SDK 19's Update)
+static void lock_fn(int at, int off, int target) {   // pacibsp; add x19, x0, #off; mov x20, x0; mov x0, x19; bl target (no add: bl target first)
     uint32_t *f = lock_code + at; int n = 0;
     f[n++] = 0xd503237fu;
     if (off >= 0) { f[n++] = 0x91000000u | (uint32_t)off << 10 | 19; f[n++] = 0xaa0003e0u | 20; f[n++] = 0xaa0003e0u | 19u << 16; }
     f[n] = 0x94000000u | ((uint32_t)(target - at - n) & 0x3ffffffu);
 }
-static int lock_read(size_t *off, const char **red) {   // update_lock with its log caught in *red: NULL when it printed none
+static int lock_read(size_t *off, const char **red) {
     static char log[256]; memset(log, 0, sizeof log);
     fflush(stderr); int saved = dup(2); FILE *t = tmpfile(); assert(saved >= 0 && t); dup2(fileno(t), 2);
     int r = update_lock(off);
@@ -402,18 +381,16 @@ static void test_update_lock(void) {
     lock_syms[1].name = "_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm"; lock_syms[1].p = lock_code + F_UPDATE;
     lock_syms[2].name = "_ZN2nn5audio6server17AudioRenderSystem10UpdateImplEPvmS3_mPKvm"; lock_syms[2].p = lock_code + F_IMPL;
     size_t off; const char *red;
-    // an Update that locks first, through the PLT, wins over a lock in UpdateImpl
     lock_fn(F_UPDATE, 0x1f0, F_STUB); lock_fn(F_IMPL, 0x2d8, F_STUB);
     off = 1; assert(lock_read(&off, &red) && off == 0x1f0 && !red);
-    lock_got = lock_code + F_OTHER_LOCK;   // a first call that is not SdkMutexType::Lock is no lock the host can take: the guess stays and the log says so
+    lock_got = lock_code + F_OTHER_LOCK;
     off = 1; assert(!lock_read(&off, &red) && off == 1 && red);
     lock_got = lock_code + F_SDK_LOCK;
-    // the game's SDK: Update's first call is the tick, and UpdateImpl has the lock: +0x2d8 in SDK 22, whatever the caller guessed
+    // the game's SDK 22: Update calls the tick first, UpdateImpl locks at +0x2d8
     lock_fn(F_UPDATE, -1, F_TICK);
     off = 0x2d0; assert(lock_read(&off, &red) && off == 0x2d8 && !red);
-    lock_fn(F_IMPL, 0x2d0, F_SDK_LOCK);   // a straight bl
+    lock_fn(F_IMPL, 0x2d0, F_SDK_LOCK);
     off = 1; assert(lock_read(&off, &red) && off == 0x2d0 && !red);
-    // neither locks first, or an SDK without UpdateImpl: the guess stays and the log says so
     lock_fn(F_IMPL, 0x2d8, F_TICK);
     off = 0x2d0; assert(!lock_read(&off, &red) && off == 0x2d0 && red);
     memset(&lock_syms[2], 0, sizeof lock_syms[2]);
@@ -460,10 +437,8 @@ static void *pace_catchup(void *arg) {
 static int wait_for_render(pthread_cond_t *cv, pthread_mutex_t *mu, const struct timespec *delay) {
     if (!pace.rate) return pthread_cond_timedwait_relative_np(cv, mu, delay);
     if (!pace.waits++) {
-        // The first paced wait gets a real wake from a second RequestUpdate.
-        // The wait and publication use the production queue mutex and condition variable.
         pthread_mutex_unlock(mu);
-        pace_catchup(pace_sys);   // record the latest render as the preceding update
+        pace_catchup(pace_sys);
         pthread_mutex_lock(mu);
         ar_t *a = &g_ar[0];
         assert(a->cq_head == a->cq_tail);
@@ -512,7 +487,7 @@ int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--malformed")) { test_malformed(0); return 0; }
     test_headers();
     for (int scenario = 0; scenario <= 5; scenario++) {
-        // Each scenario starts in a fresh process, including capture's one-time walk and sink detection.
+        // a fresh process per scenario: capture's walk and sink detection are one-time
         pid_t pid = fork(); assert(pid >= 0);
         if (!pid) {
             if (scenario <= 1) test(scenario);

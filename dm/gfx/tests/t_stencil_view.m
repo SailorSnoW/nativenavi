@@ -1,4 +1,4 @@
-// Stencil-only views of depth-stencil textures (PR #106): Metal allows an X32_Stencil8 view only of a texture with the format-view usage, and its API validation layer aborts the
+// Stencil-only views of depth-stencil textures: Metal allows an X32_Stencil8 view only of a texture with the format-view usage, and its API validation layer aborts the
 // process at the first view of one made without it. Run under MTL_DEBUG_LAYER=1: for both NVN depth-stencil formats (Depth32Float_Stencil8 in Metal), a texture is filled with a
 // per-pixel depth and stencil, read through a stencil-mode view, a texture built in stencil mode and the depth-stencil copy draw, and the copy's destination is read back
 #include "../nvn/nvn_mtl.m"
@@ -32,7 +32,7 @@ int main(void) { @autoreleasepool {
         s.d = (nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D, .format=formats[i], .width=W, .height=H, .depth=1, .levels=1, .samples=1};
         nvn_tex_layout(&s.d, &s.L);
         tex_t sb = s, d = s; sb.serial++; sb.stencil = 1; d.serial += 2;   // sb: the same storage built in stencil mode; d: the copy's destination
-        sb.d.flags |= NVN_TEXTURE_FLAGS_IMAGE;   // usage-only difference, as in Xenoblade Chronicles 3
+        sb.d.flags |= NVN_TEXTURE_FLAGS_IMAGE;   // usage-only difference
         d.off = 0x100000;   // a separate destination, not another descriptor of the source storage
         mtl_tex_init(&s); mtl_tex_init(&sb); mtl_tex_init(&d);
         id<MTLTexture> base = tex_mtl(&s), dst = tex_mtl(&d);

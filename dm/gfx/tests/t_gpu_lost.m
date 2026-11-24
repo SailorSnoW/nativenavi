@@ -1,5 +1,5 @@
-// GPU access revoked (nvn_mtl.m gpu_lost_check; issue #1326), imitated by DM_TEST_GPU_LOST=3: from the third submission on, each submission's feedback reports the access revoked in the
-// shape the #1326 logs show, and the GPU does not signal its fence. Checks that the revoked access is found under Metal's top-level error and an innocent victim's, a page fault's or
+// GPU access revoked (nvn_mtl.m gpu_lost_check), imitated by DM_TEST_GPU_LOST=3: from the third submission on, each submission's feedback reports the access revoked in the
+// shape macOS reports it, and the GPU does not signal its fence. Checks that the revoked access is found under Metal's top-level error and an innocent victim's, a page fault's or
 // a hang's error is not taken for it; that the front end is told once; that a SyncWait on such a fence returns at its feedback instead of waiting out its timeout, for the later
 // submissions too; and that a present no longer asks for the layer to take a drawable from. Real Metal 4 queue, no window, no game files
 #include "../nvn/nvn_mtl.m"

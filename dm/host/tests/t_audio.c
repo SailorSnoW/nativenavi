@@ -1,9 +1,8 @@
-// hle_audio.c unit test (silent sink): release events wake the reader, which drains the buffers in order.
-// Expected values are computed directly from the sample rate and block length: 4800 frames / 48 kHz = 100 ms.
+// hle_audio.c with the silent sink. 4800 frames / 48 kHz = 100 ms per block.
 #include "../hle_audio.c"
 #include <time.h>
 #include <sys/mman.h>
-__thread _Atomic int dm_host_work;   // defined by the graphics host in a full build
+__thread _Atomic int dm_host_work;
 uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
 static struct { const void *k; void *v; } om[8];
 void *objmap_get(const void *k) { for (int i = 0; i < 8; i++) if (om[i].k == k) return om[i].v; return NULL; }
@@ -11,13 +10,12 @@ void objmap_put(const void *k, void *v) { for (int i = 0; i < 8; i++) if (!om[i]
 void *objmap_del(const void *k) { for (int i = 0; i < 8; i++) if (om[i].k == k) { om[i].k = 0; return om[i].v; } return NULL; }
 static _Atomic int g_sig;
 void hle_signal_system_event(void *g) { (void)g; atomic_fetch_add_explicit(&g_sig, 1, memory_order_seq_cst); }
-void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }   // the real implementation needs a guest thread + SDK kernel event; the unit test only counts triggers
-module_t *module_of(const void *p) { (void)p; return NULL; }   // call sites in the log: no guest modules in the unit test
-int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }   // hle_svc.c: no guest address space in the unit test, so the big-stack entries (hle_bigstack.c) run on the calling host stack
-void dm_host_helper_qos(qos_class_t q) { (void)q; }   // hle_thread.c: the helper threads keep the default class in the unit test
+void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }   // the unit test only counts triggers
+module_t *module_of(const void *p) { (void)p; return NULL; }
+int dm_guest_as_contains(uintptr_t a) { (void)a; return 0; }
+void dm_host_helper_qos(qos_class_t q) { (void)q; }
 
-// A callback can finish several buffers, and the notifier can combine pending wakes.
-// Only inspect the released queue after an event, then take everything it announced.
+// wakes can combine: inspect the released queue only after an event, then take all it announced
 static int drain_signaled(void *out, aout_buf *buffers, int count, int *got, int *seen) {
     int signals = atomic_load_explicit(&g_sig, memory_order_acquire);
     if (signals == *seen) return 1;
@@ -33,9 +31,7 @@ static int drain_signaled(void *out, aout_buf *buffers, int count, int *got, int
     return 1;
 }
 
-// Exercise the actual device callback, not just a mixing helper. A stereo
-// device must hear every channel of a 5.1 guest buffer and release the complete
-// six-channel buffers at the same frame count, including a split inside a block.
+// a stereo device must hear all six channels of a 5.1 buffer, a split inside a block included
 static int test_surround_output(void) {
     enum { FRAMES = 273, SPLIT = 17 };
     const int16_t expected[8][2] = {
@@ -65,12 +61,8 @@ static int test_surround_output(void) {
     puts("surround callback: all six channels audible, saturation and split-buffer release verified");
     return 0;
 }
-// What the sdk's SetAudioOutBufferInfo does (Hades's sdk+0x142ab0, Metro 2033 Redux's sdk+0x80f80, the same in SDK 8 to Switch 2's): the host leaves it and the other descriptor
-// functions to the sdk and reads the guest's AudioOutBuffer itself
 static void set_buf(aout_buf *b, void *p, uint64_t cap, uint64_t size) { b->ptr = p; b->cap = cap; b->size = size; }
-// The host plays a buffer as the SDK describes it: the object spelled out as the SDK has it (not as aout_buf has it, so the check is about the ABI and not about our own names),
-// next linked as AudioBufferList links it, the data size 4 bytes short of the capacity. The callback must play exactly the data size from the data pointer and release the buffer.
-// The host's old private layout (data +0x00, capacity +0x08, data size +0x10) read next as the data and the capacity as the data size (Metro 2033 Redux)
+// the SDK's AudioOutBuffer spelled out, not aout_buf: exactly the data size plays
 static int test_buffer_layout(void) {
     enum { FRAMES = 64 };
     static int16_t pcm[FRAMES * 2 + 2], other[4];
@@ -89,8 +81,7 @@ static int test_buffer_layout(void) {
     puts("buffer layout: the data at +0x08 played for the data size at +0x18, next at +0x00 left as the game linked it");
     return 0;
 }
-// The guest AudioOut's front as the SDK fills it (au_info), and its lifetime under a guard like the middleware's: open, play, go to the background, close only if the first word says open,
-// make the PCM inaccessible (a consumer left running would fault on it) and come back, 12 times (PR #109). Old pages stay mapped PROT_NONE, so no new buffer lands at a stale address
+// open / background / close / PROT_NONE the PCM, 12 times: no buffer lands at a stale address
 static int test_output_lifetime(void) {
     enum { CYCLES = 12 };
     uint32_t out[16] = {0}; uint8_t prm[16];
@@ -119,8 +110,7 @@ static int test_output_lifetime(void) {
     printf("AudioOut fields and lifetime (%s): %d guarded open / close / unmap / resume cycles, no consumer left\n", real_audio() ? "real output" : "silent sink", CYCLES);
     return 0;
 }
-// audout takes 0 or 48000 and refuses any other rate with 0x699 (ResultInvalidSampleRate). Mega Man Legacy Collection (SDK 3.7) asks for 44.1 kHz first and opens again with the
-// defaults when refused: the refused open leaves no output and the guest AudioOut as it was, and the second one opens at 48 kHz
+// other rates are refused with 0x699 (ResultInvalidSampleRate), the guest AudioOut unchanged
 static int test_rate_refused(void) {
     uint32_t out[16] = {0}; uint8_t prm[16];
     memset(prm, 0, 8); *(int32_t *)prm = 44100;
@@ -136,8 +126,7 @@ static int test_rate_refused(void) {
     puts("AudioOut rate: 44.1 kHz refused with 0x699 and nothing opened; 0 and 48000 open at 48 kHz");
     return 0;
 }
-// audout takes 1, 2 or 6 channels (0: the default, 2) and refuses any other count with 0x1499 (ResultInvalidChannelCount): the refused open leaves no output and the guest AudioOut
-// as it was. 9 is the count whose 5 ms block would not fit the silent sink's (eight channels, the renderer's output); the renderer's own output still opens with its eight
+// other counts than 0, 1, 2, 6 are refused with 0x1499 (ResultInvalidChannelCount); 9 would overflow the silent sink's block
 static int test_channels_refused(void) {
     const int bad[] = {3, 4, 5, 7, 8, 9, 64, 0xffff}, good[] = {0, 1, 2, 6};
     uint32_t out[16] = {0}; uint8_t prm[16];
@@ -151,7 +140,7 @@ static int test_channels_refused(void) {
         memset(prm, 0, 8); *(uint16_t *)(prm + 4) = (uint16_t)good[i]; memset(out, 0, sizeof out);
         int want = good[i] ? good[i] : 2;
         if (h_au_Open4(out, NULL, prm) || out[1] != (uint32_t)want || ao(out)->ch != want) { printf("FAIL %d-channel open\n", good[i]); return 1; }
-        au_start_at(out, NULL); usleep(12000); au_close(out, NULL);   // the silent sink pulls this output's 5 ms blocks into its own block
+        au_start_at(out, NULL); usleep(12000); au_close(out, NULL);
     }
     void *sink = dm_pcmout_open_sink();
     if (ao(sink)->ch != DM_AUDIO_SINK_CHANNELS || !ao(sink)->sink_pcm) { puts("FAIL the renderer's output: not its eight channels"); return 1; }
@@ -179,8 +168,7 @@ int main(void) {
     printf("released %d/3 in order=%d after %d signals\n", got, order_ok, seen);
     if (!order_ok || got != 3) return 1;
 
-    // Scenario 2: the real audio output sink (PCM all 0, inaudible) plays 6 blocks of 100 ms each, pausing at 150 ms (dm_audio_suspend: the window minimized) and resuming at 350 ms.
-    // During the pause the silent sink takes over. Release events must let the reader reclaim all six blocks in order at real-time pace.
+    // suspended at 150 ms, resumed at 350 ms: the silent sink stands in, all blocks released in order
     setenv("DM_AUDIO", "1", 1);
     if (test_output_lifetime()) return 1;
     char out2[64]; aout_buf b2[6]; static int16_t pcm2[6][4800 * 2]; g_sig = 0;
@@ -202,12 +190,8 @@ int main(void) {
     printf("suspend / resume: released %d/6 in order=%d after %d signals, total duration lower bound 520 ms, got %.0f ms %s\n", got2, order_ok, seen2, total, ok2 ? "✓" : "✗");
     if (!ok2) return 1;
 
-    // Scenario 3: the device stops calling back while the output plays (as a system can, when another audio session takes over, without telling the AudioUnit). 20 blocks of 100 ms; at 150 ms the AudioUnit is stopped behind the host's back.
-    // Expected: the watchdog sees no callback for 200 ms, the silent sink takes over (all 20 blocks still released in order, about 2 s plus the 200-250 ms gap), and the AudioUnit is restarted 1 s later and calls back again
-    // Allow 5 s for scheduling and AudioUnit stop/start delays on virtual CI Macs; buffer order, the playback lower bound and resumed callbacks still have to hold.
-    // The virtual output of a CI Mac can also pause by itself for more than 200 ms after the restart: the watchdog then rightly stands the silent sink in again and retries 1 s later, which can fall after the
-    // last release (CI: "AudioUnit restarted", a second "has not called back for 204 ms", then Close 1 s later, "calling back again=0"). So the backend is followed on every poll until a restarted AudioUnit
-    // has called back, up to 20 s (the watchdog's back-off of 1, 2, 4 s fits), instead of being read once 100 ms after the last release; it still fails when no restarted AudioUnit ever calls back
+    // AudioUnit stopped behind the host's back: the watchdog stands the silent sink in, then restarts it.
+    // Generous limits: virtual CI outputs can pause again after the restart, and the watchdog backs off 1, 2, 4 s.
     char out3[64]; aout_buf b3[20]; static int16_t pcm3[20][4800 * 2]; g_sig = 0;
     if (au_open_at(out3, ev, NULL, prm, NULL, 0)) return 1;
     for (int i = 0; i < 20; i++) set_buf(&b3[i], pcm3[i], sizeof pcm3[i], sizeof pcm3[i]);
@@ -217,12 +201,12 @@ int main(void) {
     while (!(got3 == 20 && back) && now_ns() - t0 < 20000000000ull) {
         uint64_t ms = (now_ns() - t0) / 1000000;
         if (!cut && ms >= 150) { AudioOutputUnitStop(a3->au); cut = 1; }
-        // The watchdog changes the backend under g_aos_lock, and a restart comes at least 1 s after the silent sink stood in, so a 1 ms poll sees every stand-in and every restart
+        // restarts come at least 1 s apart, so a 1 ms poll under g_aos_lock sees each one
         pthread_mutex_lock(&g_aos_lock);
         if (cut && a3->backend == BK_NULL && a3->stalled) { standins += !sink; sink = 1; restarted = 0; }
         else if (standins && a3->backend == BK_AU && !a3->stalled) {
             uint64_t n = atomic_load(&a3->cb_n); sink = 0;
-            if (!restarted) { restarted = 1; cb_restart = n; } else if (n > cb_restart) back = 1;   // callbacks counted after the restart was seen
+            if (!restarted) { restarted = 1; cb_restart = n; } else if (n > cb_restart) back = 1;
         }
         pthread_mutex_unlock(&g_aos_lock);
         aout_buf *r = got3 < 20 ? h_au_Released(out3) : NULL;
@@ -238,4 +222,4 @@ int main(void) {
     return !ok3;
 }
 
-void dm_audio_device_changed(void) {}   // renderer notification delivery is checked by t_audren_work
+void dm_audio_device_changed(void) {}

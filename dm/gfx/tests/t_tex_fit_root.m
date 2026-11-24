@@ -1,6 +1,6 @@
 // tex_fit's type-compatible view of a texture that is a view itself (the view cache's: a level and layer range, a swizzle) is made from the texture under it, with the same levels,
-// layers and swizzle. Metal takes a view's residency from the texture it was made from: a view of a view read as not resident (shader validation) although the texture under both was
-// in the residency set (Breath of the Wild's 64x64 cube read from a 2D-array view, found with nvn_replay)
+// layers and swizzle. Metal takes a view's residency from the texture it was made from: a view of a view reads as not resident (shader validation) although the texture under
+// both is in the residency set
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -41,7 +41,7 @@ static id<MTLTexture> layered_root(NSUInteger layers) {
     }
     return root;
 }
-// Cubes and cube arrays in the slots of the other layered types: every face and layer the shader asks for, from the view's levels and layers (Splatoon Raiders: a cube in a cube array slot)
+// Cubes and cube arrays in the slots of the other layered types: every face and layer the shader asks for, from the view's levels and layers (a cube in a cube array slot)
 static void cube_views(id<MTLLibrary> library) {
     id<MTLComputePipelineState> rd_ca = pipeline_of(library, @"rd_ca"), rd_c = pipeline_of(library, @"rd_c"), rd_2a = pipeline_of(library, @"rd_2a"), rd_2d = pipeline_of(library, @"rd");
     id<MTLTexture> root = layered_root(CUBE_LAYERS);
@@ -66,7 +66,7 @@ static void cube_views(id<MTLLibrary> library) {
     read_args(rd_c, ca_c, dirs[5], sizeof dirs[5], v); CHECK(same(v, 1, 5, plain), "the first cube's last face through the cube view");
 }
 // An ID marked gone (its memory pool finalized, or mtl_reg_tex_gone) lets go of every view it caches, as a full unregister does: the type-compatible view (tex_fit) and the pool
-// table's view (pool_fit) as well as the primary one, through the deferred release behind the open submission's fence (PR #923). Each case watches those two views themselves
+// table's view (pool_fit) as well as the primary one, through the deferred release behind the open submission's fence. Each case watches those two views themselves
 // (weak references; their parent, the root, the serial table holds): alive and reading right until the submission completes, gone after. Registering the same data again keeps
 // the views (mtl_reg_tex), so a gone case followed by one must not leave them; the unregister case is the control
 enum { RT_TID = NTID };

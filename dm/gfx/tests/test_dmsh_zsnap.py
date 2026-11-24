@@ -2,10 +2,8 @@
 z > d after the denormal flush; its foliage: z * k > d * k; a body moved to dm_body_main0) takes dm_zsnap(gl_FragCoord.z, d, dm_zw), with dm_zw = fwidth(gl_FragCoord.z) first in the body
 and the helper once; z against constants or uniforms, a texture value read after z or in a block z does not see, and z read outside main0's body stay as they were. The rewritten source
 compiles where xcrun is. With --fixture <dir>, writes the helper as zsnap.h for t_zsnap.m (make check_t_zsnap), which tests it on the GPU against the depth the rasterizer stores."""
-import ast
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys

@@ -54,7 +54,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     copy_block(&f1, &rt, (uint64_t)(uintptr_t)pool, 8, 8); emit(&f1, OP_END, 0);
     submit(f1.p); nvn_cap_present(&rt, NULL);
     // a texture on a pool of its own, registered, then the pool finalized as nvnMemoryPoolFinalize does and the pool object's memory reused: the ID stays registered with its
-    // storage gone, and the capture must not read the dead pool object (Pokemon Scarlet: a texture's bytes there read as a sparse pool's mode, or as addresses outside every pool)
+    // storage gone, and the capture must not read the dead pool object (its bytes may read as a sparse pool's mode, or as addresses outside every pool)
     static pool_t p2; size_t p2sz = 64 << 10; uint8_t *mem2 = NULL; if (posix_memalign((void **)&mem2, (size_t)getpagesize(), p2sz)) return 2;
     mtl_pool_add(mem2, p2sz); p2 = (pool_t){MAGIC('P', 'O', 'O', 'L'), 0, mem2, p2sz, NULL, 0};
     tex_t t2 = {.magic = MAGIC('T', 'E', 'X', 0), .serial = nvn_new_serial(), .pool = &p2, .mem = mem2};
@@ -65,7 +65,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     for (int i = 0; i < 16 * 16; i++) { pool[0x10000 + 4 * i] = 200; pool[0x10000 + 4 * i + 1] = (uint8_t)(3 * i); pool[0x10000 + 4 * i + 2] = 90; pool[0x10000 + 4 * i + 3] = 255; }
     chain a = {{0}, 0};
     // two programs bound to the vertex and fragment stages apart: the replay layer makes a combined program and gives it a serial of its own (bind_stages). The target
-    // above keeps serial 1 in the capture, so a replay counting from 1 gave that serial to the combined program and the target resolved to it (Pokemon Scarlet)
+    // above keeps serial 1 in the capture, so a replay counting from 1 would give that serial to the combined program and the target would resolve to it
     static prog_t pv = {.magic = MAGIC('P', 'R', 'O', 'G')}, pf = {.magic = MAGIC('P', 'R', 'O', 'G')}; pv.serial = nvn_new_serial(); pf.serial = nvn_new_serial();
     { p_bind_program *p = emit(&a, OP_BIND_PROGRAM, sizeof *p); *p = (p_bind_program){&pv, 0x1}; }
     { p_bind_program *p = emit(&a, OP_BIND_PROGRAM, sizeof *p); *p = (p_bind_program){&pf, 0x2}; }
@@ -81,8 +81,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     if (!g_cap_done || g_cap_failed) { fprintf(stderr, "FAIL: capture %s\n", g_cap_done ? "incomplete" : "not written"); return 1; }
     if (g_cap_unmapped) { fprintf(stderr, "FAIL: %llu addresses outside every pool (the finalized pool's object read)\n", (unsigned long long)g_cap_unmapped); return 1; }
     if (*(uint32_t *)(pool + 0x30000) != 0x11223344) { fprintf(stderr, "FAIL: the called segment's buffer fill did not run\n"); return 1; }
-    // a shader's interface hash is of its binding values, not of nvn_refl.h's struct bytes: pinned, so a field widened or added there (682fdd26: nvn_rbind.n, soff) does not
-    // change it, which made the replayer refuse every capture although no binding had changed
+    // a shader's interface hash is of its binding values, not of nvn_refl.h's struct bytes: pinned, so a field widened or added there does not change it (the replayer
+    // would refuse every capture although no binding changed)
     { NvShader *sh = [NvShader new]; sh->rf.nb = 2; sh->rf.nv = 1; sh->rf.tg[0] = 64;
       sh->rf.b[0] = (nvn_rbind){.kind = NVN_RB_TEXA, .reg = 3, .aid = 1, .off = 0x40, .n = 300, .soff = 0x80}; sh->rf.b[1] = (nvn_rbind){.kind = 1, .rw = 1, .reg = 2};
       sh->rf.v[0].loc = 4; sh->rf.v[0].nvn = 2; sh->rf.v[0].sh[0] = sh->rf.v[0].sh[1] = sh->rf.v[0].sh[2] = 0xff;

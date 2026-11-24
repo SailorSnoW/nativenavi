@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Ordered not-equal at the SPIR-V → MSL boundary (PR #2042).
+"""Ordered not-equal at the SPIR-V → MSL boundary.
 
-SPIRV-Cross used MSL's unordered != for OpFOrdNotEqual. These synthetic modules
+Upstream SPIRV-Cross writes MSL's unordered != for OpFOrdNotEqual. These synthetic modules
 keep ordered, unordered, inverted, integer and Boolean comparisons observable.
 Scalar and vector f32/f16 results run on the GPU with the chain's Metal flags,
 so folding an ordered expression back to != also fails. No game data is needed.

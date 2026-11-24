@@ -185,7 +185,7 @@ static void gpu_case(id<MTLComputePipelineState> p, int live, int sid, const flo
 }
 
 int main(int argc, char **argv) { @autoreleasepool {
-    choice((float[4]){0.5f, 0.5f, 0.5f, 0.5f}, 5, 0, 1, 0);   // Tears of the Kingdom's grass bend map
+    choice((float[4]){0.5f, 0.5f, 0.5f, 0.5f}, 5, 0, 1, 0);   // translucent grey
     choice((float[4]){0.25f, 0.5f, 0.75f, 1}, 5, 0, 1, 1);     // opaque: kept with opaque black, corrected with opaque white
     choice((float[4]){0.8f, 0.9f, 0.7f, 0.6f}, 4, 0, 1, 2);
     choice((float[4]){1, 0, 0, 1}, 5, 0, 1, -1);

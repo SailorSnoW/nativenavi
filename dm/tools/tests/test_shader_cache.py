@@ -9,7 +9,7 @@ sys.path.insert(0, str(REPO / 'dm/tools'))
 import shader_cache
 
 D1, D2, D3 = 'a' * 64, 'b' * 64, 'c' * 64
-APPLE_PYTHON = '/usr/bin/python3'   # Xcode's, whose sqlite3 is Apple's /usr/lib/libsqlite3.dylib: a fork that opens a database there dies (GitHub issue #2354)
+APPLE_PYTHON = '/usr/bin/python3'   # Xcode's, whose sqlite3 is Apple's /usr/lib/libsqlite3.dylib: a fork that opens a database there dies
 SERVED = STORE = None   # what the forked workers inherit, and each worker's own store
 
 
@@ -67,7 +67,7 @@ class Base(unittest.TestCase):
 
 @unittest.skipIf(sys.version_info < (3, 11), 'an sqlite3 error carries its code from Python 3.11')
 class Renumbered(unittest.TestCase):
-    """A new file that takes another inode at its first write (an exFAT drive under macOS 26.6.2, GitHub issue #2434): SQLite's real SQLITE_READONLY_DBMOVED, made here by
+    """A new file that takes another inode at its first write (an exFAT drive under macOS 26.6.2): SQLite's real SQLITE_READONLY_DBMOVED, made here by
     putting a copy of the file in its place. DM_EXFAT_DIR=<a folder on an exFAT volume> also runs test_on_the_drive there"""
     def setUp(self):
         t = tempfile.TemporaryDirectory(dir=os.environ.get('DM_EXFAT_DIR')); self.addCleanup(t.cleanup)
@@ -157,7 +157,7 @@ class Entries(Base):
     def test_other_threads_read_on_connections_of_their_own(self):
         # one connection gives an entry's bytes at 190 MB/s; the library image is written from 300,000 entries (shader_lib.py write), read by a few threads at once
         for i in range(50): self.store.put(f's/{i}', bytes([i]) * 40000)
-        self.assertEqual(self.store.get('s/7'), bytes([7]) * 40000); self.assertEqual(self.store.readers, {})   # the thread that opened it: the one connection, as before
+        self.assertEqual(self.store.get('s/7'), bytes([7]) * 40000); self.assertEqual(self.store.readers, {})   # the thread that opened it: the one connection
         with cf.ThreadPoolExecutor(4) as pool: got = list(pool.map(lambda i: self.store.get(f's/{i}'), range(50)))
         self.assertEqual(got, [bytes([i]) * 40000 for i in range(50)])
         self.assertTrue(0 < len(self.store.readers) <= 4)
@@ -177,8 +177,8 @@ class Entries(Base):
         self.assertEqual(read[0][0], b'whole'); self.assertGreater(read[0][1], 0.2)   # not "absent": the read came after the batch, as on one connection
 
     def test_recovery_waits_for_readers_being_opened_or_queried(self):
-        # A reader's connection belongs to this database until its query finishes. Recovery used to clear the registry between registration and lookup (KeyError), close a
-        # connection during fetchall, or replace the database while a connection to the old file was still being opened. Pause real SQLite readers at both lifetime boundaries.
+        # A reader's connection belongs to this database until its query finishes. Recovery must not clear the registry between registration and lookup, close a
+        # connection during fetchall, or replace the database while a connection to the old file is being opened. Pause real SQLite readers at both lifetime boundaries.
         for stage in ('open', 'fetch', 'failed_fetch'):
             with self.subTest(stage=stage): self.reader_recovery(stage)
 

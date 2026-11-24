@@ -2,7 +2,7 @@
 
 Checks:
 - drs_controller: off mode (state +0x40 == 0), the threshold: the game's scaled by 60 / target fps, at most one frame
-  of the target rate (5000 / target fps units: 83 at 60, 166 at 30; DM_FPS_TARGET=30 took 83 -> 166), the game's own
+  of the target rate (5000 / target fps units: 83 at 60, 166 at 30), the game's own
   at target 0, handheld mode's 105 held to one frame at 60 and at 30, and the step-down / climb-up rules.
 - drs_render_scale_guard + drs_controller: render scale in (0, 1) holds level 0 even with DRS on; 0, >= 1, negative, NaN fall through.
 - render_scale status/store stubs: recompute trigger, scale multiply, scene-reset re-apply, status 1 preservation, and register/flag preservation.

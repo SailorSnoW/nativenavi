@@ -10,8 +10,7 @@ import json, pathlib, subprocess, sys, tempfile, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
 import dmsh_abi, dmsh_fetch, dmsh_rewrite, dmsh_side, pso_offline
 
-# Breath of the Wild's decal vertex shader 095cd6ad97fd779a as spirv-cross writes it, cut down (a full-screen triangle with w = 2 in place of the decal box), and a branch first,
-# as Tears of the Kingdom's bb19fab2f950e587 has
+# A decal vertex shader as spirv-cross writes it, cut down (a full-screen triangle with w = 2 in place of the decal box), and a branch first
 VS = '''#include <metal_stdlib>
 using namespace metal;
 
@@ -60,7 +59,7 @@ vertex main0_out main0(uint gl_VertexIndex [[vertex_id]])
     return out;
 }
 '''
-# The decal fragment shader's G-buffer read (4d3d5a4408c2e8d9), its colours rotated into its output: green from blue, blue from red, red from green
+# The decal fragment shader's G-buffer read, its colours rotated into its output: green from blue, blue from red, red from green
 FS = '''#include <metal_stdlib>
 using namespace metal;
 
@@ -97,7 +96,7 @@ fragment main0_out main0(main0_in in [[stage_in]], constant spvDescriptorSetBuff
 '''
 BINDINGS = [{'kind': dmsh_abi.KIND_TEX, 'msl_name': 'fp_t_tcb_8', 'reg': 0}]
 FS_KEY = 'fedcba9876543210'
-# Splatoon Raiders' ink stamp (6a5b76a60670e513), cut down: its ink map sampled at gl_FragCoord over the render scale times c[6].xy (1 / the map's size), through the border colour
+# An ink stamp shader, cut down: its ink map sampled at gl_FragCoord over the render scale times c[6].xy (1 / the map's size), through the border colour
 # correction; the read's channels rotated into its output (red from green, green from blue plus one minus alpha): red where it read green, black where it read red, and green
 # wherever a missing channel of an R or RG map read other than 0, 0, 1
 FS_POS = """#include <metal_stdlib>
@@ -245,12 +244,12 @@ class PixelPositionSample(unittest.TestCase):
 
 
 # A read at a computed offset, as spirv-cross writes the translator's: the size comparison (with the slot's size in words from the size table, bank DMSH_CBSIZE_BANK) a value of its
-# own, which chooses row 0 for the index and 0 for the value when out of bounds. Reads at fixed offsets are not bounded in the shader (the host's zeros, GitHub issue #2066)
+# own, which chooses row 0 for the index and 0 for the value when out of bounds. Reads at fixed offsets are not bounded in the shader (the host's zeros)
 COMPUTED = ('bool _5 = ((uint(_3) << 2u) | uint(_4)) < ((*spvDescriptorSet0.fp_c%d)._m0[2].w >> 2u);\n'
             'float _6 = _5 ? (*spvDescriptorSet0.fp_c14)._m0[_5 ? _3 : 0][_4] : 0.0;' % dmsh_abi.CBSIZE_BANK)
 
 class UniformBounds(unittest.TestCase):
-    def test_select_guards_at_a_computed_offset(self):   # a load and a select (GitHub PR #2127); the index keeps its row-0 choice, so the load is inside the binding without a branch
+    def test_select_guards_at_a_computed_offset(self):   # a load and a select; the index keeps its row-0 choice, so the load is inside the binding without a branch
         row = '(*spvDescriptorSet0.fp_c14)._m0[_5 ? _3 : 0]'
         got = dmsh_rewrite.select_guards(COMPUTED)
         self.assertEqual(got.split('\n')[1], 'float _6 = select(0.0, %s[_4], _5);' % row)
@@ -264,7 +263,7 @@ class UniformBounds(unittest.TestCase):
         self.assertTrue(dmsh_rewrite.select_guards(other).endswith(other.split('\n')[2]))
 
     def test_select_guards_leaves_none(self):   # a bounded read in a form it does not know is an error, not a branch left in the shader
-        fixed = '((117u < ((*spvDescriptorSet0.fp_c%d)._m0[0].x >> 2u)) ? (*spvDescriptorSet0.fp_c5)._m0[29].y : 0.0)' % dmsh_abi.CBSIZE_BANK   # the translator bounds no fixed offset now
+        fixed = '((117u < ((*spvDescriptorSet0.fp_c%d)._m0[0].x >> 2u)) ? (*spvDescriptorSet0.fp_c5)._m0[29].y : 0.0)' % dmsh_abi.CBSIZE_BANK   # the translator bounds no fixed offset
         for why, src in (('a fixed offset compared in the shader', 'float _1 = %s;' % fixed),
                          ('a computed offset with another index', COMPUTED.replace('[_5 ? _3 : 0]', '[_3]')),
                          ('another zero', COMPUTED.replace(': 0.0', ': -0.0')),
@@ -277,7 +276,7 @@ class UniformBounds(unittest.TestCase):
         other = bare + '\nfloat _9 = _8 ? _1 : 0.0;'
         self.assertEqual(dmsh_rewrite.select_guards(other), other, 'an ordinary choice without any size comparison is left as it is')
 
-    def test_select_guards_a_bounded_storage_read(self):   # TranslationFlags.MetalStorageBounds (GitHub issue #2618): the same choice, the index word 0 out of bounds
+    def test_select_guards_a_bounded_storage_read(self):   # TranslationFlags.MetalStorageBounds: the same choice, the index word 0 out of bounds
         t = '(*spvDescriptorSet0.cp_c%d)._m0[1]' % dmsh_abi.SBLEN_BANK
         src = ('int _96 = int(_49);\nbool _100 = (uint(_96) + %s.z) < %s.w;\nfloat _51 = as_type<float>(_100 ? (*spvDescriptorSet0.cp_s3)._m0[_100 ? _96 : 0] : 0u);\n'
                'uint _52 = _100 ? (*spvDescriptorSet0.cp_s3)._m0[_100 ? _96 : 0] : 0u;\nif (_100)\n{\n    (*spvDescriptorSet0.cp_s3)._m0[_100 ? _96 : 0] = _52;\n}') % (t, t)
@@ -338,7 +337,8 @@ class OutputMappingOnly(unittest.TestCase):
 def tile_library(src, root, name, side=frozenset(), sdk='macosx'):
     """The libraries ps_libraries cuts from a folded source: (base, side..., main0_f) as files root/<name>_<i>.metallib; raises AssertionError unless main0_f, alone in the last, declares
     function constants and the base's entry points none (the logic operation entry points have their own)"""
-    lib = compile_lib(src, root, name, sdk); libs = []
+    lib = compile_lib(src, root, name, sdk)
+    libs = []
     for i, piece in enumerate(dmsh_side.cut(lib.read_bytes(), *([side] if side else []), {'main0_f'})):
         libs.append(root / f'{name}_{i}.metallib'); libs[-1].write_bytes(piece)
     base, tile = pso_offline.functions(libs[0]), pso_offline.functions(libs[-1])
@@ -364,7 +364,7 @@ class OtherEntryPoints(unittest.TestCase):
         self.assertEqual(v.count('fx0 == 0 ? fb0 : '), 1)
         self.assertEqual(v.count('dm_body_main0(in, spvDescriptorSet0, -1, float4(0.0)'), 2)   # main0 and main0_d turn the tile read off
 
-    def test_a_copy_of_the_body_is_left_alone(self):   # main0_d as a copy of main0 (fs_dual before it called the body): its sample has no fb0 to read
+    def test_a_copy_of_the_body_is_left_alone(self):   # main0_d as a copy of main0: its sample has no fb0 to read
         copy = FS2 + '\nstruct main0_out_d\n{\n    float4 m_46 [[color(0)]];\n    float4 m_47 [[color(0), index(1)]];\n};\n\n' + \
             FS2[FS2.index('fragment main0_out main0('):].replace('fragment main0_out main0(', 'fragment main0_out_d main0_d(').replace('return out;', 'return main0_out_d{out.m_46, out.m_47};')
         v, meta = dmsh_fetch.fold(copy, BINDINGS)

@@ -1,6 +1,5 @@
 """Border colours Metal has no sampler state for (dmsh_rewrite.py border_emu): the rewrite of a shader's samples, the reflection of the twins and the block, the readable-tile variant
 of a rewritten shader, the compile on both platforms, and with DM_TEST_BORDER (the t_border executable) the samples on the GPU."""
-import ast
 import os
 from pathlib import Path
 import re
@@ -19,7 +18,7 @@ from dmsh_reflect import reflect   # noqa: E402
 from dmsh_rewrite import border_emu   # noqa: E402
 
 HEAD = '#include <metal_stdlib>\n#include <simd/simd.h>\n\nusing namespace metal;\n\n'
-# Tears of the Kingdom's ff9def5b3c418851 as spirv-cross writes it, cut down: a uniform segment, the bend map and its sampler
+# A grass shader as spirv-cross writes it, cut down: a uniform segment, the bend map and its sampler
 GRASS = HEAD + '''struct _16
 {
     float4 _m0[4096];

@@ -4,7 +4,7 @@
 // It measures what fn_claim and the prebuild's order cost: the time, and how many captures waited. It has not reproduced the crash (rendering.md, Two captures of one shader
 // function crash in Metal's binary cache): 0 of 30 unguarded runs on an M4 Pro across these options, with shaders this small. One run is one process, so a crash would be its exit status.
 //   t_pso_race [-n pairs] [--unguarded] [--order list|grouped] [--pairs shader_pairs.tsv] [--run pairs] [--work statements] [--specialized]
-// --unguarded: no fn_claim, as before it existed. Without --pairs, every pair has the same vertex function and its own pixel function; with it, the list's pairs, each key
+// --unguarded: no fn_claim. Without --pairs, every pair has the same vertex function and its own pixel function; with it, the list's pairs, each key
 // a function of its own. --run: a new vertex function each that many pairs; --work: statements in each vertex function, so it compiles longer. Prints one line: pairs, built, failed, seconds, captures that waited (g_fn_waits), of them built without the archive after the wait (g_fn_plain)
 #include "../nvn/nvn_mtl.m"
 uint64_t g_t0_ns;

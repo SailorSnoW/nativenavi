@@ -27,7 +27,7 @@ def sph2(word19=0):   # NVN2's 0x80-byte SPH (version 4)
 
 
 class EarlyFragmentTestsNvn2(unittest.TestCase):
-    def test_flag_set(self):   # PRAGMATA's streaming feedback shaders: +0x5b set, no depth
+    def test_flag_set(self):   # +0x5b set, no depth
         self.assertTrue(early(control2(bytes([0, 0, 0, 1])), sph2()))
         self.assertTrue(early(control2(bytes([0, 0, 1, 1])), sph2()))   # +0x5a beside it
 
@@ -44,7 +44,7 @@ class EarlyFragmentTestsNvn2(unittest.TestCase):
         self.assertFalse(early(control2(bytes([1, 1, 0, 1, 0, 0, 0, 1])), sph2(2)))
         self.assertTrue(early(control2(bytes([0, 0, 0, 1])), sph2(1)))   # a sample mask output (bit 0) does not keep it late (the console tests early too)
 
-    def test_sub_versions(self):   # the driver reads +0x5b in every control section version: 11 (Donkey Kong Bananza), 0x11 (PRAGMATA), 0x14 (Ocarina of Time, Orbitals) and the older ones
+    def test_sub_versions(self):   # the driver reads +0x5b in every control section version: 11, 0x11, 0x14 (Ocarina of Time) and the older ones
         for sub in (0, 2, 7, 11, 0x11, 0x14):
             self.assertTrue(early(control2(bytes([0, 0, 0, 1]), sub=sub), sph2()), sub)
 

@@ -165,8 +165,8 @@ int main(void) { @autoreleasepool {
     CHECK("the small pool still answers, its entry moved", look((uint64_t)(uintptr_t)small + 20, 16).length == 64 * MB);
     CHECK("the large pool's addresses do not", !mtl_gpu_addr(base + 100, 4, &mb, &mo, &gpu));
     mtl_pool_del(small); mtl_drain();
-    // Length 1: the read's extent is not known (an indirect draw's index buffer, a storage buffer whose address the game keeps). It may read on to the pool's end, so it takes one buffer of the
-    // whole pool, which every such lookup shares: a guess of 64 MB made a chunk of 80 MB and more at each stride, overlapping, 4,243 MB over a 1,507 MB pool in Trails in the Sky 1st Chapter (issue #877)
+    // Length 1: the read's extent is not known (an indirect draw's index buffer, a storage buffer whose address the game keeps). It may read on to the pool's end, so it takes one buffer
+    // of the whole pool, which every such lookup shares (a guessed extent makes overlapping chunks at each stride, several times the pool's size in all)
     {
         uint8_t *um = mmap(NULL, GB, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); if (um == MAP_FAILED) abort();
         uint64_t ub = (uint64_t)(uintptr_t)um, at = ub + 100 * MB + 16;
@@ -200,7 +200,7 @@ int main(void) { @autoreleasepool {
         munmap(um, GB);
     }
     // A buffer made while any of its pages is write-protected (nvn_dirty_protect: a packaged texture's upload, an index range) drops every GPU write through it, with no error, even to pages
-    // never protected (issue #1591). Each kind of zero-copy buffer over pool memory, made over a protected page, must still take the GPU's writes
+    // never protected. Each kind of zero-copy buffer over pool memory, made over a protected page, must still take the GPU's writes
     {
         uint8_t *wp = mmap(NULL, GB, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); if (wp == MAP_FAILED) abort();
         uint64_t wb = (uint64_t)(uintptr_t)wp;
@@ -212,7 +212,7 @@ int main(void) { @autoreleasepool {
         nvn_dirty_protect(wp + 220 * MB, 4096);   // then a page past its end is protected, and a longer lookup lengthens it over that page
         CHECK("a lengthened chunk over a protected page takes GPU writes", gpu_fill_ok(wb + 200 * MB, 32 * MB, 0x6b));
         // Storage the GPU wrote (render targets in a CPU-visible pool, mtl_tex_gpu_written) is protected too. A chunk made over it must not make it the CPU's, which would take its textures
-        // from guest memory the GPU never wrote (PR #1604); storage the CPU wrote since stays the CPU's
+        // from guest memory the GPU never wrote; storage the CPU wrote since stays the CPU's
         {
             pool_t wpool = {.magic = MAGIC('P', 'O', 'O', 'L'), .mem = wp, .size = GB, .flags = NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
             tex_t gt = {.magic = MAGIC('T', 'E', 'X', 0), .has_layout = 1, .pool = &wpool, .mem = wp + 400 * MB}, ct = gt;

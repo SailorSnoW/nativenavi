@@ -1,5 +1,5 @@
 // Big-stack entry (hle_bigstack.c, hle.h HLE_FORCE): a take-over called on a small guest stack runs on the thread's host stack with its register and stack arguments intact, and dm_bigstack_caller
-// gives back the game's call site both after a switch and straight through off the guest block (the audio Start / Stop / Close log it, PR #721)
+// gives back the game's call site both after a switch and straight through off the guest block (the audio Start / Stop / Close log it)
 #include "../hle.h"
 #include <stdio.h>
 #include <string.h>

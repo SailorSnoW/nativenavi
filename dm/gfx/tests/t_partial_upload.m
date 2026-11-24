@@ -1,7 +1,7 @@
 // Re-uploads of a texture taken from guest memory read only the images (a layer's level, a 3D level) whose pages were written since its upload and copy the others from the
 // texture they replace (pkg_written in nvn_texture.inc), through the production lookup (tex_mtl): after each write every image of the texture the host returns is compared with a CPU
-// reference, and the bytes read from guest memory with those of the images whose pages the write touched. Ocarina of Time's 1800x1380x8 R16 array, written layer by layer while
-// drawn, was read whole 13 times in 6 frames (docs/reference/frame-rate.md)
+// reference, and the bytes read from guest memory with those of the images whose pages the write touched. Ocarina of Time writes its 1800x1380x8 R16 array layer by layer while
+// it is drawn (docs/reference/frame-rate.md)
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -211,7 +211,7 @@ int main(void) { @autoreleasepool {
         run("RGBA8 cube array", NVN_TEXTURE_TARGET_CUBEMAP_ARRAY, NVN_FORMAT_RGBA8, 64, 64, 12, 3, 0, direct);
         run("RGBA8 3D with levels", NVN_TEXTURE_TARGET_3D, NVN_FORMAT_RGBA8, 64, 64, 32, 4, 0, direct);
         run("RGB565 array", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGB565, 256, 128, 4, 1, 0, direct);
-        // PRAGMATA's light-profile LUT: a 1D array is one row a layer; uploaded as height rows a layer, it was refused by validation and wrote past each slice without it
+        // A 1D array is one row a layer: uploaded as height rows a layer, it is refused by validation and writes past each slice without it
         run("R16F 1D array", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_R16F, 512, 64, 1, 1, 0, direct);
         run("RGBA8 1D array with levels", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_RGBA8, 256, 8, 1, 4, 4096, direct);
     }

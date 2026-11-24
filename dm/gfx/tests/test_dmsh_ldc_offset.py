@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Maxwell LDC's 16-bit immediate (InstEmitMemory.Ldc). Added to a register it is signed and the sum 32 bits, as nvdisasm prints it and
-Xenoblade Chronicles 2's pixel shaders use it (c6 at R - 8 to R - 128); alone (Ra = RZ) it is the address as it is, as Mortal Kombat 11 reads c[14][0x8448].
-Sign-extended, that read's word index overflowed into the operand's slot field and became a 512 MB c15 binding the host refused. A fixed word past the 64 KiB bank
-reads 0 (ConstantFolding). Needs DMSH_TEST_XLATE (the translator) like the other translator tests."""
+"""Maxwell LDC's 16-bit immediate (InstEmitMemory.Ldc). Added to a register it is signed and the sum 32 bits, as nvdisasm prints it; alone (Ra = RZ) it is the address
+as it is: sign-extended, the word index would overflow into the operand's slot field. A fixed word past the 64 KiB bank reads 0 (ConstantFolding). Needs DMSH_TEST_XLATE
+(the translator) like the other translator tests."""
 import json, os, struct, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
@@ -12,9 +11,9 @@ PT, RZ = 7, 255
 SCHED = 0x001f8000fc0007e0     # the scheduling word before each three instructions
 NOP = 0x50b0000000070f00
 EXIT = 0xe30000000007000f
-# Mortal Kombat 11's own encoding (0100F2200C984000): LDC.U16 R49, c[14][0x8448]
+# LDC.U16 R49, c[14][0x8448]
 LDC_U16 = 0xef9200e84487ff31
-# Xenoblade Chronicles 2's own encoding (pixel shader 09030ba6b1d1283e): LDC.64 R4, c[6][R59 - 0x40]
+# LDC.64 R4, c[6][R59 - 0x40]
 LDC_64_NEG = 0xef95006ffc073b04
 
 
@@ -59,7 +58,7 @@ class LdcOffset(unittest.TestCase):
     def test_the_game_read_alone_is_its_immediate(self):
         msl = self.translate(LDC_U16, sts(49, 0), EXIT)
         self.assertIn('cp_c14)._m0[2116].z', msl)   # 0x8448 bytes = word 8466 = vector 2116, element .z
-        self.assertNotIn('cp_c15', msl)              # before: c15 at word 33,552,452
+        self.assertNotIn('cp_c15', msl)              # sign-extended: c15 at word 33,552,452
         self.assertEqual(self.fixed(14), 0x8448 + 4)
         self.assertEqual(self.fixed(15), 0)
 

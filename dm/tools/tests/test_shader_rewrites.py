@@ -1,5 +1,5 @@
-"""The builder's text rewrites found by text where a pattern tried every character of the source (dm/gfx/tools/dmsh_build.py, dmsh_fetch.py, dmsh_side.py, dmsh_atomic.py, GitHub
-issue #1036): each gives the answer the pattern gave, at the edges of a word and of the source. No game files, no Metal compiler."""
+"""The builder's text rewrites found by text where a pattern tried every character of the source (dm/gfx/tools/dmsh_build.py, dmsh_fetch.py, dmsh_side.py, dmsh_atomic.py):
+each gives the answer the pattern gave, at the edges of a word and of the source. No game files, no Metal compiler."""
 from pathlib import Path
 import random
 import re
@@ -197,7 +197,7 @@ class Close(unittest.TestCase):
             self.assertEqual(dmsh_side._close(src, 1, '(', ')'), loop(src, 1, '(', ')'), src)
 
 
-class TypedOutputs(unittest.TestCase):   # dmsh_entry.fs_uint: main0_u for every pixel shader of a known shape, whatever its code writes (GitHub issue #2760)
+class TypedOutputs(unittest.TestCase):   # dmsh_entry.fs_uint: main0_u for every pixel shader of a known shape, whatever its code writes
     def source(self, body, extra=''):
         return f'struct main0_out\n{{\n    float4 m_0 [[color(0)]];\n}};\n\n{extra}fragment main0_out main0(main0_in in [[stage_in]])\n{{\n    main0_out out = {{}};\n{body}\n    return out;\n}}\n'
 
@@ -212,7 +212,7 @@ class TypedOutputs(unittest.TestCase):   # dmsh_entry.fs_uint: main0_u for every
         self.assertIsNone(fs_uint('kernel void main0() {}\n'))
         self.assertIsNone(fs_uint(self.source('').replace('fragment main0_out main0', 'fragment void main0')))
 
-    def test_each_colour_switched_by_its_constants(self):   # Trails in the Sky 2nd Chapter's G-buffer: float at colour 0, integer at 1 to 3, whatever each shader writes there
+    def test_each_colour_switched_by_its_constants(self):   # a G-buffer: float at colour 0, integer at 1 to 3, whatever each shader writes there
         four = ''.join(f'    float4 m_{n} [[color({n})]];\n' for n in range(4)) + '    float gl_FragDepth [[depth(any)]];\n'
         body = ('    uint _342 = uint(_341);\n    out.m_0 = in.m_9 * 2.0;\n    out.m_1.x = as_type<float>(_342);\n    out.m_2.x = 0.0;\n'
                 '    out.m_3.x = (*spvDescriptorSet0.fp_c8)._m0[2].w;\n    out.gl_FragDepth = 0.5;')
@@ -224,7 +224,8 @@ class TypedOutputs(unittest.TestCase):   # dmsh_entry.fs_uint: main0_u for every
             self.assertIn(f'    float4 m_{n} [[color({n}), function_constant(dm_uf{n})]];\n    uint4 m_{n}_ui [[color({n}), function_constant(dm_ui{n})]];\n'
                           f'    int4 m_{n}_si [[color({n}), function_constant(dm_si{n})]];\n', u)
             self.assertIn(f'    if (dm_ui{n}) r.m_{n}_ui = as_type<uint4>(out.m_{n}); else if (dm_si{n}) r.m_{n}_si = as_type<int4>(out.m_{n}); else r.m_{n} = out.m_{n};\n', u)   # the bits as they are
-        self.assertIn('    float gl_FragDepth [[depth(any)]];\n};', u); self.assertIn('    r.gl_FragDepth = out.gl_FragDepth;\n', u)   # not a colour: as main0 has it
+        self.assertIn('    float gl_FragDepth [[depth(any)]];\n};', u)   # not a colour: as main0 has it
+        self.assertIn('    r.gl_FragDepth = out.gl_FragDepth;\n', u)
         self.assertIn('fragment main0_out_u main0_u(main0_in in [[stage_in]], ', u); self.assertIn(')\n{\n    main0_out out = dm_body_main0(in);\n', u)
 
     def test_narrow_and_declared_integer_colours(self):   # a narrow colour takes the vectors of its width; one main0 declares an integer (a fout fact) is typed too, a float target the reverse cast

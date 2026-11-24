@@ -87,6 +87,20 @@ def image_with(img, start, words, keep=None):
     return out
 
 
+def registry_code():
+    """patch_nso.py's registry block (SHARED to KEYS: the shared files, then PATCH_FILES), compiled to run alone"""
+    source = TOOLS / 'patch_nso.py'
+    tree = ast.parse(source.read_text())
+    start = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'SHARED')
+    end = next(i for i, n in enumerate(tree.body[start:], start) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'KEYS')
+    return compile(ast.Module(body=tree.body[start:end], type_ignores=[]), str(source), 'exec')
+
+
+def registry_ns(root, build_id, img, name, outdir):   # the globals the registry block reads
+    return dict(__file__=str(root / 'tools/patch_nso.py'), os=os, glob=glob, importlib=importlib,
+                MOD=SimpleNamespace(build_id=build_id), IMG=img, TEXT_END=0x2000, NAME=name, outdir=str(outdir))
+
+
 class Matching(unittest.TestCase):
     def setUp(self):
         self.original = image({0x100: caller(0x100, 0x500), 0x500: [0xd2800020, RET]})
@@ -281,10 +295,7 @@ class Matching(unittest.TestCase):
         self.assertIn('2 implementations match', messages[0])
 
     def test_registry_scopes_rules_and_preserves_known_builds(self):
-        source = TOOLS / 'patch_nso.py'; tree = ast.parse(source.read_text())
-        start = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'SHARED')   # the shared files, then PATCH_FILES
-        end = next(i for i, n in enumerate(tree.body[start:], start) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'KEYS')
-        code = compile(ast.Module(body=tree.body[start:end], type_ignores=[]), str(source), 'exec')
+        code = registry_code()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); (root / 'tools').mkdir(); (root / 'tools/sdk_patches.py').write_text('')
             for gid in ('0100000000000001', '0100000000000002'):
@@ -303,8 +314,7 @@ class Matching(unittest.TestCase):
                 with self.subTest(game=gid, module=name, build=bid):
                     img = bytearray(self.original)
                     out = root / 'out' / gid / name / bid; out.mkdir(parents=True)
-                    ns = dict(__file__=str(root / 'tools/patch_nso.py'), os=os, glob=glob, importlib=importlib,
-                              MOD=SimpleNamespace(build_id=bytes.fromhex(bid)), IMG=img, TEXT_END=0x2000, NAME=name, outdir=str(out))
+                    ns = registry_ns(root, bytes.fromhex(bid), img, name, out)
                     with patch.dict(os.environ, DM_GAME=gid, DM_GAMES_DIR='/derived/profile', DM_GAMES_FIRST='1'):
                         exec(code, ns)
                     self.assertEqual(struct.unpack_from('<I', img, 0x108)[0], expected)
@@ -315,10 +325,7 @@ class Matching(unittest.TestCase):
 
     def test_registry_reports_what_an_unregistered_build_lost(self):
         # the repository profile's build rows name the registered builds of the module, whose CUTS the unregistered build did not get
-        source = TOOLS / 'patch_nso.py'; tree = ast.parse(source.read_text())
-        start = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'SHARED')   # the shared files, then PATCH_FILES
-        end = next(i for i, n in enumerate(tree.body[start:], start) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'KEYS')
-        code = compile(ast.Module(body=tree.body[start:end], type_ignores=[]), str(source), 'exec')
+        code = registry_code()
         gid, known = '0100000000000001', 'ab' * 16
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); (root / 'tools').mkdir(); (root / 'tools/sdk_patches.py').write_text('')
@@ -326,8 +333,7 @@ class Matching(unittest.TestCase):
             (g / 'patches.py').write_text("CUTS = {'" + known + "': [(0x108, 'e00317aa', '1f2003d5', 'a'), (0x10c, '1f2003d5', '1f2003d5', 'b')]}\n")
             (g / 'game.tsv').write_text(f'build\tv65536\t1.0.1\tmain={known}\tsdk={"cd" * 16}\n')
             img = bytearray(self.original)
-            ns = dict(__file__=str(root / 'tools/patch_nso.py'), os=os, glob=glob, importlib=importlib,
-                      MOD=SimpleNamespace(build_id=bytes(16)), IMG=img, TEXT_END=0x2000, NAME='main', outdir=str(root / 'out'))
+            ns = registry_ns(root, bytes(16), img, 'main', root / 'out')
             with patch.dict(os.environ, DM_GAME=gid): exec(code, ns)
             self.assertEqual(bytes(img), bytes(self.original))
             rows = [l.split('\t') for l in (root / 'out/main.match.tsv').read_text().splitlines()[1:]]
@@ -340,10 +346,7 @@ class Matching(unittest.TestCase):
     def test_sdk_wide_rules_apply_to_every_build_without_cuts(self):
         # sdk_patches.py's MATCH_CUTS apply to every game's sdk of a build with no CUTS, the selected profile's own builds too (without a match.tsv: they lost nothing); an empty
         # CUTS list keeps Nintendo's code; a miss is not red
-        source = TOOLS / 'patch_nso.py'; tree = ast.parse(source.read_text())
-        start = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'SHARED')   # the shared files, then PATCH_FILES
-        end = next(i for i, n in enumerate(tree.body[start:], start) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'KEYS')
-        code = compile(ast.Module(body=tree.body[start:end], type_ignores=[]), str(source), 'exec')
+        code = registry_code()
         gid, own, kept = '0100000000000001', 'cd' * 16, 'ef' * 16
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); (root / 'tools').mkdir()
@@ -354,8 +357,7 @@ class Matching(unittest.TestCase):
                                                ('main', '00' * 16, gid, MOV)):
                 with self.subTest(module=name, build=bid, game=gamed):
                     img, out = bytearray(self.original), root / 'out' / f'{name}{bid}{gamed}'
-                    ns = dict(__file__=str(root / 'tools/patch_nso.py'), os=os, glob=glob, importlib=importlib,
-                              MOD=SimpleNamespace(build_id=bytes.fromhex(bid)), IMG=img, TEXT_END=0x2000, NAME=name, outdir=str(out))
+                    ns = registry_ns(root, bytes.fromhex(bid), img, name, out)
                     with patch.dict(os.environ, DM_GAME=gamed): exec(code, ns)
                     self.assertEqual(struct.unpack_from('<I', img, 0x108)[0], expected)
                     if expected == ADD and (bid, gamed) != (own, gid):
@@ -363,8 +365,7 @@ class Matching(unittest.TestCase):
                     else: self.assertFalse((out / 'sdk.match.tsv').exists())
             printed = io.StringIO()
             with contextlib.redirect_stdout(printed):
-                ns = dict(__file__=str(root / 'tools/patch_nso.py'), os=os, glob=glob, importlib=importlib,
-                          MOD=SimpleNamespace(build_id=bytes(16)), IMG=bytearray(image({0x100: [RET]})), TEXT_END=0x2000, NAME='sdk', outdir=str(root / 'miss'))
+                ns = registry_ns(root, bytes(16), bytearray(image({0x100: [RET]})), 'sdk', root / 'miss')
                 with patch.dict(os.environ, DM_GAME=gid): exec(code, ns)
             self.assertIn("function patch 'heap' skipped", printed.getvalue())
             self.assertNotIn('[RED]', printed.getvalue())

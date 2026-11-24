@@ -60,8 +60,7 @@ static void check(id<MTLTexture> src, const char *name, const int crop[4], int w
     EXPECT(name,0,bad);free(out);
 }
 
-// This fixture is the only present producer. A window now holds a logical queue receipt;
-// wait for replay, then for the display ticket (snapshots do not return that ticket).
+// This fixture is the only present producer. A window holds a logical queue receipt; wait for replay, then for the display ticket (snapshots do not return that ticket).
 static uint64_t display_ticket(uint64_t receipt, uint64_t before) {
     EXPECT("present returned a logical receipt",1,receipt!=0);
     if (!receipt) return 0;
@@ -94,7 +93,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     check(src,"aspect of the valid area kept, 128 pixels red in the middle / black on both sides",tl,16,8,4);
 #ifndef CROP_LEGACY_HEADER
     {
-        // sRGB swapchain: present sends the raw bytes (as the Switch's scan-out does) without decoding first; unfixed, 128/64/200 decode to about 55/13/148
+        // sRGB swapchain: present sends the raw bytes (as the Switch's scan-out does) without decoding first; decoded, 128/64/200 would come out as about 55/13/148
         MTLTextureDescriptor *sd=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB width:8 height:8 mipmapped:NO];sd.storageMode=MTLStorageModeShared;sd.usage=MTLTextureUsageShaderRead;
         id<MTLTexture> s8=[g_dev newTextureWithDescriptor:sd];uint8_t g[8*8*4];
         for(int i=0;i<64;i++){g[4*i]=128;g[4*i+1]=64;g[4*i+2]=200;g[4*i+3]=255;}
@@ -173,7 +172,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         EXPECT("reuse makes no new scaler",2,g_fx_present.made);
         // DM_FX_INPLACE and DM_FX_DIRECT: the scaler reads a private window texture in place and writes a canvas it can write, while the frame that draws that texture is
         // still running on the queue (committed just before, as a present follows its frame). The scaler must still see the whole frame: the encoder before it orders it after
-        // the queue's earlier work only around work of its own (an encoder of barriers alone ordered nothing, and the scaler read the frame before, in every round)
+        // the queue's earlier work only around work of its own (an encoder of barriers alone orders nothing)
         {
             const int S=256,ROUNDS=8;
             MTLTextureDescriptor *wd=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:S height:S mipmapped:NO];
@@ -272,7 +271,7 @@ int main(int argc, char **argv) { @autoreleasepool {
 #endif
     h_nvnWindowFinalize((NVNwindow *)&win);
 #ifndef CROP_LEGACY_HEADER
-    {   // The crop only picks texels; the picture has the layer's shape (Super Mario Galaxy 2's storybook cutscenes: 1200x960 of a 1920x1080 swapchain, shown at 16:9, issue #949)
+    {   // The crop only picks texels; the picture has the layer's shape (a 1200x960 crop of a 1920x1080 swapchain is shown at 16:9)
         const int W=64,H=36,TW=64,TH=36;MTLTextureDescriptor *td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:TW height:TH mipmapped:NO];td.storageMode=MTLStorageModeShared;td.usage=MTLTextureUsageShaderRead;
         id<MTLTexture> sw=[g_dev newTextureWithDescriptor:td];uint8_t *sp=malloc(TW*TH*4);
         const int crop54[4]={0,0,40,32};   // 5:4 in the top-left corner: red inside, green outside

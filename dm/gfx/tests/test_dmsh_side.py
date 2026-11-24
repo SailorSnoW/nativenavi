@@ -14,8 +14,10 @@ class Unit(unittest.TestCase):
         u, info = dmsh_side.unit(BASE)
         self.assertEqual(info, {'alpha': ['main0_a'], 'logic': []})   # main0_u holds its own alpha test and logic operation, and main0 gets no logic operation beside it
         self.assertEqual(u.count(' dm_body_main0(float4 gl_FragCoord, constant spvDescriptorSetBuffer0& spvDescriptorSet0)'), 1)
-        self.assertEqual(u.count('fragment main0_out_u main0_u('), 1); self.assertNotIn('dm_body_main0_u', u)   # main0_u as fs_uint wrote it
-        self.assertEqual(u.count('struct dm_alpha_state '), 1); self.assertEqual(u.count('struct dm_logic_state '), 1)   # the helpers once, main0_u's
+        self.assertEqual(u.count('fragment main0_out_u main0_u('), 1)   # main0_u as fs_uint wrote it
+        self.assertNotIn('dm_body_main0_u', u)
+        self.assertEqual(u.count('struct dm_alpha_state '), 1)   # the helpers once, main0_u's
+        self.assertEqual(u.count('struct dm_logic_state '), 1)
         self.assertEqual(u.count('out.m_1 = float4(0.5);'), BASE.count('out.m_1 = float4(0.5);'))
 
     def test_a_parameter_it_cannot_pass(self):

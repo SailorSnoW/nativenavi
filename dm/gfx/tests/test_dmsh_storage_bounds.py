@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Storage bounds through the offline translator (TranslationFlags.MetalStorageBounds, GitHub issue #2618): a storage buffer whose address the shader takes from a game uniform slot
+"""Storage bounds through the offline translator (TranslationFlags.MetalStorageBounds): a storage buffer whose address the shader takes from a game uniform slot
 (SBUFU) or the push constants (SBUFQ) has no size, so each access compares its word index with the memory the host bound, from the length table in bank 27 (dmsh_abi.h DMSH_SBLEN_BANK):
 a load gives 0 outside it, a store or an atomic is skipped. NVN's own storage buffer table (c[0], with a size) is left as it was. The reflection gives the table its kind and each
-bounded binding its slot in it. PRAGMATA's GI voxeliser ef4ad01151918469 read its surfel colours past the one run mapped at the base of a sparse pool, and the other memory there washed
-the R53 hangar in colour. Needs DMSH_TEST_XLATE (the translator) like the other translator tests."""
+bounded binding its slot in it. Needs DMSH_TEST_XLATE (the translator) like the other translator tests."""
 import json, os, re, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_dmsh_maxwell_ftz import EXIT, PT, RZ, TOOLS, code, sts   # noqa: E402
+from test_dmsh_maxwell_ftz import EXIT, RZ, TOOLS, code, sts   # noqa: E402
 from test_dmsh_nvn2_buffers import EXIT as A_EXIT, SUATOM_R5, ULDC64_C0_10, inst   # noqa: E402
 from test_dmsh_storage_offset import iadd_c, ldg, mov_c, shl_i   # noqa: E402
 from test_dmsh_hull_cbe import stg   # noqa: E402

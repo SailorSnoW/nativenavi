@@ -1,8 +1,7 @@
 """shader_split: bahs_shaders finds an agl BAHS file's program entries (code offset, 0, control length, control distance) by scanning its table area, and a control section's own
 words can read as one. An NVN2 section's +0x38..+0x47 (instruction length, c1 start and end, code length, here 0x100, 0, 0x100, 0x100) is such an entry: its control distance lands on
-the next program's control section, its offset on that program's code, and the shader it made paired one program's control with whatever code lay there. Ocarina of Time's
-agl_common.sharcb@0x357f0 gave a compute control and a vertex shader's code, whose SPH the translator read as an instruction ("Ampere instruction 481 at 0x0"); six such entries in
-its agl and terrain files, none ever loaded. The terrain file's lowest one also kept bahs_variations from finding the binary array, so tera_common gave no variation pairs. No game files."""
+the next program's control section, its offset on that program's code, and the shader it made would pair one program's control with whatever code lay there (Ocarina of
+Time's agl and terrain files hold six such entries, none ever loaded; the terrain file's lowest one would also keep bahs_variations from finding the binary array). No game files."""
 import struct
 import sys
 import unittest
@@ -18,8 +17,11 @@ REGION, CODE = 0x400, 0x100   # the code region's start; each program's code are
 
 def nvn2_ctl(stage):
     """An NVN2 control section (0xe0 bytes): magic, version 0xc9, +0x38 instruction length, +0x40 / +0x44 c1 start and end (= the code area's length), +0x56 the stage byte"""
-    c = bytearray(0xe0); c[:4] = ss.CTL_MAGIC; c[4:8] = b'\xc9\0\0\0'
-    struct.pack_into('<4I', c, 0x38, CODE, 0, CODE, CODE); c[0x56] = stage
+    c = bytearray(0xe0)
+    c[:4] = ss.CTL_MAGIC
+    c[4:8] = b'\xc9\0\0\0'
+    struct.pack_into('<4I', c, 0x38, CODE, 0, CODE, CODE)
+    c[0x56] = stage
     return c
 
 
@@ -31,7 +33,8 @@ def bahs():
     for entry, off in ((0x100, 0), (0x238, CODE)):
         struct.pack_into('<IIIi', d, entry, off, 0, 0xe0, 0x68)
         d[entry + 0x68:entry + 0x68 + 0xe0] = nvn2_ctl(0)
-        code = bytearray(CODE); struct.pack_into('<I', code, 0, 0x000c0481 + off)   # an SPH, vertex (word 0: type 1, stage 1 in bits 10..13), told apart by its offset
+        code = bytearray(CODE)
+        struct.pack_into('<I', code, 0, 0x000c0481 + off)   # an SPH, vertex (word 0: type 1, stage 1 in bits 10..13), told apart by its offset
         d[REGION + off:REGION + off + CODE] = code
     assert struct.unpack_from('<IIIi', d, 0x1a0) == (CODE, 0, CODE, CODE) and 0x1a0 + CODE == 0x2a0
     return bytes(d)

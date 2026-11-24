@@ -92,7 +92,7 @@ static int frame1(int delay_us) { frame_start(1, delay_us); int w = waiting(0); 
 int main(void) { @autoreleasepool {
     alarm(120); if (setvbuf(stdout, NULL, _IONBF, 0)) return 2;
     setenv("DM_PRESENT_HZ", "0", 1); setenv("DM_PRESENT_LATCH", "1", 1); setenv("DM_PRESENT_DRAIN", "1", 1); setenv("DM_RT", "0", 1);
-    setenv("DM_PRESENT_SNAP", "0", 1);   // a profile with present_snap on (Breath of the Wild) would turn the latch and the drain off (mtl_snap_on)
+    setenv("DM_PRESENT_SNAP", "0", 1);   // a profile with present_snap on would turn the latch and the drain off (mtl_snap_on)
     mtl_init();
     g_test_layer = offscreen_layer(); g_layers = [NSMutableArray new];
     g_present_shape[0] = g_present_shape[1] = 8;   // the drawables' shape (t_present_alloc)

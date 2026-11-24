@@ -1,6 +1,6 @@
 // A compile 0 call of pso_build_ex (nvn_pso.inc) for a base another thread holds: it waits for that thread's archive lookup, which takes milliseconds, and takes the base
-// it found; it never waits for that thread's compile. Before, it returned nil at once, so a draw that came while a background worker looked up its pulling base found no
-// stand-in and compiled its own base on the submit thread instead (Ocarina of Time's first visits).
+// it found; it never waits for that thread's compile. Returning nil at once would leave a draw that comes while a background worker looks up its pulling base without a
+// stand-in, compiling its own base on the submit thread (Ocarina of Time's first visits).
 // The other thread is played here by hand: a job planted in g_pbase_pending, finished from a dispatch_after block. Real Metal 4 compiles of synthetic shaders, no archive.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }

@@ -1,7 +1,7 @@
 // Race between "set read-only" and pool retirement in dirty-page tracking.
 // Scene: thread A, in nvn_dirty_protect, has found the pool's live range but not yet changed any page state; thread B now retires the pool (nvn_dirty_remove_range:
-// restore its protected pages to writable, mark the range dead). Old implementation: B finished in that window, then A set the retired storage read-only --
-//   no live range owns the page any more, so a host system call reading into it fails with EFAULT and a game thread writing it faults with nobody to unprotect it.
+// restore its protected pages to writable, mark the range dead). Were B to finish in that window and A then set the retired storage read-only, no live range would own the
+// page: a host system call reading into it fails with EFAULT and a game thread writing it faults with nobody to unprotect it.
 // How it is staged: atomic_compare_exchange_strong in nvn_dirty.c is wrapped here -- before protect's first page-state exchange (right after its lookup), B is started and given 100 ms, so the order is deterministic.
 // Expected values do not depend on the implementation under test: after both return, the retired pool is untracked and really writable (reading 16 bytes into it gives 16).
 #include <stdatomic.h>

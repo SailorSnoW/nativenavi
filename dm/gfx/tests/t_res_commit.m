@@ -1,7 +1,6 @@
 // Residency changes and their commit: res_add / res_remove only queue a change, and res_commit applies and commits what is queued under a lock of its own. A commit that adds
-// hundreds of MB takes tens of milliseconds; while it held the lock res_add takes, every res_add on any thread waited for it (Switch Sports Resort's court load: the submit
-// thread's res_add waited 20-43 ms in one frame for the upload batches' completion handlers). Checks, with real Metal allocations:
-//  - a res_add or res_remove while another thread's commit is under way returns at once (it waited for the whole commit before);
+// hundreds of MB takes tens of milliseconds; holding the lock res_add takes, it would make every res_add on any thread wait for it. Checks, with real Metal allocations:
+//  - a res_add or res_remove while another thread's commit is under way returns at once;
 //  - after res_commit returns, what was added before it is in the set, also when another thread's commit took the change;
 //  - a removed allocation stays alive until the commit that takes it out of the set, then goes.
 #include "../nvn/nvn_mtl.m"
@@ -37,8 +36,8 @@ int main(void) { @autoreleasepool {
     @autoreleasepool { res_commit(); }
     CHECK("and goes once it is", weak_r == nil);
 
-    // A res_add while another thread's commit is under way: a commit alone takes well under a millisecond here, but tens of milliseconds in a game whose GPU is busy (10-25 ms
-    // each in Switch Sports Resort's court load), so one is stood in for by holding the commit's lock for 100 ms, as a commit holds it
+    // A res_add while another thread's commit is under way: a commit alone takes well under a millisecond here, but tens of milliseconds in a game whose GPU is busy, so one is
+    // stood in for by holding the commit's lock for 100 ms, as a commit holds it
     NSMutableArray *small = [NSMutableArray array];
     dispatch_semaphore_t held = dispatch_semaphore_create(0), released = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{

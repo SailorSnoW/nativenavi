@@ -1,7 +1,6 @@
 """Shadow vertex inputs (dm/gfx/tools/dmsh_vin.py): small vertex shaders in the translator's MSL shape, no game needed. The variant must give each integer input a float4 shadow and
 then other-sign shadows while attribute indices 16-30 last, OR them into the input in both entry points, leave the transform feedback entry out, and compile with the Metal compiler
 for macOS (temporary files only in a temporary folder)."""
-import os
 from pathlib import Path
 import re
 import subprocess

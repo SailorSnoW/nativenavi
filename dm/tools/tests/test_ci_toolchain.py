@@ -27,7 +27,7 @@ class Toolchain(unittest.TestCase):
         self.assertEqual(set(named), {self.xcode}, f'README.md: the Xcode to install is not CI\'s {self.xcode}')
         self.assertEqual(set(re.findall(r'Xcode[ -](\d+\.\d+)', readme)), {self.xcode}, f'README.md: an Xcode it names (the side-by-side one too) is not CI\'s {self.xcode}')
 
-    def test_metal_stop_names_the_same_xcode(self):   # own_compilers.py's stop message: the Xcode to install and select (GitHub issue #717)
+    def test_metal_stop_names_the_same_xcode(self):   # own_compilers.py's stop message: the Xcode to install and select
         named = re.findall(r"XCODE_VERSION = '(\d+\.\d+)'", (REPO / 'dm/gfx/tools/own_compilers.py').read_text())
         self.assertEqual(named, [self.xcode], f'dm/gfx/tools/own_compilers.py: XCODE_VERSION is not CI\'s {self.xcode}')
 

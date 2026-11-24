@@ -1,4 +1,4 @@
-"""System register accesses whose register is x18 (issue #2123), without game binaries: the rewritten block copies between thread slots and never names x18.
+"""System register accesses whose register is x18, without game binaries: the rewritten block copies between thread slots and never names x18.
 
 Optional dependency: unicorn, which runs the blocks. On macOS its JIT needs execution outside the sandbox."""
 import ast
@@ -40,12 +40,15 @@ MOVZ_CTR = 0xD2A00080              # movz xN, #4, lsl #16
 
 
 def block(word):
-    scope['patch'].clear(); scope['fix'].clear()
+    scope['patch'].clear()
+    scope['fix'].clear()
     ins = scope['dis'](word, SITE)
     if word & ~31 == MRS_TPIDR: scope['site_sysreg_read'](ins, 'KTLS')
     elif word & ~31 == MRS_TPIDRRO: scope['site_sysreg_read'](ins, 'KTLR')
     elif word & ~31 == MSR_TPIDR: scope['site_tpidr_write'](ins)
-    else: assert word == MRS_CTR | 18; scope['site_slot_copy'](ins, MOVZ_CTR | 15, 'K18')   # as the rewriter's ctr case does
+    else:
+        assert word == MRS_CTR | 18
+        scope['site_slot_copy'](ins, MOVZ_CTR | 15, 'K18')   # as the rewriter's ctr case does
     return bytes(scope['patch'])
 
 

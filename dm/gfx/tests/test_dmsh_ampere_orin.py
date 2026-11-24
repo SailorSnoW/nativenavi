@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""Ampere instructions through the whole chain against a real Ampere GPU: each op of ampere_orin/ (recorded on a Jetson Orin, sm_87, by
-dm/gfx/tools/ampere_orin/capture.py) is the GPU compiler's machine code for one PTX operation, its 1,024 input rows and the outputs the GPU computed. Here the
-program goes through the translator (dmsh_xlate, arch sm86, the build's debug and relaxed-precision options), spirv-cross with the chain's arguments and the
-MSL rewrites dmsh_build.py's finish() makes of every shader, is compiled with the chain's Metal flags and run on this Mac's GPU on the same inputs, and every
-output word is compared with the GPU's bit for bit.
-
-An op is expected to match except for what Metal's float arithmetic itself gives (compare.PLATFORM: NaN bits, denormals). KNOWN lists the ops that still
-differ, each with its reason and where it is tracked; APPROX the ones that run Metal's own approximation of a function (bit-exact only by accident). The test
-fails when an op outside those lists differs, and when a KNOWN op matches, so that its entry is taken out with the fix.
-
-Needs DMSH_TEST_XLATE (the translator) like the other translator tests, and an Apple-silicon Mac. AMPERE_ORIN_ONLY=<ops or families> runs some;
-AMPERE_ORIN_REPORT=<file> writes every op's causes and differing NaN patterns as JSON. Derived ordinary-HFMA2 programs retain the recorded oracle.
-Small synthetic contracts are labelled separately from hardware recordings."""
+"""Each op of ampere_orin/ (a Jetson Orin's machine code for one PTX operation, its 1,024 input rows and the GPU's outputs) through the whole chain on this Mac's GPU, compared bit for bit.
+Differences Metal's float arithmetic gives (compare.PLATFORM) are expected; a KNOWN op that matches fails, so its entry goes with the fix. APPROX ops are reported, never failed.
+Needs DMSH_TEST_XLATE; AMPERE_ORIN_ONLY=<ops or families> runs some, AMPERE_ORIN_REPORT=<file> writes every op's causes as JSON."""
 import ast
 import collections
 import concurrent.futures
@@ -36,13 +26,11 @@ sys.path.insert(0, str(TOOLS / 'ampere_orin'))
 import compare  # noqa: E402
 import dmsh_chain  # noqa: E402
 
-# Ops that still differ from the GPU beyond PLATFORM: name -> why. A fix takes its ops out of here.
+# ops that still differ beyond PLATFORM: name -> why
 KNOWN = {
-    # results that differ
     'i2f_s32_rz': 'I2FP.F32.S32.RZ rounds to nearest (PR #1800 has the fix)',
     'fmax_nan': 'FMNMX.NAN: a NaN operand gives the other operand, not NaN (PR #1800 has the fix)', 'fmin_nan': '(as fmax_nan)',
     'hmma_16816_f32': 'HMMA.16816.F32: the f32 accumulator does not add the products as the tensor core does (about 1 ULP)',
-    # the translator refuses these
     'fdiv_rn': 'FCHK (0x302) is not implemented; its slow path calls the CUDA driver',
     'f2i_s64': 'F2I.S64 (0x311) is not implemented',
     'dadd': 'DADD (0x229) is not implemented', 'dmul': 'DMUL (0x228) is not implemented',
@@ -52,13 +40,13 @@ KNOWN = {
     'iadd_sat': 'PLOP3 with .SIGN register sources (0x21f) is not implemented', 'isub_sat': '(as iadd_sat)',
     'prmt': 'PRMT modes other than the index form (.F4E .B4E .RC8 .ECL .ECR .RC16) are not implemented',
     'mufu_tanh': 'MUFU.TANH is not implemented', 'mufu_tanh_f16x2': '(as mufu_tanh)',
-    # the program calls a routine of the CUDA driver's own (CALL.ABS to a relocation the JIT resolves at load), which a game's shader never does
+    # CALL.ABS to a relocation the CUDA JIT resolves at load, which a game's shader never does
     'frcp_rn': 'not testable: CALL.ABS into the CUDA driver', 'fsqrt_rn': '(as frcp_rn)',
 }
-# Ops that run Metal's own approximation (MUFU, and the divisions built on it): compared and reported, never failed
+# Metal's own approximation: compared and reported, never failed
 APPROX = {'mufu_ex2', 'mufu_ex2_ftz', 'mufu_lg2', 'mufu_lg2_ftz', 'mufu_rcp', 'mufu_rcp_ftz', 'mufu_rsqrt', 'mufu_rsqrt_ftz', 'mufu_sqrt', 'mufu_sqrt_ftz', 'mufu_sin',
           'mufu_cos', 'mufu_ex2_f16x2', 'fdiv_full', 'fdiv_approx',
-          # HMMA with an f16 accumulator: one block of 8 rounded once (PR #1897) matches 99.97 %; the rest are 1-2 ULP where the sum nearly cancels
+          # f16 accumulator: one block of 8 rounded once matches 99.97 %; the rest 1-2 ULP where the sum nearly cancels
           'hmma_16816_f16', 'hmma_1688_f16'}
 
 MAC_METAL = dmsh_chain.MAC_METAL
@@ -79,8 +67,6 @@ def load_fixture():
         o['rows_gpu'] = [list(words[i + len(o['ins']):i + w]) for i in range(0, len(words), w)]
         if o['name'] in ('f2fp_pack_bf16x2', 'f2fp_pack_f16x2_relu'):
             o['exact_bits'] = True
-    # The recorded FMA uses the tensor-pipe opcode. Exercise the ordinary ALU
-    # emitter too, independently of HFMA2.MMA support, retaining the Orin oracle.
     for o in list(doc['ops']):
         if o['name'] not in ('hfma2', 'hfma2_ftz', 'hfma2_relu'):
             continue
@@ -100,7 +86,6 @@ def load_fixture():
 
 
 def half_variant(op, opcode, *, clear_opcode=0, modifiers=0, after=b''):
-    """Change one instruction or insert its consumer, retaining the template's registers and guards."""
     program = bytearray(op['program'])
     offsets = []
     for i in range(0, len(program), 16):
@@ -116,9 +101,6 @@ def half_variant(op, opcode, *, clear_opcode=0, modifiers=0, after=b''):
 
 
 def half_ftz_boundaries(ops):
-    """Small semantic checks, not additional Orin recordings: min/max flush
-    either input to signed zero, keep the smallest normal, and .F32 results
-    keep values below the half-normal bound. No NaN or zero-tie min/max cases."""
     cases = {
         'hmin2': [([0x83ff03ff, 0x04000400], 0x80000000),
                   ([0x04000400, 0x83ff03ff], 0x80000000),
@@ -145,8 +127,6 @@ def half_ftz_boundaries(ops):
 
 
 def half_relu_boundary(ops):
-    """HMUL2.RELU semantic contract, not an additional NVIDIA recording.
-    Keep NaNs (including 0*inf), clamp negatives, retain positive subnormals."""
     op = next(o for o in ops if o['name'] == 'hmul2')
     cases = [([0x7e007e00, 0x3c003c00], 0x7fff7fff),
              ([0x00000000, 0x7c007c00], 0x7fff7fff),
@@ -164,8 +144,7 @@ def half_relu_boundary(ops):
 def hfma_rounding_cases(ops):
     by_name = {o['name']: o for o in ops}
     base = by_name['hfma2']
-    # PR #1902's Orin PTX fma.rn.f16x2 recording: u32 count followed by the
-    # three input columns and one result column, each containing packed half pairs.
+    # u32 count, then three input columns and one result column of packed half pairs
     capture = (FIXTURE / 'hfma_orin_fixture.u32').read_bytes()
     count, = struct.unpack_from('<I', capture)
     columns = struct.unpack(f'<{4 * count}I', capture[4:])
@@ -185,29 +164,26 @@ def hfma_rounding_cases(ops):
     relu_rows = [(midpoint, 0x76397639), ([0, 0x7c007c00, 0], 0x7fff7fff),
                  ([0x80018001, 0x38003800, 0], 0)]
     ftz_rows = [(midpoint, 0x76397639),
-                ([0x84000400, 0x3bff3bff, 0], 0x84000400),   # the midpoint below the smallest normal rounds up
-                ([0x84000400, 0x38003800, 0], 0x80000000),   # a rounded subnormal flushes with sign
-                ([0x80010001, 0x7c007c00, 0], 0x7fff7fff)]  # input flush gives 0 * inf
+                ([0x84000400, 0x3bff3bff, 0], 0x84000400),
+                ([0x84000400, 0x38003800, 0], 0x80000000),
+                ([0x80010001, 0x7c007c00, 0], 0x7fff7fff)]
     for stem in ('hfma2', 'hfma2_alu'):
         yield case(stem + '_ftz', '_round', ftz_rows)
         yield case(stem + '_relu', '_round', relu_rows)
         yield case(stem + '_relu', '_ftz_round', [relu_rows[0], relu_rows[1], ([0x84000400, 0x38003800, 0], 0)],
                    bits=1 << (80 - 64))
 
-    # All templates write R7 to shared memory. The inserted consumers also write R7.
     pack = struct.pack('<QQ', 0x000000070707723e, 0x000fe20000000000)    # F2FP.PACK_AB R7, R7, R7
     unpack = struct.pack('<QQ', 0x0000000700077304, 0x003fe20000101000)  # F2F.F32.F16 R7, R7
     yield case('hfma2_alu', '_unpack', [(midpoint, 0x46c72000)], after=unpack, outs='f')
     yield case('hfma2_alu', '_f32', [(midpoint, 0x46c71000)], bits=1 << (78 - 64), outs='f')
     yield case('hfma2_alu', '_f32_pack', [(midpoint, 0x76387638)], bits=1 << (78 - 64), after=pack)
-    # .F32 source A: 1 + 2^-12 multiplied by 1, plus 2^-11. Narrowing A first would give 0x3c00.
+    # 1 + 2^-12 times 1, plus 2^-11: narrowing A first would give 0x3c00
     yield case('hfma2_alu', '_f32_source', [([0x3f800800, 0x3c003c00, 0x10001000], 0x3c013c01)], bits=1 << (74 - 64))
     yield case('ffma_rn', '_pack', [([0xc5440000, 0xc1020000, 0x3902c000], 0x76387638)], after=pack, outs='h')
 
 
 def minmax_boundaries(ops):
-    """Synthetic contracts for signed zeros, numeric/NaN selection, half FTZ,
-    and Maxwell's constant and register predicates. No additional GPU recordings."""
     by_name = {o['name']: o for o in ops}
     for template in ('fmin', 'fmax', 'hmin2', 'hmax2'):
         op = by_name[template]
@@ -239,8 +215,7 @@ def minmax_boundaries(ops):
 
 
 def maxwell_minmax(is_min, register_predicate):
-    """FMNMX R3, R1, R2, P0 or [!]PT; R1/R2/P0 come from shared input.
-    R8 is the lane's four-word row, with R3 stored in its last word."""
+    """FMNMX R3, R1, R2, P0 or [!]PT; R8 is the lane's four-word row, R3 stored in its last word"""
     fmnmx = 0x5c60000000070000 | 3 | 1 << 8 | 2 << 20
     if not register_predicate:
         fmnmx |= 7 << 39 | (0 if is_min else 1 << 42)
@@ -258,7 +233,6 @@ def maxwell_minmax(is_min, register_predicate):
 
 
 def directed_rounding_boundaries(ops):
-    """Exact synthetic binary32 boundaries, separate from the Orin recording."""
     by_name = {o['name']: o for o in ops}
 
     def case(template, suffix, rows, *, instruction=None):
@@ -280,14 +254,13 @@ def directed_rounding_boundaries(ops):
 
     for mode, code in (('rm', 1), ('rp', 2), ('rz', 3)):
         add, mul, fma = (name + '_' + mode for name in ('fadd', 'fmul', 'ffma'))
-        # Near FLT_MAX, rounded sum minus the smaller addend overflows in unscaled TwoSum.
+        # near FLT_MAX the rounded sum minus the smaller addend overflows in unscaled TwoSum
         pos = 0x7f7ffffe if mode == 'rp' else 0x7f7ffffd
         neg = 0xff7ffffe if mode == 'rm' else 0xff7ffffd
         yield case(add, 'finite_sum', [([0xf3c00000, 0x7f7fffff], pos), ([0x7f7fffff, 0xf3c00000], pos),
                                       ([0x73c00000, 0xff7fffff], neg), ([0xff7fffff, 0x73c00000], neg)])
 
         offset, lo, hi = instruction(mul, 0x020)
-        # D2 rescues an overflowing unscaled product and M8 rescues an underflowing one.
         d2_pos = 0x3f000003 if mode == 'rp' else 0x3f000002
         d2_neg = 0xbf000003 if mode == 'rm' else 0xbf000002
         yield case(mul, 'd2', [([0x7f000000, 0x40000000], 0x7f000000), ([0xff000000, 0x40000000], 0xff000000),
@@ -296,14 +269,12 @@ def directed_rounding_boundaries(ops):
         yield case(mul, 'm8', [([0x00800000, 0x3e000000], 0x00800000), ([0x80800000, 0x3e000000], 0x80800000)],
                    instruction=(offset, lo, hi & ~(7 << 20) | 7 << 20))
 
-        # Use the trig literal as an ordinary multiply. The next instruction stores it.
         offset, lo, hi = instruction('fmul_by_imm', 0x020)
         imm_rows = {'rm': ([0xc0400000], 0xbef47645), 'rp': ([0x3fc00000], 0x3e747645), 'rz': ([0x3fa00000], 0x3e4bb7e3)}
         yield case('fmul_by_imm', mode, [imm_rows[mode]],
                    instruction=(offset, lo & 0xffffffff | 0x3e22f983 << 32, hi & ~(3 << 14) | code << 14))
 
-        # a*b overflows separately, but a*b+c is 2^127 + 2^104 - 2^81.
-        # Also check exact cancellation and a fused result one tiny step above it.
+        # a*b overflows alone, but a*b+c is 2^127 + 2^104 - 2^81
         yield case(fma, 'cancellation', [
             ([0x7f7fffff, 0x3f800001, 0xff000000], 0x7f000001 if mode == 'rp' else 0x7f000000),
             ([0x3f800000, 0x3f800000, 0xbf800000], 0x80000000 if mode == 'rm' else 0),
@@ -320,13 +291,12 @@ def directed_rounding_boundaries(ops):
 
 
 def i2f64_boundaries(ops):
-    """Exact binary32 outputs for zero, rounding ties, word carries and integer limits."""
     template = next(op for op in ops if op['name'] == 'i2f_s64')
     ((offset, lo, hi),) = [
         (i * 16, lo, hi) for i, (lo, hi) in enumerate(struct.iter_unpack('<QQ', template['program']))
         if lo & 0xfff == 0x312
     ]
-    # Each row is the input followed by the expected RN, RM, RP and RZ bits.
+    # input, then the expected RN, RM, RP and RZ bits
     common = [
         (0,                 0,          0,          0,          0),
         (1,                 0x3f800000, 0x3f800000, 0x3f800000, 0x3f800000),
@@ -335,7 +305,6 @@ def i2f64_boundaries(ops):
         (0xffffffff,        0x4f800000, 0x4f7fffff, 0x4f800000, 0x4f7fffff),
         (0x1_00000000,      0x4f800000, 0x4f800000, 0x4f800000, 0x4f800000),
         (0x1_00000001,      0x4f800000, 0x4f800000, 0x4f800001, 0x4f800000),
-        # Set just the low word's sticky bit to move from a tie to above the midpoint.
         (0x800000_80000000, 0x5b000000, 0x5b000000, 0x5b000001, 0x5b000000),
         (0x800000_80000001, 0x5b000001, 0x5b000000, 0x5b000001, 0x5b000000),
     ]
@@ -367,7 +336,6 @@ def i2f64_boundaries(ops):
 
 
 def f2fp_boundaries(ops):
-    """Derived PACK_AB forms use exact packed outputs from the conversion contract."""
     by_name = {o['name']: o for o in ops}
 
     def case(template, suffix, modifiers, rows):
@@ -379,12 +347,12 @@ def f2fp_boundaries(ops):
     bf16 = 'f2fp_pack_bf16x2'
     rz = 3 << 15    # bits 79..80 of the full instruction
     relu = 1 << 11  # bit 75
-    # Each row has its input pair, nearest-even pack and toward-zero pack.
+    # input pair, nearest-even pack, toward-zero pack
     bf16_rows = [
-        ([0x3f808000, 0x3f818000], 0x3f803f82, 0x3f803f81),  # midpoint with even and odd retained bit
-        ([0x3f807fff, 0x3f808001], 0x3f803f81, 0x3f803f80),  # immediately below and above a midpoint
+        ([0x3f808000, 0x3f818000], 0x3f803f82, 0x3f803f81),
+        ([0x3f807fff, 0x3f808001], 0x3f803f81, 0x3f803f80),
         ([0xbf818000, 0x00008001], 0xbf820001, 0xbf810000),
-        ([0x007f8000, 0x00008000], 0x00800000, 0x007f0000),  # subnormal rounding at both ends
+        ([0x007f8000, 0x00008000], 0x00800000, 0x007f0000),
         ([0x7f7fffff, 0xff7fffff], 0x7f80ff80, 0x7f7fff7f),
         ([0x80000000, 0xff800001], 0x80007fff, 0x80007fff),
     ]
@@ -416,20 +384,18 @@ def f2fp_boundaries(ops):
 
 
 def alu_cbuf_variant(op, opcode, source, bank, offset, *, modifiers=0):
-    """Change a register ALU instruction to read its B or C from a fixed constant-buffer offset."""
     program = bytearray(op['program'])
     (position, lo, hi), = [(i * 16, lo, hi) for i, (lo, hi) in enumerate(struct.iter_unpack('<QQ', program))
                            if lo & 0x1ff == opcode]
     form = 5 if source == 'b' else 3
     if source == 'c':
-        hi = (hi & ~0xff) | ((lo >> 32) & 0xff)  # B moves into the register field formerly used by C.
+        hi = (hi & ~0xff) | ((lo >> 32) & 0xff)
     lo = (lo & 0xffffffff & ~(7 << 9)) | (form << 9) | (bank << 54) | (offset << 38)
     struct.pack_into('<QQ', program, position, lo, hi | modifiers)
     return bytes(program)
 
 
 def idp_constant_buffer_cases(ops):
-    """Bind a nonzero word at c[3][5] and exercise its use in either operand slot."""
     by_name = {op['name']: op for op in ops}
     bank, offset = 3, 20
     rows = [[0x80017fff, 0x807f0201, 0xfffffff0],
@@ -461,7 +427,6 @@ def idp_constant_buffer_cases(ops):
 
 
 def vabsdiff_cases(ops):
-    """Compare full-width signed and unsigned distances, including sums that wrap."""
     template = next(op for op in ops if op['name'] == 'isad')
     rows = [[0x80000000, 0x7fffffff, 1],
             [0x7fffffff, 0x80000000, 0],
@@ -494,9 +459,7 @@ def vabsdiff_cases(ops):
 
 
 def chain_rewrites():
-    """the MSL rewrites dmsh_build.py's finish() makes of every shader, in its order: each `src = f(src)` at its top level or in a try there (the ones under a
-    stage's `if` are another stage's). The rewrites live in importable modules;
-    importing dmsh_build itself would start a game build."""
+    """finish()'s MSL rewrites in its order: each top-level `src = f(src)` or one in a try there (those under a stage's `if` are another stage's); importing dmsh_build would start a build"""
     path = TOOLS / 'dmsh_build.py'
     tree = ast.parse(path.read_text())
     xc = next(n for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, 'id', None) == 'XC' for t in n.targets))
@@ -521,7 +484,7 @@ def chain_rewrites():
 
 
 def harness(msl, w):
-    """main0 seeds each thread's W words of the shader's shared array from buffer 30 and writes them back where it returns"""
+    """main0 seeds each thread's W words of the shared array from buffer 30 and writes them back where it returns"""
     i = msl.index('kernel void main0(')
     sig = msl[i:msl.index(')', i)]
     lid = re.search(r'uint (\w+) \[\[thread_index_in_threadgroup\]\]', sig)

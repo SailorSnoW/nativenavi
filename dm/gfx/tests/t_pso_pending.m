@@ -519,7 +519,7 @@ static void test_prediction_only_reads_existing_targets(void) {
     reset_queue(); reset_pso_cache();
 }
 
-// The prediction runs once per submission, at its first new miss: a draw whose own build is already under way drew in an earlier frame and does not start it (issue #2438)
+// The prediction runs once per submission, at its first new miss: a draw whose own build is already under way drew in an earlier frame and does not start it
 static void test_prediction_at_first_new_miss(void) {
     g_sub_serial = 100; g_pp_submit_mark = 0;
     EXPECT_EQ("a stand-in draw whose build is under way does not start the prediction", 0, pso_predict_due(0));

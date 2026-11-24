@@ -1,7 +1,7 @@
 """Equivalent duplicates keep their first source and payload through the full split.
 
-Issues #2924/#2927: source labels also order package records, so a change from
-last to first representatives needs verified profile maps, even for equal code.
+Source labels also order package records, so a change from last to first
+representatives needs verified profile maps, even for equal code.
 All inputs here are synthetic.
 """
 import os

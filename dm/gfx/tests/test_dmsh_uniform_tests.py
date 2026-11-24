@@ -1,6 +1,6 @@
 """A game uniform word tested against constants (dmsh_rewrite.py uniform_tests): each test of a word tested more than once reads it with a volatile load (dm_uword), so the Metal
-front end folds no chain of tests into a switch, which Apple's GPU compiler took hours and tens of gigabytes over (Nintendo Switch Sports Resort's pixel shader 692008b305ce264f in
-the offline pipeline archive). The shader below is the translator's form of a GLSL switch on one word; with dmsh_build.py's compile command its plain form
+front end folds no chain of tests into a switch, which Apple's GPU compiler can take hours and tens of gigabytes over in the offline pipeline archive. The shader below is the
+translator's form of a GLSL switch on one word; with dmsh_build.py's compile command its plain form
 becomes a switch in the front end's IR and its rewritten form none."""
 from pathlib import Path
 import shutil
@@ -18,7 +18,7 @@ import dmsh_rewrite  # noqa: E402
 WORD = '(*spvDescriptorSet0.fp_c5)._m0[16]'
 
 
-# As spirv-cross writes Ryujinx's structured switch on c5[16].w (the cases 100 to 103 of a material's mode), cut down; the last test with the constant first
+# As spirv-cross writes the translator's structured switch on c5[16].w (cases 100 to 103), cut down; the last test with the constant first
 SHADER = '''#include <metal_stdlib>
 using namespace metal;
 

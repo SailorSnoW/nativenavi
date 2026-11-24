@@ -61,7 +61,7 @@ int main(void) {
     id<MTLBuffer> zero = [dev newBufferWithLength:64 options:MTLResourceStorageModeShared], out = [dev newBufferWithLength:NV * 32 options:MTLResourceStorageModeShared];
     memset(zero.contents, 0, 64);
     const int nf = (int)(sizeof F / sizeof *F);
-    // input a (uint) gets every format, input b (int) the next one in the list: each pipeline mixes two classes, as Age of Calamity's soldiers do
+    // input a (uint) gets every format, input b (int) the next one in the list: each pipeline mixes two classes
     for (int ia = 0; ia < nf; ia++) {
         const fmt_t *fa = &F[ia], *fb = &F[(ia + 1) % nf];
         uint8_t da[NV * 8], db[NV * 8];

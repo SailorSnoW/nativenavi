@@ -2,7 +2,7 @@
 // differ, then the edges; dmsh_rewrite.py blend_zero's guard in it, from test_dmsh_blend_zero.py --fixture-rop) drawn into RGBA8, RGBA16 and RGB10A2 normalized targets with blending
 // off, with MAX, and with an ADD of ONE and ZERO (a blended sum: rounded after the blend, out of the shader's reach), and the targets read back. Where the stored value is the
 // colour's conversion, it is NVIDIA's: the float32 product rounded to nearest even. The ADD row, and every row with DM_NVN_ROP_ROUND=0, show Apple's conversion as it is: the
-// exact product rounded to nearest (Sonic Frontiers' flags 66.5 / 255: 66 against 67). rop_word's cases are checked on the state alone. A merged pass's draw (output 0 drawn to
+// exact product rounded to nearest (66.5 / 255: 66 against 67). rop_word's cases are checked on the state alone. A merged pass's draw (output 0 drawn to
 // attachment 1) is drawn and read back too, with the words bz_bind bound.
 // make GAME=<id> check_t_rop_round (./t_rop_round <dir>)
 #include "../nvn/nvn_mtl.m"
@@ -32,7 +32,7 @@ static void stored(int f, const uint8_t *px, unsigned out[4], unsigned sc[4]) {
 }
 static blend_st state(int r) { blend_st b = {.target = 0, .src_rgb = O, .dst_rgb = Z, .src_a = O, .dst_a = Z, .eq_rgb = (uint64_t)rows[r].eq, .eq_a = (uint64_t)rows[r].eq}; return b; }
 // A merged pass's draw (g_pso_lmap and g_pso_fsfn as draw has them for a pass that reads its targets from the tile): the words it binds are the state's under the map, as its pipeline's
-// are. The shader's output 0 (blending off, Sonic Frontiers' flags 66.5 / 255) goes to physical attachment 1, an RGBA8 target, beside an RGBA16F one at attachment 0 that no output
+// are. The shader's output 0 (blending off, 66.5 / 255) goes to physical attachment 1, an RGBA8 target, beside an RGBA16F one at attachment 0 that no output
 // reaches. Read without the map, the word is 0 (attachment 0 is no normalized target) and Apple's conversion stores 67
 static void merged_case(NSString *source, prog_t *program, int on) {
     NSString *merged = [source stringByAppendingString:@"\nstruct dm_merged_out { float4 m_1 [[color(1)]]; };\n"
@@ -169,7 +169,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         pso_key k = {.cfmt = {MTLPixelFormatRGBA8Unorm}, .blend_en = 0, .chmask = 0xf};
         CHECK(pso_blend_live(&k, ps, 0) == (on ? 1 : 0));
         CHECK(pso_off(&k, ps, 0) == (on ? FN_OFF_BORDER : (FN_OFF_BORDER | FN_OFF_BLEND)));
-        // Force FN_OFF_BLEND with rop_word = DMSH_ROUND_8 bound: dm_rop is compiled out, so Sonic Frontiers' 66.5/255 stores Apple's 67 instead of NVIDIA's 66
+        // Force FN_OFF_BLEND with rop_word = DMSH_ROUND_8 bound: dm_rop is compiled out, so 66.5/255 stores Apple's 67 instead of NVIDIA's 66
         MTLRenderPipelineDescriptor *d = pso_desc(&k, pr->sh[0], ps, nil, 0);
         NSError *be = nil; id<MTLRenderPipelineState> off_ps = pso_build(d, FN_OFF_BORDER | FN_OFF_BLEND, &be);
         CHECK(off_ps != nil);

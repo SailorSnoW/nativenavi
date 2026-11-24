@@ -127,7 +127,7 @@ int main(void) { @autoreleasepool {
     mtl_reg_tex(701, &in, NULL); mtl_reg_image(702, &out, NULL); mtl_reg_image(703, &same, NULL);
     const float colour[4] = {0.5f, 0.25f, 0.75f, 1.0f}, black[4] = {0, 0, 0, 1};
     fill(tex_mtl(&in), MTLClearColorMake(colour[0], colour[1], colour[2], colour[3])); fill(tex_mtl(&out), MTLClearColorMake(0, 0, 0, 1));
-    char key[24] = "7629d857a0a93833_b"; if (DM_GAME_UPSCALER_N) snprintf(key, sizeof key, "%.16s_b", DM_GAME_UPSCALER_KEYS);   // the profile's first upscaler, else Bananza's (not named here)
+    char key[24] = "7629d857a0a93833_b"; if (DM_GAME_UPSCALER_N) snprintf(key, sizeof key, "%.16s_b", DM_GAME_UPSCALER_KEYS);   // the profile's first upscaler, else a stand-in key
     NvShader *named = upscaler(key), *other = upscaler("0123456789abcdef_b");
     CHECK(up_mfx_wanted(named) == (on && DM_GAME_UPSCALER_N), "a shader the profile names is swapped exactly when DM_UPSCALER=metalfx (none in a profile without upscalers)");
     CHECK(!up_mfx_wanted(other), "a shader the profile does not name is never swapped");
@@ -175,7 +175,7 @@ int main(void) { @autoreleasepool {
             CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error(), "packed output submission completes");
         }
         CHECK(tex_mtl(&packed_out) == backing && g_pfv_upgrades == upgrades, "repeated scales reuse the original image backing");
-        // sRGB input and linear output (Splatoon Raiders): the same sizes as above, so a scaler of their own, and the image holds the colour decoded
+        // sRGB input and linear output: the same sizes as above, so a scaler of their own, and the image holds the colour decoded
         S.img[5][1] = 702; S.tex[5][0] = 701; { const uint32_t rects[8] = {0, 0, 959, 539, 0, 0, 1919, 1079}; memcpy(S.push[1], rects, sizeof rects); }
         named->up_color = UP_COLOR_SRGB;
         const float decoded[4] = {0.2140f, 0.0509f, 0.5225f, 1.0f};   // sRGB 0.5, 0.25, 0.75

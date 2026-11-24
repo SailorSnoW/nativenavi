@@ -281,7 +281,7 @@ $(B)/t_pause_stress: t_pause_stress.c t_condvar_stub.c ../hle_thread.c ../dm.h $
 preempt: $(B)/t_preempt
 	$(B)/t_preempt
 	$(B)/t_preempt --all-peers
-# the stop-the-world stress for longer: make pause-stress [PAUSE_STRESS_SECONDS=N] (run does 1 s, where the stale pause showed in the first few dozen of about 3,700 cycles)
+# the stop-the-world stress for longer: make pause-stress [PAUSE_STRESS_SECONDS=N] (run does 1 s, about 3,700 cycles)
 PAUSE_STRESS_SECONDS ?= 30
 .PHONY: pause-stress
 pause-stress: $(B)/t_pause_stress
