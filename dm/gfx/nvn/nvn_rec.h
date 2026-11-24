@@ -1,68 +1,75 @@
-// Deferred encoding (DM_NVN_ENC_THREAD=1; included by nvn_mtl.m only): the replay's Metal encoding runs on a worker thread while the submit thread goes on translating.
-// About 40% of the submit thread's time was spent inside Metal itself: encoder creation, draw calls, state setters and argument table writes (Breath of the Wild: about 2.7 of 6.5 ms a frame).
-// With this switch the replay talks to stand-ins for the main command buffer, its encoders and the argument tables it rewrites per draw. Each call becomes a fixed-size record (objects retained);
-// records go to the encode thread in blocks, and the encode thread makes the same calls in the same order on the real objects. Commits of the main command buffer and of upload batches, and
-// event signals, are records too, so the queue sees work in exactly the order it did before. The submit thread waits for the encode thread to finish (rec_drain) at the end of each submission
-// and before anything that waits for the GPU or uses another queue, so nothing outside the submission can tell the difference.
-// Everything else the replay creates (textures, views, pipelines, buffers, residency) stays on the submit thread: device calls, safe from any thread. Queue commits take the residency lock,
-// since the submit thread may be adding to the set at the same time.
-// A selector the stand-ins do not implement stops the host with its name (forwardingTargetForSelector), so a missing one cannot silently drop work.
+// Deferred encoding (DM_NVN_ENC_THREAD=1; nvn_mtl.m only): the replay calls stand-ins for the main command buffer, its encoders and argument tables; each call becomes a record the
+// encode thread makes in the same order on the real objects. Commits and signals are records too, and the submit thread drains (rec_drain) at each submission's end and before
+// anything that waits for the GPU or uses another queue. Objects are made on the submit thread (device calls are thread-safe); queue commits take the residency lock.
+// A selector the stand-ins lack stops the host.
 
-// ---------- Copy queue: large uniform shadows (ubp_get) are filled by a worker thread ----------
-// A shadow is the bytes of a uniform range as the GPU will read them at that point of the submission (nvn_ubuf.inc ubp_get): memory, or the previous shadow of the range, with the inline
-// updates queued since laid over it. Breath of the Wild makes about 440 a frame, 14 MB of copies, a tenth of the submit thread's time. The submit thread queues the copies in order and
-// goes on; one worker makes them in the same order (a shadow may start from the previous one). The GPU reads shadows only after its command buffer is committed, and every commit first
-// waits for the copies queued before it (ubc_wait, from the encode thread when Metal encoding is deferred); a CPU read of a shadow waits for its own copies. DM_NVN_UB_COPY_THREAD=0
-// copies on the submit thread as before
-// Hand-off: the copy thread sleeps on g_ubc_head and a waiter on g_ubc_done (os_sync_wait_on_address: the kernel compares the word, so a change before the sleep is not lost),
-// each woken only by the thread that advanced that word, after it did. A waker never clears the sleeper's flag; the sleeper does, once awake. A push whose wake call comes late
-// can meet the flag the thread set for its next sleep, on a word that already includes that push: had the call taken the flag, the thread would sleep with it clear, the next
-// push would not wake it and every later wait would hang (the waiting thread's commit never made, its fence never signalled). Waiters are counted for the same reason.
-// No mutex: before, ubc_wait locked a mutex and signalled a condition on every spin while the thread slept, and the woken thread could not get that mutex back. Ocarina of
-// Time on one build: the replay thread spent half its busy time there, the copy thread waited for the mutex 9 times as long as it copied, and translation took 170-330k
-// instructions a draw against 32-48k
+// Copy queue: a worker fills large uniform shadows (ubp_get) in queue order; every commit first waits for the copies queued before it (ubc_wait), a CPU read for its own.
+// Hand-off without a mutex: the copy thread sleeps on g_ubc_head, waiters on g_ubc_done (os_sync_wait_on_address); only the sleeper clears its own flag, waiters are counted
+// (docs/reference/frame-rate.md#the-uniform-copy-threads-hand-off-convoys-on-its-mutex)
 typedef struct { void *d; const void *s; size_t n; } ubc_op;
-enum { UBC_N = 8192, UBC_SPIN = 4096 };   // UBC_SPIN: a waiter's spins before it sleeps (the copies it waits for are usually a few KB)
+enum { UBC_N = 8192, UBC_SPIN = 4096 };   // UBC_SPIN: a waiter's spins before it sleeps
 static ubc_op g_ubc[UBC_N];
-static _Alignas(128) _Atomic uint64_t g_ubc_head;   // ops queued (monotonic; the copy thread sleeps on it)
-static _Alignas(128) _Atomic uint64_t g_ubc_done;   // ops made (a waiter sleeps on it)
-static _Alignas(128) _Atomic uint32_t g_ubc_sleeping, g_ubc_waiting;   // the copy thread is asleep or about to be (it clears this itself) / waiters asleep or about to be
-static _Atomic uint64_t g_ubc_wakes;   // wake calls made, both ways (t_ubc_wait)
-#ifndef UBC_T_SLEEPING   // t_ubc_wait: holds the copy thread on its way to sleep, so that a late wake call lands there
+static _Alignas(128) _Atomic uint64_t g_ubc_head;   // the copy thread sleeps on it
+static _Alignas(128) _Atomic uint64_t g_ubc_done;   // waiters sleep on it
+static _Alignas(128) _Atomic uint32_t g_ubc_sleeping, g_ubc_waiting;   // asleep or about to be; only the copy thread clears its flag
+static _Atomic uint64_t g_ubc_wakes;
+#ifndef UBC_T_SLEEPING   // t_ubc_wait: delays the copy thread's sleep so a late wake lands there
 #define UBC_T_SLEEPING() ((void)0)
 #endif
-static int ubc_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_UB_COPY_THREAD"); v = !(e && !strcmp(e, "0")); } return v; }
-// Wake the copy thread if it sleeps; only ubc_push, after its store to g_ubc_head (pushes between the wake and the thread clearing its flag make a call each, harmless)
+static int ubc_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("DM_NVN_UB_COPY_THREAD");
+        v = !(e && !strcmp(e, "0"));
+    }
+    return v;
+}
+// only ubc_push calls it, after its store to g_ubc_head
 static inline void ubc_kick(void) {
-    if (atomic_load(&g_ubc_sleeping)) { atomic_fetch_add_explicit(&g_ubc_wakes, 1, memory_order_relaxed); os_sync_wake_by_address_any(&g_ubc_head, sizeof g_ubc_head, OS_SYNC_WAKE_BY_ADDRESS_NONE); }
+    if (atomic_load(&g_ubc_sleeping)) {
+        atomic_fetch_add_explicit(&g_ubc_wakes, 1, memory_order_relaxed);
+        os_sync_wake_by_address_any(&g_ubc_head, sizeof g_ubc_head, OS_SYNC_WAKE_BY_ADDRESS_NONE);
+    }
 }
 static void *ubc_thread(void *arg) {
-    (void)arg; pthread_setname_np("dm-ub-copy"); pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    (void)arg;
+    pthread_setname_np("dm-ub-copy");
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     for (uint64_t t = 0;;) {
         uint64_t h = atomic_load_explicit(&g_ubc_head, memory_order_acquire);
-        for (int spin = 0; spin < 2000 && t == h; spin++) h = atomic_load_explicit(&g_ubc_head, memory_order_acquire);   // a submission queues copies in bursts: stay awake a moment
-        while (t == h) {   // the flag first, then the word (both sequentially consistent, as the pusher's store and flag load): a push sees the flag or this sees the push
+        for (int spin = 0; spin < 2000 && t == h; spin++) h = atomic_load_explicit(&g_ubc_head, memory_order_acquire);
+        while (t == h) {   // flag, then word (seq_cst, as the pusher's store and flag load): a push sees the flag or this sees the push
             atomic_store(&g_ubc_sleeping, 1);
             if ((h = atomic_load(&g_ubc_head)) != t) break;
             UBC_T_SLEEPING();
-            os_sync_wait_on_address(&g_ubc_head, t, sizeof g_ubc_head, OS_SYNC_WAIT_ON_ADDRESS_NONE);   // returns at once if the word is no longer t; EINTR and spurious returns loop
-            atomic_store(&g_ubc_sleeping, 0);   // awake: set again before the next sleep's look at the word
+            os_sync_wait_on_address(&g_ubc_head, t, sizeof g_ubc_head, OS_SYNC_WAIT_ON_ADDRESS_NONE);
+            atomic_store(&g_ubc_sleeping, 0);
             h = atomic_load(&g_ubc_head);
         }
-        atomic_store_explicit(&g_ubc_sleeping, 0, memory_order_relaxed);   // also when the look found a push
-        for (; t < h; t++) { const ubc_op *o = &g_ubc[t % UBC_N]; memcpy(o->d, o->s, o->n); }
+        atomic_store_explicit(&g_ubc_sleeping, 0, memory_order_relaxed);
+        for (; t < h; t++) {
+            const ubc_op *o = &g_ubc[t % UBC_N];
+            memcpy(o->d, o->s, o->n);
+        }
         atomic_store(&g_ubc_done, t);
-        if (atomic_load(&g_ubc_waiting)) { atomic_fetch_add_explicit(&g_ubc_wakes, 1, memory_order_relaxed); os_sync_wake_by_address_all(&g_ubc_done, sizeof g_ubc_done, OS_SYNC_WAKE_BY_ADDRESS_NONE); }
+        if (atomic_load(&g_ubc_waiting)) {
+            atomic_fetch_add_explicit(&g_ubc_wakes, 1, memory_order_relaxed);
+            os_sync_wake_by_address_all(&g_ubc_done, sizeof g_ubc_done, OS_SYNC_WAKE_BY_ADDRESS_NONE);
+        }
     }
     return NULL;
 }
-// Wait until the first seq ops are made (the replay thread, or the encode thread at a commit): spin a moment, then sleep on g_ubc_done
+// replay or encode thread
 static void ubc_wait(uint64_t seq) {
     if (atomic_load_explicit(&g_ubc_done, memory_order_acquire) >= seq) return;
     uint64_t w0 = ws_t0();
-    for (int spin = 0;; spin++) {   // the copies are queued, so the copy thread is awake or woken by their push
-        if (spin < UBC_SPIN) { __builtin_arm_yield(); if (atomic_load_explicit(&g_ubc_done, memory_order_acquire) >= seq) break; continue; }
-        atomic_fetch_add(&g_ubc_waiting, 1);   // counted first, then the word (as the copy thread's store and count load): it sees this waiter or this sees its store
+    for (int spin = 0;; spin++) {
+        if (spin < UBC_SPIN) {
+            __builtin_arm_yield();
+            if (atomic_load_explicit(&g_ubc_done, memory_order_acquire) >= seq) break;
+            continue;
+        }
+        atomic_fetch_add(&g_ubc_waiting, 1);   // count, then word (as the copy thread's store and count load): it sees this waiter or this sees its store
         uint64_t d = atomic_load(&g_ubc_done);
         if (d < seq) os_sync_wait_on_address(&g_ubc_done, d, sizeof g_ubc_done, OS_SYNC_WAIT_ON_ADDRESS_NONE);
         atomic_fetch_sub(&g_ubc_waiting, 1);
@@ -71,10 +78,15 @@ static void ubc_wait(uint64_t seq) {
     if (ws_on()) ws_put(WS_UBC, w0, 1);
 }
 static inline uint64_t ubc_head(void) { return atomic_load_explicit(&g_ubc_head, memory_order_relaxed); }
-// Queue a copy (submit thread only); returns the count of ops that must be made for it to be done
+// submit thread only; returns the op count that completes it
 static uint64_t ubc_push(void *d, const void *s, size_t n) {
     static int started;
-    if (!started) { pthread_t th; if (pthread_create(&th, NULL, ubc_thread, NULL)) MDIE("cannot start the uniform copy thread"); pthread_detach(th); started = 1; }
+    if (!started) {
+        pthread_t th;
+        if (pthread_create(&th, NULL, ubc_thread, NULL)) MDIE("cannot start the uniform copy thread");
+        pthread_detach(th);
+        started = 1;
+    }
     uint64_t h = atomic_load_explicit(&g_ubc_head, memory_order_relaxed);
     if (h - atomic_load_explicit(&g_ubc_done, memory_order_acquire) >= UBC_N) ubc_wait(h - UBC_N + 1);
     g_ubc[h % UBC_N] = (ubc_op){d, s, n};
@@ -91,120 +103,145 @@ enum {
     RO_R_DRAW, RO_R_DRAW_INST, RO_R_DRAW_IND, RO_R_DRAW_IDX, RO_R_DRAW_IDX_IND, RO_R_MESH, RO_R_MESH_IND, RO_R_STORE_C, RO_R_STORE_D, RO_R_STORE_S,
     RO_C_TABLE, RO_C_PSO, RO_C_DISPATCH, RO_C_DISPATCH_IND, RO_C_COPY_BB, RO_C_COPY_BT, RO_C_COPY_BT_OPT, RO_C_COPY_TB, RO_C_COPY_TB_OPT, RO_C_COPY_TT, RO_C_FILL,
     RO_T_ADDR, RO_T_TEX, RO_T_SAMP, RO_T_RESOURCE,
-    RO_LABEL, RO_R_TS, RO_C_TS,   // diagnostics: DM_NVN_ENC_LABEL, DM_NVN_GPUPROF
-    RO_NOTE,   // a[0] an _Atomic uint64_t, a[1] a value: the encode thread has made every call before this one (rec_note_wait)
+    RO_LABEL, RO_R_TS, RO_C_TS,
+    RO_NOTE,   // a[0] an _Atomic uint64_t set to a[1] once every earlier call is made
 };
-typedef struct { uint32_t op, nobj; uint64_t a[15]; } rec_t;   // the first nobj slots hold retained objects (0 for nil), released once the call is made
+typedef struct { uint32_t op, nobj; uint64_t a[15]; } rec_t;   // the first nobj slots are retained objects (0 = nil), released once made
 enum { REC_BLK = 256 };
 typedef struct rec_blk { struct rec_blk *next; int n; rec_t r[REC_BLK]; } rec_blk;
 
-// On by the profile's enc_thread or DM_NVN_ENC_THREAD=1: Metal's encoding leaves the submit thread
 static int g_rec = -1;
 static inline int rec_on(void) {
     if (__builtin_expect(g_rec >= 0, 1)) return g_rec;
     const char *e = getenv("DM_NVN_ENC_THREAD");
-    g_rec = e ? atoi(e) > 0 : DM_GAME_ENC_THREAD;   // the profile's enc_thread: Need for Speed: Hot Pursuit Remastered waits on its fence each frame, so encoding on its thread took its 60 fps frame from 18.1 to 16.7 ms
+    g_rec = e ? atoi(e) > 0 : DM_GAME_ENC_THREAD;
     if (g_rec) MLOG("Metal encoding runs on its own thread (DM_NVN_ENC_THREAD=0 turns it off)");
     return g_rec;
 }
 static pthread_mutex_t g_rb_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_rb_work = PTHREAD_COND_INITIALIZER, g_rb_idle = PTHREAD_COND_INITIALIZER;
-static rec_blk *g_rb_cur, *g_rb_head, *g_rb_tail, *g_rb_free;   // the submit thread's open block; blocks waiting for the encode thread; empty blocks
-static int g_rb_busy, g_rb_started, g_rb_sleeping;              // the encode thread is working through a block; the thread exists; it waits for work
+static rec_blk *g_rb_cur, *g_rb_head, *g_rb_tail, *g_rb_free;
+static int g_rb_busy, g_rb_started, g_rb_sleeping;
 
 static inline uint64_t rec_obj(id o) { return o ? (uint64_t)(uintptr_t)CFBridgingRetain(o) : 0; }
 static inline id rec_id(uint64_t v) { return (__bridge id)(void *)(uintptr_t)v; }
 static inline uint64_t rec_f(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 static inline float rec_fv(uint64_t v) { uint32_t u = (uint32_t)v; float f; memcpy(&f, &u, 4); return f; }
 
-static pthread_mutex_t g_note_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_note_cv = PTHREAD_COND_INITIALIZER;
-// Wait until the encode thread has passed a RO_NOTE of at least v on p (only the encode thread's progress through what is queued, never the GPU)
+static pthread_mutex_t g_note_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_note_cv = PTHREAD_COND_INITIALIZER;
+// the encode thread's progress only, never the GPU
 static void rec_note_wait(_Atomic uint64_t *p, uint64_t v) {
     if (atomic_load(p) >= v) return;
-    pthread_mutex_lock(&g_note_mu); while (atomic_load(p) < v) pthread_cond_wait(&g_note_cv, &g_note_mu); pthread_mutex_unlock(&g_note_mu);
+    pthread_mutex_lock(&g_note_mu);
+    while (atomic_load(p) < v) pthread_cond_wait(&g_note_cv, &g_note_mu);
+    pthread_mutex_unlock(&g_note_mu);
 }
 
-// ---------- Held commits (profile key replay_ahead, DM_NVN_REPLAY_AHEAD) ----------
-// A queue parked on an event the game's CPU signals has its commands translated and encoded meanwhile (nvn_queue.inc nq_worker), while everything that reaches the Metal queue
-// (commits, event signals, queue blocks) is kept here in order and made when the event's wait is satisfied: the GPU gets the work when and in the order the game gives it, and
-// only the host's translation moves ahead of the signal. The encode thread keeps and makes them; the submit thread stops at anything that waits for held work (hold_block).
-// A parked queue with nobody waiting for it stays held as long as the game leaves it parked. Once the submit thread has stopped at a wait for held work (it holds the
-// submission lock there) or another thread has waited for or polled a held fence, the signal may depend on that thread: HOLD_MAX_NS after the first of them (hold_stuck) the
-// held operations are made at once and a red line says so, as the commands then run before the game's signal; nvn_queue.inc takes no wait on that event for a while
+// Held commits (replay_ahead; docs/reference/frame-rate.md#the-gpu-waits-at-a-frames-start-for-commands-the-game-queued-long-before): a queue parked on a CPU-signalled event is
+// encoded meanwhile, but what reaches the Metal queue is kept in order until the wait is satisfied. HOLD_MAX_NS after a thread first waits for held work (it may be the signaller)
+// it is made at once, with a red line
 enum { HOLD_MAX_NS = 200000000 };
-static _Atomic uint64_t g_hold_stuck;        // when the first such wait of this hold began (ns), 0 with none; cleared only as the hold ends
-static _Atomic uint32_t g_hold_gen;          // counts holds: a request made for one hold does not end the next
-static _Atomic int g_hold_on; static _Atomic uint64_t g_hold_req;   // req: the hold it is for << 2 | 1 the wait is satisfied (hold_poke), 2 forced, 3 the host drains (a suspend, the exit)
-static _Atomic uint32_t g_hold_recs;         // queue records made under this hold (submit thread)
-static volatile uint32_t *g_hold_word; static unsigned g_hold_mode; static uint32_t g_hold_value;
-static uint64_t g_hold_t0, g_hold_first;     // when it began (ns); the first fence it holds
-static NSMutableArray *g_hold_ops;           // the encode thread's
-static pthread_mutex_t g_hold_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_hold_cv = PTHREAD_COND_INITIALIZER;
-static uint64_t g_hold_n, g_hold_ops_n, g_hold_forced, g_hold_drained, g_hold_blocks, g_hold_block_recs, g_hold_ns;   // statistics
+static _Atomic uint64_t g_hold_stuck;        // ns; 0 = none; cleared only as the hold ends
+static _Atomic uint32_t g_hold_gen;          // a request for one hold does not end the next
+static _Atomic int g_hold_on;
+static _Atomic uint64_t g_hold_req;          // hold << 2 | 1 satisfied, 2 forced, 3 host drain
+static _Atomic uint32_t g_hold_recs;         // submit thread
+static volatile uint32_t *g_hold_word;
+static unsigned g_hold_mode;
+static uint32_t g_hold_value;
+static uint64_t g_hold_t0, g_hold_first;
+static NSMutableArray *g_hold_ops;           // encode thread's
+static pthread_mutex_t g_hold_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_hold_cv = PTHREAD_COND_INITIALIZER;
+static uint64_t g_hold_n, g_hold_ops_n, g_hold_forced, g_hold_drained, g_hold_blocks, g_hold_block_recs, g_hold_ns;
 static const char *volatile g_hold_force_why;
-static uint64_t g_rc_ahead_waits;   // nvn_query.inc rc_value
-static const char HOLD_DRAIN[] = "drain";   // hold_poke: the host's own drain, where the game does not run on
+static uint64_t g_rc_ahead_waits;
+static const char HOLD_DRAIN[] = "drain";
 static int on_sub_thread(void);
-void nvn_queue_ahead_refuse(volatile uint32_t *word);   // nvn_queue.inc
-static void hold_stuck(void) { uint64_t z = 0; atomic_compare_exchange_strong(&g_hold_stuck, &z, clock_gettime_nsec_np(CLOCK_UPTIME_RAW)); }   // a thread waits for held work from now
+void nvn_queue_ahead_refuse(volatile uint32_t *word);
+static void hold_stuck(void) {
+    uint64_t z = 0;
+    atomic_compare_exchange_strong(&g_hold_stuck, &z, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+}
 static int hold_pred(uint32_t c) { return g_hold_mode == 0 ? c == g_hold_value : (uint32_t)(c - g_hold_value) < 0x80000000u; }
-static int hold_ready(void) { uint32_t c = atomic_load_explicit((_Atomic uint32_t *)g_hold_word, memory_order_acquire); return g_hold_mode == 0 ? c == g_hold_value : (uint32_t)(c - g_hold_value) < 0x80000000u; }
-// The encode thread: 1 while queue operations are to be kept; makes them all once the wait is satisfied
+static int hold_ready(void) { return hold_pred(atomic_load_explicit((_Atomic uint32_t *)g_hold_word, memory_order_acquire)); }
+// encode thread
 static int hold_check(void) {
     if (!atomic_load_explicit(&g_hold_on, memory_order_acquire)) return 0;
-    uint64_t rq = atomic_load(&g_hold_req); int req = rq >> 2 == atomic_load(&g_hold_gen) ? (int)(rq & 3) : 0;
+    uint64_t rq = atomic_load(&g_hold_req);
+    int req = rq >> 2 == atomic_load(&g_hold_gen) ? (int)(rq & 3) : 0;
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     if (!req && hold_ready()) req = 1;
     uint64_t stuck = atomic_load(&g_hold_stuck);
-    if (!req && stuck && now > stuck && now - stuck > HOLD_MAX_NS) { req = 2; g_hold_force_why = "a thread had waited for them for 200 ms with no signal"; }
+    if (!req && stuck && now > stuck && now - stuck > HOLD_MAX_NS) {
+        req = 2;
+        g_hold_force_why = "a thread had waited for them for 200 ms with no signal";
+    }
     if (!req) return 1;
     for (void (^op)(void) in g_hold_ops) op();
-    g_hold_n++; g_hold_ops_n += g_hold_ops.count; g_hold_ns += now - g_hold_t0; [g_hold_ops removeAllObjects];
+    g_hold_n++;
+    g_hold_ops_n += g_hold_ops.count;
+    g_hold_ns += now - g_hold_t0;
+    [g_hold_ops removeAllObjects];
     if (req == 3) g_hold_drained++;
-    if (req == 2) { nvn_queue_ahead_refuse(g_hold_word); if (!g_hold_forced++) MLOG("[RED] replay ahead: held commands were handed to the GPU before the game's signal (%s); further ones are counted", g_hold_force_why ?: "?"); }
+    if (req == 2) {
+        nvn_queue_ahead_refuse(g_hold_word);
+        if (!g_hold_forced++) MLOG("[RED] replay ahead: held commands were handed to the GPU before the game's signal (%s); further ones are counted", g_hold_force_why ?: "?");
+    }
     if (g_hold_n % 3000 == 0) MLOG("replay ahead: %llu holds, %.1f queue operations and %.2f ms a hold, %llu forced, %llu ended by a drain of the host's, submit thread stopped %llu times before the signal (%.1f queue operations recorded by then); of them at a condition whose report was in flight %llu", (unsigned long long)g_hold_n, (double)g_hold_ops_n / g_hold_n, g_hold_ns / 1e6 / g_hold_n, (unsigned long long)g_hold_forced, (unsigned long long)g_hold_drained, (unsigned long long)g_hold_blocks, g_hold_blocks ? (double)g_hold_block_recs / g_hold_blocks : 0.0, (unsigned long long)g_rc_ahead_waits);
-    pthread_mutex_lock(&g_hold_mu); atomic_store(&g_hold_stuck, 0); atomic_store_explicit(&g_hold_on, 0, memory_order_release); pthread_cond_broadcast(&g_hold_cv); pthread_mutex_unlock(&g_hold_mu);
+    pthread_mutex_lock(&g_hold_mu);
+    atomic_store(&g_hold_stuck, 0);
+    atomic_store_explicit(&g_hold_on, 0, memory_order_release);
+    pthread_cond_broadcast(&g_hold_cv);
+    pthread_mutex_unlock(&g_hold_mu);
     return 0;
 }
-static int hold_req_now(void) { uint64_t rq = atomic_load(&g_hold_req); return rq >> 2 == atomic_load(&g_hold_gen) && (rq & 3); }
-static void hold_op(void (^op)(void)) { if (hold_check()) { if (!g_hold_ops) g_hold_ops = [NSMutableArray new]; [g_hold_ops addObject:[op copy]]; } else op(); }
+static int hold_req_now(void) {
+    uint64_t rq = atomic_load(&g_hold_req);
+    return rq >> 2 == atomic_load(&g_hold_gen) && (rq & 3);
+}
+static void hold_op(void (^op)(void)) {
+    if (!hold_check()) {
+        op();
+        return;
+    }
+    if (!g_hold_ops) g_hold_ops = [NSMutableArray new];
+    [g_hold_ops addObject:[op copy]];
+}
 
-// ---------- The encode thread ----------
-static id g_rx_cb, g_rx_enc;   // the encode thread's real command buffer and open encoder
-// ---------- Submissions committed together ----------
-// A submission's commit is held while the GPU still runs a main command buffer committed earlier: its command buffer is ended and kept, the next submissions' go into command buffers
-// of their own, and the held ones reach the queue in one commit call, in order. A game that splits its frame at every event signal makes many small submissions (Ocarina of Time 22
-// to 30 a frame, each cut again at its waits, signals and fences by the queue scheduler), and they all reach the queue within a few milliseconds, behind the frame's first one.
-// Command buffers queued behind running work are the condition for the kernel's stall (docs/reference/frame-rate.md, "The GPU idles with the next command buffer already
-// committed"): with the GPU at a low clock, the next command buffer of a frame can start long after the one before it ended, and a governor that then
-// reads the GPU as partly busy does not raise the clock again. The held ones are committed when the GPU runs out of work (read at the end
-// of an encoder, and every 50 us while nothing is recorded, for half a millisecond at most), when the submit thread drains the encode thread, and before anything else goes to the queue (an
-// upload batch, a snapshot copy, a queue operation, a signal of its own): each command buffer keeps its place among those exactly as when it was committed on its own. A first version
-// put the next submissions into the held command buffer itself; an upload batch recorded inside a submission then went to the queue after the draws of that submission recorded
-// before it, which sampled the textures before their upload (pink and dark flashes, and a GPU error and recovery). Each held submission's feedback gets its own part of
-// the commit's GPU time, from the stamp its successor's first encoder writes (ts_sub_begin) where there is one, so a counter report that falls back to its command buffer's times
-// (rep_ticks) reads what it read on its own. DM_NVN_SUB_MERGE=0 commits every submission on its own again (ab: alternates with the DM_AB phases, for measurement)
-// Whether the GPU still has work is read from an event the encode thread signals after each of its commits (g_rx_ev: the GPU has run out of its work once that reads g_rx_seq):
-// the GPU writes it as it gets there, about 0.04 ms after the work's end on an M6, where the commit feedback runs 0.08-1.2 ms after it, and nothing woke the encode thread for it
-// (it looked at the end of its next encoder or after a 150 us wait), so each held batch sat that long in front of an idle GPU. An upload batch or a snapshot copy counts as
-// work too. DM_NVN_SUB_IDLE_FB=1 reads the commit feedback's count instead, as the first version did (ab: alternates with the DM_AB phases, for measurement)
+static id g_rx_cb, g_rx_enc;
+// Submissions committed together (DM_NVN_SUB_MERGE): while the GPU runs an earlier main command buffer, a submission's ended command buffer is held and the next ones join it in one
+// commit, keeping their place among other queue work (docs/reference/frame-rate.md#the-gpu-idles-with-the-next-command-buffer-already-committed). Not merged into one command
+// buffer: an upload batch recorded inside a submission would follow its draws. GPU idleness is read from g_rx_ev, signalled after each commit
 enum { RX_PEND_MAX = 48 };
-enum { REC_CMT_NOW = 0, REC_CMT_END = 1, REC_CMT_SEG = 2 };   // RO_COMMIT a[5]: commit now (mdi_wait / copy cut / busy=0), submission end (DM_NVN_SUB_MERGE), or segment cut (held while rx_inflight >= cut_busy_limit)
-static id g_rx_held_cb[RX_PEND_MAX]; static DmCommitFB *g_rx_fb[RX_PEND_MAX]; static id g_rx_stamp_heap[RX_PEND_MAX]; static int g_rx_stamp[RX_PEND_MAX], g_rx_npend;   // the held submissions, oldest first; stamp: the heap slot of the boundary after it (-1: none)
-static int g_rx_after, g_rx_want_stamp;   // the last record was a held submission-end commit (or its signal or note); the next boundary stamp is the last held CB's end
-static uint64_t g_rx_ubc;   // the newest uniform shadow the held submissions read (ubc_wait at the commit)
-static struct { uint64_t v; _Atomic uint64_t *p; } g_rx_post[2 * RX_PEND_MAX + 4]; static id g_rx_post_ev[2 * RX_PEND_MAX + 4]; static int g_rx_npost;   // the signals (an event) and notes that followed held commits: made after the real one, in order
-static _Atomic int g_rx_fly, g_rx_held, g_rx_drain, g_rx_busy_hold;   // main command buffers committed and not reported back (DM_NVN_SUB_IDLE_FB); commits are held (rec_drain waits for them); rec_drain callers waiting; tests: synthetic in-flight commits
-static id<MTLSharedEvent> g_rx_ev; static _Atomic uint64_t g_rx_seq, g_rx_need_fence;   // signalled with ++g_rx_seq after every commit on g_q4 (rx_mark); highest fence a blocking waiter needs committed (rec_wake_for_fence)
-static uint64_t g_rx_merged, g_rx_cbs; static int g_rx_last_nb;   // submissions / segments held and committed with a later one; commit calls of main command buffers; command buffers in the last one
-static int sw_mode(const char *name, int dflt); static inline int sw_on(int m);
+enum { REC_CMT_NOW = 0, REC_CMT_END = 1, REC_CMT_SEG = 2 };   // RO_COMMIT a[5]: commit now, submission end, or segment cut (held while rx_inflight >= cut_busy_limit)
+static id g_rx_held_cb[RX_PEND_MAX];   // oldest first; stamp: heap slot of the boundary after it (-1 none)
+static DmCommitFB *g_rx_fb[RX_PEND_MAX];
+static id g_rx_stamp_heap[RX_PEND_MAX];
+static int g_rx_stamp[RX_PEND_MAX], g_rx_npend;
+static int g_rx_after, g_rx_want_stamp;
+static uint64_t g_rx_ubc;   // newest uniform shadow the held ones read
+static struct { uint64_t v; _Atomic uint64_t *p; } g_rx_post[2 * RX_PEND_MAX + 4];   // signals and notes after held commits: made after the real one, in order
+static id g_rx_post_ev[2 * RX_PEND_MAX + 4];
+static int g_rx_npost;
+static _Atomic int g_rx_fly, g_rx_held, g_rx_drain, g_rx_busy_hold;   // fly: committed, not reported back; held; drain: rec_drain callers waiting; busy_hold: tests
+static id<MTLSharedEvent> g_rx_ev;   // ++g_rx_seq after every commit on g_q4
+static _Atomic uint64_t g_rx_seq, g_rx_need_fence;   // g_rx_need_fence: highest fence a blocking waiter needs committed
+static uint64_t g_rx_merged, g_rx_cbs;
+static int g_rx_last_nb;
+static int sw_mode(const char *name, int dflt);
+static inline int sw_on(int m);
 static int rx_merge_on(void) {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("DM_NVN_SUB_MERGE"); v = e && !strncmp(e, "ab", 2) ? sw_mode("DM_NVN_SUB_MERGE", 0) : !(e && !strcmp(e, "0"));
-        if (!v) MLOG("DM_NVN_SUB_MERGE=0: every submission is committed on its own"); }
+    if (v < 0) {
+        const char *e = getenv("DM_NVN_SUB_MERGE");
+        v = e && !strncmp(e, "ab", 2) ? sw_mode("DM_NVN_SUB_MERGE", 0) : !(e && !strcmp(e, "0"));
+        if (!v) MLOG("DM_NVN_SUB_MERGE=0: every submission is committed on its own");
+    }
     return sw_on(v);
 }
-static void rx_mark_locked(void) {   // after a commit on g_q4, under g_res_commit_mu
+static void rx_mark_locked(void) {   // under g_res_commit_mu
     id<MTLSharedEvent> ev = g_rx_ev;
     if (!ev) {
         ev = [g_dev newSharedEvent];
@@ -220,15 +257,16 @@ static void rx_mark(void) {
     rx_mark_locked();
     pthread_mutex_unlock(&g_res_commit_mu);
 }
-static uint64_t rx_inflight(void) {   // commits on g_q4 not yet completed by the GPU (plus any test hold)
-    static int fbm = -1; if (fbm < 0) fbm = sw_mode("DM_NVN_SUB_IDLE_FB", 0);
+static uint64_t rx_inflight(void) {
+    static int fbm = -1;
+    if (fbm < 0) fbm = sw_mode("DM_NVN_SUB_IDLE_FB", 0);
     uint64_t hold = (uint64_t)atomic_load_explicit(&g_rx_busy_hold, memory_order_relaxed);
     if (fbm && sw_on(fbm)) {
         int fly = rec_on() ? atomic_load_explicit(&g_rx_fly, memory_order_relaxed) : atomic_load_explicit(&g_seg_inflight, memory_order_relaxed);
         return hold + (fly > 0 ? (uint64_t)fly : 0);
     }
     uint64_t seq = atomic_load_explicit(&g_rx_seq, memory_order_acquire);
-    if (!seq) return hold;   // rx_mark_locked publishes the event with the first sequence number
+    if (!seq) return hold;
     uint64_t done = g_rx_ev.signaledValue;
     return hold + (seq > done ? seq - done : 0);
 }
@@ -237,93 +275,179 @@ static inline int rx_need_flush(void) {
     return atomic_load_explicit(&g_rx_drain, memory_order_acquire)
         || atomic_load_explicit(&g_rx_need_fence, memory_order_seq_cst) > atomic_load_explicit(&g_sub_cmt, memory_order_seq_cst);
 }
-static double rx_stamp_s(id heap, int slot) {   // a boundary stamp in seconds on the Mach clock, as a commit feedback's GPU times are; 0 when it was not written
+static double rx_stamp_s(id heap, int slot) {   // s on the Mach clock, as commit feedback times; 0 = not written
     if (!heap || slot < 0) return 0;
-    NSData *d = [(id<MTL4CounterHeap>)heap resolveCounterRange:NSMakeRange((NSUInteger)slot, 1)]; const MTL4TimestampHeapEntry *en = d.bytes;
+    NSData *d = [(id<MTL4CounterHeap>)heap resolveCounterRange:NSMakeRange((NSUInteger)slot, 1)];
+    const MTL4TimestampHeapEntry *en = d.bytes;
     if (!en || d.length < sizeof *en || !en->timestamp) return 0;
-    MTLTimestamp cpu = 0, gpu = 0; [g_dev sampleTimestamps:&cpu gpuTimestamp:&gpu];
-    static double scale; if (!scale) { uint64_t hz = [g_dev queryTimestampFrequency]; scale = hz ? 1e9 / (double)hz : 1; }
+    MTLTimestamp cpu = 0, gpu = 0;
+    [g_dev sampleTimestamps:&cpu gpuTimestamp:&gpu];
+    static double scale;
+    if (!scale) {
+        uint64_t hz = [g_dev queryTimestampFrequency];
+        scale = hz ? 1e9 / (double)hz : 1;
+    }
     double ago = (double)gpu - (double)en->timestamp * scale;
     return cpu && ago >= 0 && ago < 2e9 ? ((double)cpu - ago) / 1e9 : 0;
 }
-// One commit call: the held command buffers, then (cur) the encode thread's own, ended by the caller, with its feedback own (nil: none). The held ones' feedback comes first
+// held command buffers, then (cur) the encode thread's own; the held ones' feedback first
 static void rx_commit(int cur, DmCommitFB *own, uint64_t ubc) {
-    int n = g_rx_npend, nb = n + (cur != 0), cnt = nb; if (!nb) return;
+    int n = g_rx_npend, nb = n + (cur != 0), cnt = nb;
+    if (!nb) return;
     id<MTL4CommandBuffer> buffers[RX_PEND_MAX + 1];
-    NSMutableArray *fbs = [NSMutableArray arrayWithCapacity:(NSUInteger)cnt], *heaps = [NSMutableArray arrayWithCapacity:(NSUInteger)(n ? n : 1)]; NSMutableData *st = [NSMutableData dataWithLength:(NSUInteger)(n ? n : 1) * sizeof(int)]; int *sl = st.mutableBytes;
-    for (int i = 0; i < n; i++) { buffers[i] = g_rx_held_cb[i]; [fbs addObject:g_rx_fb[i]]; [heaps addObject:g_rx_stamp_heap[i] ?: (id)NSNull.null]; sl[i] = g_rx_stamp[i]; g_rx_held_cb[i] = nil; g_rx_fb[i] = nil; g_rx_stamp_heap[i] = nil; }
-    if (cur) { buffers[n] = g_rx_cb; [fbs addObject:own ?: (id)NSNull.null]; }
+    NSMutableArray *fbs = [NSMutableArray arrayWithCapacity:(NSUInteger)cnt], *heaps = [NSMutableArray arrayWithCapacity:(NSUInteger)(n ? n : 1)];
+    NSMutableData *st = [NSMutableData dataWithLength:(NSUInteger)(n ? n : 1) * sizeof(int)];
+    int *sl = st.mutableBytes;
+    for (int i = 0; i < n; i++) {
+        buffers[i] = g_rx_held_cb[i];
+        [fbs addObject:g_rx_fb[i]];
+        [heaps addObject:g_rx_stamp_heap[i] ?: (id)NSNull.null];
+        sl[i] = g_rx_stamp[i];
+        g_rx_held_cb[i] = nil;
+        g_rx_fb[i] = nil;
+        g_rx_stamp_heap[i] = nil;
+    }
+    if (cur) {
+        buffers[n] = g_rx_cb;
+        [fbs addObject:own ?: (id)NSNull.null];
+    }
     if (g_rx_ubc > ubc) ubc = g_rx_ubc;
-    g_rx_ubc = 0; g_rx_npend = 0; g_rx_want_stamp = 0; atomic_store(&g_rx_held, 0);
-    ubc_wait(ubc);   // the uniform shadows these command buffers read
+    g_rx_ubc = 0;
+    g_rx_npend = 0;
+    g_rx_want_stamp = 0;
+    atomic_store(&g_rx_held, 0);
+    ubc_wait(ubc);
     MTL4CommitOptions *o = [MTL4CommitOptions new];
     atomic_fetch_add(&g_rx_fly, 1);
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
         atomic_fetch_sub(&g_rx_fly, 1);
-        if (cnt == 1) { if (fbs[0] != NSNull.null) for (void (^b)(id<MTL4CommitFeedback>) in ((DmCommitFB *)fbs[0])->blocks) b(f); return; }
-        double t[RX_PEND_MAX + 2]; const int *ss = st.bytes; t[0] = f.GPUStartTime; t[cnt] = f.GPUEndTime;
-        for (int i = 1; i < cnt; i++) { double at = i - 1 < n && heaps[(NSUInteger)(i - 1)] != NSNull.null ? rx_stamp_s(heaps[(NSUInteger)(i - 1)], ss[i - 1]) : 0; t[i] = at > 0 && at >= t[0] && at <= t[cnt] ? at : -1; }
-        for (int i = cnt - 1; i >= 1; i--) if (t[i] < 0 || t[i] > t[i + 1]) t[i] = t[i + 1];   // no stamp (an encoder with no work writes none): the submission ends where the next known boundary is
-        for (int i = 0; i < cnt; i++) { if (fbs[(NSUInteger)i] == NSNull.null) continue; DmPartFB *part = [DmPartFB new]; part->t0 = t[i]; part->t1 = t[i + 1]; part->err = f.error;
-            for (void (^b)(id<MTL4CommitFeedback>) in ((DmCommitFB *)fbs[(NSUInteger)i])->blocks) b((id<MTL4CommitFeedback>)part); }
+        if (cnt == 1) {
+            if (fbs[0] != NSNull.null) for (void (^b)(id<MTL4CommitFeedback>) in ((DmCommitFB *)fbs[0])->blocks) b(f);
+            return;
+        }
+        double t[RX_PEND_MAX + 2];
+        const int *ss = st.bytes;
+        t[0] = f.GPUStartTime;
+        t[cnt] = f.GPUEndTime;
+        for (int i = 1; i < cnt; i++) {
+            double at = i - 1 < n && heaps[(NSUInteger)(i - 1)] != NSNull.null ? rx_stamp_s(heaps[(NSUInteger)(i - 1)], ss[i - 1]) : 0;
+            t[i] = at > 0 && at >= t[0] && at <= t[cnt] ? at : -1;
+        }
+        for (int i = cnt - 1; i >= 1; i--) if (t[i] < 0 || t[i] > t[i + 1]) t[i] = t[i + 1];   // no stamp (an empty encoder writes none): ends at the next known boundary
+        for (int i = 0; i < cnt; i++) {
+            if (fbs[(NSUInteger)i] == NSNull.null) continue;
+            DmPartFB *part = [DmPartFB new];
+            part->t0 = t[i];
+            part->t1 = t[i + 1];
+            part->err = f.error;
+            for (void (^b)(id<MTL4CommitFeedback>) in ((DmCommitFB *)fbs[(NSUInteger)i])->blocks) b((id<MTL4CommitFeedback>)part);
+        }
     }];
-    // The queue's part, with what followed the held commits (signals, notes) after it in order: kept by a replay-ahead hold (hold_op) until the game's signal, like every other queue operation
-    NSMutableArray *bl = [NSMutableArray arrayWithCapacity:(NSUInteger)nb]; for (int i = 0; i < nb; i++) [bl addObject:buffers[i]];
-    int npost = g_rx_npost; NSMutableArray *pev = [NSMutableArray arrayWithCapacity:(NSUInteger)(npost ? npost : 1)];
+    // kept by a replay-ahead hold until the game's signal, with what followed
+    NSMutableArray *bl = [NSMutableArray arrayWithCapacity:(NSUInteger)nb];
+    for (int i = 0; i < nb; i++) [bl addObject:buffers[i]];
+    int npost = g_rx_npost;
+    NSMutableArray *pev = [NSMutableArray arrayWithCapacity:(NSUInteger)(npost ? npost : 1)];
     NSData *pv = [NSData dataWithBytes:g_rx_post length:(NSUInteger)npost * sizeof *g_rx_post];
-    for (int i = 0; i < npost; i++) { [pev addObject:g_rx_post_ev[i] ?: (id)NSNull.null]; g_rx_post_ev[i] = nil; }
+    for (int i = 0; i < npost; i++) {
+        [pev addObject:g_rx_post_ev[i] ?: (id)NSNull.null];
+        g_rx_post_ev[i] = nil;
+    }
     g_rx_npost = 0;
     hold_op(^{
-        id<MTL4CommandBuffer> qb[RX_PEND_MAX + 1]; for (int i = 0; i < nb; i++) qb[i] = bl[(NSUInteger)i];
+        id<MTL4CommandBuffer> qb[RX_PEND_MAX + 1];
+        for (int i = 0; i < nb; i++) qb[i] = bl[(NSUInteger)i];
         pthread_mutex_lock(&g_res_commit_mu);
-        [g_q4 commit:qb count:(NSUInteger)nb options:o]; rx_mark_locked();
+        [g_q4 commit:qb count:(NSUInteger)nb options:o];
+        rx_mark_locked();
         pthread_mutex_unlock(&g_res_commit_mu);
         const typeof(*g_rx_post) *ps = pv.bytes;
         for (int i = 0; i < npost; i++) {
-            if (pev[(NSUInteger)i] != NSNull.null) [g_q4 signalEvent:pev[(NSUInteger)i] value:ps[i].v];
-            else { _Atomic uint64_t *np = ps[i].p; pthread_mutex_lock(&g_note_mu); if (ps[i].v > atomic_load(np)) atomic_store(np, ps[i].v); pthread_cond_broadcast(&g_note_cv); pthread_mutex_unlock(&g_note_mu); }
+            if (pev[(NSUInteger)i] != NSNull.null) {
+                [g_q4 signalEvent:pev[(NSUInteger)i] value:ps[i].v];
+                continue;
+            }
+            _Atomic uint64_t *np = ps[i].p;
+            pthread_mutex_lock(&g_note_mu);
+            if (ps[i].v > atomic_load(np)) atomic_store(np, ps[i].v);
+            pthread_cond_broadcast(&g_note_cv);
+            pthread_mutex_unlock(&g_note_mu);
         }
     });
     if (cur) g_rx_cb = nil;
-    g_rx_cbs++; g_rx_merged += (uint64_t)n; g_rx_last_nb = nb;
+    g_rx_cbs++;
+    g_rx_merged += (uint64_t)n;
+    g_rx_last_nb = nb;
     if (g_rx_cbs % 20000 == 0) MLOG("held submissions: %llu commits of main command buffers so far, %llu submissions committed with a later one (DM_NVN_SUB_MERGE)", (unsigned long long)g_rx_cbs, (unsigned long long)g_rx_merged);
 }
-static void rx_flush(void) { if (g_rx_npend) rx_commit(0, nil, 0); }   // the held command buffers go to the queue now
+static void rx_flush(void) { if (g_rx_npend) rx_commit(0, nil, 0); }
 static void rec_exec(const rec_t *r) {
-    const uint64_t *a = r->a; id e = g_rx_enc;
-    int after = g_rx_after; if (r->op != RO_SIGNAL && r->op != RO_NOTE) g_rx_after = 0;
+    const uint64_t *a = r->a;
+    id e = g_rx_enc;
+    int after = g_rx_after;
+    if (r->op != RO_SIGNAL && r->op != RO_NOTE) g_rx_after = 0;
     switch (r->op) {
     case RO_CB_NEW: g_rx_cb = [g_dev newCommandBuffer]; break;
     case RO_CB_BEGIN: [(id<MTL4CommandBuffer>)g_rx_cb beginCommandBufferWithAllocator:rec_id(a[0])]; break;
-    case RO_CB_END: cb_end(g_rx_cb, nil); break;   // names the residency sets (nvn_mtl.m res_name)
+    case RO_CB_END: cb_end(g_rx_cb, nil); break;
     case RO_CB_BLOCK: ((void (^)(id<MTL4CommandBuffer>))rec_id(a[0]))(g_rx_cb); break;
-    case RO_COMMIT: {   // a main command buffer (ended): a[0] its feedback, a[2] its uniform shadows, a[5] REC_CMT_NOW / REC_CMT_END / REC_CMT_SEG
+    case RO_COMMIT: {
         DmCommitFB *fb = rec_id(a[0]);
         int mode = (int)a[5], lim = cut_busy_limit();
         uint64_t cap = lim > 0 ? (uint64_t)lim : 1;
         int can_hold = (mode == REC_CMT_END && rx_inflight() >= cap) || (mode == REC_CMT_SEG && lim > 0 && rx_inflight() >= (uint64_t)lim);
-        if (can_hold && fb && g_rx_npend < RX_PEND_MAX && !atomic_load(&g_rx_drain) && rx_merge_on()) {   // held: the GPU has work up to the in-flight limit
-            g_rx_held_cb[g_rx_npend] = g_rx_cb; g_rx_fb[g_rx_npend] = fb; g_rx_stamp[g_rx_npend] = -1; g_rx_stamp_heap[g_rx_npend] = nil; g_rx_npend++; if (a[2] > g_rx_ubc) g_rx_ubc = a[2];
-            g_rx_cb = nil; g_rx_after = mode == REC_CMT_END; g_rx_want_stamp = 1; atomic_store(&g_rx_held, 1);
-            break; }
+        if (can_hold && fb && g_rx_npend < RX_PEND_MAX && !atomic_load(&g_rx_drain) && rx_merge_on()) {
+            g_rx_held_cb[g_rx_npend] = g_rx_cb;
+            g_rx_fb[g_rx_npend] = fb;
+            g_rx_stamp[g_rx_npend] = -1;
+            g_rx_stamp_heap[g_rx_npend] = nil;
+            g_rx_npend++;
+            if (a[2] > g_rx_ubc) g_rx_ubc = a[2];
+            g_rx_cb = nil;
+            g_rx_after = mode == REC_CMT_END;
+            g_rx_want_stamp = 1;
+            atomic_store(&g_rx_held, 1);
+            break;
+        }
         rx_commit(1, fb, a[2]);
-        break; }
-    case RO_COMMIT_REAL: {   // an upload batch, a snapshot copy: a whole command buffer, after everything recorded before it
+        break;
+    }
+    case RO_COMMIT_REAL: {   // a whole command buffer after everything recorded before it
         rx_flush();
-        id<MTL4CommandBuffer> cb = rec_id(a[1]); MTL4CommitOptions *o = rec_id(a[0]);
-        hold_op(^{ id<MTL4CommandBuffer> buffers[] = {cb};
-            pthread_mutex_lock(&g_res_commit_mu);   // apart from the residency set's commit, as the present snapshot's queue commit (nvn_mtl.m res_commit)
-            if (o) [g_q4 commit:buffers count:1 options:o]; else [g_q4 commit:buffers count:1];
-            rx_mark_locked(); pthread_mutex_unlock(&g_res_commit_mu); });
-        break; }
+        id<MTL4CommandBuffer> cb = rec_id(a[1]);
+        MTL4CommitOptions *o = rec_id(a[0]);
+        hold_op(^{
+            id<MTL4CommandBuffer> buffers[] = {cb};
+            pthread_mutex_lock(&g_res_commit_mu);   // apart from the residency set's commit
+            if (o) [g_q4 commit:buffers count:1 options:o];
+            else [g_q4 commit:buffers count:1];
+            rx_mark_locked();
+            pthread_mutex_unlock(&g_res_commit_mu);
+        });
+        break;
+    }
     case RO_SIGNAL: {
-        if (after && g_rx_npend && g_rx_npost < (int)(sizeof g_rx_post / sizeof *g_rx_post)) { g_rx_post_ev[g_rx_npost] = rec_id(a[0]); g_rx_post[g_rx_npost].v = a[1]; g_rx_post[g_rx_npost++].p = NULL; g_rx_after = 1; break; }   // its command buffer is not committed yet
-        rx_flush(); id ev = rec_id(a[0]); uint64_t v = a[1]; hold_op(^{ [g_q4 signalEvent:ev value:v]; }); break; }
+        if (after && g_rx_npend && g_rx_npost < (int)(sizeof g_rx_post / sizeof *g_rx_post)) {
+            g_rx_post_ev[g_rx_npost] = rec_id(a[0]);
+            g_rx_post[g_rx_npost].v = a[1];
+            g_rx_post[g_rx_npost++].p = NULL;
+            g_rx_after = 1;
+            break;
+        }
+        rx_flush();
+        id ev = rec_id(a[0]);
+        uint64_t v = a[1];
+        hold_op(^{ [g_q4 signalEvent:ev value:v]; });
+        break;
+    }
     case RO_Q_BLOCK: rx_flush(); hold_op((void (^)(void))rec_id(a[0])); break;
     case RO_RE_BEGIN: g_rx_enc = [(id<MTL4CommandBuffer>)g_rx_cb renderCommandEncoderWithDescriptor:rec_id(a[0])]; break;
     case RO_CE_BEGIN: g_rx_enc = [(id<MTL4CommandBuffer>)g_rx_cb computeCommandEncoder]; break;
-    case RO_END: [(id<MTL4CommandEncoder>)e endEncoding]; g_rx_enc = nil; g_rx_want_stamp = 0;
-        if (g_rx_npend && (atomic_load(&g_rx_drain) || rx_inflight() < rx_hold_limit())) rx_flush();   // the GPU has room (or rec_drain waits): the held ones go to it
+    case RO_END:
+        [(id<MTL4CommandEncoder>)e endEncoding];
+        g_rx_enc = nil;
+        g_rx_want_stamp = 0;
+        if (g_rx_npend && (atomic_load(&g_rx_drain) || rx_inflight() < rx_hold_limit())) rx_flush();
         break;
     case RO_BAR_QUEUE: [(id<MTL4CommandEncoder>)e barrierAfterQueueStages:a[0] beforeStages:a[1] visibilityOptions:a[2]]; break;
     case RO_BAR_AFTER_STAGES: [(id<MTL4CommandEncoder>)e barrierAfterStages:a[0] beforeQueueStages:a[1] visibilityOptions:a[2]]; break;
@@ -338,18 +462,18 @@ static void rec_exec(const rec_t *r) {
     case RO_R_FILL: [(id<MTL4RenderCommandEncoder>)e setTriangleFillMode:a[0]]; break;
     case RO_R_BIAS: [(id<MTL4RenderCommandEncoder>)e setDepthBias:rec_fv(a[0]) slopeScale:rec_fv(a[1]) clamp:rec_fv(a[2])]; break;
     case RO_R_CLIP: [(id<MTL4RenderCommandEncoder>)e setDepthClipMode:a[0]]; break;
-    case RO_R_SREF: [(id<MTL4RenderCommandEncoder>)e setStencilFrontReferenceValue:(uint32_t)a[0] backReferenceValue:(uint32_t)a[1]]; break;   // front, back
+    case RO_R_SREF: [(id<MTL4RenderCommandEncoder>)e setStencilFrontReferenceValue:(uint32_t)a[0] backReferenceValue:(uint32_t)a[1]]; break;
     case RO_R_BLEND: [(id<MTL4RenderCommandEncoder>)e setBlendColorRed:rec_fv(a[0]) green:rec_fv(a[1]) blue:rec_fv(a[2]) alpha:rec_fv(a[3])]; break;
     case RO_R_VIS: [(id<MTL4RenderCommandEncoder>)e setVisibilityResultMode:a[0] offset:a[1]]; break;
     case RO_R_AMP: { MTLVertexAmplificationViewMapping m = {(uint32_t)a[1], (uint32_t)a[2]}; [(id<MTL4RenderCommandEncoder>)e setVertexAmplificationCount:a[0] viewMappings:a[0] ? &m : NULL]; break; }   // count 0 or 1 (slice-merged passes)
-    case RO_R_CMAP: [(id<MTL4RenderCommandEncoder>)e setColorAttachmentMap:(__bridge MTLLogicalToPhysicalColorAttachmentMap *)(void *)(uintptr_t)a[0]]; break;   // one of nvn_mtl.m's g_fsp_map, kept for the process (face-split draws)
+    case RO_R_CMAP: [(id<MTL4RenderCommandEncoder>)e setColorAttachmentMap:(__bridge MTLLogicalToPhysicalColorAttachmentMap *)(void *)(uintptr_t)a[0]]; break;   // a g_fsp_map, kept for the process
     case RO_R_DRAW: [(id<MTL4RenderCommandEncoder>)e drawPrimitives:a[0] vertexStart:a[1] vertexCount:a[2]]; break;
     case RO_R_DRAW_INST: [(id<MTL4RenderCommandEncoder>)e drawPrimitives:a[0] vertexStart:a[1] vertexCount:a[2] instanceCount:a[3] baseInstance:a[4]]; break;
     case RO_R_DRAW_IND: [(id<MTL4RenderCommandEncoder>)e drawPrimitives:a[0] indirectBuffer:a[1]]; break;
     case RO_R_DRAW_IDX: [(id<MTL4RenderCommandEncoder>)e drawIndexedPrimitives:a[0] indexCount:a[1] indexType:a[2] indexBuffer:a[3] indexBufferLength:a[4] instanceCount:a[5] baseVertex:(NSInteger)a[6] baseInstance:a[7]]; break;
     case RO_R_DRAW_IDX_IND: [(id<MTL4RenderCommandEncoder>)e drawIndexedPrimitives:a[0] indexType:a[1] indexBuffer:a[2] indexBufferLength:a[3] indirectBuffer:a[4]]; break;
     case RO_R_MESH: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroups:MTLSizeMake(a[0], 1, 1) threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;
-    case RO_R_MESH_IND: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroupsWithIndirectBuffer:a[0] threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;   // PR #1312's indirect task / mesh draws: the encode thread aborted on the selector
+    case RO_R_MESH_IND: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroupsWithIndirectBuffer:a[0] threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;
     case RO_R_STORE_C: [(id<MTL4RenderCommandEncoder>)e setColorStoreAction:a[0] atIndex:a[1]]; break;
     case RO_R_STORE_D: [(id<MTL4RenderCommandEncoder>)e setDepthStoreAction:a[0]]; break;
     case RO_R_STORE_S: [(id<MTL4RenderCommandEncoder>)e setStencilStoreAction:a[0]]; break;
@@ -375,61 +499,116 @@ static void rec_exec(const rec_t *r) {
     case RO_T_RESOURCE: [(id<MTL4ArgumentTable>)rec_id(a[0]) setResource:(MTLResourceID){a[1]} atBufferIndex:a[2]]; break;
     case RO_LABEL: [(id<MTL4CommandEncoder>)e setLabel:rec_id(a[0])]; break;
     case RO_R_TS: [(id<MTL4RenderCommandEncoder>)e writeTimestampWithGranularity:a[1] afterStage:a[2] intoHeap:rec_id(a[0]) atIndex:a[3]];
-        if (g_rx_want_stamp && g_rx_npend && rec_id(a[0]) == (id)g_ts_heap) { g_rx_stamp_heap[g_rx_npend - 1] = rec_id(a[0]); g_rx_stamp[g_rx_npend - 1] = (int)a[3]; g_rx_want_stamp = 0; }   // the submission's begin stamp: where the deferred one before it ends
+        if (g_rx_want_stamp && g_rx_npend && rec_id(a[0]) == (id)g_ts_heap) {   // the submission's begin stamp ends the held one before it
+            g_rx_stamp_heap[g_rx_npend - 1] = rec_id(a[0]);
+            g_rx_stamp[g_rx_npend - 1] = (int)a[3];
+            g_rx_want_stamp = 0;
+        }
         break;
     case RO_C_TS: [(id<MTL4ComputeCommandEncoder>)e writeTimestampWithGranularity:a[1] intoHeap:rec_id(a[0]) atIndex:a[2]];
-        if (g_rx_want_stamp && g_rx_npend && rec_id(a[0]) == (id)g_ts_heap) { g_rx_stamp_heap[g_rx_npend - 1] = rec_id(a[0]); g_rx_stamp[g_rx_npend - 1] = (int)a[2]; g_rx_want_stamp = 0; }
+        if (g_rx_want_stamp && g_rx_npend && rec_id(a[0]) == (id)g_ts_heap) {
+            g_rx_stamp_heap[g_rx_npend - 1] = rec_id(a[0]);
+            g_rx_stamp[g_rx_npend - 1] = (int)a[2];
+            g_rx_want_stamp = 0;
+        }
         break;
-    case RO_NOTE: { _Atomic uint64_t *p = (_Atomic uint64_t *)(uintptr_t)a[0]; uint64_t v = a[1];
-        if (after && g_rx_npend && g_rx_npost < (int)(sizeof g_rx_post / sizeof *g_rx_post)) { g_rx_post_ev[g_rx_npost] = nil; g_rx_post[g_rx_npost].v = v; g_rx_post[g_rx_npost++].p = p; g_rx_after = 1; break; }   // noted once its command buffer is committed
-        // kept with the queue operations it follows (a replay-ahead hold): it says they are made
-        hold_op(^{ pthread_mutex_lock(&g_note_mu); if (v > atomic_load(p)) atomic_store(p, v); pthread_cond_broadcast(&g_note_cv); pthread_mutex_unlock(&g_note_mu); }); break; }
+    case RO_NOTE: {
+        _Atomic uint64_t *p = (_Atomic uint64_t *)(uintptr_t)a[0];
+        uint64_t v = a[1];
+        if (after && g_rx_npend && g_rx_npost < (int)(sizeof g_rx_post / sizeof *g_rx_post)) {
+            g_rx_post_ev[g_rx_npost] = nil;
+            g_rx_post[g_rx_npost].v = v;
+            g_rx_post[g_rx_npost++].p = p;
+            g_rx_after = 1;
+            break;
+        }
+        // in a hold: after the operations it follows
+        hold_op(^{
+            pthread_mutex_lock(&g_note_mu);
+            if (v > atomic_load(p)) atomic_store(p, v);
+            pthread_cond_broadcast(&g_note_cv);
+            pthread_mutex_unlock(&g_note_mu);
+        });
+        break;
+    }
     default: MDIE("deferred encoding: unknown record %u", r->op);
     }
     for (uint32_t i = 0; i < r->nobj; i++) if (a[i]) CFRelease((CFTypeRef)(uintptr_t)a[i]);
 }
-#include "nvn_rt.h"   // nvn_rt_join / nvn_rt_tick (hle_nvn.c): the encode thread declares the frame's deadline
+#include "nvn_rt.h"
 static void *rec_thread(void *arg) {
-    (void)arg; pthread_setname_np("dm-encode");
+    (void)arg;
+    pthread_setname_np("dm-encode");
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-    void *rt = nvn_rt_join("encode thread");   // it makes the frame's Metal calls: it declares the frame's deadline too (hle_nvn.c rt_tick)
+    void *rt = nvn_rt_join("encode thread");   // it makes the frame's Metal calls, so it declares the frame's deadline
     for (;;) {
         pthread_mutex_lock(&g_rb_mu);
         while (!g_rb_head) {
-            if (g_rx_npend) {   // held commits and nothing more to encode: a short wait for the next submission while the GPU still has work (looked at every 50 us), then they go
-                for (int k = 0; k < 9 && !g_rb_head && !rx_need_flush() && rx_inflight() >= rx_hold_limit(); k++) { struct timespec ts = {0, 50000}; g_rb_sleeping = 1; pthread_cond_timedwait_relative_np(&g_rb_work, &g_rb_mu, &ts); g_rb_sleeping = 0; }
+            if (g_rx_npend) {   // held commits, nothing to encode: wait briefly (every 50 us) while the GPU still has work
+                for (int k = 0; k < 9 && !g_rb_head && !rx_need_flush() && rx_inflight() >= rx_hold_limit(); k++) {
+                    struct timespec ts = {0, 50000};
+                    g_rb_sleeping = 1;
+                    pthread_cond_timedwait_relative_np(&g_rb_work, &g_rb_mu, &ts);
+                    g_rb_sleeping = 0;
+                }
                 if (g_rb_head) break;
-                g_rb_busy = 1; pthread_mutex_unlock(&g_rb_mu);
-                @autoreleasepool { rx_flush(); }   // under a replay-ahead hold they join its operations (hold_op)
-                pthread_mutex_lock(&g_rb_mu); g_rb_busy = 0; if (!g_rb_head) pthread_cond_broadcast(&g_rb_idle);
+                g_rb_busy = 1;
+                pthread_mutex_unlock(&g_rb_mu);
+                @autoreleasepool { rx_flush(); }
+                pthread_mutex_lock(&g_rb_mu);
+                g_rb_busy = 0;
+                if (!g_rb_head) pthread_cond_broadcast(&g_rb_idle);
                 continue;
             }
-            if (atomic_load(&g_hold_on)) {   // held operations wait for the game's signal: hold_poke wakes this thread, and a store into a mapped event word is found by the poll
-                pthread_mutex_unlock(&g_rb_mu); int held; @autoreleasepool { held = hold_check(); } pthread_mutex_lock(&g_rb_mu);
+            if (atomic_load(&g_hold_on)) {   // held: hold_poke wakes this thread; a store into a mapped event word is found by the poll
+                pthread_mutex_unlock(&g_rb_mu);
+                int held;
+                @autoreleasepool { held = hold_check(); }
+                pthread_mutex_lock(&g_rb_mu);
                 if (g_rb_head) break;
-                if (held) { struct timespec tick = {0, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - g_hold_t0 < 50000000ull ? 500000 : 5000000}; g_rb_sleeping = 1;   // a frame gate is signalled within milliseconds; a queue parked for long is polled less
-                    if (!g_rb_head && !hold_req_now()) pthread_cond_timedwait_relative_np(&g_rb_work, &g_rb_mu, &tick); g_rb_sleeping = 0; }
+                if (held) {
+                    struct timespec tick = {0, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - g_hold_t0 < 50000000ull ? 500000 : 5000000};   // a frame gate is signalled within ms; a long-parked queue is polled less
+                    g_rb_sleeping = 1;
+                    if (!g_rb_head && !hold_req_now()) pthread_cond_timedwait_relative_np(&g_rb_work, &g_rb_mu, &tick);
+                    g_rb_sleeping = 0;
+                }
                 continue;
             }
-            g_rb_sleeping = 1; pthread_cond_wait(&g_rb_work, &g_rb_mu); g_rb_sleeping = 0;
+            g_rb_sleeping = 1;
+            pthread_cond_wait(&g_rb_work, &g_rb_mu);
+            g_rb_sleeping = 0;
         }
-        rec_blk *b = g_rb_head; g_rb_head = b->next; if (!g_rb_head) g_rb_tail = NULL; g_rb_busy = 1;
+        rec_blk *b = g_rb_head;
+        g_rb_head = b->next;
+        if (!g_rb_head) g_rb_tail = NULL;
+        g_rb_busy = 1;
         pthread_mutex_unlock(&g_rb_mu);
         nvn_rt_tick(rt);
-        @autoreleasepool { for (int i = 0; i < b->n; i++) { if (atomic_load_explicit(&g_hold_on, memory_order_relaxed) && g_hold_ops.count) hold_check(); rec_exec(&b->r[i]); } }
+        @autoreleasepool {
+            for (int i = 0; i < b->n; i++) {
+                if (atomic_load_explicit(&g_hold_on, memory_order_relaxed) && g_hold_ops.count) hold_check();
+                rec_exec(&b->r[i]);
+            }
+        }
         pthread_mutex_lock(&g_rb_mu);
-        b->n = 0; b->next = g_rb_free; g_rb_free = b; g_rb_busy = 0;
+        b->n = 0;
+        b->next = g_rb_free;
+        g_rb_free = b;
+        g_rb_busy = 0;
         if (!g_rb_head) pthread_cond_broadcast(&g_rb_idle);
         pthread_mutex_unlock(&g_rb_mu);
     }
     return NULL;
 }
 
-// ---------- The submit thread's side ----------
 static void rec_publish(void) {
     if (!g_rb_cur || !g_rb_cur->n) return;
     pthread_mutex_lock(&g_rb_mu);
-    g_rb_cur->next = NULL; if (g_rb_tail) g_rb_tail->next = g_rb_cur; else g_rb_head = g_rb_cur; g_rb_tail = g_rb_cur; g_rb_cur = NULL;
+    g_rb_cur->next = NULL;
+    if (g_rb_tail) g_rb_tail->next = g_rb_cur;
+    else g_rb_head = g_rb_cur;
+    g_rb_tail = g_rb_cur;
+    g_rb_cur = NULL;
     if (g_rb_sleeping) pthread_cond_signal(&g_rb_work);
     pthread_mutex_unlock(&g_rb_mu);
 }
@@ -437,47 +616,75 @@ static rec_t *rec_put(uint32_t op, uint32_t nobj) {
     if (g_rb_cur && g_rb_cur->n == REC_BLK) rec_publish();
     if (!g_rb_cur) {
         pthread_mutex_lock(&g_rb_mu);
-        if (!g_rb_started) { pthread_t th; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 1 << 20);
-            if (pthread_create(&th, &at, rec_thread, NULL)) MDIE("deferred encoding: cannot start the encode thread"); pthread_attr_destroy(&at); g_rb_started = 1; }
-        g_rb_cur = g_rb_free; if (g_rb_cur) g_rb_free = g_rb_cur->next;
+        if (!g_rb_started) {
+            pthread_t th;
+            pthread_attr_t at;
+            pthread_attr_init(&at);
+            pthread_attr_setstacksize(&at, 1 << 20);
+            if (pthread_create(&th, &at, rec_thread, NULL)) MDIE("deferred encoding: cannot start the encode thread");
+            pthread_attr_destroy(&at);
+            g_rb_started = 1;
+        }
+        g_rb_cur = g_rb_free;
+        if (g_rb_cur) g_rb_free = g_rb_cur->next;
         pthread_mutex_unlock(&g_rb_mu);
-        if (!g_rb_cur) { g_rb_cur = malloc(sizeof *g_rb_cur); if (!g_rb_cur) MDIE("deferred encoding: out of memory"); }
+        if (!g_rb_cur) {
+            g_rb_cur = malloc(sizeof *g_rb_cur);
+            if (!g_rb_cur) MDIE("deferred encoding: out of memory");
+        }
         g_rb_cur->n = 0;
     }
-    rec_t *r = &g_rb_cur->r[g_rb_cur->n++]; r->op = op; r->nobj = nobj; return r;
+    rec_t *r = &g_rb_cur->r[g_rb_cur->n++];
+    r->op = op;
+    r->nobj = nobj;
+    return r;
 }
-// The submit thread, at a wait for work a hold keeps from the GPU: the hold ends first, with the game's signal
-static void hold_block(int any) {   // any: also with nothing held yet (the caller waits for what the game's signal follows, not for held work)
+// the hold ends first, with the game's signal
+static void hold_block(int any) {   // any: also with nothing held yet
     if (!atomic_load(&g_hold_on) || (!any && !atomic_load(&g_hold_recs))) return;
-    rec_publish(); g_hold_blocks++; g_hold_block_recs += atomic_load(&g_hold_recs);
+    rec_publish();
+    g_hold_blocks++;
+    g_hold_block_recs += atomic_load(&g_hold_recs);
     hold_stuck();
-    pthread_mutex_lock(&g_hold_mu); while (atomic_load(&g_hold_on)) pthread_cond_wait(&g_hold_cv, &g_hold_mu); pthread_mutex_unlock(&g_hold_mu);
+    pthread_mutex_lock(&g_hold_mu);
+    while (atomic_load(&g_hold_on)) pthread_cond_wait(&g_hold_cv, &g_hold_mu);
+    pthread_mutex_unlock(&g_hold_mu);
 }
-// Any thread: the wait (word, as read under the queue lock) is satisfied, or with why the held work must reach the GPU now. gen: the hold the caller saw
+// Any thread: the wait is satisfied, or why held work must reach the GPU now; gen: the hold the caller saw
 static void hold_poke(const char *why, uint32_t gen) {
     if (!atomic_load(&g_hold_on) || atomic_load(&g_hold_gen) != gen) return;
     uint64_t req = (uint64_t)gen << 2 | (!why ? 1 : why == HOLD_DRAIN ? 3 : 2), old = atomic_load(&g_hold_req);
     do { if (old >> 2 == gen && (old & 3)) return; } while (!atomic_compare_exchange_weak(&g_hold_req, &old, req));   // the first request for this hold stands
     if (why && why != HOLD_DRAIN) g_hold_force_why = why;
-    pthread_mutex_lock(&g_rb_mu); if (g_rb_sleeping) pthread_cond_signal(&g_rb_work); pthread_mutex_unlock(&g_rb_mu);
+    pthread_mutex_lock(&g_rb_mu);
+    if (g_rb_sleeping) pthread_cond_signal(&g_rb_work);
+    pthread_mutex_unlock(&g_rb_mu);
 }
-// Hand over what is recorded and wait until the encode thread has made every call. A caller that goes on to wait for the GPU or to use another queue needs the queue to have
-// everything (hard): held operations are made first, which waits for the game's signal. The end of a submission only needs the calls made (rec_drain_soft)
+// Hard drain (before a GPU wait or another queue): held operations are made first, waiting for the game's signal; a submission's end needs only rec_drain_soft
 static void rec_drain_soft(void);
-static void rec_drain(void) { if (on_sub_thread()) hold_block(0); rec_drain_soft(); }
+static void rec_drain(void) {
+    if (on_sub_thread()) hold_block(0);
+    rec_drain_soft();
+}
 static void rec_drain_soft(void) {
     if (!g_rb_started) return;
     rec_publish();
-    uint64_t w0 = ws_t0(); int blocked = 0;
+    uint64_t w0 = ws_t0();
+    int blocked = 0;
     pthread_mutex_lock(&g_rb_mu);
-    atomic_fetch_add(&g_rx_drain, 1); if (g_rb_sleeping) pthread_cond_signal(&g_rb_work);   // held commits go now (DM_NVN_SUB_MERGE)
-    while (g_rb_head || g_rb_busy || atomic_load(&g_rx_held)) { blocked = 1; struct timespec ts = {0, 2000000}; pthread_cond_timedwait_relative_np(&g_rb_idle, &g_rb_mu, &ts); if (g_rb_sleeping) pthread_cond_signal(&g_rb_work); }
+    atomic_fetch_add(&g_rx_drain, 1);   // held commits go now
+    if (g_rb_sleeping) pthread_cond_signal(&g_rb_work);
+    while (g_rb_head || g_rb_busy || atomic_load(&g_rx_held)) {
+        blocked = 1;
+        struct timespec ts = {0, 2000000};
+        pthread_cond_timedwait_relative_np(&g_rb_idle, &g_rb_mu, &ts);
+        if (g_rb_sleeping) pthread_cond_signal(&g_rb_work);
+    }
     atomic_fetch_sub(&g_rx_drain, 1);
     pthread_mutex_unlock(&g_rb_mu);
     if (ws_on()) ws_put(WS_DRAIN, w0, blocked);
 }
-// A thread is about to block waiting for fence: if the encode thread has not committed it yet (for example, DM_NVN_SUB_MERGE held the frame's final submission behind a segment cut),
-// wake it so the held command buffer and its fence signal go to the queue immediately instead of sitting in the 50 us idle loop
+// wake the encode thread so a held fence's command buffer goes now, not after the 50 us idle loop
 static void rec_wake_for_fence(uint64_t fence) {
     if (!rec_on() || !g_rb_started || atomic_load_explicit(&g_sub_cmt, memory_order_acquire) >= fence) return;
     uint64_t cur = atomic_load_explicit(&g_rx_need_fence, memory_order_relaxed);
@@ -488,24 +695,38 @@ static void rec_wake_for_fence(uint64_t fence) {
         pthread_mutex_unlock(&g_rb_mu);
     }
 }
-// A block of records from another thread than the submit thread (the present snapshot's copy): it goes in one piece behind every block published so far. Everything the game
-// submitted before it presents is published by then (a submission publishes its records before it returns), so the block runs after the frame's work, and the presenting thread
-// does not wait for the encode thread
+// Records from another thread (the present snapshot's copy): one block behind all published, so after the frame's work, without waiting
 static rec_blk *rec_own_begin(void) {
-    pthread_mutex_lock(&g_rb_mu); rec_blk *b = g_rb_free; if (b) g_rb_free = b->next; pthread_mutex_unlock(&g_rb_mu);
-    if (!b) { b = malloc(sizeof *b); if (!b) MDIE("deferred encoding: out of memory"); }
-    b->n = 0; return b;
+    pthread_mutex_lock(&g_rb_mu);
+    rec_blk *b = g_rb_free;
+    if (b) g_rb_free = b->next;
+    pthread_mutex_unlock(&g_rb_mu);
+    if (!b) {
+        b = malloc(sizeof *b);
+        if (!b) MDIE("deferred encoding: out of memory");
+    }
+    b->n = 0;
+    return b;
 }
-static rec_t *rec_own_put(rec_blk *b, uint32_t op, uint32_t nobj) { if (b->n == REC_BLK) MDIE("deferred encoding: an own block is full"); rec_t *r = &b->r[b->n++]; r->op = op; r->nobj = nobj; return r; }
+static rec_t *rec_own_put(rec_blk *b, uint32_t op, uint32_t nobj) {
+    if (b->n == REC_BLK) MDIE("deferred encoding: an own block is full");
+    rec_t *r = &b->r[b->n++];
+    r->op = op;
+    r->nobj = nobj;
+    return r;
+}
 static void rec_own_push(rec_blk *b) {
     pthread_mutex_lock(&g_rb_mu);
-    b->next = NULL; if (g_rb_tail) g_rb_tail->next = b; else g_rb_head = b; g_rb_tail = b;
+    b->next = NULL;
+    if (g_rb_tail) g_rb_tail->next = b;
+    else g_rb_head = b;
+    g_rb_tail = b;
     if (g_rb_sleeping) pthread_cond_signal(&g_rb_work);
     pthread_mutex_unlock(&g_rb_mu);
 }
 static __attribute__((noreturn)) void rec_missing(id o, SEL s) { MDIE("deferred encoding: %s has no stand-in for -%s (DM_NVN_ENC_THREAD=0 runs without it)", object_getClassName(o), sel_getName(s)); }
 
-// Argument tables: every stand-in is made once and kept for good (rec_table), so the real table is passed without a retain
+// stand-ins are kept for good, so the real table is passed without a retain
 @interface DmRecTable : NSObject { @public id real; } @end
 static inline void rec_table_op(uint32_t op, id t, uint64_t v, NSUInteger i) { rec_t *r = rec_put(op, 0); r->a[0] = (uint64_t)(uintptr_t)(__bridge void *)((DmRecTable *)t)->real; r->a[1] = v; r->a[2] = i; }
 @implementation DmRecTable
@@ -525,7 +746,6 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
 - (void)barrierAfterQueueStages:(MTLStages)a beforeStages:(MTLStages)b visibilityOptions:(MTL4VisibilityOptions)v { rec_t *r = rec_put(RO_BAR_QUEUE, 0); r->a[0] = a; r->a[1] = b; r->a[2] = v; }
 - (void)barrierAfterStages:(MTLStages)a beforeQueueStages:(MTLStages)b visibilityOptions:(MTL4VisibilityOptions)v { rec_t *r = rec_put(RO_BAR_AFTER_STAGES, 0); r->a[0] = a; r->a[1] = b; r->a[2] = v; }
 - (void)barrierAfterEncoderStages:(MTLStages)a beforeEncoderStages:(MTLStages)b visibilityOptions:(MTL4VisibilityOptions)v { rec_t *r = rec_put(RO_BAR_ENCODER, 0); r->a[0] = a; r->a[1] = b; r->a[2] = v; }
-// Render
 - (void)setArgumentTable:(id)t atStages:(MTLRenderStages)s { id x = rec_table_real(t); int keep = x != t; rec_t *r = rec_put(RO_R_TABLE, !keep); r->a[0] = keep ? (uint64_t)(uintptr_t)(__bridge void *)x : rec_obj(x); r->a[1] = s; }
 - (void)setRenderPipelineState:(id)p { rec_t *r = rec_put(RO_R_PSO, 1); r->a[0] = rec_obj(p); }
 - (void)setDepthStencilState:(id)s { rec_t *r = rec_put(RO_R_DSS, 1); r->a[0] = rec_obj(s); }
@@ -555,7 +775,7 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
 - (void)setColorStoreAction:(MTLStoreAction)a atIndex:(NSUInteger)i { rec_t *r = rec_put(RO_R_STORE_C, 0); r->a[0] = a; r->a[1] = i; }
 - (void)setDepthStoreAction:(MTLStoreAction)a { rec_put(RO_R_STORE_D, 0)->a[0] = a; }
 - (void)setStencilStoreAction:(MTLStoreAction)a { rec_put(RO_R_STORE_S, 0)->a[0] = a; }
-// Compute and copies (Metal 4 copies are on the compute encoder)
+// Metal 4 copies are on the compute encoder
 - (void)setArgumentTable:(id)t { id x = rec_table_real(t); int keep = x != t; rec_t *r = rec_put(RO_C_TABLE, !keep); r->a[0] = keep ? (uint64_t)(uintptr_t)(__bridge void *)x : rec_obj(x); }
 - (void)setComputePipelineState:(id)p { rec_t *r = rec_put(RO_C_PSO, 1); r->a[0] = rec_obj(p); }
 - (void)dispatchThreadgroups:(MTLSize)n threadsPerThreadgroup:(MTLSize)t { rec_t *r = rec_put(RO_C_DISPATCH, 0); r->a[0] = n.width; r->a[1] = n.height; r->a[2] = n.depth; r->a[3] = t.width; r->a[4] = t.height; r->a[5] = t.depth; }
@@ -565,8 +785,6 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
 - (void)copyFromBuffer:(id)s sourceOffset:(NSUInteger)so sourceBytesPerRow:(NSUInteger)row sourceBytesPerImage:(NSUInteger)img sourceSize:(MTLSize)z toTexture:(id)d destinationSlice:(NSUInteger)sl destinationLevel:(NSUInteger)lv destinationOrigin:(MTLOrigin)o {
     rec_t *r = rec_put(RO_C_COPY_BT, 2); r->a[0] = rec_obj(s); r->a[1] = rec_obj(d); r->a[2] = so; r->a[3] = row; r->a[4] = img; r->a[5] = z.width; r->a[6] = z.height; r->a[7] = z.depth;
     r->a[8] = sl; r->a[9] = lv; r->a[10] = o.x; r->a[11] = o.y; r->a[12] = o.z; }
-// The two copies with blit options move one plane of a combined depth / stencil texture through a buffer (the depth plane copy, nvn_mtl.m enc_b_copy_*_opt); without their stand-ins
-// the encode thread stopped there (t_unwritten_store with DM_NVN_ENC_THREAD=1)
 - (void)copyFromBuffer:(id)s sourceOffset:(NSUInteger)so sourceBytesPerRow:(NSUInteger)row sourceBytesPerImage:(NSUInteger)img sourceSize:(MTLSize)z toTexture:(id)d destinationSlice:(NSUInteger)sl destinationLevel:(NSUInteger)lv destinationOrigin:(MTLOrigin)o options:(MTLBlitOption)opt {
     rec_t *r = rec_put(RO_C_COPY_BT_OPT, 2); r->a[0] = rec_obj(s); r->a[1] = rec_obj(d); r->a[2] = so; r->a[3] = row; r->a[4] = img; r->a[5] = z.width; r->a[6] = z.height; r->a[7] = z.depth;
     r->a[8] = sl; r->a[9] = lv; r->a[10] = o.x; r->a[11] = o.y; r->a[12] = o.z; r->a[13] = opt; }
@@ -580,7 +798,6 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
     rec_t *r = rec_put(RO_C_COPY_TT, 2); r->a[0] = rec_obj(s); r->a[1] = rec_obj(d); r->a[2] = sl; r->a[3] = lv; r->a[4] = o.x; r->a[5] = o.y; r->a[6] = o.z; r->a[7] = z.width; r->a[8] = z.height; r->a[9] = z.depth;
     r->a[10] = dsl; r->a[11] = dlv; r->a[12] = dorg.x; r->a[13] = dorg.y; r->a[14] = dorg.z; }
 - (void)fillBuffer:(id)b range:(NSRange)rg value:(uint8_t)v { rec_t *r = rec_put(RO_C_FILL, 1); r->a[0] = rec_obj(b); r->a[1] = rg.location; r->a[2] = rg.length; r->a[3] = v; }
-// Diagnostics: encoder labels (DM_NVN_ENC_LABEL) and timestamps into a counter heap (DM_NVN_GPUPROF); the render form names a stage, the compute form none
 - (void)setLabel:(NSString *)l { rec_put(RO_LABEL, 1)->a[0] = rec_obj(l); }
 - (void)writeTimestampWithGranularity:(MTL4TimestampGranularity)g afterStage:(MTLRenderStages)st intoHeap:(id)h atIndex:(NSUInteger)i { rec_t *r = rec_put(RO_R_TS, 1); r->a[0] = rec_obj(h); r->a[1] = g; r->a[2] = st; r->a[3] = i; }
 - (void)writeTimestampWithGranularity:(MTL4TimestampGranularity)g intoHeap:(id)h atIndex:(NSUInteger)i { rec_t *r = rec_put(RO_C_TS, 1); r->a[0] = rec_obj(h); r->a[1] = g; r->a[2] = i; }
@@ -591,43 +808,91 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
 - (id)forwardingTargetForSelector:(SEL)s { rec_missing(self, s); }
 - (void)beginCommandBufferWithAllocator:(id)a { rec_put(RO_CB_BEGIN, 1)->a[0] = rec_obj(a); }
 - (void)endCommandBuffer { rec_put(RO_CB_END, 0); }
-- (id)renderCommandEncoderWithDescriptor:(MTL4RenderPassDescriptor *)d { rec_put(RO_RE_BEGIN, 1)->a[0] = rec_obj([d copy]); return [DmRecEnc new]; }   // copied: the replay may reuse or change the descriptor afterwards
+- (id)renderCommandEncoderWithDescriptor:(MTL4RenderPassDescriptor *)d { rec_put(RO_RE_BEGIN, 1)->a[0] = rec_obj([d copy]); return [DmRecEnc new]; }   // copied: the replay may change the descriptor afterwards
 - (id)computeCommandEncoder { rec_put(RO_CE_BEGIN, 0); return [DmRecEnc new]; }
 @end
 
-// The replay's entry points
-static id rec_cb_new(void) { if (!rec_on()) return [g_dev newCommandBuffer]; rec_put(RO_CB_NEW, 0); return [DmRecCB new]; }
-// Work a framework encodes itself (MetalFX's scalers) needs the real command buffer: on the encoding thread, in order with the recorded encoders
+static id rec_cb_new(void) {
+    if (!rec_on()) return [g_dev newCommandBuffer];
+    rec_put(RO_CB_NEW, 0);
+    return [DmRecCB new];
+}
+// work a framework encodes itself (MetalFX) needs the real command buffer, in order
 static void rec_cb_block(id cb, void (^block)(id<MTL4CommandBuffer>)) {
     if ([cb isKindOfClass:[DmRecCB class]]) rec_put(RO_CB_BLOCK, 1)->a[0] = rec_obj([block copy]);
     else block(cb);
 }
-static id rec_table(id t) { if (!rec_on() || !t) return t; DmRecTable *s = [DmRecTable new]; s->real = t; return s; }
-// The replay's main command buffer: committed once the uniform shadows queued so far are made (ubc_wait)
-static void rec_commit(id cb, DmCommitFB *fb, int end) {   // end: REC_CMT_NOW / REC_CMT_END / REC_CMT_SEG (the encode thread may keep a submission open for the next one, or hold a segment: rec_cb_end)
-    if ([cb isKindOfClass:[DmRecCB class]]) { rec_t *r = rec_put(RO_COMMIT, 1); r->a[0] = rec_obj(fb); r->a[2] = ubc_head(); r->a[5] = (uint64_t)end; atomic_fetch_add(&g_hold_recs, 1); return; }
+static id rec_table(id t) {
+    if (!rec_on() || !t) return t;
+    DmRecTable *s = [DmRecTable new];
+    s->real = t;
+    return s;
+}
+// committed once the uniform shadows queued so far are made
+static void rec_commit(id cb, DmCommitFB *fb, int end) {
+    if ([cb isKindOfClass:[DmRecCB class]]) {
+        rec_t *r = rec_put(RO_COMMIT, 1);
+        r->a[0] = rec_obj(fb);
+        r->a[2] = ubc_head();
+        r->a[5] = (uint64_t)end;
+        atomic_fetch_add(&g_hold_recs, 1);
+        return;
+    }
     ubc_wait(ubc_head());
-    id<MTL4CommandBuffer> buffers[] = {cb}; MTL4CommitOptions *o = commit_opts(fb);
-    if (o) [g_q4 commit:buffers count:1 options:o]; else [g_q4 commit:buffers count:1];
-    rx_mark();
-}
-// An upload batch: its place in the queue is after what is recorded so far (it reads no uniform shadow)
-static void rec_commit_upload(id cb, MTL4CommitOptions *o) {
-    if (rec_on() && g_rb_started) { rec_t *r = rec_put(RO_COMMIT_REAL, 2); r->a[0] = rec_obj(o); r->a[1] = rec_obj(cb); atomic_fetch_add(&g_hold_recs, 1); return; }
     id<MTL4CommandBuffer> buffers[] = {cb};
-    if (o) [g_q4 commit:buffers count:1 options:o]; else [g_q4 commit:buffers count:1];
+    MTL4CommitOptions *o = commit_opts(fb);
+    if (o) [g_q4 commit:buffers count:1 options:o];
+    else [g_q4 commit:buffers count:1];
     rx_mark();
 }
-// A queue operation (a sparse texture's mapping update, nvn_mtl.m sparse_*): on the encoding thread in its place among the recorded commits, so it reaches the queue before the upload batch
-// committed after it and after the command buffers committed before it
-static void rec_queue_block(void (^block)(void)) { if (rec_on() && g_rb_started) { rec_put(RO_Q_BLOCK, 1)->a[0] = rec_obj([block copy]); atomic_fetch_add(&g_hold_recs, 1); } else block(); }
-static void rec_signal(id ev, uint64_t v) { if (rec_on() && g_rb_started) { rec_t *r = rec_put(RO_SIGNAL, 1); r->a[0] = rec_obj(ev); r->a[1] = v; atomic_fetch_add(&g_hold_recs, 1); } else [g_q4 signalEvent:ev value:v]; }
-// The submit thread, idle between submissions (nvn_fence.inc mtl_hold_begin): from here on what reaches the queue is kept until the wait (word, mode, value) is satisfied
+// after what is recorded so far (it reads no uniform shadow)
+static void rec_commit_upload(id cb, MTL4CommitOptions *o) {
+    if (rec_on() && g_rb_started) {
+        rec_t *r = rec_put(RO_COMMIT_REAL, 2);
+        r->a[0] = rec_obj(o);
+        r->a[1] = rec_obj(cb);
+        atomic_fetch_add(&g_hold_recs, 1);
+        return;
+    }
+    id<MTL4CommandBuffer> buffers[] = {cb};
+    if (o) [g_q4 commit:buffers count:1 options:o];
+    else [g_q4 commit:buffers count:1];
+    rx_mark();
+}
+// a queue operation (sparse mapping update) in its place among the recorded commits
+static void rec_queue_block(void (^block)(void)) {
+    if (!rec_on() || !g_rb_started) {
+        block();
+        return;
+    }
+    rec_put(RO_Q_BLOCK, 1)->a[0] = rec_obj([block copy]);
+    atomic_fetch_add(&g_hold_recs, 1);
+}
+static void rec_signal(id ev, uint64_t v) {
+    if (!rec_on() || !g_rb_started) {
+        [g_q4 signalEvent:ev value:v];
+        return;
+    }
+    rec_t *r = rec_put(RO_SIGNAL, 1);
+    r->a[0] = rec_obj(ev);
+    r->a[1] = v;
+    atomic_fetch_add(&g_hold_recs, 1);
+}
+// submit thread, idle between submissions
 static int hold_begin(volatile uint32_t *word, unsigned mode, uint32_t value, uint64_t first_fence) {
     if (!rec_on() || !g_rb_started || atomic_load(&g_hold_on)) return 0;
     rec_drain_soft();
-    g_hold_word = word; g_hold_mode = mode; g_hold_value = value; g_hold_first = first_fence; g_hold_t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-    atomic_store(&g_hold_recs, 0); atomic_store(&g_hold_stuck, 0); atomic_fetch_add(&g_hold_gen, 1); atomic_store_explicit(&g_hold_on, 1, memory_order_release);
-    pthread_mutex_lock(&g_rb_mu); if (g_rb_sleeping) pthread_cond_signal(&g_rb_work); pthread_mutex_unlock(&g_rb_mu);   // the encode thread polls from now, also with nothing recorded
+    g_hold_word = word;
+    g_hold_mode = mode;
+    g_hold_value = value;
+    g_hold_first = first_fence;
+    g_hold_t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    atomic_store(&g_hold_recs, 0);
+    atomic_store(&g_hold_stuck, 0);
+    atomic_fetch_add(&g_hold_gen, 1);
+    atomic_store_explicit(&g_hold_on, 1, memory_order_release);
+    pthread_mutex_lock(&g_rb_mu);   // the encode thread polls from now, also with nothing recorded
+    if (g_rb_sleeping) pthread_cond_signal(&g_rb_work);
+    pthread_mutex_unlock(&g_rb_mu);
     return 1;
 }

@@ -1,6 +1,5 @@
     .arch_extension lse
-// Common entry for unimplemented NVN functions: when the thunk comes in, x16 = this function's slot address (nvn_slot[i]).
-// Calls nvn_unimpl_c(slot, x0, x1, x2) to report a failure and log the name, returns 0.
+// Unimplemented NVN functions: x16 = slot address (nvn_slot[i]); reports through nvn_unimpl_c, returns 0.
     .text
     .globl _nvn_unimpl_entry
     .p2align 2
@@ -15,10 +14,7 @@ _nvn_unimpl_entry:
     ldp x29, x30, [sp], #16
     ret
 
-// Timing wrapper entry (the slot table points here when DM_NVN_PROF=1): when the thunk comes in, x16 = this function's slot address.
-// Save x0-x7 / q0-q7 (NVN functions pass no arguments on the stack, verified by the generator), take mach_absolute_time -> call the real implementation (nvn_real[i]) -> take it again,
-// atomically add the difference to nvn_prof_ticks[i] (mach timebase units); return values x0/x1, q0-q3 are passed back unchanged.
-// cntvct_el0 is not used: measured on this machine it is not in a fixed ratio to the system timebase (cntfrq reports 1 GHz, increment ratio over the same interval 98.9), so it cannot be converted to time.
+// DM_NVN_PROF=1 timing entry: x16 = slot address; NVN functions take no stack arguments. Not cntvct_el0: its rate is no fixed ratio of the mach timebase
     .globl _nvn_prof_entry
     .p2align 2
 _nvn_prof_entry:
@@ -36,7 +32,7 @@ _nvn_prof_entry:
     adrp x9, _nvn_slot@PAGE
     add x9, x9, _nvn_slot@PAGEOFF
     sub x16, x16, x9
-    lsr x16, x16, #4                 // Slot index i
+    lsr x16, x16, #4                 // slot index
     str x16, [sp, #80]
     bl _mach_absolute_time
     str x0, [sp, #88]
@@ -44,7 +40,7 @@ _nvn_prof_entry:
     adrp x9, _nvn_real@PAGE
     add x9, x9, _nvn_real@PAGEOFF
     ldr x17, [x9, x16, lsl #3]
-    adrp x9, _nvn_slot@PAGE          // x16 back to the slot address: when the real implementation is the big-stack entry (nvn_big_entry) it finds the implementation through it
+    adrp x9, _nvn_slot@PAGE          // x16 = slot address again: nvn_big_entry finds the implementation through it
     add x9, x9, _nvn_slot@PAGEOFF
     add x16, x9, x16, lsl #4
     ldp x0, x1, [sp, #16]
@@ -75,16 +71,14 @@ _nvn_prof_entry:
     add sp, sp, #240
     ret
 
-// Big-stack entry: when the thunk comes in, x16 = this function's slot address. Load nvn_big_real[i] into x16 and hand over to dm_bigstack_enter (dm/host/hle_bigstack.c):
-// on a guest thread stack it switches to this thread's big host stack before calling the implementation. The host's NVN implementations do Metal work when submitting, presenting and creating textures, and the Metal driver compiles internal programs (the fast-clear blit program, ...) on a deep stack,
-// which The Legend of Zelda: Breath of the Wild's render thread stack cannot hold (SIGBUS in the AGX compiler, at an address in the guest stack region). NVN functions pass no arguments on the stack (verified by the generator); x0-x8 / d0-d7 are enough
+// Big-stack entry: runs the implementation on this thread's big host stack, since Metal's driver compiles internal programs on a deeper stack than a guest thread's
     .globl _nvn_big_entry
     .p2align 2
 _nvn_big_entry:
     adrp x17, _nvn_slot@PAGE
     add x17, x17, _nvn_slot@PAGEOFF
     sub x16, x16, x17
-    lsr x16, x16, #4                 // Slot index i
+    lsr x16, x16, #4                 // slot index
     adrp x17, _nvn_big_real@PAGE
     add x17, x17, _nvn_big_real@PAGEOFF
     ldr x16, [x17, x16, lsl #3]

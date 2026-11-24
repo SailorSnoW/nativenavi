@@ -1,20 +1,10 @@
-// Lines wider than a pixel (SetLineWidth): Metal draws 1-pixel lines only. A line draw (lines, a line loop or a strip) whose width rounds to 2 or more (OpenGL rounds a
-// non-antialiased width to an integer) is drawn as a quad per segment, two triangles, as OpenGL draws a non-antialiased wide line (and Maxwell): a parallelogram w pixels
-// across the segment's minor axis, its ends on the major axis, so consecutive segments meet (multisampled: OpenGL's rectangle across the segment, wl_encode). It is the game's draw itself, in its render pass, with the vertex shader's wide-line
-// entry (dmsh_pull.py <entry>_wl, in the pulling library) in place of its vertex function and 6 vertices a segment in place of its count: each vertex finds its segment's two
-// endpoints from its vertex ID and the line block (wl_block: the primitive, the count, the first or base vertex, the index buffer, read on the GPU, and the restart index), runs the
-// shader for both, clips the segment in front of the eye (and the near plane with depth clipping on: zclip) and moves its position by half the width. The fragment shader,
-// blending, depth and stencil are the draw's own; culling is off (a line has no faces), so a blended line is as heavy as one stroke; the polygon offset is the one enabled for
-// lines. A deferred pass (defer_take) copies the draw and the state, and its replay comes back here; a merged pass's attachment map and fragment function reach wl_pso.
-// Indirect arguments are read on the CPU (wl_indirect_args). A restart index drops the segments it touches: a strip breaks
-// there, as OpenGL's; a line list keeps its pairs (OpenGL starts a new pair after it), and an indexed loop with restart on stays 1 pixel wide, its runs' closing segments unknown.
-// Drawn 1 pixel wide instead, as before, with a [RED] line naming the reason: a vertex shader without a wide-line entry (no pulling library: no vertex inputs, or a parameter
-// the entry cannot pass on), an indexed loop with restart. Programs with task or mesh shaders are left to their own path. DM_NVN_LINE_WIDTH=0 draws every line 1 pixel wide. Tested on the GPU by t_wline.m.
+// Wide lines (SetLineWidth >= 2): Metal rasterizes 1-pixel lines only, so the vertex shader's wide-line entry (dmsh_pull.py <entry>_wl) draws OpenGL's parallelograms, 6 vertices a segment.
+// A restart index drops the segments it touches. Without a wide-line entry, or for an indexed loop with restart, the line is drawn 1 pixel wide with a [RED] line.
 typedef struct { uint64_t ib; float vp[2]; float width; uint32_t prim, count; int32_t base; uint32_t isz, restart, ri, zclip, rect, pad; } wl_block;   // dmsh_pull.py dm_wline
 _Static_assert(sizeof(wl_block) == 56, "wl_block: dmsh_pull.py dm_wline's layout");
-typedef struct { int on, miss, rect; uint64_t block; wl_block *cpu; uint32_t count, instances; } wl_state;   // count: the vertices of the quads; rect: set at encode (wl_encode)
+typedef struct { int on, miss, rect; uint64_t block; wl_block *cpu; uint32_t count, instances; } wl_state;
 static wl_state g_wl;
-// A CPU read needs the GPU work that may write its range to be done. Unknown or overflowing write sets always retain the conservative drain.
+// A CPU read waits for the GPU writes to its range; an unknown or overflowing write set drains.
 static int wl_cpu_hazard(uint64_t lo, uint64_t n) {
     if (!n) return 0;
     if (!lo || n > UINT64_MAX - lo) return 1;
@@ -26,59 +16,97 @@ static int wl_sync_cpu(int *drained) {
     if (*drained) return 1;
     mdi_wait();
     if (g_read_ev.signaledValue < g_read_v) return 0;
-    memset(g_vconv, 0, sizeof g_vconv); *drained = 1;
+    memset(g_vconv, 0, sizeof g_vconv);
+    *drained = 1;
     return 1;
 }
-// An indirect draw's arguments, read on the CPU once the GPU work that may write them is done (wl_sync_cpu), into the draw's copy: the count, the instances, the
-// first vertex (an indexed draw: its first index, moved into the index address, and its base vertex) and the base instance; the copy is a direct draw afterwards.
-// 1: read; 0: nothing to draw; -1: not readable or out of range (logged, as what)
+// 1: read; 0: nothing to draw; -1: unreadable or out of range (logged)
 static int wl_indirect_args(p_draw *dw, p_draw_idx *di, int *drained, const char *what) {
-    uint64_t ind = dw ? dw->ind : di->ind; size_t n = dw ? 16 : 20;
+    uint64_t ind = dw ? dw->ind : di->ind;
+    size_t n = dw ? 16 : 20;
     if (wl_cpu_hazard(ind, n) && !wl_sync_cpu(drained)) return -1;
     uint32_t a[5] = {0};
-    if (!nvn_host_readable(ind, n)) { MLOG("[RED] %s indirect arguments are not readable", what); return -1; }
+    if (!nvn_host_readable(ind, n)) {
+        MLOG("[RED] %s indirect arguments are not readable", what);
+        return -1;
+    }
     memcpy(a, (void *)(uintptr_t)ind, n);
     if (!a[0] || !a[1]) return 0;
-    if (a[0] > INT32_MAX || a[1] > INT32_MAX) { MLOG("[RED] %s indirect draw exceeds the host count range", what); return -1; }
-    if (dw) { dw->count = (int32_t)a[0]; dw->instances = (int32_t)a[1]; dw->first = (int32_t)a[2]; dw->base_instance = (int32_t)a[3]; dw->ind = 0; dw->mdi_cnt = 0; }
-    else { di->count = (int32_t)a[0]; di->instances = (int32_t)a[1]; di->ibuf += (uint64_t)a[2] << di->itype; di->base_vertex = (int32_t)a[3]; di->base_instance = (int32_t)a[4]; di->ind = 0; di->mdi_cnt = 0; }
+    if (a[0] > INT32_MAX || a[1] > INT32_MAX) {
+        MLOG("[RED] %s indirect draw exceeds the host count range", what);
+        return -1;
+    }
+    if (dw) {
+        dw->count = (int32_t)a[0];
+        dw->instances = (int32_t)a[1];
+        dw->first = (int32_t)a[2];
+        dw->base_instance = (int32_t)a[3];
+        dw->ind = 0;
+        dw->mdi_cnt = 0;
+    } else {
+        di->count = (int32_t)a[0];
+        di->instances = (int32_t)a[1];
+        di->ibuf += (uint64_t)a[2] << di->itype;
+        di->base_vertex = (int32_t)a[3];
+        di->base_instance = (int32_t)a[4];
+        di->ind = 0;
+        di->mdi_cnt = 0;
+    }
     return 1;
 }
-static nvn_hmap g_pso_wl = {.klen = sizeof(pso_key)}, g_pso_wl_fail = {.klen = sizeof(pso_key)};   // wide-line pipelines by key, and the keys that failed (submit thread)
+static nvn_hmap g_pso_wl = {.klen = sizeof(pso_key)}, g_pso_wl_fail = {.klen = sizeof(pso_key)};   // submit thread
 static uint64_t g_wl_draws, g_wl_segments;
-static int wl_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_LINE_WIDTH"); v = !(e && !strcmp(e, "0")); } return v; }
+static int wl_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("DM_NVN_LINE_WIDTH");
+        v = !(e && !strcmp(e, "0"));
+    }
+    return v;
+}
 static int wl_wanted(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
     int prim = dw ? dw->prim : di->prim;
     return (prim == 1 || prim == 2 || prim == 3) && pr && pr->sh[0] && !pr->sh[3] && !pr->sh[4] && roundf(S.line_width) >= 2.0f && !S.rast_discard && wl_on();
 }
-// The draw's pipeline with the vertex shader's wide-line entry and no vertex descriptor (as a pulling pipeline: pso_desc_pull), and the fragment function and attachment map a merged
-// pass gives it (g_pso_lmap, g_pso_fsfn, as pso_get); built on first need, then kept
 static id<MTLRenderPipelineState> wl_pso(NvProg *pr) {
     NvShader *vs = pr->sh[0], *fs = pr->sh[1];
     if (!vs || !vs->wlfn) return nil;
-    pso_key k; pso_key_fill(&k, vs, fs, g_pass.cfmt, g_pass.dfmt, g_pass.sfmt, g_pass.samples, g_pso_lmap != NULL);
+    pso_key k;
+    pso_key_fill(&k, vs, fs, g_pass.cfmt, g_pass.dfmt, g_pass.sfmt, g_pass.samples, g_pso_lmap != NULL);
     memset(k.attr, 0, sizeof k.attr); memset(k.attr_hi, 0, sizeof k.attr_hi); memset(k.stream, 0, sizeof k.stream);   // the pipeline pulls its streams: no vertex layout in it
-    if (g_pso_lmap) { memcpy(k.lmap, g_pso_lmap, 8); k.fsfn = (__bridge void *)g_pso_fsfn; }
+    if (g_pso_lmap) {
+        memcpy(k.lmap, g_pso_lmap, 8);
+        k.fsfn = (__bridge void *)g_pso_fsfn;
+    }
     id<MTLRenderPipelineState> h = hm_get_id(&g_pso_wl, &k);
     if (h || hm_get_id(&g_pso_wl_fail, &k)) return h;
     MTLRenderPipelineDescriptor *d = pso_desc(&k, vs, fs, g_pso_fsfn, g_pso_lmap != NULL);
-    d.vertexFunction = vs->wlfn; d.vertexDescriptor = [MTLVertexDescriptor vertexDescriptor];
-    NSError *e = nil; id<MTLRenderPipelineState> ps = pso_build(d, !k.border, &e);
-    if (!ps) { hm_put_id(&g_pso_wl_fail, &k, NSNull.null); MLOG("[RED] wide-line pipeline (vertex %s fragment %s): %s", vs->key, fs ? fs->key : "-", e.localizedDescription.UTF8String); return nil; }
+    d.vertexFunction = vs->wlfn;
+    d.vertexDescriptor = [MTLVertexDescriptor vertexDescriptor];
+    NSError *e = nil;
+    id<MTLRenderPipelineState> ps = pso_build(d, !k.border, &e);
+    if (!ps) {
+        hm_put_id(&g_pso_wl_fail, &k, NSNull.null);
+        MLOG("[RED] wide-line pipeline (vertex %s fragment %s): %s", vs->key, fs ? fs->key : "-", e.localizedDescription.UTF8String);
+        return nil;
+    }
     hm_put_id(&g_pso_wl, &k, ps);
     return ps;
 }
-// 1: drawn (or nothing to draw); 0: the caller draws the line 1 pixel wide
+// 1: drawn (or nothing to draw); 0: the caller draws it 1 pixel wide
 static int wl_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     NvShader *vs = pr->sh[0];
     static int red;
     #define WL_NO(why) do { if (red++ < 6) MLOG("[RED] wide line (width %.2f, vertex %s) drawn 1 pixel wide: %s", S.line_width, vs->key, why); return 0; } while (0)
-    (void)pull_fn(vs); if (!vs->wlfn) WL_NO("its vertex shader has no wide-line entry (pulling library)");
-    if ((dw0 && dw0->mdi_cnt && !mdi_live(dw0->mdi_cnt, dw0->mdi_i)) || (di0 && di0->mdi_cnt && !mdi_live(di0->mdi_cnt, di0->mdi_i))) return 1;   // past a multi-draw's count
-    p_draw dwl = dw0 ? *dw0 : (p_draw){0}; p_draw_idx dil = di0 ? *di0 : (p_draw_idx){0};   // an indirect draw's arguments go into these copies
-    const p_draw *dw = dw0 ? &dwl : NULL; const p_draw_idx *di = di0 ? &dil : NULL;
+    (void)pull_fn(vs);
+    if (!vs->wlfn) WL_NO("its vertex shader has no wide-line entry (pulling library)");
+    if ((dw0 && dw0->mdi_cnt && !mdi_live(dw0->mdi_cnt, dw0->mdi_i)) || (di0 && di0->mdi_cnt && !mdi_live(di0->mdi_cnt, di0->mdi_i))) return 1;
+    p_draw dwl = dw0 ? *dw0 : (p_draw){0};
+    p_draw_idx dil = di0 ? *di0 : (p_draw_idx){0};
+    const p_draw *dw = dw0 ? &dwl : NULL;
+    const p_draw_idx *di = di0 ? &dil : NULL;
     if (di && (di->itype < 0 || di->itype > 2)) WL_NO("index type");
-    if (dw ? dw->ind : di->ind) {   // NOLINT(clang-analyzer-core.NullDereference): draw passes a direct or an indexed draw, never neither
+    if (dw ? dw->ind : di->ind) {   // NOLINT(clang-analyzer-core.NullDereference): dw or di is always set
         int drained = 0, r = wl_indirect_args(dw ? &dwl : NULL, di ? &dil : NULL, &drained, "wide line");
         if (r < 0) WL_NO("indirect arguments");
         if (!r) return 1;
@@ -88,8 +116,13 @@ static int wl_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     uint64_t nseg = count < 2 ? 0 : prim == 1 ? (uint64_t)count / 2 : prim == 3 ? (uint64_t)count - 1 : (uint64_t)count;
     if (!nseg || (dw ? dw->instances : di->instances) < 1) return 1;
     if (nseg > (UINT32_MAX - 6) / 6) WL_NO("too many segments");
-    uint32_t isz = di ? 1u << di->itype : 0; uint64_t ib = 0;
-    if (di) { void *mb; uint64_t mo; if (!mtl_gpu_addr(di->ibuf, (uint64_t)count * isz, &mb, &mo, &ib)) WL_NO("index buffer not in GPU memory"); }
+    uint32_t isz = di ? 1u << di->itype : 0;
+    uint64_t ib = 0;
+    if (di) {
+        void *mb;
+        uint64_t mo;
+        if (!mtl_gpu_addr(di->ibuf, (uint64_t)count * isz, &mb, &mo, &ib)) WL_NO("index buffer not in GPU memory");
+    }
     NSUInteger vw, vh; bare_dims(&vw, &vh);
     float width = fminf(roundf(S.line_width), 64.0f);
     id<MTLBuffer> bb; size_t bo = arena_alloc(sizeof(wl_block), &bb);
@@ -97,20 +130,24 @@ static int wl_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
                    di ? di->base_vertex : dw->first, isz, (uint32_t)restart, S.restart.index & (isz == 1 ? UINT8_MAX : isz == 2 ? UINT16_MAX : UINT32_MAX), (uint32_t)!S.depth_clamp, 0, 0};
     memcpy((uint8_t *)bb.contents + bo, &lb, sizeof lb);
     g_wl = (wl_state){.on = 1, .block = bb.gpuAddress + bo, .cpu = (wl_block *)((uint8_t *)bb.contents + bo), .count = (uint32_t)(nseg * 6), .instances = (uint32_t)(dw ? dw->instances : di->instances)};
-    draw(dw, di);   // the game's draw, with the quads' pipeline and count (draw_: g_wl)
-    int miss = g_wl.miss, rect = g_wl.rect; memset(&g_wl, 0, sizeof g_wl);
+    draw(dw, di);
+    int miss = g_wl.miss, rect = g_wl.rect;
+    memset(&g_wl, 0, sizeof g_wl);
     if (miss) WL_NO("no wide-line pipeline");
-    g_wl_draws++; g_wl_segments += nseg;
-    static int once; if (once++ < 3) MLOG("wide lines: width %.0f (vertex %s, fragment %s), %llu segments drawn as %s%s", width, vs->key, pr->sh[1] ? pr->sh[1]->key : "-",
+    g_wl_draws++;
+    g_wl_segments += nseg;
+    static int once;
+    if (once++ < 3) MLOG("wide lines: width %.0f (vertex %s, fragment %s), %llu segments drawn as %s%s", width, vs->key, pr->sh[1] ? pr->sh[1]->key : "-",
                                           (unsigned long long)nseg, rect ? "rectangles (multisampled)" : "quads", di ? ", indexed" : "");
     if (g_wl_draws == 30 || g_wl_draws == 300 || g_wl_draws % 3000 == 0)
         MLOG("wide lines up to frame %llu: %llu draws, %llu segments drawn as quads", (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)g_wl_draws, (unsigned long long)g_wl_segments);
     return 1;
     #undef WL_NO
 }
-// At the draw's encode, in its pass: with multisampling on (more than one sample, and the multisample state enables it) a segment is a rectangle across it, as OpenGL draws a wide
-// line then, not the parallelogram (dmsh_pull.py dm_wl_offset); then the quads' draw
+// Multisampled: a rectangle across the segment, as OpenGL draws it, not the parallelogram
 static void wl_encode(id<MTL4RenderCommandEncoder> en) {
-    g_wl.rect = g_pass.samples > 1 && S.ms.enable; g_wl.cpu->rect = (uint32_t)g_wl.rect;
-    enc_r_vbuf(en, 15, g_wl.block); enc_r_draw_instanced(en, MTLPrimitiveTypeTriangle, 0, g_wl.count, g_wl.instances, (uint32_t)g_draw_binst);
+    g_wl.rect = g_pass.samples > 1 && S.ms.enable;
+    g_wl.cpu->rect = (uint32_t)g_wl.rect;
+    enc_r_vbuf(en, 15, g_wl.block);
+    enc_r_draw_instanced(en, MTLPrimitiveTypeTriangle, 0, g_wl.count, g_wl.instances, (uint32_t)g_draw_binst);
 }

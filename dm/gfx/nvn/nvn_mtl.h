@@ -1,58 +1,55 @@
-// Metal execution layer of the NVN null device (C interface): memory pool = zero-copy MTLBuffer, submit = MTLCommandBuffer, sync = MTLSharedEvent.
-// Ordering convention (to avoid repeating the GO_MAP_SHARE corrupted-picture mistake of the x86 route): every visible effect of "GPU completion" (sync object ready, event values, counters)
-// happens only after the Metal command buffer has actually completed; CPU-side waits look only at the completed value of the MTLSharedEvent.
+// Metal layer of the NVN device: pools are zero-copy MTLBuffers, submits command buffers, syncs MTLSharedEvents.
+// Every effect of GPU completion (syncs, event values, counters) happens only once the command buffer has completed.
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
 
 void mtl_init(void);
 void mtl_vbuf_stats(uint64_t *resolve, uint64_t *reuse, uint64_t *set, uint64_t *skip, uint64_t *copies, uint64_t *copy_bytes);
-void mtl_set_depth_zero(int on);          // NVN depth mode: 1 = near is 0 (D3D / Metal), 0 = near is -w (GL, NVN's default); picks the vertex shaders' entry point (see shader_load in nvn_shader.inc)
-void mtl_set_origin_lower_left(int on);   // NVN window origin: 1 = lower left (GL, NVN's default), 0 = upper left (D3D / Metal); see nvn_mtl.m
-void mtl_set_queue_origin_lower_left(int on); // Raster flip captured at NVN queue creation; selected under the submit lock.
+void mtl_set_depth_zero(int on);          // 1 = near is 0 (D3D / Metal), 0 = near is -w (GL, NVN's default)
+void mtl_set_origin_lower_left(int on);   // 1 = lower left (GL, NVN's default), 0 = upper left
+void mtl_set_queue_origin_lower_left(int on); // read under the submit lock
 
-// Memory pool: [mem, mem+size) is expanded outward to page boundaries to build a zero-copy buffer; look up the buffer and offset by GPU address (= CPU address)
+// expanded to page boundaries; GPU address = CPU address
 void mtl_pool_add(const void *mem, uint64_t size);
-void mtl_pool_addressed(const void *mem, uint64_t size);   // the game holds a GPU address in this range, so raw global memory may reach it
+void mtl_pool_addressed(const void *mem, uint64_t size);   // raw global memory may reach it
 void mtl_pool_del(const void *mem);
-void mtl_pool_replace(const void *const *del, int ndel, const void *const *add, const uint64_t *size, int nadd);   // in one step for every lookup (a sparse pool's runs, hle_nvn.c vrun_set)
-void dm_gfx_addr_note(uint64_t a, char *note, size_t n);   // what the graphics layer knows of an address (the crash dump, red lines)
-// memory pool Finalize: evict the textures built on this pool (pool object address) from the storage-sharing table
+void mtl_pool_replace(const void *const *del, int ndel, const void *const *add, const uint64_t *size, int nadd);   // all at once for every lookup
+void dm_gfx_addr_note(uint64_t a, char *note, size_t n);
 void mtl_alias_drop_pool(const void *pool);
-// physical memory pool Finalize: the shared placement sparse tiles of its memory go back once no texture maps them (sp_release)
+// its shared sparse tiles go once no texture maps them
 void mtl_sp_phys_gone(const void *mem, uint64_t size);
-int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off);   // 1 on success; buf is a (__bridge) id<MTLBuffer>
-int mtl_addr_known(uint64_t addr, uint64_t len);   // 1 when the range lies in one memory pool (as mtl_addr finds it); does not make the pool resident
+int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off);   // buf: a (__bridge) id<MTLBuffer>
+int mtl_addr_known(uint64_t addr, uint64_t len);   // does not make the pool resident
 
-// One submit: begin -> several operations -> commit (returns the fence value at which this submit completes)
-void mtl_prepare(void);                                // the first submission's prepare step (prewarm, pipeline prebuild): no GPU work, called outside the graphics gate
+void mtl_prepare(void);                                // no GPU work; called outside the graphics gate
 void mtl_sub_begin(void);
-void mtl_sub_ready(uint64_t guest_ns);   // the guest ns the submission being encoded was ready to run: its submit, or a wait it held for passing (counter timestamps: sub_place)
-void mtl_queue_activate(uint64_t serial);              // submit lock held: restore this queue's persistent GPU state
-void mtl_queue_forget(uint64_t serial);                // finalize: discard its state, including guest object pointers
-void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n);               // Buffer copy in GPU ordering
-void mtl_sub_event(volatile uint32_t *val, uint32_t mode, uint32_t v);   // Write the event value after completion (0 write / 1 add)
-void mtl_sub_counter(uint64_t addr, uint32_t type);                       // Write the counter record after completion
+void mtl_sub_ready(uint64_t guest_ns);   // guest ns the submission was ready to run (counter timestamps)
+void mtl_queue_activate(uint64_t serial);              // submit lock held
+void mtl_queue_forget(uint64_t serial);
+void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n);
+void mtl_sub_event(volatile uint32_t *val, uint32_t mode, uint32_t v);   // mode: 0 write, 1 add
+void mtl_sub_counter(uint64_t addr, uint32_t type);
 uint64_t mtl_sub_commit(void);
 
-uint64_t mtl_completed_fence(void);                 // Completed physical submissions, including CPU-visible post effects
-int mtl_replay_ahead(void);                          // profile key replay_ahead / DM_NVN_REPLAY_AHEAD, with the encode thread
-int mtl_hold_begin(volatile uint32_t *word, unsigned mode, uint32_t value);   // submit thread, between submissions: 1 when what reaches the queue from now on is held until the wait is satisfied
+uint64_t mtl_completed_fence(void);
+int mtl_replay_ahead(void);
+int mtl_hold_begin(volatile uint32_t *word, unsigned mode, uint32_t value);   // submit thread, between submissions: 1 when later work is held until the wait is satisfied
 int mtl_hold_active(void);
-void mtl_hold_signal(volatile uint32_t *word, uint32_t value);   // any thread: this event word was signalled and holds value
-void mtl_hold_force(volatile uint32_t *word);        // any thread: commands that signal this word were submitted; a hold on it cannot be satisfied
-void mtl_hold_drain(void);                           // any thread: the host drains (a suspend); a hold ends now
-void mtl_hold_wait(void);                            // submit thread: returns once the hold has ended
-void mtl_hold_satisfied(void);                       // any thread: the held wait was satisfied (a signal latched before the hold began)
-uint64_t mtl_last_fence(void);                       // Fence value of the most recent submit (0 = never submitted)
+void mtl_hold_signal(volatile uint32_t *word, uint32_t value);   // any thread
+void mtl_hold_force(volatile uint32_t *word);        // any thread: a hold on it cannot be satisfied
+void mtl_hold_drain(void);                           // any thread: a hold ends now
+void mtl_hold_wait(void);                            // submit thread
+void mtl_hold_satisfied(void);                       // any thread
+uint64_t mtl_last_fence(void);                       // 0 = never submitted
 enum { POOL_STATS = 14 };
-void mtl_pool_stats(uint64_t s[POOL_STATS]);              // the pool tables' counts for the power line (nvn_pooltab.inc mtl_pool_stats)
-int mtl_wait(uint64_t fence, uint64_t timeout_ns);   // Returns 1 when the GPU has completed up to fence, 0 on timeout
-int mtl_wait_acq(uint64_t fence, uint64_t timeout_ns);   // the same for a sync WindowAcquireTexture handed out (its own line in the wait ledger, DM_NVN_WAITS)
-void mtl_finish(void);                               // Wait for all submitted commands to complete
-void mtl_drain(void);                                // Wait for all commands on the queue (including presents) to complete: submit an empty command buffer and wait for it
-void mtl_arch_save(int wait_ms, int ending);         // The pipeline archive's unwritten captures, written now even during the prewarm (going to the background, quitting); ending: the process ends after waiting up to wait_ms
-enum { MTL_QUIT_ARCH_MS = 10000 };   // what quitting gives the archive's write (atexit; the graceful exit: dm.h DM_QUIT_ARCH_MS, the same): a file of 900 bases took 1.8-4 s on Macs
-void mtl_warm_stop(void);   // the process is ending: the pipeline prewarm takes no more lines, and what it has not built is left to the next start (no compiles beside the archive's write)
-void mtl_present_wait(uint64_t ticket);   // as in nvn_obj.h: wait until that present has been handed to the GPU
-void mtl_present_wait_texture(uint64_t ticket, uint64_t copy);   // the next acquire of a presented texture, or a queue finish: with a snapshot (copy, from mtl_present) its copy has run on the GPU, else as mtl_present_wait
+void mtl_pool_stats(uint64_t s[POOL_STATS]);
+int mtl_wait(uint64_t fence, uint64_t timeout_ns);   // 0 on timeout
+int mtl_wait_acq(uint64_t fence, uint64_t timeout_ns);
+void mtl_finish(void);
+void mtl_drain(void);                                // including presents
+void mtl_arch_save(int wait_ms, int ending);         // writes even during the prewarm; ending: the process ends after up to wait_ms
+enum { MTL_QUIT_ARCH_MS = 10000 };   // atexit's wait for the archive write; dm.h DM_QUIT_ARCH_MS is the same
+void mtl_warm_stop(void);   // the process is ending: the prewarm builds nothing more
+void mtl_present_wait(uint64_t ticket);
+void mtl_present_wait_texture(uint64_t ticket, uint64_t copy);   // with a snapshot, its copy has run on the GPU; else as mtl_present_wait
