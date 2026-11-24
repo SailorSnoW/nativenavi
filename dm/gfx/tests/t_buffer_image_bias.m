@@ -1,4 +1,4 @@
-// A buffer texture below Metal's view alignment (nvn_mtl.m tex_mtl, tbuf_lead): its view starts at the aligned boundary below its pool offset, wider by the elements in between, and
+// A buffer texture below Metal's view alignment (nvn_storage.inc tex_mtl, nvn_pooltab.inc tbuf_lead): its view starts at the aligned boundary below its pool offset, wider by the elements in between, and
 // the shader moves each coordinate by that count from its offset table (the translator's TranslationFlags.MetalBufferImageBias), so accesses land on the texture's own bytes.
 // Assassin's Creed II's occlusion culling wrote its visibility marks two R32 elements early into buffers at pool offsets 8 mod 16 (GitHub PR #1399). The kernels below do what a
 // translated shader does (Instructions.cs BiasBufferImageCoordinate: x = c + bias, or c itself when that sum wraps; a size query gives the width less the bias), and the pool's

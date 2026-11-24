@@ -1,5 +1,5 @@
 // A compute shader in two passes (dmsh_ndsr.py's split, docs/reference/shaders.md "agl's NDSR network on simdgroup matrices, in two passes"): dispatch runs pass 0 (DMSH_SPLIT_FC false),
-// a barrier, then pass 1 (true) on the same grid, the words between them in frame scratch at DMSH_SPLIT_SLOT (nvn_mtl.m split_pipes, split_dispatch). The kernel's pass 0 writes WORDS
+// a barrier, then pass 1 (true) on the same grid, the words between them in frame scratch at DMSH_SPLIT_SLOT (nvn_dispatch.inc split_pipes, split_dispatch). The kernel's pass 0 writes WORDS
 // words a thread; its pass 1 reads those of a thread GROUPS / 2 + 1 workgroups away, which a pass 1 that started before pass 0 had finished would find unwritten, and marks the output 2;
 // the one pass (the constant undefined) computes the same value and marks it 1. Direct dispatches take two passes, an indirect one and DM_NVN_SPLIT=0 (--one) take one
 #include "../nvn/nvn_mtl.m"

@@ -1,4 +1,4 @@
-// The present: the frame drawn into the drawable, cropped (nvn_mtl.m present_pipeline)
+// The present: the frame drawn into the drawable, cropped (nvn_present.inc present_pipeline)
 #include <metal_stdlib>
 using namespace metal;
 struct V { float4 p [[position]]; float2 uv; };

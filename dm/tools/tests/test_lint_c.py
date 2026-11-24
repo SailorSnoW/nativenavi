@@ -140,6 +140,13 @@ class CompileDatabase(unittest.TestCase):
         self.assertEqual([(lint.rel(x['file']), x['arguments'][1]) for x in db],
                          [('dm/gfx/vk/hle_vk.m', '-DHOST'), ('dm/host/loader.c', '-DHOST'), ('dm/host/tests/t_fs.c', '-DTEST')])
 
+    def test_a_unit_of_parts_is_analyzed_from_every_function(self):   # nvn_mtl.m's parts (nvn_*.inc) would get no path-sensitive analysis of their own
+        def e(f): return {'directory': str(REPO), 'file': str(REPO / f), 'arguments': ['clang', '-DHOST', '-c', str(REPO / f)]}
+        db = {lint.rel(x['file']): x['arguments'] for x in lint.merge_entries([e('dm/gfx/nvn/nvn_mtl.m'), e('dm/host/loader.c')])}
+        self.assertEqual(db['dm/gfx/nvn/nvn_mtl.m'], ['clang', '-Xclang', '-analyzer-opt-analyze-headers', '-DHOST', '-c', str(REPO / 'dm/gfx/nvn/nvn_mtl.m')])
+        self.assertEqual(db['dm/host/loader.c'], ['clang', '-DHOST', '-c', str(REPO / 'dm/host/loader.c')])
+        self.assertTrue((REPO / lint.UNITS[0]).is_file())
+
 
 class Against(unittest.TestCase):
     """--against: the baseline may not grow over the base's, unless LLVM_VERSION was raised."""

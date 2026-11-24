@@ -118,10 +118,10 @@ class Rewrite(unittest.TestCase):
 
     def test_stages_and_the_function_constant(self):
         frag, kern = border_emu(GRASS), border_emu(KERNEL)
-        self.assertIn(f'constant bool dm_border_off [[function_constant({abi.BORDER_FC})]];', frag, 'a fragment shader takes the host\'s specialization (nvn_mtl.m fn_off)')
+        self.assertIn(f'constant bool dm_border_off [[function_constant({abi.BORDER_FC})]];', frag, 'a fragment shader takes the host\'s specialization (nvn_shader.inc fn_off)')
         self.assertIn('#define DM_BORDER_LIVE dm_border_live', frag)
         self.assertIn('if (DM_BORDER_LIVE && (b->mask >> i & 1u))', frag)
-        self.assertIn(f'constant bool dm_border_off [[function_constant({abi.BORDER_FC})]];', kern, 'a kernel too (nvn_mtl.m cps_new_b, by its specialized descriptor)')
+        self.assertIn(f'constant bool dm_border_off [[function_constant({abi.BORDER_FC})]];', kern, 'a kernel too (nvn_archive.inc cps_new_b, by its specialized descriptor)')
         self.assertIn('#define DM_BORDER_LIVE dm_border_live', kern)
 
     def test_integer_textures_keep_their_samples(self):

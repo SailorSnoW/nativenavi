@@ -68,7 +68,7 @@ static void focus_sync(int applets) {   // applets: +1 an applet opens, -1 one c
 void dm_applet_enter(const char *name) { LOG("oe library applet: %s", name); focus_sync(1); }
 void dm_applet_leave(void) { focus_sync(-1); }
 int dm_focus_now(void) { return atomic_load(&g_focus); }   // the front end's state, not an applet's: the display link follows the window
-uint64_t dm_focus_in_since(void) { return atomic_load(&g_focus_in_ns); }   // graphics layer display link watchdog: stalls are only computed while active, counted from activation (nvn_mtl.m mtl_present_wait)
+uint64_t dm_focus_in_since(void) { return atomic_load(&g_focus_in_ns); }   // graphics layer display link watchdog: stalls are only computed while active, counted from activation (nvn_display.inc mtl_present_wait)
 void dm_focus_set(int st) {
     if (st < 1 || st > 3) die("dm_focus_set: invalid state %d", st);
     if (st == 1) atomic_store(&g_focus_in_ns, now_ns());
@@ -113,7 +113,7 @@ HLE_FORCE("_ZN2nn2oe24IsInStoreDemoModeEnabledEv", "retail store demo mode (thro
 
 // Scripted state changes (verify lifecycle / overheat downgrade without a window): DM_OE_SCRIPT="focus=3@10,focus=1@20,opmode=0@30" (second N); bg=1 / bg=0 run the whole background round trip (see script_bg)
 // Time counts from the game's first notification fetch. Coexists with front end calls.
-// bg=1 / bg=0: the whole "to background / back to foreground" sequence (script_bg: out of focus, background, then audio, guest clock and graphics suspended; back in the reverse order), the order an iOS scene lifecycle gave it in nxnative (resign active -> enter background; enter foreground -> become active).
+// bg=1 / bg=0: the whole "to background / back to foreground" sequence (script_bg: out of focus, background, then audio, guest clock and graphics suspended; back in the reverse order) (resign active -> enter background; enter foreground -> become active).
 // Used to reproduce "after going to the background and back" problems on the Mac (audio take-over and resume, guest clock freeze, graphics suspend); to imitate the process being suspended as well, send dmhost SIGSTOP / SIGCONT between the two items
 static void script_bg(int on) {
     if (on) { dm_focus_set(2); dm_focus_set(3); dm_audio_suspend(1); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); }

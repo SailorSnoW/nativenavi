@@ -1,5 +1,5 @@
 // A new colour texture is zeroed in the upload batch by copies from the zero buffer in pieces of rows (tex_zero_fill), as depth is (t_zero_depth): the zero buffer stays at its 4 MB
-// instead of growing to the largest texture zeroed and staying resident at that size (Ocarina of Time's reached 64 MB on the iPhone 17). Every byte of every level, layer and depth slice
+// instead of growing to the largest texture zeroed and staying resident at that size (Ocarina of Time's reached 64 MB). Every byte of every level, layer and depth slice
 // reads 0 afterwards, from a texture first filled with non-zero bytes
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }

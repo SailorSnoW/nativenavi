@@ -1,4 +1,4 @@
-// A texture buffer view at a buffer offset below Metal's 16-byte alignment: nvn_mtl.m tbuf_shadow binds a view of a copy of its bytes at an aligned offset instead. Checks, for every
+// A texture buffer view at a buffer offset below Metal's 16-byte alignment: nvn_pooltab.inc tbuf_shadow binds a view of a copy of its bytes at an aligned offset instead. Checks, for every
 // 4-byte offset in the first 64 bytes and three formats, that the view of the copy reads the elements at the offset, bound directly and through an argument buffer; and reports how
 // a view created at the offset itself reads on this GPU (an M4 Pro reads from the 16-byte boundary below: R32Float at offset 4 gives element 0 where element 1 is expected)
 #import <Metal/Metal.h>

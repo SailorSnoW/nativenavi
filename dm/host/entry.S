@@ -1,5 +1,5 @@
 // Common entries + static stub tables.
-// 0) unimpl_stubs: named stubs for unimplemented imports, the k-th = movz x9,#k; b unimpl_entry (static code; iOS does not allow runtime generation)
+// 0) unimpl_stubs: named stubs for unimplemented imports, the k-th = movz x9,#k; b unimpl_entry (static code: nothing is written at run time)
 // 1) unimpl_entry: stub entry for unimplemented imports, x9 = stub number; save x0-x8+lr and call unimpl_c(idx, regs).
 // 2) dm_gate_stubs + dm_gate: the rewriter replaces svc / cntpct reads with a gate block that pushes the guest's x29 / x30 and calls the address in the thread's KGATE slot, which is
 //    this thread's stub (thread.c guest_gate_stack). The stub passes the top of the thread's gate stack to dm_gate, which saves x0-x30 there, calls gate_dispatch(ret, regs) on that stack,

@@ -1,4 +1,4 @@
-// A finalized pool's buffer between submissions (nvn_mtl.m mtl_pool_del, defer_kick): with no submission open it waits only for the last committed fence, and goes with no
+// A finalized pool's buffer between submissions (nvn_pool.inc mtl_pool_del, nvn_mtl.m defer_kick): with no submission open it waits only for the last committed fence, and goes with no
 // submission after it, as a game that stops submitting out of focus (Ocarina of Time) still remakes virtual pool runs. A submission open when the pool goes keeps it until that
 // submission completes, and one in flight when it goes keeps it until its feedback. The residency set holds what a drain took out of it until its next commit, which with no
 // submission to come is made off the submit thread (defer_idle_commit). A commit that lands between pool_gone_release's read of the open flag and its read of g_fence leaves the

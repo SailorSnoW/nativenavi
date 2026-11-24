@@ -2,7 +2,7 @@
 // tests/t_switch2.c checks it on any machine; pad_switch2_apple.m is the CoreBluetooth transport of the Mac front end.
 //
 // Where it comes from: the GATT identifiers, command framing and report layout are the community's reverse engineering of the controllers (Peter Sharma's "Finally the Controller
-// Works", ndeadly/switch2_controller_research, trevlars/switch2-controllers-linux, Nadeflore/switch2-controllers and others; the same protocol seedds/nxnative PR 645 used on iOS).
+// Works", ndeadly/switch2_controller_research, trevlars/switch2-controllers-linux, Nadeflore/switch2-controllers and others; seedds/nxnative PR 645).
 // This code was written from those notes; none of it is copied from them.
 // Observed here on real hardware (a left and a right Joy-Con 2, macOS 27): the Joy-Con 2s advertise product ids 0x2067 (left) and 0x2066 (right) with Nintendo's company id
 // 0x0553; they use the same three characteristics as the Pro Controller 2 (input, command, command reply); after the same handshake they send the same 63-byte input report; a

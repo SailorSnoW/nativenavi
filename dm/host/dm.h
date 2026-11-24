@@ -153,7 +153,7 @@ int dm_mods_exclusive(int i);         // 1 for a pack's variant that replaces th
 int dm_amiibo_scan(const char *path); // Put an amiibo dump on the virtual NFC reader (hle_sdk16.c); 0 when the file is not one
 void dm_amiibo_remove(void);          // Take it off
 const char *dm_amiibo_name(void);     // The amiibo on the reader, NULL when none
-// Graphics lifecycle (hle_nvn.c): on=1 suspends (afterwards submit / present block, and in-flight GPU work is drained before returning), on=0 resumes; called by the iOS front end when entering and leaving the background
+// Graphics lifecycle (hle_nvn.c): on=1 suspends (afterwards submit / present block, and in-flight GPU work is drained before returning), on=0 resumes; called when the window is minimized and restored (front_mac.m) and by a scripted background round (hle_oe.c)
 void dm_gfx_suspend(int on);
 void dm_gfx_quit(int wait_ms);   // hle_nvn.c: the process is ending (the graceful exit): what the pipeline archive has not written yet, written, waiting up to wait_ms
 void dm_gfx_quit_begin(void);   // hle_nvn.c: the process is about to end (the graceful exit, oe::ExecuteProgram's hand-over): the pipeline prewarm stops and the archive starts writing what it holds, without waiting

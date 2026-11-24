@@ -1,4 +1,4 @@
-// NVN2's DLSS on MetalFX (nvn_mtl.m dlss_eval) with Metal encoding on its own thread and without: MetalFX's temporal scaler encodes into the replay's real command buffer
+// NVN2's DLSS on MetalFX (nvn_dlss.inc dlss_eval) with Metal encoding on its own thread and without: MetalFX's temporal scaler encodes into the replay's real command buffer
 // (rec_cb_block), never the recording's stand-in, and fills a 1920x1080 output from a flat 960x540 colour; two evaluations through the same scaler before the submission ends
 // keep each one's own output. A network that takes new textures after an evaluation in the same submission replaces its scaler, and the submission still completes: the
 // replaced scaler lives until then (a Metal 4 command buffer retains nothing; released at once, the commit messages a freed object, which the Makefile's NSZombieEnabled
@@ -160,7 +160,7 @@ int main(void) { @autoreleasepool {
     CHECK(s4 && sc4 && (__bridge void *)s4->sc == sc4, "a smaller input in the same textures keeps the network's scaler");
     CHECK(flat(tex_mtl(&out4), b), "the 2x evaluation in the same textures fills its output");
     CHECK(alpha_flat(tex_mtl(&out4), b[3]), "dynamic input alpha clamps to its content at every output edge and corner");
-    if (@available(macOS 27.0, iOS 27.0, *)) {
+    if (@available(macOS 27.0, *)) {
         fill_alpha_rect(tex_mtl(&col4), b, 17, 9, 768, 432);
         c4.base[DLSS_COLOR][0] = 17; c4.base[DLSS_COLOR][1] = 9; c4.reset = 1;
         mtl_sub_begin(); dlss_eval(&c4);

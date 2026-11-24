@@ -1,4 +1,4 @@
-// 8-bit indices widened to 16-bit on the GPU (nvn_mtl.m wide_run)
+// 8-bit indices widened to 16-bit on the GPU (nvn_indirect.inc wide_run)
 #include <metal_stdlib>
 using namespace metal;
 struct wjob { device const uchar *src; device ushort *dst; uint n, shift; };

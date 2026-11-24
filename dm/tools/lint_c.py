@@ -2,7 +2,8 @@
 # C and Objective-C lint of dm/host and dm/gfx, as CI runs it (.github/workflows/lint-c.yml). Two commands:
 #   compdb  writes the compile database dm/host/gen/compile_commands.json from dry runs of the Makefiles (make -n -B): the host (dm/host), the texture tests (dm/gfx/tex/tests),
 #           every graphics test (dm/gfx/tests), and the host tests (dm/host/tests), all for one profile (--game, default GAME or Ocarina of Time).
-#           A source compiled by several of them keeps the first command (the host's). Third-party sources (dm/third_party) are left out.
+#           A source compiled by several of them keeps the first command (the host's). Third-party sources (dm/third_party) are left out. The replay layer, one unit of
+#           parts (UNITS), is analyzed from every function of its parts.
 #   tidy    runs clang-tidy (the checks in .clang-tidy) on every source of the database and counts its findings per file and check, without line numbers, so that moving code does not
 #           change them. The counts are a ratchet, as dm/tools/lint_python.py's: more findings than dm/tools/lint_c_baseline.tsv lists for a file and check fail (a new one), and so
 #           do fewer (a fixed finding still listed: run --update). So the baseline only shrinks:
@@ -26,6 +27,11 @@ WORKFLOW = '.github/workflows/lint-c.yml'
 LINT_DIRS = ('dm/host', 'dm/gfx')
 SKIP = ('dm/third_party/', 'dm/host/gen/', 'dm/gfx/nvn/include/')   # third-party code, generated headers, the NVN API header
 SOURCES = ('.c', '.m', '.mm', '.cpp')
+# Translation units made of parts they include (the replay layer: nvn_mtl.m and its nvn_*.inc). Clang's analyzer starts its path-sensitive checks only from functions of the
+# main file (AnalysisConsumer::getModeForDecl): a part's functions would get the syntax checks alone, and the analyzer would follow them only when inlined from the main file's.
+# These sources are analyzed with -analyzer-opt-analyze-headers, which starts from every function of the unit. Not the tests that include them: each would take minutes
+UNITS = ('dm/gfx/nvn/nvn_mtl.m',)
+UNIT_FLAGS = ['-Xclang', '-analyzer-opt-analyze-headers']
 DEFAULT_GAME = '0400486024DEC000'
 
 def llvm_tool(name):
@@ -95,11 +101,14 @@ def compdb(game):
     return db
 
 def merge_entries(es):
-    # one entry per linted source, the first command that compiles it (the runs go host first), sorted by file
+    # one entry per linted source, the first command that compiles it (the runs go host first), sorted by file; a unit of parts (UNITS) analyzed from all its functions
     db, seen = [], set()
     for e in es:
         r = rel(e['file'])
-        if linted(r) and r not in seen: seen.add(r); db.append(e)
+        if linted(r) and r not in seen:
+            seen.add(r)
+            if r in UNITS: e = {**e, 'arguments': [e['arguments'][0], *UNIT_FLAGS, *e['arguments'][1:]]}
+            db.append(e)
     return sorted(db, key=lambda e: e['file'])
 
 # ---------- clang-tidy ----------

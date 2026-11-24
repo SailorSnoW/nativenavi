@@ -1,4 +1,4 @@
-// A texture buffer read through a slot the translator made a 2D read of wrapped 1D fetches (InstEmitTexture.cs nxnative: x & 0x3FFF, x >> 14): nvn_mtl.m tbuf_as_2d binds a linear
+// A texture buffer read through a slot the translator made a 2D read of wrapped 1D fetches (InstEmitTexture.cs nxnative: x & 0x3FFF, x >> 14): nvn_descpool.inc tbuf_as_2d binds a linear
 // 2D texture of 16384-texel rows (nvn_tbuf_rows) over the same buffer bytes. Checks, for element counts from 1 to 1,048,576, pool offsets at the linear-texture alignment and two
 // formats, that every element read through the alias at the wrapped address equals the texture_buffer view's read and the memory itself; and that a one-row 2D texture (how the
 // host creates a 1D texture) reads the same at x & 0x3FFF, x >> 14 as at (x, 0)

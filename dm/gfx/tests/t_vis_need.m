@@ -1,4 +1,4 @@
-// Occlusion queries count only the draws a report can see (DM_NVN_VIS_NEED, nvn_mtl.m vis_need_scan): after a samples-passed reset or report
+// Occlusion queries count only the draws a report can see (DM_NVN_VIS_NEED, nvn_scan.inc vis_need_scan): after a samples-passed reset or report
 // whose next samples-passed op in the submission is a reset, the draws up to it are encoded with counting off. Every sequence reads the same
 // values either way; with DM_NVN_VIS_NEED=0 (the check's second run) no draw is left uncounted. Recorded with the public NVN entry points.
 #include "game_profile.h"

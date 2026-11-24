@@ -154,8 +154,8 @@ static void packed_copies(int format, int tid) {
     NVNsync sync; h_nvnSyncInitialize(&sync, NULL);
     h_nvnCommandBufferFenceSync(&cmd, &sync, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); mtl_exec(nvn_rec_linear(h, NULL)); mtl_sub_commit();
-    int wait = h_nvnSyncWait(&sync, 5000000000ull); EXPECT("packed copies fence wait", 1, wait == 0 || wait == 1);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint8_t *records = nvn_rec_linear(h, NULL); mtl_exec(records); mtl_sub_commit();
+    int wait = h_nvnSyncWait(&sync, 5000000000ull); EXPECT("packed copies fence wait", 1, wait == 0 || wait == 1); free(records);   // the linear copy of the records, once their work is done
     char n[160]; const char *f = rgba4 ? "RGBA4" : b565 ? "RGB565" : a1 ? "RGB5A1" : "RGB5";
     mtl_reg_tex(tid, TX(&copied), NULL); float s[8]; sample2(tid, s);
     snprintf(n, sizeof n, "%s buffer -> plain texture, sampled red then blue", f); EXPECT(n, 1, s[0] > .99f && s[2] < .01f && s[4] < .01f && s[6] > .99f);
@@ -211,7 +211,7 @@ static void store_completion(void) {
     c->poolRelease = dispatch_semaphore_create(0); c->waiterExited = dispatch_semaphore_create(0);
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
     uint64_t stores = g_gsb_stores;
-    mtl_exec(nvn_rec_linear(handle, NULL));
+    uint8_t *records = nvn_rec_linear(handle, NULL); mtl_exec(records);
     EXPECT("the clear of the source (a GPU texture) and the copy into the packaged texture are each stored on the GPU", 2, (int)(g_gsb_stores - stores));
     [g_commit_blocks addObject:^{
         dispatch_semaphore_signal(c->feedbackEntered);
@@ -241,7 +241,7 @@ static void store_completion(void) {
     EXPECT("late feedback does not apply the event effect twice", 47, h_nvnEventGetValue(&event));
     mtl_sub_begin(); uint64_t retirement = mtl_sub_commit();
     EXPECT("retirement submission completed", 1, mtl_wait_at(retirement, 5000000000ull, WS_FINISH));
-    readback_feedback_idle();
+    readback_feedback_idle(); free(records);   // the linear copy of the records, once their work is done
     EXPECT("retirement GPU success", 0, mtl_last_commit_error());
     dispatch_semaphore_signal(c->poolRelease);
     readback_wait_for("guest waiter drained its outer pool and exited", c->waiterExited); pthread_join(thread, NULL);
@@ -356,8 +356,8 @@ static void copy_stream(void) { @autoreleasepool {
     NVNsync sync; h_nvnSyncInitialize(&sync, NULL);
     h_nvnCommandBufferFenceSync(&cmd, &sync, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); mtl_exec(nvn_rec_linear(h, NULL)); mtl_sub_commit();
-    int wait = h_nvnSyncWait(&sync, 5000000000ull); EXPECT("stream fence wait", 1, wait == 0 || wait == 1);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint8_t *records = nvn_rec_linear(h, NULL); mtl_exec(records); mtl_sub_commit();
+    int wait = h_nvnSyncWait(&sync, 5000000000ull); EXPECT("stream fence wait", 1, wait == 0 || wait == 1); free(records);   // the linear copy of the records, once their work is done
     EXPECT("stream GPU success", 0, mtl_last_commit_error());
     EXPECT("9 copies into a texture uploaded from its storage: one re-upload (the CPU write before them)", 1, (int)(g_pkg_reuploads - r0));
     EXPECT("... and the 9 copies stored into the storage on the GPU", 9, (int)(g_gsb_stores - s0));
@@ -408,8 +408,8 @@ static void copy_stream(void) { @autoreleasepool {
         h_nvnCommandBufferFenceSync(&cmd, &sync, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
         NVNcommandHandle he = h_nvnCommandBufferEndRecording(&cmd);
         uint64_t s3 = g_gsb_stores;
-        state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); mtl_exec(nvn_rec_linear(he, NULL)); mtl_sub_commit();
-        wait = h_nvnSyncWait(&sync, 5000000000ull); EXPECT("edge store fence wait", 1, wait == 0 || wait == 1);
+        state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint8_t *records = nvn_rec_linear(he, NULL); mtl_exec(records); mtl_sub_commit();
+        wait = h_nvnSyncWait(&sync, 5000000000ull); EXPECT("edge store fence wait", 1, wait == 0 || wait == 1); free(records);   // the linear copy of the records, once their work is done
         EXPECT("edge store GPU success", 0, mtl_last_commit_error());
         EXPECT("the copy into the first page is stored", 1, (int)(g_gsb_stores - s3));
         bad = 0; for (uint64_t i = lo[0][0]; i < hi[0][0]; i++) bad += m[OFF + i] != 0x5A;
@@ -535,8 +535,8 @@ static void copy_stream_3d(void) { @autoreleasepool {
     NVNsync sync; h_nvnSyncInitialize(&sync, NULL);
     h_nvnCommandBufferFenceSync(&cmd, &sync, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); mtl_exec(nvn_rec_linear(h, NULL)); mtl_sub_commit();
-    int wait = h_nvnSyncWait(&sync, 5000000000ull); EXPECT("volume fence wait", 1, wait == 0 || wait == 1);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint8_t *records = nvn_rec_linear(h, NULL); mtl_exec(records); mtl_sub_commit();
+    int wait = h_nvnSyncWait(&sync, 5000000000ull); EXPECT("volume fence wait", 1, wait == 0 || wait == 1); free(records);   // the linear copy of the records, once their work is done
     EXPECT("volume GPU success", 0, mtl_last_commit_error());
     EXPECT("8 slice copies into a volume uploaded from its storage: no re-upload", 0, (int)(g_pkg_reuploads - r0));
     EXPECT("... the 8 copies stored on the GPU", D, (int)(g_gsb_stores - s0));

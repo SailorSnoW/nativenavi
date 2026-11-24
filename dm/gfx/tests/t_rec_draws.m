@@ -1,6 +1,6 @@
 // The encode thread's recorder (nvn_rec.h DmRecEnc, DM_NVN_ENC_THREAD) stands in for the render encoder and stops the host on a selector it does not record
-// (forwardingTargetForSelector). Every draw the NVN layer encodes must be one it records: the indirect task / mesh draw of nvn_mesh.inc was not, and the
-// iOS app (where the encode thread was the default) aborted at Ocarina of Time's first one. No GPU work: the selectors are checked on the class.
+// (forwardingTargetForSelector). Every draw the NVN layer encodes must be one it records: the indirect task / mesh draw of nvn_mesh.inc was not, and a run
+// with the encode thread aborted at Ocarina of Time's first one. No GPU work: the selectors are checked on the class.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }

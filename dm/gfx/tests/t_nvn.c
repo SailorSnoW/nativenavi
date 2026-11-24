@@ -1671,7 +1671,7 @@ int main(void) {
         P(nvnMemoryPoolFinalize)(&lpool);
     }
 
-    // 6c3. GPU copies stored into the destination's storage on the GPU (nvn_mtl.m gsb_store / gsb_store_buf, the streamer's level copies), run through the queue: a region of a level
+    // 6c3. GPU copies stored into the destination's storage on the GPU (nvn_pass.inc gsb_store / gsb_store_buf, the streamer's level copies), run through the queue: a region of a level
     //      copied from a texture of other dimensions (another block height) and a whole level, leaving the pool byte-identical to "decode the source level → patch the destination level →
     //      re-encode", the rest of it untouched; RGBA8 and BC1; the same regions from a buffer in the pool with a padded row stride. The pool is filled
     //      from the generator's high bits: its low byte repeats every 256 bytes, and copies between level-aligned regions then moved bytes equal to those they replaced
@@ -1910,7 +1910,7 @@ int main(void) {
         EXPECT("a call of a removed entry is counted and reported ([RED])", 1, nvn_slot[bi].cnt - calls == 1 && g_unimpl_seen[bi] > 0);
     }
 
-    // 8. A texture buffer as 2D rows for wrapped 1D fetches (x & 0x3FFF, x >> 14; nvn_mtl.m tbuf_as_2d): full rows back to back, one short row rounded to the alignment
+    // 8. A texture buffer as 2D rows for wrapped 1D fetches (x & 0x3FFF, x >> 14; nvn_descpool.inc tbuf_as_2d): full rows back to back, one short row rounded to the alignment
     {
         uint32_t w, h, row;
         EXPECT("256 R32 elements: one row", 1, nvn_tbuf_rows(256, 4, 64, &w, &h, &row) && w == 256 && h == 1 && row == 1024);

@@ -110,7 +110,7 @@ int main(int argc, char **argv) { @autoreleasepool {
 #ifndef CROP_LEGACY_HEADER
     {   // DM_PRESENT_UPSCALE: which content MetalFX scales, and to which size (the picture's rectangle on the canvas)
         const struct { unsigned cw,ch,dw,dh,w,h; int upscale; } sizes[] = {
-            {1280,720,2868,1320,2347,1320,1},   // handheld, letterboxed on an iPhone
+            {1280,720,2868,1320,2347,1320,1},   // handheld, letterboxed on a wide canvas
             {1952,900,2868,1320,2868,1320,1},   // ratios within 1 % fill the canvas
             {1280,720,2560,1440,2560,1440,1},   // Retina window
             {1280,720,1280,720,1280,720,0},     // native size

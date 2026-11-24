@@ -94,7 +94,7 @@ static void guest_clock_freeze_apply(int on) {
 // freeze if any holds, release only when all are lifted -- otherwise "switch to background and back while the keyboard is up" or "archive init finishes inside the prepare step"
 // would release the clock early
 static pthread_mutex_t g_gfz_mu = PTHREAD_MUTEX_INITIALIZER; static unsigned g_gfz_reasons;
-// A suspended application does not run: Horizon suspends the whole process out of focus (as iOS suspended nxnative's app in the background). The host freezes the guest clock in the background but its
+// A suspended application does not run: Horizon suspends the whole process out of focus. The host freezes the guest clock in the background but its
 // guest threads go on until they block, so a guest reading the clock twice there saw no time pass. Super Mario Galaxy 2's frame pacing (main+0x5926a8) took the interval between two
 // frames as its period, got 0, and the next frame's loop that steps by it (main+0x9abd0) never ended. The same stall on the render thread during the host's first-submission prepare
 // step or pipeline archive open (reasons 3 and 4: seconds on a slow disk or cold prebuild) let Vanillaware's main thread skip hundreds of frames and advance into texture teardown

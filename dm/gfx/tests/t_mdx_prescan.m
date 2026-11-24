@@ -1,4 +1,4 @@
-// Indirect-count multi-draws after an ordinary draw in the same render pass (nvn_mtl.m mdx_prescan): once the game has drawn one, the pass the ordinary draw opens
+// Indirect-count multi-draws after an ordinary draw in the same render pass (nvn_indirect.inc mdx_prescan): once the game has drawn one, the pass the ordinary draw opens
 // copies their records first and is not split for them. An ORDER_INDIRECT_DATA barrier after a draw with shader writes ends those copies (g_mdx_wr): the multi-draw
 // after it copies again, which splits the pass; the same barrier with no shader write since the copies keeps them
 // A real fragment producer also checks ORDER_PRIMITIVES: the count starts at zero, the shader writes 65535, and a later indexed draw must paint red with its new mask.

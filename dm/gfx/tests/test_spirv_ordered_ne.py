@@ -5,7 +5,7 @@ SPIRV-Cross used MSL's unordered != for OpFOrdNotEqual. These synthetic modules
 keep ordered, unordered, inverted, integer and Boolean comparisons observable.
 Scalar and vector f32/f16 results run on the GPU with the chain's Metal flags,
 so folding an ordered expression back to != also fails. No game data is needed.
-Set DMSH_TEST_GPU=1 for GPU readback and DMSH_TEST_METAL=1 for iOS compilation.
+Set DMSH_TEST_GPU=1 for GPU readback.
 """
 import math
 import os

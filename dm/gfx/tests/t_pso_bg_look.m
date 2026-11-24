@@ -1,4 +1,4 @@
-// The prediction's base lookups in the background (nvn_mtl.m pso_bg_look): with hybrid pipelines a proposed key whose base is not made gets no stand-in on the submit
+// The prediction's base lookups in the background (nvn_scan.inc pso_bg_look): with hybrid pipelines a proposed key whose base is not made gets no stand-in on the submit
 // thread; a worker looks its base up (the key's own, else its pulling one), the draw then takes its stand-in from the base made, and a key with neither base has its build
 // admitted by the worker. Real Metal 4 compiles of synthetic shaders, no archive, no game files.
 #include "../nvn/nvn_mtl.m"

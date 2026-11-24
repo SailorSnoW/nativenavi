@@ -1,5 +1,5 @@
 // Draining frames that stand in the present queue (pure function; unit test tests/t_link_drain.c).
-// The display-link callback (nvn_mtl.m NvMetalDisplayLinkDelegate) wakes the game's acquire and then takes a frame from the present queue, so a frame the game presents
+// The display-link callback (nvn_display.inc NvMetalDisplayLinkDelegate) wakes the game's acquire and then takes a frame from the present queue, so a frame the game presents
 // right after a tick waits for the next one. That wait is under one link tick. After a late frame the acquire returns at once to catch up (mtl_link_wait_ticks), two frames
 // reach the queue before one tick, the callback shows them in order (one per tick), and from then on every frame waits one tick more than it needs: a standing frame, 33.3 ms
 // of input lag at 30 fps and 16.7 ms at 60, which never clears while the game keeps up (Ocarina of Time at a 30 fps cap in a window: 115 ms from the game's present to the

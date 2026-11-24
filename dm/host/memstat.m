@@ -1,5 +1,5 @@
 // Memory accounting: when DM_MEMSTAT=<tsv path> is set, one line is logged per second.
-//   Totals: phys_footprint (task_info TASK_VM_INFO), the available-memory column (always 0: os_proc_available_memory was iOS only), Metal currentAllocatedSize
+//   Totals: phys_footprint (task_info TASK_VM_INFO), the available-memory column (always 0: os_proc_available_memory has no answer on macOS), Metal currentAllocatedSize
 //   Breakdown: walk this process's VM regions (vm_region_recurse_64, VM_REGION_SUBMAP_INFO_64), classify by region, and for each class record
 //         virtual = address space size (reserved-only counts too), resident = pages_resident, charged = dirty pages + compressed/swapped-out pages, deduplicated by VM object (≈ the part that goes into phys_footprint)
 //         dedup key = (object id, offset within the object); reason for dedup: Metal wraps the guest memory pool with "no copy", so the same object is mapped in several places (share_mode TRUESHARED, ref_count>1), and summing region by region would double count;
@@ -52,9 +52,8 @@ static void dump_regions(const char *path) {
 }
 
 // The address-space census the crash handler writes after every crash and abort (crash.c on_crash): how much of the process's address space each class holds, the largest free gaps
-// between the lowest and highest address the task may use (TASK_VM_INFO min / max_address) and the thread count. Made for the iPhone, which without the extended-virtual-addressing entitlement had
-// a few GB of address space: a thread's stack, a realloc or a Metal heap that found no room aborted there with the footprint far below the memory limit
-// (GitHub issue #2444). Regions inside a submap (the dyld shared cache) are "system" here and never a gap. Only mach calls and fprintf: it runs in the signal handler
+// between the lowest and highest address the task may use (TASK_VM_INFO min / max_address) and the thread count. A thread's stack, a realloc or a Metal heap that finds no room
+// aborts with the footprint far below the memory limit (GitHub issue #2444). Regions inside a submap (the dyld shared cache) are "system" here and never a gap. Only mach calls and fprintf: it runs in the signal handler
 void dm_vm_census(FILE *f) {
     enum { C_SYS = NC, NCC };
     uint64_t virt[NCC] = {0}, gap[3] = {0}, gap_at = 0, prev = 0, lo = 0, hi = 0, nreg = 0, tag[256] = {0};   // tag: "other" by VM user tag
@@ -188,8 +187,8 @@ static void thrcpu_start(void) {
     char *spec = strdup(p);
     pthread_t th; pthread_create(&th, NULL, thrcpu_thread, spec); pthread_detach(th);
 }
-// DM_MEMSTAT and DM_THRCPU, started once by the host's loading (main.c host_load), not by a constructor: on iOS a constructor ran before the app's main() set what Documents/env.txt
-// held, so either switch set there did nothing (GitHub issue #1184)
+// DM_MEMSTAT and DM_THRCPU, started once by the host's loading (main.c host_load), not by a constructor: a constructor runs before the front end has set what the launcher's environment
+// holds, so either switch set there would do nothing (GitHub issue #1184)
 void dm_diag_samplers_start(void) {
     static atomic_int once;
     if (atomic_exchange(&once, 1)) return;
@@ -210,8 +209,8 @@ static int gpu_users(gpu_user *u) {
         for (io_registry_entry_t c; (c = IOIteratorNext(kids)); IOObjectRelease(c)) {
             NSString *who = CFBridgingRelease(IORegistryEntryCreateCFProperty(c, CFSTR("IOUserClientCreator"), NULL, 0));
             NSArray *use = CFBridgingRelease(IORegistryEntryCreateCFProperty(c, CFSTR("AppUsage"), NULL, 0));
-            int pid = 0; char name[24] = "";
-            if (![who isKindOfClass:NSString.class] || ![use isKindOfClass:NSArray.class] || sscanf(who.UTF8String, "pid %d, %23[^\n]", &pid, name) < 1) continue;
+            int pid = 0; char name[24] = ""; const char *w = [who isKindOfClass:NSString.class] ? who.UTF8String : NULL;
+            if (!w || ![use isKindOfClass:NSArray.class] || sscanf(w, "pid %d, %23[^\n]", &pid, name) < 1) continue;
             uint64_t ns = 0; for (NSDictionary *q in use) if ([q isKindOfClass:NSDictionary.class]) ns += [q[@"accumulatedGPUTime"] unsignedLongLongValue];
             int k = 0; while (k < n && u[k].pid != pid) k++;
             if (k < n) u[k].ns += ns;

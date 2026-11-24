@@ -1,4 +1,4 @@
-// The RGB565 family's red / blue exchange, or RGBA4's reversed nibbles (shift 4), on the GPU, for copies between guest memory and a host texture (nvn_mtl.m rb_swap_gpu)
+// The RGB565 family's red / blue exchange, or RGBA4's reversed nibbles (shift 4), on the GPU, for copies between guest memory and a host texture (nvn_copy.inc rb_swap_gpu)
 #include <metal_stdlib>
 using namespace metal;
 struct P { device const uchar *s; device uchar *d; uint w, h, row, img, drow, dimg, shift; };

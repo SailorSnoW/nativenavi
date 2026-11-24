@@ -31,7 +31,7 @@ def frame_step(ctx):
               0x1e270200,   # fmov s0,w16
               0x1e201908):  # fdiv s8,s8,s0          / 60
         emit(w)
-    emit(ADRP(16, here(), FS_STATE_OFF))   # the page again: x17 did not survive the store above on an iPhone (seedds/nxnative PR #1543, a fault at x17 + 0x3c with x17 = 0)
+    emit(ADRP(16, here(), FS_STATE_OFF))   # the page again: x17, a scratch register, need not survive the store above (seedds/nxnative PR #1543: a fault at x17 + 0x3c with x17 = 0)
     for w in (0xbd403a00,   # ldr s0,[x16,#0x38]     seconds; 0 = at the target
               0x52800031,   # mov w17,#1
               0xb9003e11,   # str w17,[x16,#0x3c]    this main reads the frame time

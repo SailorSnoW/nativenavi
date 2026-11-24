@@ -1,4 +1,4 @@
-// Texture copies drawn as a render pass: colour, depth and stencil (nvn_mtl.m copy_t2t_draw)
+// Texture copies drawn as a render pass: colour, depth and stencil (nvn_copy.inc copy_t2t_draw)
 #include <metal_stdlib>
 using namespace metal;
 struct V { float4 p [[position]]; };

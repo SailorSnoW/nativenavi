@@ -63,8 +63,8 @@ static void screen_refresh(NSScreen *screen) {   // main thread: refresh capabil
     }
 }
 static _Atomic int g_fullscreen;   // the window is in fullscreen (set when it has entered and when it has left)
-int front_fullscreen(void) { return g_fullscreen; }   // nvn_mtl.m link_latency: frame latency 2 in variable-refresh fullscreen
-// Whether the screen is still settling at start, so the display link waits before starting (nvn_mtl.m link_sync): fullscreen was asked for at launch (DM_FULLSCREEN) and has not been
+int front_fullscreen(void) { return g_fullscreen; }   // nvn_display.inc link_latency: frame latency 2 in variable-refresh fullscreen
+// Whether the screen is still settling at start, so the display link waits before starting (nvn_display.inc link_sync): fullscreen was asked for at launch (DM_FULLSCREEN) and has not been
 // entered yet (at most 5 s), a fullscreen match request is still queued on the main thread, or this host switched a screen's mode under 1 s ago. Started before, the link ran into
 // the mode switch fullscreen brings (silences up to 500 ms, a rescue, and a minute at 20-30 fps on a ROG XG27AQNGV). The present thread shows frames meanwhile
 static _Atomic int g_fs_starting, g_match_pending; static _Atomic double g_fs_asked, g_mode_switched;
@@ -75,14 +75,14 @@ int front_screen_settling(void) {
     return g_mode_switched > 0 && now - g_mode_switched < 1.0;
 }
 // The screen's refresh rate matched to the game's frame rate in fullscreen (front_screen_match, from PR #79; DM_SCREEN_MATCH=0 turns it off). 60 fps on a 144 Hz screen cannot be paced
-// evenly: the display link counts a tick on the refresh nearest each 1/60 s slot (nvn_mtl.m link_range), so frames stay up 2 and 3 refreshes in turn (13.9 / 20.8 ms) and Apple's HUD shows
+// evenly: the display link counts a tick on the refresh nearest each 1/60 s slot (nvn_display.inc link_range), so frames stay up 2 and 3 refreshes in turn (13.9 / 20.8 ms) and Apple's HUD shows
 // the frame interval jumping between them. In fullscreen, a screen whose rate is not a multiple of the game's switches to the mode of the same size with the highest rate that is (144 → 120 Hz
 // for 60 and 30 fps), for this app only: macOS switches it back when the host quits, crashes included, and leaving fullscreen or that screen switches it back at once. A window keeps the
 // screen's rate, because the switch changes the whole screen for every app and most external screens go black for a second or more. A screen with no such mode keeps the virtual ticks.
 // A variable-refresh screen (ProMotion) in fullscreen switches to a fixed-rate mode of the same size at a multiple of the game's rate (120 → 60 Hz for 60 and 30 fps), though its own
 // rate is a multiple: there the display link at 60 Hz missed its targets (every present a 120 Hz refresh late and every other tick skipped, 40 fps on an M5 Pro at frame latency 2;
 // 1 → 2 → 3 vsync steps at latency 1, issue #347), and the fixed 60 Hz mode held 60.0 fps at latency 1 (docs/reference/frame-rate.md). A screen with no such mode keeps its rate, and
-// the 120 Hz link paces it (nvn_mtl.m link_vrr_120)
+// the 120 Hz link paces it (nvn_display.inc link_vrr_120)
 static NSWindow *g_win; static _Atomic int g_match_want;   // the game's window; the frame rate to match (0 = not known yet), written by the present thread only
 // A switch reconfigures every screen, and with several screens (a DisplayLink one among them) that moved the fullscreen window off the switched screen and back: each move
 // switched the screen back and then again, 18 times in a minute, until two of three screens lost their signal and the Dock and Finder stopped answering (LNPANDY/NX2Apple#1085).
@@ -791,7 +791,7 @@ __attribute__((constructor)) static void hud_env(void) { front_hud_env(); }
     NSString *pack = nil;
     for (int i = 0; i < n; i++) {
         NSArray<NSString *> *parts = [@(dm_mods_name(i)) componentsSeparatedByString:@"/"];
-        if (parts.count > 1 && ![parts[0] isEqualToString:pack]) [menu addItemWithTitle:parts[0] action:nil keyEquivalent:@""].enabled = NO;
+        if (parts.count > 1 && (!pack || ![parts[0] isEqualToString:pack])) [menu addItemWithTitle:parts[0] action:nil keyEquivalent:@""].enabled = NO;
         pack = parts.count > 1 ? parts[0] : nil;
         NSMenuItem *it = [menu addItemWithTitle:parts.lastObject action:@selector(toggleMod:) keyEquivalent:@""];
         if (dm_mods_exclusive(i)) it.toolTip = @"Replaces the same files as another mod of this pack: turning it on turns that one off";

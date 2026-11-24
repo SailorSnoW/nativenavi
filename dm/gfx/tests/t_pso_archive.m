@@ -672,11 +672,11 @@ static void capture_preserves_foreign_folder(void) {
         EXPECT("foreign capture: test-owned fixture removed", 1, [NSFileManager.defaultManager removeItemAtPath:proxy->fixture error:nil]);
 }
 // Stand-ins for a base pipeline's newRenderPipelineDescriptorForSpecialization: one returns the descriptor retained, as its name promises (macOS 27.0), the other autoreleased,
-// as iOS 26.0's driver did. Plain functions, so ARC's naming convention does not decide what they return
+// as one of Apple's drivers did. Plain functions, so ARC's naming convention does not decide what they return
 static __weak MTL4RenderPipelineDescriptor *g_spec_made;
 static void *spec_retained(id self, SEL cmd) { (void)self; (void)cmd; MTL4RenderPipelineDescriptor *d = [MTL4RenderPipelineDescriptor new]; g_spec_made = d; return (void *)CFBridgingRetain(d); }
 static void *spec_autoreleased(id self, SEL cmd) { (void)self; (void)cmd; MTL4RenderPipelineDescriptor *d = [MTL4RenderPipelineDescriptor new]; g_spec_made = d; return (void *)CFAutorelease(CFBridgingRetain(d)); }
-// spec_desc owns the descriptor either way: it outlives every pool once returned (no over-release; the warm task's pool crashed on iOS 26.0) and goes away once dropped (no leak),
+// spec_desc owns the descriptor either way: it outlives every pool once returned (no over-release: the warm task's pool crashed on one) and goes away once dropped (no leak),
 // on the first call, which finds out how the driver returns it, and on later ones
 static void spec_desc_ownership(void) {
     SEL sel = @selector(newRenderPipelineDescriptorForSpecialization);

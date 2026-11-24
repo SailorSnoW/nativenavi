@@ -1,5 +1,5 @@
 // The display-link callback's late latch (pure function; unit test tests/t_link_latch.c).
-// The callback (nvn_mtl.m NvMetalDisplayLinkDelegate) wakes the game's acquire and then takes a frame from the present queue. A game presents a little after its acquire
+// The callback (nvn_display.inc NvMetalDisplayLinkDelegate) wakes the game's acquire and then takes a frame from the present queue. A game presents a little after its acquire
 // returns (Ocarina of Time 1.3 ms later), so the frame it took was the one presented just after the previous callback, which had waited a whole period in the queue: on a
 // 60 Hz link about 15 ms of input lag on every frame (issue #2648: 40.3 ms from the game's present to the screen with the link, 31.7 ms without it, on a fixed 120 Hz screen).
 // With the latch the callback that woke an acquire waits a short, bounded time for that acquire's present and takes it, so the frame goes out on the tick that woke it.

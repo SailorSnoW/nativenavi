@@ -80,7 +80,7 @@ static void pic_rgba(const cv_pic *p, uint8_t *dst, int w, int h) {
         for (int x = 0; x < cw; x++) {
             int l = (py[x] - y0) * Y, u = puv[x & ~1] - 128, v = puv[(x & ~1) + 1] - 128;
             int r = (l + RV * v + 32768) >> 16, g = (l - GU * u - GV * v + 32768) >> 16, b = (l + BU * u + 32768) >> 16;
-            o[4 * x] = (uint8_t)CL(r); o[4 * x + 1] = (uint8_t)CL(g); o[4 * x + 2] = (uint8_t)CL(b); o[4 * x + 3] = 255;
+            o[4 * x] = (uint8_t)CL(r); o[4 * x + 1] = (uint8_t)CL(g); o[4 * x + 2] = (uint8_t)CL(b); o[4 * x + 3] = 255;   // NOLINT(clang-analyzer-security.ArrayBound): x < cw <= w, y < ch <= h, in the w x h x 4 bytes of dst (the analyzer does not tie the index to that product)
         }
     }
     #undef CL

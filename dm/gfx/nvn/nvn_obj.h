@@ -80,7 +80,7 @@ typedef struct {
     uint8_t *cur;                        // Write pointer of the current command memory segment
     uint64_t nvn_flag10;
                                          // +0x10 is left to the game: its inlined NVN header code writes byte 1 here after AddCommandMemory and before BeginRecording / CallCommands (an internal flag of real NVN; main+0x4da5c, main+0xb8dec etc.).
-                                         // This used to be the low byte of end: rewritten to 01 it cut the segment end by up to 254 bytes, and SMBW's material setup handles (512-byte blocks at minimum) kept overflowing into host segments at the iPhone's addresses
+                                         // This used to be the low byte of end: rewritten to 01 it cut the segment end by up to 254 bytes, and SMBW's material setup handles (512-byte blocks at minimum) kept overflowing into host segments
     uint8_t *end;                        // End of the current command memory segment
     uint8_t *begin;                      // First record of this recording; recording 2 = not written yet
     PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb; void *cb_data;
@@ -270,7 +270,7 @@ typedef struct { int64_t row, image; } p_copy_strides;
 static inline const p_copy_strides *copy_strides(const void *a, uint32_t size) {
     return size >= 8 && size - 8 >= COPY_STRIDES_OFF + sizeof(p_copy_strides) ? (const p_copy_strides *)((const uint8_t *)a + COPY_STRIDES_OFF) : NULL;
 }
-// NVN2's DLSS evaluation: the parameters at the time of the call, each texture snapped after the record (hle_nvn.c "NVN2's DLSS", nvn_mtl.m dlss_eval)
+// NVN2's DLSS evaluation: the parameters at the time of the call, each texture snapped after the record (hle_nvn.c "NVN2's DLSS", nvn_dlss.inc dlss_eval)
 enum { DLSS_COLOR, DLSS_DEPTH, DLSS_MOTION, DLSS_OUTPUT, DLSS_BIAS, DLSS_EXPOSURE, DLSS_TEXTURES };
 // NVN2's DLSS network as the host keeps it in the game's memory (hle_nvn.c): what it was built with, and the serial its evaluations carry (p_dlss.net), new at each Initialize
 typedef struct { int32_t w, h, method, preset; uint32_t flags; } dlss_builder_t;
@@ -279,7 +279,7 @@ typedef struct { const tex_t *tex[DLSS_TEXTURES]; uint64_t net; int32_t iw, ih, 
 typedef struct { uint64_t addr, size; uint32_t value, _pad; } p_clear_buf;   // buffer filled with a 32-bit value (ClearBuffer)
 typedef struct { float rgba[4]; } p_blend_color;
 typedef struct { float ref; } p_alpha_ref;
-typedef struct { uint16_t compute, offset; uint32_t size; uint8_t data[]; } p_push_const;   // NVN2 push constants: the bytes at offset in the graphics or compute group's c[24] (block b at b * DMSH_PUSH_SIZE)   // SetAlphaRef: the reference of the alpha test (ColorStateSetAlphaTest; nvn_mtl.m at_bind)
+typedef struct { uint16_t compute, offset; uint32_t size; uint8_t data[]; } p_push_const;   // NVN2 push constants: the bytes at offset in the graphics or compute group's c[24] (block b at b * DMSH_PUSH_SIZE)   // SetAlphaRef: the reference of the alpha test (ColorStateSetAlphaTest; nvn_pso_desc.inc at_bind)
 typedef struct { int32_t on; } p_rast_discard;
 
 // Entry point of the Metal replay layer (nvn_mtl.m): replays a set of command handles into the current submission
@@ -347,7 +347,7 @@ void mtl_tex_gpu_written(const tex_t *t);   // a GPU write into the texture's st
 int mtl_tex_gpu_owned(uint64_t serial);                                  // its host texture is a render target or shader-writable: GPU content, never re-uploaded from guest memory
 enum { MTL_REWRITE_UPLOADED, MTL_REWRITE_GPU, MTL_REWRITE_GPU_NOW };     // mtl_tex_cpu_rewritten: uploaded from its storage / left to the GPU for good / until the CPU rewrites it
 int mtl_tex_cpu_rewritten(const tex_t *t);                               // nvn_ft_poll: the CPU wrote a registered texture's pages after its first use (MTL_REWRITE_*)
-// hle_nvn.c: a texture tex_flush_upload / tex_dirty_upload registered and has not resolved yet; what the GPU writes into it is stored into its storage as well (nvn_mtl.m gsb_store)
+// hle_nvn.c: a texture tex_flush_upload / tex_dirty_upload registered and has not resolved yet; what the GPU writes into it is stored into its storage as well (nvn_pass.inc gsb_store)
 int nvn_ft_tracked(uint64_t serial);
 int nvn_tex_level_range(const tex_t *t, unsigned level, unsigned layer, uint64_t *lo, uint64_t *hi);   // one level of one layer in the texture's storage, as offsets; −1 out of range
 // A program's per-stage shader key (hle_nvn.c): the first 8 bytes of sha256(first 0x48 bytes of the NVN2 control section, +0x30 as zero, + code area). Computed at SetShaders (NVN lets the caller free the control section once it returns, and Unity does);

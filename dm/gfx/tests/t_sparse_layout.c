@@ -27,7 +27,7 @@ int main(void) {
     uint64_t l1 = nvn_tex_level_offset(&mh, 1); uint32_t g0 = nvn_tex_level_gobs(&mh, 0);
     g_n++; if (l1 != 0x90000 || g0 != 48) g_fail++;
     printf("1024x1024 ASTC 6x6 sparse: level 0 %u GOBs wide, level 1 at %#llx (want 48, 0x90000) %s\n", g0, (unsigned long long)l1, l1 == 0x90000 && g0 == 48 ? "✓" : "✗");
-    // Tiles decoded one by one (nvn_deswizzle_tile, the placement sparse textures of nvn_mtl.m sparse_sync) read what the whole level reads: a sparse BC6H 2D array (16-byte blocks,
+    // Tiles decoded one by one (nvn_deswizzle_tile, the placement sparse textures of nvn_sparse.inc sparse_sync) read what the whole level reads: a sparse BC6H 2D array (16-byte blocks,
     // 256x256 texels a tile, Mario Kart World's terrain format) and a sparse RGBA8 texture (128x128), each with level 0 one tile short of square, both GOB orders; the mip tail decoded
     // from its own bytes (nvn_deswizzle_from) reads what the whole texture reads
     static const struct { int format; uint32_t w, h, layers, levels; } tc[] = {{0x50, 1024, 768, 2, 5}, {0x25, 512, 384, 1, 4}};

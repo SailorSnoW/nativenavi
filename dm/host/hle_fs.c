@@ -36,7 +36,7 @@ _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry layout");
 // Killed at any moment, commit is either the old version or the new version, never half-written / a mix of old and new; the next mount discards leftover .work / .new.
 // RomFS image (dm/tools/romfs_image.py): DM_ROMFS may name one image file instead of a folder. Its index is read at mount; a file handle is then an entry of the image
 // (IMG_HANDLE, bit 58 set, never a valid fd), read with pread at its offset in the one descriptor kept open, and a directory lists its consecutive child entries.
-// One file instead of a few hundred thousand: the image was made for copies to an iPhone at full speed (a folder copy of Tears of the Kingdom's 304,000 files ran the phone's file service out of open files)
+// One file instead of a few hundred thousand: one descriptor for the whole RomFS and one copy at full speed (Tears of the Kingdom has 304,000 files)
 #define IMG_HANDLE(mi, k) ((1ull << 58) | ((uint64_t)(mi) << 32) | (uint64_t)(k))
 #define IMG_H(h) (((h) >> 58) == 1)
 #define IMG_M(h) ((int)(((h) >> 32) & 0x3ffffff))
@@ -205,7 +205,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     const char *overlay = g_mnt[g_nmnt].romfs ? overlay_now() : NULL;
     if (overlay) strlcpy(g_mnt[g_nmnt].overlay, overlay, sizeof g_mnt[0].overlay);
     // The transaction directory cannot be set up (leftovers cannot be cleared / clone failed, which really happens on a full disk): do not exit; mount the committed directory read-only -- saves still read, every write fails, commits are no-ops, the committed version is untouched, and the front end is told
-    // (each of these three failures used to call die: with an iPhone's storage full the game exited as soon as it mounted its saves)
+    // (each of these three failures used to call die: with a full disk the game exited as soon as it mounted its saves)
     int txn_err = 0, k = 0;
     while (txn && k < g_nmnt && strcmp(g_mnt[k].commit, dir)) k++;
     if (txn && k < g_nmnt) {   // a second name for a save already mounted: it shares that transaction, whose pending writes a new clone would drop
@@ -269,7 +269,7 @@ static struct dirent *dir_next(DIR *d) {
 }
 // Name index of the directories of read-only mounts (RomFS, a save that fell back to read-only): guest name → physical name, sorted by guest name. The mount table is resident and a read-only mount does not change for the whole process,
 // so each directory's index is built once at its first lookup and stays valid. The entry-by-entry comparison below calls getxattr on every entry of the parent directory for each path component:
-// Engage's voice bank directories have 38,000 entries, and walking the whole RomFS at boot (9,680 directories) took about 17 s of black screen on the Mac and longer on an iPhone;
+// Engage's voice bank directories have 38,000 entries, and walking the whole RomFS at boot (9,680 directories) took about 17 s of black screen on the Mac;
 // in play every audio file Wwise opened also took tens of milliseconds, all while holding the global path lock. Callers all hold PATH_LOCK (like host_path_ex), so the index takes no lock of its own.
 typedef struct { const char *guest, *phys; } name_ent;
 typedef struct dir_index { struct dir_index *next; uint64_t hash; char *path; size_t n; name_ent *e; char *pool; } dir_index;

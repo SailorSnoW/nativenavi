@@ -19,6 +19,7 @@ static int fake_clonefile(const char *src, const char *dst, uint32_t flags);
 #define pwrite fake_pwrite
 #define clonefile fake_clonefile
 #include "../hle_fs.c"
+#include "t_files.h"
 #undef pwrite
 #undef clonefile
 ssize_t pwrite(int, const void *, size_t, off_t);
@@ -187,9 +188,9 @@ int main(void) {
         h = 0; cnt = -1; CHECK(h_fs_OpenDirectory(&h, "rom:\\data", DIRMODE_DIR | DIRMODE_FILE) == RES_OK && h_fs_DirCount(&cnt, h) == RES_OK && cnt == 4, "and list the merged directory (%lld)", (long long)cnt); h_fs_CloseDirectory(h);
         g_nmnt = 0;
         {   // three folders, the first the highest: one that deletes, the one above, and one whose names differ from the game's in case
-            char o2[1100], o3[1100], list[3400], cmd[2600];
+            char o2[1100], o3[1100], list[3400], dir[1200];
             snprintf(o2, sizeof o2, "%s/ovdel", root); snprintf(o3, sizeof o3, "%s/ovcase", root);
-            snprintf(cmd, sizeof cmd, "mkdir -p '%s/data' '%s/DATA/B'", o2, o3); CHECK(!system(cmd), "stage the overlay folders");
+            snprintf(dir, sizeof dir, "%s/data", o2); int staged = !t_mkdirs(dir); snprintf(dir, sizeof dir, "%s/DATA/B", o3); CHECK(staged && !t_mkdirs(dir), "stage the overlay folders");
             snprintf(fn, sizeof fn, "%s/data/c.dm-delete", o2); put(fn, ""); snprintf(fn, sizeof fn, "%s/data/new.dm-delete", o2); put(fn, "");
             snprintf(fn, sizeof fn, "%s/DATA/C", o3); put(fn, "lower"); snprintf(fn, sizeof fn, "%s/DATA/Extra", o3); put(fn, "x"); snprintf(fn, sizeof fn, "%s/DATA/B/inner", o3); put(fn, "in");
             snprintf(list, sizeof list, "%s:%s:%s", o2, ov, o3); setenv("DM_ROMFS_OVERLAY", list, 1);
@@ -204,7 +205,7 @@ int main(void) {
             for (int i = 0; i < cnt; i++) seen += (!strcmp(d8[i].name, "a") && d8[i].size == 3) || (!strcmp(d8[i].name, "b") && d8[i].type == ENT_DIR) || (!strcmp(d8[i].name, "Extra") && d8[i].size == 1);
             CHECK(seen == 3, "and names what the game has by the game's spelling"); h_fs_CloseDirectory(h);
             g_nmnt = 0;
-            snprintf(o2, sizeof o2, "%s/ovdir", root); snprintf(cmd, sizeof cmd, "mkdir -p '%s/data'", o2); CHECK(!system(cmd), "stage a folder that replaces a directory");
+            snprintf(o2, sizeof o2, "%s/ovdir", root); snprintf(dir, sizeof dir, "%s/data", o2); CHECK(!t_mkdirs(dir), "stage a folder that replaces a directory");
             snprintf(fn, sizeof fn, "%s/data.dm-delete", o2); put(fn, ""); snprintf(fn, sizeof fn, "%s/data/only", o2); put(fn, "o");
             snprintf(list, sizeof list, "%s:%s", o2, ov); setenv("DM_ROMFS_OVERLAY", list, 1);
             CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK, "mount the image with a folder that replaces a directory");
@@ -302,7 +303,7 @@ int main(void) {
     CHECK(write_save("save:/a", "ok2") == RES_OK && h_fs_Commit("save") == RES_OK, "the next transaction commits as usual");
     // 6c Cloning the work directory at mount fails: do not exit; mount the committed directory read-only instead. Reads work, writes fail, commits are no-ops, the committed version is unchanged, and the front end is notified once; the next normal mount works as before
     setenv("DM_TEST_FS_FAILAT", "mountclone:1", 1); g_nmnt = 0; nf0 = g_nfail;
-    snprintf(p, sizeof p, "rm -rf '%s'", work); system(p);
+    t_rmtree(work);
     CHECK(h_fs_MountSave("save", k_user1) == RES_OK && g_nfail == nf0 + 1, "mount returns success, front end notified once (actually %d times)", g_nfail - nf0);
     CHECK(read_fs("save:/a", got, sizeof got) && !strcmp(got, "ok2"), "the read-only mount reads the committed a=ok2 (read %s)", got);
     CHECK(write_save("save:/a", "zzz") != RES_OK, "writes fail");
@@ -406,7 +407,7 @@ int main(void) {
         t_guest_sym = NULL;
     }
 
-    char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); system(cmd);
+    t_rmtree(root);
     printf("== %d checks, %d failed ==\n", checks, fails);
     return fails != 0;
 }

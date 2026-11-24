@@ -49,7 +49,7 @@ extern const char call_on_site[];
 __asm__(".text\n.p2align 2\n.globl _call_on\n_call_on:\n"
         "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n"
         "    cbz x2, 1f\n    mov sp, x2\n"
-        "1:  mov x17, #0x7ff0\n"            // garbage in x17: the NVN, Vulkan and GL layers enter without setting it, and a plain entry must carry no stack arguments
+        "1:  mov x17, #0x7ff0\n"            // garbage in x17: the NVN layer enters without setting it, and a plain entry must carry no stack arguments
         "    blr x3\n"
         ".globl _call_on_site\n_call_on_site:\n"
         "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n");

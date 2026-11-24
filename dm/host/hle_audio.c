@@ -196,7 +196,7 @@ static void route_check(void *unused) { (void)unused; atomic_store(&g_route_queu
 static void route_queue(void) { if (!atomic_exchange(&g_route_queued, 1)) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), NULL, route_check); }
 // Mac DefaultOutput's default 512 device frames can exceed the PCM a game has queued, producing zero-filled gaps.
 // Request about 5 ms of device frames; reapply on device or output-rate changes within the supported range.
-// DM_DBG_AU_FRAMES=N asks N frames instead (1024, the iOS audio session's default, reproduced the crackling found there)
+// DM_DBG_AU_FRAMES=N asks N frames instead (1024 reproduces the crackling of a larger hardware buffer)
 static void au_buffer(AudioUnit au, const char *why) {
     AudioDeviceID device = kAudioObjectUnknown; UInt32 sz = sizeof device;
     if (AudioUnitGetProperty(au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, &sz) || device == kAudioObjectUnknown) return;
@@ -439,11 +439,11 @@ static void au_request_start(aout *a) {
     a->start_phase = AU_STARTING;
     dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), a, au_start_device);
 }
-// Watchdog (real output only): an AudioUnit that is started while the app is in focus must keep calling back. Found on iOS, which stopped calling back without telling the AudioUnit when another audio session took over
-// (Siri, an alarm, a call) or the media services reset; the output's buffers were then never released, and a game whose audio thread waits for them (Wwise's poll-only output, FMOD) stayed silent for good.
+// Watchdog (real output only): an AudioUnit that is started while the app is in focus must keep calling back. A system can stop calling back without telling the AudioUnit (another audio session
+// takes over, the media services reset); the output's buffers were then never released, and a game whose audio thread waits for them (Wwise's poll-only output, FMOD) stayed silent for good.
 // After 200 ms without a callback the silent sink takes over (the game's audio keeps its real-time pace) and the AudioUnit is retried after 1, 2, 4, 8 s. A late wake-up of the watchdog itself (the whole process was stopped) only restarts the count.
 // The time is read under g_aos_lock: the startup helper stamps wd_t under it too, and a watchdog time read before the lock was older than the stamp of an AudioUnit the return from the background had just
-// started (DRAGON QUEST VII Reimagined on an iPhone: "has not called back for 18446744073662 ms", a restart of a running AudioUnit)
+// started (DRAGON QUEST VII Reimagined: "has not called back for 18446744073662 ms", a restart of a running AudioUnit)
 enum { WD_TICK_MS = 50, WD_STALL_MS = 200 };
 typedef struct { audio_stats stats; int id, ch; } audio_report;
 // Both consumers hold g_aos_lock. A local copy owns every log argument, so a slow log cannot hold up registry changes or retain a closed output.
@@ -890,7 +890,7 @@ static void au_remake(aout *a, int route) {
 // Route change: a six-channel output whose unit takes a different count from what the route takes now gets a new unit at that count. Without this a unit keeps the count of the route
 // it was opened on: moved from HDMI 5.1 to the speakers or headphones, Core Audio's own 6 → 2 mapping keeps only the front pair (the center and the back channels go silent);
 // moved the other way, the host's stereo downmix plays on the front pair of the 5.1 system. An output whose new unit could not be made gets another try. Under g_aos_lock, with
-// the route read under it too, so of two checks the later read is the one applied; not while suspended (the resume syncs instead; found on iOS, which could refuse a unit
+// the route read under it too, so of two checks the later read is the one applied; not while suspended (the resume syncs instead: a system may refuse a unit
 // in the background or during an interruption). Outputs the guest opened with another count keep it: a game that wants six on the new route reopens its output after
 // GetActiveAudioDeviceChannelCountForOutput says so, and host DeviceSink blocks already contain both representations (hle_audren.c)
 static void route_sync(int route) {

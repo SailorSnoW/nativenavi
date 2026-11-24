@@ -1,4 +1,4 @@
-// A game's upscaler drawn by MetalFX (DM_UPSCALER=metalfx; nvn_mtl.m up_mfx_encode): one of the game's upscaler shaders reading a 960x540 texture and writing a
+// A game's upscaler drawn by MetalFX (DM_UPSCALER=metalfx; nvn_upscaler.inc up_mfx_encode): one of the game's upscaler shaders reading a 960x540 texture and writing a
 // 1920x1080 image is replaced by the spatial scaler, which fills the whole image with the texture's colour; equal sizes, another shader, and DM_UPSCALER unset
 // (the last run) leave the dispatch to the shader. Runs under any profile: the named shader is the profile's first upscaler (DM_GAME_UPSCALER_KEYS), and a profile with
 // none swaps no shader; the MetalFX draw itself (up_mfx_encode) does not look at the key. The colour (up_mfx_color) comes from synthetic code holding the curves' constants: a variant with sRGB input

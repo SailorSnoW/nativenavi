@@ -1,4 +1,4 @@
-// Indirect draws Metal cannot take as they are: records converted to indexed indirect draws (nvn_mtl.m ixc_run)
+// Indirect draws Metal cannot take as they are: records converted to indexed indirect draws (nvn_indirect.inc ixc_run)
 #include <metal_stdlib>
 using namespace metal;
 struct ajob { device const uint *rec; device uint *args; uint prim, cap; };

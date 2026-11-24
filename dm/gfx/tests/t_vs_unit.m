@@ -54,7 +54,7 @@ static MTLVertexDescriptor *layout(int shadow) {   // the attributes at the buff
     vd.attributes[0].format = MTLVertexFormatHalf4; vd.attributes[1].format = MTLVertexFormatChar4Normalized; vd.attributes[1].offset = 8; vd.attributes[2].format = MTLVertexFormatUChar4; vd.attributes[2].offset = 12;
     for (int a = 0; a < 3; a++) vd.attributes[a].bufferIndex = 16;
     vd.layouts[16].stride = 16;
-    if (shadow) {   // the integer input's shadows take the zero buffer: its format is of the input's own class (nvn_mtl.m vin_ct)
+    if (shadow) {   // the integer input's shadows take the zero buffer: its format is of the input's own class (nvn_vertex.inc vin_ct)
         vd.attributes[16].format = MTLVertexFormatFloat4; vd.attributes[17].format = MTLVertexFormatInt4; vd.attributes[16].bufferIndex = vd.attributes[17].bufferIndex = 29;
         vd.layouts[29].stride = 16; vd.layouts[29].stepFunction = MTLVertexStepFunctionConstant; vd.layouts[29].stepRate = 0; }
     return vd;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # The host's own Metal shaders (dm/gfx/msl/<name>.metal: clears, copies, the present, index conversions, geometry packing, ...), compiled when the host is built, so the host
 # never compiles MSL source at run time. MTL4Compiler's newLibraryWithDescriptor: with a source compiles it through the MTLDevice (it calls newLibraryWithSource:), which
-# the Metal performance HUD reports ("Compiled 2 shaders ... Consider adopting MTL4Compiler") and which held the submitting thread about 50 ms per library on an iPhone.
+# the Metal performance HUD reports ("Compiled 2 shaders ... Consider adopting MTL4Compiler") and which held the submitting thread for each library.
 # Writes one C header (the host Makefile includes its directory; dm/gfx/nvn/host_msl.m reads it) with, per library, its name, its source (the fallback when the library
 # is missing) and the metallib compiled for the SDK. Without the Metal toolchain the header has the sources only: the host then compiles them and says so in a [RED] line.
 # Each run rechecks the compiler, SDK, deployment target and source contents. Matching inputs reuse the header without compiling; a toolchain installed after a source-only

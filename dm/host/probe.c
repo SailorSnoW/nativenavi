@@ -6,7 +6,7 @@
 #include <sys/mman.h>
 #include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>   // the write watch (DM_PROBE_WATCH): iOS's SDK has no mach_vm.h
+#include <mach/mach_vm.h>   // the write watch (DM_PROBE_WATCH)
 #include <pthread.h>
 #include <stdatomic.h>
 #include <unistd.h>
@@ -370,7 +370,7 @@ static void watch_install(void) {
 
 // DM_CTL atrace <hex address> <bytes> (hle_hid.c): the range made inaccessible; the first access to each page after that logs who made it (pc / lr as module offsets, read or write)
 // and opens the page again. Tells which code reads memory the GPU writes (PRAGMATA: the culling chain's results, read back by the game). Up to 64 ranges, 64 lines in all.
-// Mac and iOS: only mprotect and the page fault hooks (crash.c), as nvn_dirty.c's write tracking; hle_hid.c's DM_CTL reader calls it on both
+// Only mprotect and the page fault hooks (crash.c), as nvn_dirty.c's write tracking; hle_hid.c's DM_CTL reader calls it
 static struct { uint64_t lo, hi; } g_at[64]; static _Atomic int g_atn, g_atlog;
 static int atrace_fault(void *addr, int is_write, void *uc_) {
     uint64_t a = (uint64_t)(uintptr_t)addr; int n = atomic_load(&g_atn);

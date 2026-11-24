@@ -103,11 +103,11 @@ static void recording(int compact) {
     h_nvnCommandBufferBindSeparateSampler(&commands,(NVNshaderStage)7,0,(NVNseparateSamplerHandle){handle(7,14)});
     apply(h_nvnCommandBufferEndRecording(&commands));
     CHECK(S.ubo[4][0].addr==address(7,12) && !S.ubo[5][0].addr && !S.ubo[3][0].addr, "second queue mesh writes do not populate compute or task");
-    typeof(S) before=S;   // NVN2's ray tracing stage: every bind is refused and records nothing
+    typeof(S) before; memcpy(&before,&S,sizeof S);   // NVN2's ray tracing stage: every bind is refused and records nothing. A byte copy, padding included (an assignment need not copy it)
     h_nvnCommandBufferBeginRecording(&commands);
     bind_all(8);
     apply(h_nvnCommandBufferEndRecording(&commands));
-    CHECK(!memcmp(&before,&S,sizeof S), "binds for the ray tracing stage (8) change no resource table");
+    CHECK(!memcmp(&before,&S,sizeof S), "binds for the ray tracing stage (8) change no resource table");   // NOLINT(bugprone-suspicious-memory-comparison): the bytes of a byte copy, and refused binds write no byte of S
     mtl_queue_activate(780001);
     CHECK(S.ubo[4][0].addr==mesh && S.ubo[5][0].addr==cs && S.ubo[3][0].addr==task, "queue restore preserves distinct mesh/compute/task uniforms");
     verify_all();

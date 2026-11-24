@@ -104,7 +104,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     id<MTLComputePipelineState> ps = lib ? [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"main0"] error:&e] : nil;
     if (!ps) { printf("pipeline: %s\n", e.localizedDescription.UTF8String); return 1; }
     const uint32_t slice = (uint32_t)atoi(argv[2]), slot = (uint32_t)atoi(argv[3]), gw = 16, gh = 64, groups = gw * gh;
-    id<MTLBuffer> tg = [dev newBufferWithLength:(size_t)slice * groups options:MTLResourceStorageModeShared];   // one slice per workgroup, as nvn_mtl.m dispatch binds
+    id<MTLBuffer> tg = [dev newBufferWithLength:(size_t)slice * groups options:MTLResourceStorageModeShared];   // one slice per workgroup, as nvn_dispatch.inc dispatch binds
     id<MTLBuffer> out = [dev newBufferWithLength:groups * 64 * 4 options:MTLResourceStorageModeShared];
     id<MTLCommandQueue> q = [dev newCommandQueue];
     long wrong = 0;

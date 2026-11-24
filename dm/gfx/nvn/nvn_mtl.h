@@ -7,7 +7,7 @@
 
 void mtl_init(void);
 void mtl_vbuf_stats(uint64_t *resolve, uint64_t *reuse, uint64_t *set, uint64_t *skip, uint64_t *copies, uint64_t *copy_bytes);
-void mtl_set_depth_zero(int on);          // NVN depth mode: 1 = near is 0 (D3D / Metal), 0 = near is -w (GL, NVN's default); picks the vertex shaders' entry point (see shader_load in nvn_mtl.m)
+void mtl_set_depth_zero(int on);          // NVN depth mode: 1 = near is 0 (D3D / Metal), 0 = near is -w (GL, NVN's default); picks the vertex shaders' entry point (see shader_load in nvn_shader.inc)
 void mtl_set_origin_lower_left(int on);   // NVN window origin: 1 = lower left (GL, NVN's default), 0 = upper left (D3D / Metal); see nvn_mtl.m
 void mtl_set_queue_origin_lower_left(int on); // Raster flip captured at NVN queue creation; selected under the submit lock.
 
@@ -46,7 +46,7 @@ void mtl_hold_wait(void);                            // submit thread: returns o
 void mtl_hold_satisfied(void);                       // any thread: the held wait was satisfied (a signal latched before the hold began)
 uint64_t mtl_last_fence(void);                       // Fence value of the most recent submit (0 = never submitted)
 enum { POOL_STATS = 14 };
-void mtl_pool_stats(uint64_t s[POOL_STATS]);              // the pool tables' counts for the power line (nvn_mtl.m mtl_pool_stats)
+void mtl_pool_stats(uint64_t s[POOL_STATS]);              // the pool tables' counts for the power line (nvn_pooltab.inc mtl_pool_stats)
 int mtl_wait(uint64_t fence, uint64_t timeout_ns);   // Returns 1 when the GPU has completed up to fence, 0 on timeout
 int mtl_wait_acq(uint64_t fence, uint64_t timeout_ns);   // the same for a sync WindowAcquireTexture handed out (its own line in the wait ledger, DM_NVN_WAITS)
 void mtl_finish(void);                               // Wait for all submitted commands to complete

@@ -589,7 +589,7 @@ static void ctx_fill(const thr_t *t, hz_ctx_t *o) {   // holding G, t is stopped
 // DM_HITCH_DUMP=<ms>[:<s>] (diagnostic): when no frame has been presented for <ms>, from <s> seconds after the start on, log every guest thread once per stall: priority, core and
 // mask, what it waits on, its last SVC and call site, and where it is (pc, lr and the frame-pointer chain: up to 8 guest frames, the host frames above them; x0-x2 and x19-x25
 // when it runs guest code), read with the thread suspended for a moment. At most 24 stalls per run. It found Breath of the Wild's job queue poll (patch_nso.py "Spin waits")
-_Atomic uint64_t dm_present_ns;   // nvn_mtl.m present_enqueue (every graphics API): when the last present was made (host monotonic ns)
+_Atomic uint64_t dm_present_ns;   // nvn_display.inc present_enqueue (every graphics API): when the last present was made (host monotonic ns)
 typedef struct {   // what one dump line needs, copied under G so that a thread that exits meanwhile is not read
     uint32_t handle, svc; int prio, core, rs, sleeping, host_work, wkind;
     uint64_t mask, waddr, wkey, lr;
@@ -680,7 +680,7 @@ uint32_t svc_thread_main_init(void) {
     pthread_cond_init(&t->cv, NULL); pthread_cond_init(&t->pcv, NULL);
     // Its affinity is its ideal core alone, as Horizon creates every thread (Mesosphere KThread::Initialize); it was 7, which a same-core handoff now takes for a thread that can run elsewhere (dm_yield_to_core_peers)
     t->started = t->entered = 1; t->prio = 44; t->core = 0; t->mask = 1; t->pt = pthread_self(); t->mport = pthread_mach_thread_np(t->pt); t->host_work = &dm_host_work;
-    // The iOS boot pthread inherits default QoS. Apply the guest policy before
+    // The boot pthread inherits default QoS. Apply the guest policy before
     // publishing the main thread, just as workers do before running guest code.
     qos_apply(t);
     qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0;
@@ -889,13 +889,13 @@ void svc_thread_dump(void) {
 // already-runnable peers after every thread SVC; DM_PREEMPT overrides that option.
 // These are cooperative boundaries, not an asynchronous guest-core scheduler.
 static int svc_thread_impl(int num, uint64_t *regs);
-// Yield back-off: on the Switch a yield with nothing else runnable costs nothing, but a guest loop that polls the tick and yields (Three Houses' frame limiter main+0x5be430 waited out each 33 ms frame this way:
-// 228,105 yields per frame on an iPhone, a P-core at full clock) becomes a host busy spin. A run of yields with no other SVC between them (and no progress, thr_yield) is let through as plain sched_yield for its first 2 ms
+// Yield back-off: on the Switch a yield with nothing else runnable costs nothing, but a guest loop that polls the tick and yields (Three Houses' frame limiter main+0x5be430 waited out each 33 ms frame this way,
+// a core at full clock) becomes a host busy spin. A run of yields with no other SVC between them (and no progress, thr_yield) is let through as plain sched_yield for its first 2 ms
 // (a run that reads the clock between its yields sleeps from its start, thr_yield);
 // after that each yield sleeps an eighth of the run so far, between 10 and 250 µs (a 23 ms limiter wait: about 90 sleeps instead of 200k yields, ending at most 250 µs late; idle workers polling for jobs the same).
 // The back-off used to start after 200 µs: that also caught Tears of the Kingdom's main thread waiting for its ModuleSystem workers (about 350 yields a frame, runs of a few hundred µs on the
 // frame's critical path). A sleep that overran the moment the workers finished pushed frames past 33 ms, and the game then drops itself to present interval 3 (20 fps) for a while:
-// Mac frame p95 34.5 → 41 ms with 7 drops per 300 frames; on the iPhone the threads also looked idle to the performance controller, which kept them on efficiency cores at 1.5 GHz.
+// Mac frame p95 34.5 → 41 ms with 7 drops per 300 frames, and the threads looked idle to the performance controller.
 // Waits under 2 ms are handoffs between threads that do work; waits beyond it are limiters and idle polls. Returns the sleep for a yield whose run started `run_ns` ago (0 = plain yield);
 // a clock wait (`clock`, thr_yield) has no start: it waits for a time, not for another thread, and sleeps from its first yield on.
 // DM_YIELD_BACKOFF=0 turns it off; DM_YIELD_BACKOFF=<cap µs>[:<start µs>] sets the cap and the run length after which it starts (default 250:2000)
@@ -1004,7 +1004,7 @@ static void clock_wait(thr_t *me, uint64_t sig, uint64_t now, int predict) {
 }
 // Spin waits (patch_nso.py "Spin waits"): a guest loop that polls memory with no SVC, which the rewriter has made go through a spin gate on every pass after the first. On the Switch
 // such a poll costs nothing while another thread of its core has work (a higher-priority one preempts it); here it takes a host core from the threads doing the work: Paper Mario:
-// The Thousand-Year Door's three job workers (main+0xa8e680) spun at 94% of a core each in Rogueport on an iPhone, which ran at 24 fps. The gate alone slows the poll down, and on the
+// The Thousand-Year Door's three job workers (main+0xa8e680) spun at 94% of a core each in Rogueport. The gate alone slows the poll down, and on the
 // Mac that was the whole gain (the workers' CPU fell about tenfold, see docs/development.md): most waits are short handoffs between workers. A wait (passes with no SVC between them
 // and at most SPIN_GAP_NS of guest work between two) therefore polls on for its first DM_SPIN_POLL µs (2000, the yield back-off's start), and then sleeps as a run of yields does
 // (yield_backoff_ns, DM_YIELD_BACKOFF), which leaves the core to the threads doing the work. A sched_yield on every pass instead (DM_SPIN_POLL=0) raised the Mac's frame p95 by 2-5 ms,

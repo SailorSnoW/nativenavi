@@ -1,6 +1,7 @@
 // Mods folder unit test (hle_mods.c): discovery and order.txt, the RomFS overlay list, .pchtxt and IPS32 parsing with the
 // NSO header shift, build ID matching, and the refusals that keep the rewriter's work intact. Expectations are written by hand.
 #include "../hle_mods.c"
+#include "t_files.h"
 #include <unistd.h>
 
 static char live_overlay[4096];
@@ -10,8 +11,7 @@ static int fails;
 #define CHECK(c, what) do { if (!(c)) { fails++; printf("FAIL %s (line %d)\n", what, __LINE__); } } while (0)
 
 static void put(const char *path, const void *data, size_t n) {
-    char cmd[2200]; snprintf(cmd, sizeof cmd, "mkdir -p \"$(dirname '%s')\"", path);
-    if (system(cmd)) exit(2);
+    if (t_mkdirs_for(path)) exit(2);
     FILE *f = fopen(path, "wb");
     if (!f || fwrite(data, 1, n, f) != n) exit(2);
     fclose(f);
@@ -102,7 +102,8 @@ int main(void) {
         if (!strcmp(dm_mods_name(i), "Bundle/Music2")) CHECK(dm_mods_exclusive(i) && !dm_mods_on(i), "two of a pack with the same file are alternatives");
     }
     char want[4096]; snprintf(want, sizeof want, "/explicit:%s/mods/Gamma/romfs:%s/mods/Tunics/Pink/romfs:%s/mods/Alpha/romfs:%s/mods/Beta/atmosphere/contents/%s/romfs:%s/mods/Bundle/Hud/romfs:%s/mods/Bundle/Music/romfs:%s/mods/Pack/Blue/romfs", base, base, base, base, tid, base, base, base);
-    CHECK(!strcmp(getenv("DM_ROMFS_OVERLAY"), want), "overlay list: the explicit folder, then the mods in order");
+    const char *overlay = getenv("DM_ROMFS_OVERLAY");
+    CHECK(overlay && !strcmp(overlay, want), "overlay list: the explicit folder, then the mods in order");
     CHECK(g_npfiles == 5, "five patch files found");
 
     module_t *m = &mods[0];
@@ -195,8 +196,7 @@ int main(void) {
     CHECK(text && strstr(text, "\n# Tunics/Pink\nTunics/Green\n") && strstr(text, "\n# Pack/Red\n"), "order.txt is rewritten with the choice");
     free(text);
 
-    char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", base);
-    if (system(cmd)) fails++;
+    if (t_rmtree(base)) fails++;
     printf(fails ? "t_mods: %d FAILED\n" : "t_mods: ok\n", fails);
     return fails != 0;
 }

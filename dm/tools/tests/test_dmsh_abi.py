@@ -17,11 +17,13 @@ import dmsh_abi as abi   # noqa: E402
 
 # Literals of the ABI still written in each file (outside comments), counted as the ratchet below does: the value, or the kind string (repr). These stay for other reasons:
 # a json key spelled like a kind ('c1', 'tex', 'img' in the facts and reflection json), and 0x100
-# where it is not the push constant block's size (DMSH_PUSH_SIZE): a viewport swizzle value in nvn_mtl.m, the start of compute code in a package record in dmsh_build.py.
-# 0x1000 where it is not the pool table's entry count (DMSH_GMEM_MAP_ENTRIES): the 4 KB page step of nvn_mtl.m's sparse residency map.
-# A count may only go down; when it does, lower it here.
+# where it is not the push constant block's size (DMSH_PUSH_SIZE): the viewport swizzle value of a flipped viewport in the replay layer (nvn_draw.inc, nvn_indirect.inc),
+# the start of compute code in a package record in dmsh_build.py.
+# A count may only go down; when it does, lower it here. The replay layer's parts that nvn_mtl.m includes and this list leaves out may have none (REPLAY_PARTS below).
 BASELINE = {
-    'dm/gfx/nvn/nvn_mtl.m': {'0x100': 2, '0x1000': 2},
+    'dm/gfx/nvn/nvn_mtl.m': {},
+    'dm/gfx/nvn/nvn_draw.inc': {'0x100': 1},
+    'dm/gfx/nvn/nvn_indirect.inc': {'0x100': 1},
     'dm/gfx/nvn/nvn_refl.m': {"'c1'": 1},
     'dm/gfx/nvn/nvn_refl.h': {},
     'dm/gfx/nvn/nvn_obj.h': {},
@@ -32,6 +34,8 @@ BASELINE = {
     'dm/gfx/tools/dmsh_entry.py': {},
     'dm/gfx/tools/cb_extent.py': {},
 }
+REPLAY_PARTS = re.findall(r'^#include "(nvn_\w+\.inc)"', (REPO / 'dm/gfx/nvn/nvn_mtl.m').read_text(), re.M)   # the replay layer: nvn_mtl.m and the parts it includes
+for _part in REPLAY_PARTS: BASELINE.setdefault(f'dm/gfx/nvn/{_part}', {})
 NUMBERS = {v for v in abi.VALUES.values() if isinstance(v, int) and v >= 0x100}   # the offsets and sizes distinctive enough to find as literals (not 8, 16, 0x20 or 128)
 KINDS = {k for k in abi.KINDS if len(k) > 1}   # the kind strings, likewise: not DMSH_KIND_UNKNOWN's "?", every log line's placeholder for a missing name (nvn_mtl.m has three)
 C_TOKEN = re.compile(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|//[^\n]*|/\*.*?\*/|\b0[xX][0-9A-Fa-f]+\b', re.S)
@@ -158,6 +162,10 @@ class Ratchet(unittest.TestCase):
             more = {lit: f'{base.get(lit, 0)} -> {n}' for lit, n in now.items() if n > base.get(lit, 0)}
             if more: worse[path] = more
         self.assertEqual(worse, {}, 'ABI values written as literals: use the DMSH_* names of dm/gfx/nvn/dmsh_abi.h (dmsh_abi.<NAME> in Python)')
+
+    def test_the_ratchet_reaches_the_replay_layer(self):   # an include list the pattern misses would leave the parts unchecked
+        self.assertGreaterEqual(len(REPLAY_PARTS), 30)
+        self.assertIn('nvn_pso.inc', REPLAY_PARTS)
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-// The raw pool table words of the argument blocks encoded so far follow the pools at commit (nvn_mtl.m gmem_slot_note, gmem_commit_patch): a pool made after a block was encoded is in the
+// The raw pool table words of the argument blocks encoded so far follow the pools at commit (nvn_args.inc gmem_slot_note, gmem_commit_patch): a pool made after a block was encoded is in the
 // table its word points at when the GPU reads it, a word behind the pools or holding an older table is rewritten and counted, a word that is current is left alone, and the commit before an
 // indirect-count multi-draw's count wait (mdi_wait) patches them too and clears the list of noted words.
 #include "../nvn/nvn_mtl.m"

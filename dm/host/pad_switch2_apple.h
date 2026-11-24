@@ -1,4 +1,4 @@
-// Nintendo Switch 2 controllers (Pro Controller 2, Joy-Con 2) over Bluetooth LE, shared by the Mac and iOS front ends as haptics_apple.m is: the CoreBluetooth transport
+// Nintendo Switch 2 controllers (Pro Controller 2, Joy-Con 2) over Bluetooth LE for the Mac front end: the CoreBluetooth transport
 // (pad_switch2_apple.m) turns each controller's reports into a pad, and the front end gives a pad a player slot through dm_switch2_front. switch2_proto.h is the protocol.
 //
 // Off unless DM_SW2=1 (the "Switch 2 controllers" setting): with it off no Bluetooth client is created, so no permission prompt appears. The app's Info.plist needs
@@ -6,7 +6,7 @@
 //
 // Pairing happens in the game: hold Sync on a controller until its player lights sweep. On the Mac the host then bonds it to this Mac (switch2_proto.h, Bonding), and from then on
 // a press of any button wakes it toward this Mac and it connects without Sync. A controller woken for another host (a nearby Switch 2) is left alone and nothing is written to it.
-// Where this host's address cannot be known (iOS) a controller in pairing mode is used without bonding, and needs Sync again next time.
+// Where this host's address cannot be read, a controller in pairing mode is used without bonding, and needs Sync again next time.
 // The feedback is the controller's player LEDs and a log line.
 //
 // A pad is one player: a Pro Controller 2, a left and a right Joy-Con 2 together, or one Joy-Con 2 held sideways. Two Joy-Cons that connect pair up; holding SL and SR on one of a

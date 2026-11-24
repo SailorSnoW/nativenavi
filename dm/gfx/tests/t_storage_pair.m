@@ -1,4 +1,4 @@
-// Storage pairs (nvn_mtl.m pair_texture): a 4-sample colour target of W x H and the single-sample image of 2W x 2H in its format over one pool offset are one storage on NVN, sample s
+// Storage pairs (nvn_storage.inc pair_texture): a 4-sample colour target of W x H and the single-sample image of 2W x 2H in its format over one pool offset are one storage on NVN, sample s
 // of pixel (x, y) being texel (2x + (s & 1), 2y + (s >> 1)) (Metro 2033 Redux's effects target over its scene target). Checked here on the host's own textures: whichever of the
 // pair is made first, the second is placed over it in its heap and reads and writes the same samples, compressed (recycled memory) and uncompressed (a resolution family); it holds
 // the heap, so the first one's release does not hand the heap to another texture while it lives, and a first one made again joins it with the content kept; other sample counts,

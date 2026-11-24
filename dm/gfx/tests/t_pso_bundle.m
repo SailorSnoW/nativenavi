@@ -1,4 +1,4 @@
-// The pipeline archive made offline and bundled with the app (DM_PSO_BUNDLE, pso_bundle_open / pso_bundle_covers in nvn_mtl.m), made here as the packing script makes it (mac_pso in scripts/build_app.py): tiny shader
+// The pipeline archive made offline and bundled with the app (DM_PSO_BUNDLE, pso_bundle_open in nvn_archive.inc / pso_bundle_covers in nvn_prewarm.inc), made here as the packing script makes it (mac_pso in scripts/build_app.py): tiny shader
 // libraries and their reflection, a pair list, then dm/gfx/tools/pso_offline.py (metal-tt) for this Mac's GPU. Checks: the archive for this GPU opens and comes first among the files of
 // bases without a vertex layout; with a matching stamp the prebuild builds only the pairs left to the device (a function with constants) and takes nothing from the compiler otherwise,
 // and a draw of a covered pair takes its base from the bundle and captures nothing for the device's own archive;

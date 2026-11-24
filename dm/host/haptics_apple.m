@@ -84,10 +84,10 @@ static void report(NSError *e, NSString *target, const char *stage) {
 // checkEngineRunning:]: self.running"), and it offers no running state to ask first: the engine stops on its own at any time (an audio interruption,
 // the haptics helper's exit) while its stopped handler is only queued here, and a stop is asynchronous. So every entry into a channel (apply:, stop,
 // the queued renewals and stops) runs its Core Haptics calls through guarded:work:, and a raise drops the engine as a failed one. Uncaught, it ended
-// Mario Kart World on an iPhone (2026-11-07); which call raised there is not known. The host is ARC without -fobjc-arc-exceptions, so a raise leaks
+// Mario Kart World (2026-11-07); which call raised there is not known. The host is ARC without -fobjc-arc-exceptions, so a raise leaks
 // what ARC held in the frames it unwinds: the player whose call raised (and so perhaps its dead engine) and the parameters sent to it, once per engine
 // failure (t_haptics_apple under leaks: about 300 bytes a raise, none with the flag). The flag would cover the whole host, or need a per-file rule in
-// both the Makefile and the iOS project; not worth it for this
+// the Makefile; not worth it for this
 - (void)guarded:(const char *)stage work:(void (^)(void))work {
     @try { work(); }
     @catch (NSException *x) { [self stoppedEngine:x stage:stage]; }

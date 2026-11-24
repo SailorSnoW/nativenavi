@@ -17,7 +17,7 @@ static int cases, failed;
 static void run_case(int format) {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 262144)) abort(); memset(mem, 0, 262144);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=262144, .flags=0x24}; mtl_pool_add(mem, 262144);
-    NVNtextureBuilder tb = {0}; NVNtexture tex; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
+    NVNtextureBuilder tb = {0}; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
     h_nvnTextureBuilderSetHeight(&tb, 90); h_nvnTextureBuilderSetFormat(&tb, format);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR); h_nvnTextureBuilderSetStride(&tb, 640);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 65536); EXPECT("linear texture init", 1, h_nvnTextureInitialize(&tex, &tb));
@@ -32,7 +32,8 @@ static void run_case(int format) {
     mtl_wait(mtl_sub_commit(), 5000000000ull); EXPECT("production uint image view", 1, image != nil);
     NSError *err = nil; const char *src = "#include <metal_stdlib>\nusing namespace metal;\nkernel void fill(texture2d<uint,access::write> out [[texture(0)]], uint2 p [[thread_position_in_grid]]) { if(p.x<160&&p.y<90) out.write(uint4(0xff996633u,0,0,0),p); }\n";
     id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(src) options:nil error:&err]; if (!lib) { fprintf(stderr,"%s\n",err.description.UTF8String); abort(); }
-    id<MTLComputePipelineState> ps = [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"fill"] error:&err]; if (!ps) abort();
+    id<MTLFunction> fill = [lib newFunctionWithName:@"fill"]; if (!fill) abort();
+    id<MTLComputePipelineState> ps = [g_dev newComputePipelineStateWithFunction:fill error:&err]; if (!ps) abort();
     id<MTLCommandBuffer> cb = q_cb(); id<MTLComputeCommandEncoder> en = [cb computeCommandEncoder]; [en setComputePipelineState:ps]; [en setTexture:image atIndex:0];
     [en dispatchThreads:MTLSizeMake(160,90,1) threadsPerThreadgroup:MTLSizeMake(8,8,1)]; [en endEncoding]; [cb commit]; [cb waitUntilCompleted];
     EXPECT("image compute complete", MTLCommandBufferStatusCompleted, cb.status);
@@ -45,7 +46,7 @@ static void run_case(int format) {
 static void render_target_stride_case(void) {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 65536)) abort(); memset(mem, 0, 65536);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=65536, .flags=0x24}; mtl_pool_add(mem, 65536);
-    NVNtextureBuilder tb = {0}; NVNtexture tex; h_nvnTextureBuilderSetDefaults(&tb);
+    NVNtextureBuilder tb = {0}; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
     h_nvnTextureBuilderSetWidth(&tb, 16); h_nvnTextureBuilderSetHeight(&tb, 16);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET);
@@ -71,7 +72,7 @@ static void render_target_stride_case(void) {
 static void scaled_copy_case(void) {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 262144)) abort(); memset(mem, 0, 262144);
     pool_t pool = {.magic=MAGIC('P','O','O','L'), .mem=mem, .size=262144, .flags=0x24}; mtl_pool_add(mem, 262144);
-    NVNtextureBuilder tb = {0}; NVNtexture dst; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
+    NVNtextureBuilder tb = {0}; NVNtexture dst = {0}; h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 160);
     h_nvnTextureBuilderSetHeight(&tb, 90); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8_SRGB);
     h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR); h_nvnTextureBuilderSetStride(&tb, 640);
     h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&pool, 65536); EXPECT("scaled copy destination init", 1, h_nvnTextureInitialize(&dst, &tb));
@@ -86,15 +87,15 @@ static void scaled_copy_case(void) {
     h_nvnCommandBufferAddCommandMemory(&cmd, (const NVNmemoryPool *)&pool, 0, 65536); h_nvnCommandBufferBeginRecording(&cmd);
     NVNcopyRegion sr={0,0,0,320,180,1}, dr={0,0,0,160,90,1};
     h_nvnCommandBufferCopyTextureToTexture(&cmd, (const NVNtexture *)&src, NULL, &sr, &dst, NULL, &dr, NVN_COPY_FLAGS_LINEAR_FILTER_BIT);
-    NVNcommandHandle h=h_nvnCommandBufferEndRecording(&cmd); state_reset(); memset(&R,0,sizeof R); mtl_sub_begin(); mtl_exec(nvn_rec_linear(h, NULL));
-    EXPECT("scaled copy committed", 1, mtl_wait(mtl_sub_commit(),5000000000ull)); EXPECT("scaled copy GPU error",0,mtl_last_commit_error());
+    NVNcommandHandle h=h_nvnCommandBufferEndRecording(&cmd); state_reset(); memset(&R,0,sizeof R); mtl_sub_begin(); uint8_t *records = nvn_rec_linear(h, NULL); mtl_exec(records);
+    EXPECT("scaled copy committed", 1, mtl_wait(mtl_sub_commit(),5000000000ull)); EXPECT("scaled copy GPU error",0,mtl_last_commit_error()); free(records);   // the linear copy of the records, once their work is done
     h_nvnMemoryPoolInvalidateMappedRange((const NVNmemoryPool *)&pool,65536,640*90); uint8_t *map=(uint8_t *)h_nvnMemoryPoolMap((const NVNmemoryPool *)&pool)+65536;
     static const uint8_t want[]={255,0,0,255}; int bad=0; for(int i=0;i<160*90;i++)bad+=memcmp(map+i*4,want,4)!=0;
     EXPECT("scaled render copy -> CPU pool map, 14400 literal red pixels",0,bad);
     EXPECT("scaled destination keeps pool backing",1,tex_mtl((const tex_t *)&dst).buffer!=nil);
     h_nvnTextureFinalize(&dst); mtl_tex_release(&src); mtl_pool_del(mem); free(mem);
 }
-// Linear textures whose rows the device cannot view on the pool's buffer (DM_TBUF_ALIGN=64, as iOS asked; Axiom Verge's 8x8 RGBA8 textures have 32-byte rows). 6x6 RGBA8: 24 bytes of
+// Linear textures whose rows the device cannot view on the pool's buffer (DM_TBUF_ALIGN=64, more than the Mac's 16 bytes; Axiom Verge's 8x8 RGBA8 textures have 32-byte rows). 6x6 RGBA8: 24 bytes of
 // pixels in each row, the rest of the row filled so that a wrong stride shows.
 //   0: LINEAR, 32-byte rows: uploaded from its storage at its stride, and ReadTexels reads its pixels; then an NVN copy into it, a CPU write, reads on another thread and an upload
 //   1: LINEAR, 64-byte rows: stays a view
@@ -125,7 +126,7 @@ static void unaligned_upload_case(void) {   // a pool made through NVN, so that 
     const size_t len = 262144; uint8_t *mem = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); if (mem == MAP_FAILED) abort(); memset(mem, 0xee, len);
     pool_t pool = {0}; pool_builder_t pb = {.mem = mem, .size = len, .flags = NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     EXPECT("unaligned case: pool init", 1, h_nvnMemoryPoolInitialize((NVNmemoryPool *)&pool, (const NVNmemoryPoolBuilder *)&pb));
-    enum { N = 6 }; NVNtexture tex[N]; id<MTLTexture> t[N];
+    enum { N = 6 }; NVNtexture tex[N] = {0}; id<MTLTexture> t[N];
     int stride[N] = {32, 64, 32, 32, 32, 32}, flags[N] = {NVN_TEXTURE_FLAGS_LINEAR, NVN_TEXTURE_FLAGS_LINEAR, NVN_TEXTURE_FLAGS_LINEAR, NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR,
                                                     NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR, NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET};
     const uint8_t *stored[N];
@@ -165,8 +166,8 @@ static void unaligned_upload_case(void) {   // a pool made through NVN, so that 
     NVNcommandBuffer cmd; EXPECT("unaligned case: command buffer init", 1, h_nvnCommandBufferInitialize(&cmd, NULL));
     h_nvnCommandBufferAddCommandMemory(&cmd, (const NVNmemoryPool *)&pool, 0, 65536); h_nvnCommandBufferBeginRecording(&cmd);
     NVNcopyRegion cr = {0, 0, 0, 6, 6, 1}; h_nvnCommandBufferCopyTextureToTexture(&cmd, &tex[1], NULL, &cr, &tex[0], NULL, &cr, 0);
-    NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd); state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); mtl_exec(nvn_rec_linear(h, NULL));
-    EXPECT("0: the copy from 1 committed", 1, mtl_wait(mtl_sub_commit(), 5000000000ull));
+    NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd); state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint8_t *records = nvn_rec_linear(h, NULL); mtl_exec(records);
+    EXPECT("0: the copy from 1 committed", 1, mtl_wait(mtl_sub_commit(), 5000000000ull)); free(records);   // the linear copy of the records, once their work is done
     uint8_t want[24 * 6]; for (int y = 0; y < 6; y++) memcpy(want + y * 24, stored[1] + y * 64, 24);
     read_job after_copy = {&tex[0], want, -1}; read_job_tight(&after_copy);
     EXPECT("0: ReadTexels on another thread after the copy has the copied rows", 0, after_copy.bad);
@@ -202,7 +203,7 @@ static void nonlinear_image_readback_case(void) {
     memset(mem, 0, len);
     NVNmemoryPool pool; pool_builder_t pb = {.mem = mem, .size = len, .flags = NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     EXPECT("nonlinear image pool init", 1, h_nvnMemoryPoolInitialize(&pool, (const NVNmemoryPoolBuilder *)&pb));
-    NVNtextureBuilder tb = {0}; NVNtexture tex;
+    NVNtextureBuilder tb = {0}; NVNtexture tex = {0};   // zeroed, as a fresh object: TextureInitialize reads it to tell a live texture initialized again
     h_nvnTextureBuilderSetDefaults(&tb); h_nvnTextureBuilderSetWidth(&tb, 6); h_nvnTextureBuilderSetHeight(&tb, 6);
     h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_IMAGE);
     h_nvnTextureBuilderSetStorage(&tb, &pool, 65536);

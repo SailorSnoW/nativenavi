@@ -93,7 +93,7 @@ SWITCH_BINDING = [
     ('tex_dyn_slots', '', {'what': "buffer-texture handles indexed through c2's tables", 'now': 'game', 'goal': 'host', 'purpose': 'shaders',
      'why': "right only where the handle comes from c2's tables: the translator could prove that per shader"}),
     ('enc_thread', '', {'what': 'Metal encoding on its own thread on the Mac', 'now': 'game', 'goal': 'host', 'purpose': 'frame rate',
-     'why': f'what iOS does for every game: {DEFAULT_SOON}'}),
+     'why': f'a setting the game was tested with: {DEFAULT_SOON}'}),
     ('present_snap', '', {'what': 'present snapshots', 'now': 'game', 'goal': 'host', 'purpose': 'rendering', 'why': f'a setting the game was tested with: {DEFAULT_SOON}'}),
     ('game_env', 'DOTNET_GCRegionRange=', {'what': ".NET's garbage-collector region range", 'now': 'game', 'goal': 'game', 'purpose': 'address space', 'why': "measured for the game's regions"}),
     ('present_interval', '', {'what': 'one frame per display tick', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'right only for games whose logic does not count frames'}),

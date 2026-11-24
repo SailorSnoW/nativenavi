@@ -44,7 +44,7 @@ class CleanTest(unittest.TestCase):
             self.assertEqual(cmc.clean(root, idle_min=60, now=NOW, starts=[])[0], 1)
             self.assertFalse(d.exists())
 
-    def test_app_folder_lock(self):   # a built app's folder: kept while a copy of the app holds the lock beside it (nvn_mtl.m ga_claim), cleaned once none does
+    def test_app_folder_lock(self):   # a built app's folder: kept while a copy of the app holds the lock beside it (nvn_archive.inc ga_claim), cleaned once none does
         with tempfile.TemporaryDirectory() as td:
             app = Path(td) / 'org.nativenavi.0100a5c00d162000'; root = app / 'com.apple.gpuarchiver'; root.mkdir(parents=True)
             d = folder(root, 'gpuarchiver-aaaaaa', NOW - 5 * 3600)

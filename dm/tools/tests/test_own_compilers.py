@@ -1,5 +1,5 @@
 """The tested Metal compiler as a requirement (GitHub issue #242): dm/gfx/tools/own_compilers.py requires the pinned spirv-cross, and stops on another Metal
-compiler (macOS or iOS) with a message naming the Xcode to install, unless DM_ALLOW_OTHER_METAL=1; a missing compiler or another translator still fails as dmsh_build.py reports it.
+compiler with a message naming the Xcode to install, unless DM_ALLOW_OTHER_METAL=1; a missing compiler or another translator still fails as dmsh_build.py reports it.
 The packing script checks the Metal compiler before an NVN game's shader steps (check_metal), and ALLOW_OTHER_METAL / --allow-other-metal skips the check and passes the override to the
 shader step. No Xcode, translator or game files needed: the tools' fingerprints are stand-ins."""
 import importlib.util

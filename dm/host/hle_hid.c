@@ -202,9 +202,9 @@ void hid_keys_init(void) {
 //   "env KEY=VALUE" sets a switch read at the time of use (DM_NVN_SNAPRAW for the next texdump),
 //   "peek <address> <count>" logs that many floats of guest memory, "memdump <address> <bytes> <path>" saves guest memory
 //   to a file (a buffer texture's storage, which the pass dump's tbuf lines print, holds what the GPU wrote: buffer textures are views of the pool), "texlist <NVN target>" logs the
-//   registered textures of that target (2 = 3D) with storage address and block-linear layout (nvn_mtl.m dm_gfx_texlist), "texraw <serial> <path>"
-//   saves a host texture's level 0 raw, every slice (a cube's six faces, a 3D texture's depth slices) (nvn_mtl.m dm_gfx_texraw), "addr <hex address>" logs what the host knows of a guest
-//   address (nvn_mtl.m dm_gfx_addr_note: its memory pool, a texture's storage, a recorded GPU write, the raw memory table, a sparse pool's page), "dump" logs what each guest thread waits on and the graphics wait points
+//   registered textures of that target (2 = 3D) with storage address and block-linear layout (nvn_present.inc dm_gfx_texlist), "texraw <serial> <path>"
+//   saves a host texture's level 0 raw, every slice (a cube's six faces, a 3D texture's depth slices) (nvn_present.inc dm_gfx_texraw), "addr <hex address>" logs what the host knows of a guest
+//   address (nvn_present.inc dm_gfx_addr_note: its memory pool, a texture's storage, a recorded GPU write, the raw memory table, a sparse pool's page), "dump" logs what each guest thread waits on and the graphics wait points
 //   (crash_dump_now; scripts/regress.py asks for it before stopping a hung game), "#…" is ignored.
 //   Look at a screen, decide, press, look again: menus whose timing moves from run to run (loading) need no blind timed script
 static void imu_env_reread(void);   // below, at the IMU state
@@ -235,11 +235,11 @@ static void *ctl_main(void *arg) {
                 if (!strncmp(line, "shot ", 5)) { dm_gfx_shot_at(1, line + 5); LOG("DM_CTL: screenshot of the next frame → %s", line + 5); continue; }
                 if (!strncmp(line, "texlist ", 8)) { void dm_gfx_texlist(int target); dm_gfx_texlist(atoi(line + 8)); continue; }
                 if (!strcmp(line, "restop")) { void dm_gfx_restop(void); dm_gfx_restop(); continue; }   // what the residency set holds (nvn_mtl.m res_top)
-                if (!strcmp(line, "memtrim")) { void dm_gfx_memtrim(void); dm_gfx_memtrim(); continue; }   // a memory pressure trim at the next submission, as a critical event asks (nvn_mtl.m mem_trim)
+                if (!strcmp(line, "memtrim")) { void dm_gfx_memtrim(void); dm_gfx_memtrim(); continue; }   // a memory pressure trim at the next submission, as a critical event asks (nvn_texture.inc mem_trim)
                 if (!strncmp(line, "addr ", 5)) { void dm_gfx_addr_note(uint64_t a, char *note, size_t n); char note[600]; uint64_t a = strtoull(line + 5, NULL, 16);   // what the host knows of a guest address
                     dm_gfx_addr_note(a, note, sizeof note); LOG("DM_CTL: addr %#llx:%s", (unsigned long long)a, note[0] ? note : " nothing known"); continue; }
                 if (!strncmp(line, "texraw ", 7)) { void dm_gfx_texraw(uint64_t serial, const char *path); char *e2; uint64_t s = strtoull(line + 7, &e2, 10); while (*e2 == ' ') e2++; dm_gfx_texraw(s, e2); continue; }
-                if (!strncmp(line, "bufsnap ", 8)) {   // bufsnap <shader key> <hex address> <bytes> <path>: guest memory as the GPU left it right after that shader's next dispatch (nvn_mtl.m dm_gfx_bufsnap)
+                if (!strncmp(line, "bufsnap ", 8)) {   // bufsnap <shader key> <hex address> <bytes> <path>: guest memory as the GPU left it right after that shader's next dispatch (nvn_dispatch.inc dm_gfx_bufsnap)
                     void dm_gfx_bufsnap(const char *key, uint64_t a, size_t n, const char *path); char key[32] = {0}, path[512] = {0}; unsigned long long a = 0, n = 0;
                     if (sscanf(line + 8, "%31s %llx %lli %511s", key, &a, &n, path) == 4) dm_gfx_bufsnap(key, a, (size_t)n, path); else LOG("DM_CTL: bufsnap <shader key> <hex address> <bytes> <path>"); continue; }
                 if (!strncmp(line, "peek ", 5)) { char *e2; uint64_t a = strtoull(line + 5, &e2, 16); dm_ctl_peek(a, (int)strtol(e2, NULL, 0)); continue; }

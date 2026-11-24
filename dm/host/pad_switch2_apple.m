@@ -1,4 +1,4 @@
-// CoreBluetooth transport for Switch 2 controllers, shared by the Mac and iOS front ends (pad_switch2_apple.h says what it does; switch2_proto.h is the protocol).
+// CoreBluetooth transport for Switch 2 controllers (pad_switch2_apple.h says what it does; switch2_proto.h is the protocol).
 // Everything runs on the main queue, where the front ends' own pad callbacks run.
 #import "pad_switch2_apple.h"
 #import <CoreBluetooth/CoreBluetooth.h>

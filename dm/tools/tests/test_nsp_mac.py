@@ -50,7 +50,7 @@ class Nvn(Base):
         self.ran.clear()
         return nsp.build_shaders(sys.executable, REPO, self.sh, REPO / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate', {'WORK': str(self.tmp)}, self.logs, self.g, 'P')
 
-    def test_mac_libraries(self):   # into the cache folder, the key beside it, not in it; no switch of the removed iPhone build
+    def test_mac_libraries(self):   # into the cache folder, the key beside it, not in it; no switch of another platform's build
         self.assertEqual(self.build(), self.sh / 'cache')
         self.assertEqual(self.ran[0][0][1:], [str(REPO / 'dm/gfx/tools/own_compilers.py'), str(self.sh / 'pkg'), str(self.sh / 'cache')])
         for k in ('IOSOUT', 'DMSH_TARGETS', 'DMSH_IOS_PULL'): self.assertNotIn(k, self.ran[0][1])

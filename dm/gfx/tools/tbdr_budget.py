@@ -19,7 +19,7 @@ TBPP = {10: 1, 20: 2, 25: 2, 30: 2, 53: 4, 55: 4, 60: 4, 65: 8, 70: 4, 71: 4, 80
 texinfo = collections.defaultdict(dict); sampled = collections.defaultdict(set); tgt = {}; maxvc = collections.defaultdict(int); ndraw = collections.defaultdict(int); fskeys = collections.defaultdict(set); fused = set(); att_desc = collections.defaultdict(list)
 import os, json; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import dmsh_chain
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'tools')); import shader_lib
-# The shader libraries the run loaded, found as the host finds them (g_msl_dir in dm/gfx/nvn/nvn_mtl.m): under DM_MSL_DIR, which a build's run command sets to <build folder>/shader/cache,
+# The shader libraries the run loaded, found as the host finds them (g_msl_dir in dm/gfx/nvn/nvn_shader.inc): under DM_MSL_DIR, which a build's run command sets to <build folder>/shader/cache,
 # else under DM_ROOT (default ~/dm-work). Without them every fragment shader counts as 4 texture slots
 MSL_DIR = os.environ.get('DM_MSL_DIR') or os.path.join(os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work'), 'build/cache/metal_shader_cache')
 LIB = shader_lib.view(os.path.join(MSL_DIR, f'b-{dmsh_chain.version()}'))

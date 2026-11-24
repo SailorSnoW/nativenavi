@@ -223,7 +223,7 @@ void crash_install(void) {
     struct sigaction sa = {.sa_sigaction = on_crash, .sa_flags = SA_SIGINFO | SA_ONSTACK};
     sigaction(SIGALRM, &sa, 0);
     // Both watchdogs are turned on only when a test explicitly sets DM_WATCH / DM_WATCH_STALL: the product (the player launches from the desktop, no environment variables) turns on neither.
-    // Found by reading the code: nxnative's iOS main.m did setenv DM_WATCH=30 by default → the player's launch was killed by SIGALRM at 30 s; the no-progress watchdog defaulted to 15 s → the pause menu (ticks stopped) was killed at 15 s
+    // On by default they killed a player's launch: DM_WATCH=30 sends SIGALRM at 30 s, and a no-progress watchdog of 15 s ended the pause menu (whose ticks stop) at 15 s
     const char *watch = getenv("DM_WATCH"), *stall = getenv("DM_WATCH_STALL");
     if (watch) alarm(atoi(watch));
     if (watch || stall) {

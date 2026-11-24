@@ -12,8 +12,7 @@
 #define SWITCH_ALIAS UINT64_C(0x1000000000)   // a Switch's alias region: 64 GB
 // Reserve one whole block of guest address space, partitioned the Horizon way (address values are the real addresses returned by the host's mmap).
 // It only takes address space, not memory.
-// Its size is the profile's mem_reserve, with the alias region in use in place of the profile's mem_alias (g_reserve, mem_init_once). In nxnative Super Mario Bros. Wonder's profile
-// had 5 GB, sized for an iPhone: without the "extended virtual addressing" entitlement a single reservation there could be at most 6 GB (read on a real device: 6 GB succeeded, 7 GB failed).
+// Its size is the profile's mem_reserve, with the alias region in use in place of the profile's mem_alias (g_reserve, mem_init_once).
 #define RESERVE DM_GAME_MEM_RESERVE   // game profile mem_reserve
 #define QUERY_VA_END (1ull << 47)     // past every user address of the host (arm64 macOS: under 128 TB); QueryMemory reports what lies past it as inaccessible
 static uint8_t *g_as;              // ASLR region base = the whole block
@@ -45,8 +44,8 @@ static void mem_init_once(void) {
         DM_GAME_MEM_STACK > RESERVE - 0x10000000 - DM_GAME_MEM_ALIAS ||
         ((RESERVE | DM_GAME_MEM_ALIAS | DM_GAME_MEM_STACK) & (pg - 1)))
         die("guest address-space profile has invalid native boundaries");
-    // The alias region is the Switch's 64 GB (or the profile's, when larger): games lay their regions out for that much, and a profile's smaller one (sized in nxnative for an iPhone's one
-    // reservation of at most 6 GB) crashed Trails in the Sky 1st Chapter at launch and Just Dance within a minute. It is address space, not memory: the application pool bounds
+    // The alias region is the Switch's 64 GB (or the profile's, when larger): games lay their regions out for that much, and a profile's smaller one
+    // crashed Trails in the Sky 1st Chapter at launch and Just Dance within a minute. It is address space, not memory: the application pool bounds
     // what is mapped. DM_ALIAS_SIZE=<bytes> sets another size, the heap and stacks as they are; the profile's value keeps the heap and stacks at lower addresses (the 2^39 line below)
     size_t alias = DM_GAME_MEM_ALIAS > SWITCH_ALIAS ? DM_GAME_MEM_ALIAS : SWITCH_ALIAS;
     const char *as = getenv("DM_ALIAS_SIZE");
@@ -386,7 +385,7 @@ static void region_free(uint64_t *r, int param) {
 // games pass sizes made for the Switch's 64 GB alias region: Pokémon Legends: Z-A 12 GB, Pokémon Scarlet 12 GB, Paper Mario: The Thousand-Year Door 62 GB, Absolum 40 GB. Where the
 // size is more than the alias region has room for, the request would fail (an nn::diag abort in nninitStartup), so the gate at the function's entry (patch_nso.py) gives it the room
 // instead: the alias region less the regions already made (at least the SDK's 62 MB node area) and 256 MB for regions made later, in 32 MB steps. The SDK lays the region out from that size, so it holds; the pool, not the region, bounds what the heap
-// can map. A workaround for an alias region smaller than a Switch's (an iPhone's in nxnative; DM_ALIAS_SIZE here), not for the game: with room for the request (the Mac's 64 GB) nothing changes. Found by symbol in every sdk
+// can map. A workaround for an alias region smaller than a Switch's (DM_ALIAS_SIZE), not for the game: with room for the request (the Mac's 64 GB) nothing changes. Found by symbol in every sdk
 #define STDALLOC_LATER 0x10000000ull
 // What the alias region has room for in one more region: past the end of the regions made so far, less STDALLOC_LATER for those made later, in 32 MB steps (0 = none)
 static uint64_t alias_room(void) {

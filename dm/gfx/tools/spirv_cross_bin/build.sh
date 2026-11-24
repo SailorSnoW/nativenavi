@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds dm/gfx/tools/spirv_cross_bin/spirv-cross, the SPIR-V to MSL converter of the shader translation chain (and of the Vulkan and OpenGL layers' shader tools), from a pinned
+# Builds dm/gfx/tools/spirv_cross_bin/spirv-cross, the SPIR-V to MSL converter of the shader translation chain, from a pinned
 # upstream commit, so every Mac runs the same build and its fingerprint is the one dmsh_chain.lock records (a Homebrew build is compiled from source on macOS versions without a
 # bottle, and its fingerprint never matches even at the same version: GitHub issue #242).
 # The build is reproducible: the same commit, options and Xcode give the same bytes in any folder (the embedded --revision timestamp is the commit's time in UTC, SOURCE_DATE_EPOCH).

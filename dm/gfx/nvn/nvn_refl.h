@@ -10,15 +10,15 @@
 enum { NVN_RB_CBUF = 1, NVN_RB_SAMP, NVN_RB_TEX, NVN_RB_IMG, NVN_RB_TBUF,
        NVN_RB_SBUFP, NVN_RB_SUPPORT, NVN_RB_C1, NVN_RB_DRV0, NVN_RB_DRV2, NVN_RB_SAMPT, NVN_RB_UBOP, NVN_RB_TEXU, NVN_RB_SAMPU, NVN_RB_SAMPI, NVN_RB_SBUFU, NVN_RB_TEXD, NVN_RB_SAMPD, NVN_RB_TEXA, NVN_RB_SAMPA, NVN_RB_TEXP, NVN_RB_SAMPP, NVN_RB_TEXH, NVN_RB_SAMPH, NVN_RB_BORDER, NVN_RB_PUSH, NVN_RB_GMEM, NVN_RB_GMEML, NVN_RB_IMGU, NVN_RB_TBUFU, NVN_RB_CBSIZE, NVN_RB_SBUFQ, NVN_RB_TBIAS, NVN_RB_SBLEN };
 // IMGU / TBUFU: an image / a buffer texture whose handle the game keeps in uniform slot reg at byte off, as TEXU (Unreal Engine 5.4 on the Switch 2 keeps every image in c[3]). Read at encode time
-// GMEM: the host's memory pool table for global memory the translator traced to no storage buffer (dmsh_abi.h DMSH_GMEM_MAP_*, nvn_mtl.m gmem_map_gpu): the shader may read, and with rw
-// write, anything in any pool. GMEML: the write log of those stores (dmsh_abi.h DMSH_GMEM_LOG_*, nvn_mtl.m gml_take)
+// GMEM: the host's memory pool table for global memory the translator traced to no storage buffer (dmsh_abi.h DMSH_GMEM_MAP_*, nvn_args.inc gmem_map_gpu): the shader may read, and with rw
+// write, anything in any pool. GMEML: the write log of those stores (dmsh_abi.h DMSH_GMEM_LOG_*, nvn_args.inc gml_take)
 // TEXP / SAMPP: the texture / sampler pool as one array indexed by the handle's ID, for a handle the translator traced to no slot (dmsh_reflect.py pool_arrays): one argument buffer entry,
-// the address of the buffer the replay keeps for the element type dtt / dpf and the pool bound at the draw (nvn_mtl.m pool_gpu). Mario Party Superstars' characters
+// the address of the buffer the replay keeps for the element type dtt / dpf and the pool bound at the draw (nvn_pooltab.inc pool_gpu). Mario Party Superstars' characters
 // TEXA / SAMPA: an array of n handles in the driver table c2 that the shader indexes at run time (dmsh_reflect.py c2_array): element k = the texture / sampler of the slot whose c2 word lies
 // at byte off + 8k (combined, else separate); words outside both tables give the dummy. Luigi's Mansion 3's shadow cascades
 // TEXD / SAMPD: Ryujinx's fallback for a texture handle it cannot trace to one slot (handle type 4, <stage>_<t|tb|s>_cb0_40000000): an array of n textures / samplers indexed by
 // the handle's texture / sampler ID (capped at n - 1); the replay binds slot k at element k and puts slot indices in c2 (profile key tex_dyn_slots, Octopath Traveler 0)
-// BORDER: the shader's border colour block (dmsh_abi.h DMSH_BORDER_*), filled from its twin samplers (a sampler binding with bw set) by nvn_mtl.m encode_args
+// BORDER: the shader's border colour block (dmsh_abi.h DMSH_BORDER_*), filled from its twin samplers (a sampler binding with bw set) by nvn_args.inc encode_args
 // SAMPI: the sampler ID is a constant in the shader (reg = the ID; Ryujinx's SeparateConstantSamplerHandle: the handle ORs a constant sampler into a bound texture, Monster Hunter Rise)
 // UBOP: device pointer of compute-stage uniform slot r (the Maxwell compute stage reads uniforms via the c0 address table + global memory)   // SAMPT: the sampler is taken from the combined handle of texture slot r (high bits = sampler ID)   // Binding kind (type in the json); IMG = writable texture (D3D u_r, NVN image slot r); TBUF = typed buffer (D3D t_r Buffer<T>, buffer texture in NVN texture slot r)
 enum { NVN_DPF_FLOAT = 0, NVN_DPF_UINT, NVN_DPF_SINT, NVN_DPF_DEPTH };            // Dummy texture pixel class (determined by msl_type)
@@ -38,26 +38,26 @@ typedef struct {
     uint16_t n;              // TEXD / SAMPD, TEXA / SAMPA, and TEXU / SAMPU arrays (element k = the handle at byte 8k of the uniform buffer): array length (argument buffer entries aid .. aid + n - 1)
     uint16_t soff;           // TEXA / SAMPA: c2 byte of a separate sampler word ORed into every element's handle (handle type 1), 0 = none; TEXU / SAMPU / TBUFU: byte of the other word ORed into the handle (handle type 1) + 1, in uniform slot sreg (DMSH_SREG_C2: SAMPU's sampler is the word at that c2 byte), 0 = none
     uint8_t sreg;
-    uint8_t f1d;             // TEX: read by 1D integer fetches as 2D rows of 16384 texels (dmsh_build.py "fetch1d"): a buffer texture here is bound as such rows (nvn_mtl.m tbuf_as_2d)
-    uint8_t atom;            // IMG: the shader runs image atomics on it (dmsh_build.py "atomic"): the texture must allow Metal's texture atomics (nvn_mtl.m dummy_img_atomic); 2: 64-bit ones (texture2d<ulong>, an RG32Uint texture: pf_atomic)
-    uint16_t fixw;           // CBUF: the slot's words the shader reads at fixed offsets, from its start to the end of the highest (dmsh_reflect.py "fixed"): a binding shorter than that is encoded with zeros up to there (nvn_mtl.m ub_padded)
+    uint8_t f1d;             // TEX: read by 1D integer fetches as 2D rows of 16384 texels (dmsh_build.py "fetch1d"): a buffer texture here is bound as such rows (nvn_descpool.inc tbuf_as_2d)
+    uint8_t atom;            // IMG: the shader runs image atomics on it (dmsh_build.py "atomic"): the texture must allow Metal's texture atomics (nvn_args.inc dummy_img_atomic); 2: 64-bit ones (texture2d<ulong>, an RG32Uint texture: pf_atomic)
+    uint16_t fixw;           // CBUF: the slot's words the shader reads at fixed offsets, from its start to the end of the highest (dmsh_reflect.py "fixed"): a binding shorter than that is encoded with zeros up to there (nvn_args.inc ub_padded)
     uint8_t bw;              // SAMP / SAMPT / SAMPU / SAMPI: a twin sampler for border colours (dmsh_rewrite.py border_emu), its bit in the BORDER block + 1; 0 = an ordinary sampler binding
     uint8_t raw_id;          // SAMPU: the uniform word holds a SeparateSamplerId (the sampler ID itself), not a handle with the sampler ID in its high 12 bits
     uint16_t tbx;            // IMG / IMGU / TBUF / TBUFU: a buffer image's or buffer texture's index in the shader's offset table (TBIAS, dmsh_abi.h DMSH_TBIAS_BANK) + 1, whose coordinates the shader moves by it
                              // TEX / TEXU / TEXD / TEXA with f1d: row-fetch leads, followed by the logical widths (one of each per element)
-                             // (nvn_mtl.m tbuf_lead); TEXD / TEXA of buffer textures: element 0's, element k's at tbx - 1 + k; 0 = none
-    uint8_t sbx;             // SBUFU / SBUFQ: the binding's slot in the shader's length table (SBLEN, dmsh_abi.h DMSH_SBLEN_BANK) + 1, whose words bound its accesses (nvn_mtl.m sblen_put); 0 = unbounded
+                             // (nvn_pooltab.inc tbuf_lead); TEXD / TEXA of buffer textures: element 0's, element k's at tbx - 1 + k; 0 = none
+    uint8_t sbx;             // SBUFU / SBUFQ: the binding's slot in the shader's length table (SBLEN, dmsh_abi.h DMSH_SBLEN_BANK) + 1, whose words bound its accesses (nvn_args.inc sblen_put); 0 = unbounded
 } nvn_rbind;
 typedef struct {
     int nb, abi, nv;         // Binding count, argument buffer slot, vertex input count
     nvn_rbind b[NVN_REFL_MAXB];
     struct { uint8_t loc, ct, nvn, sh[3]; } v[NVN_REFL_MAXV];   // loc: Metal vertex attribute slot (DXBC input register); nvn: NVN vertex attribute number (the n of HLSL semantic ATTRn);
                                                                 // sh[ct]: Metal attribute index of the input's shadow of that component type in the <key>_bv library (0xff = none; dmsh_vin.py)
-    uint8_t has_vin;         // has a shadow-input library <key>_bv (nvn_mtl.m vin_fn)
+    uint8_t has_vin;         // has a shadow-input library <key>_bv (nvn_vertex.inc vin_fn)
     uint16_t tg[3];          // Compute thread group size (none = 0)
     uint32_t tg_spill;       // Compute: threadgroup memory bytes per workgroup the shader takes from a device buffer at DMSH_TG_SLOT (dmsh_rewrite.py tg_spill; 0 = none)
     uint32_t loop_sites;     // Compute: number of contained loop sites, including helpers (dmsh_rewrite.py compute_loops); 0: no containment state to bind
-    uint8_t split_words;     // Compute: the kernel runs in two passes (dmsh_ndsr.py, the reflection's "split"): pass 0 writes this many u32s a thread at DMSH_SPLIT_SLOT, pass 1 reads them (DMSH_SPLIT_FC false, true; nvn_mtl.m split_dispatch); 0 = one pass
+    uint8_t split_words;     // Compute: the kernel runs in two passes (dmsh_ndsr.py, the reflection's "split"): pass 0 writes this many u32s a thread at DMSH_SPLIT_SLOT, pass 1 reads them (DMSH_SPLIT_FC false, true; nvn_dispatch.inc split_dispatch); 0 = one pass
     uint8_t mesh_spill;      // Mesh: the stage array is a device slice of a scratch buffer bound at DMSH_MESH_SCRATCH_SLOT (dmsh_meshstage.py to_stage; nvn_mesh.inc mesh_scratch)
     struct { uint8_t reg; uint16_t word; uint32_t value; } first[4]; uint8_t nfirst;   // Stores to storage buffer words the host makes before each dispatch (dmsh_rewrite.py first_store)
     uint8_t route_b, has_c1; // Route B; has a c1 constant segment
@@ -67,15 +67,15 @@ typedef struct {
     uint16_t tbias_n;        // The offset table's length in entries (its TBIAS binding; dmsh_abi.h DMSH_TBIAS_BANK), 0 = none
     uint8_t sblen;           // Has the length table of its bounded storage buffers (an SBLEN binding; dmsh_abi.h DMSH_SBLEN_BANK)
     uint8_t pool;            // Has TEXP / SAMPP bindings (it also sets bindless): its argument block holds pool addresses, which change when a pool is rebuilt
-    uint8_t htab;            // Has TEXH / SAMPH bindings (tables of a uniform buffer's handles, nvn_mtl.m htab_gpu; it also sets bindless): likewise
+    uint8_t htab;            // Has TEXH / SAMPH bindings (tables of a uniform buffer's handles, nvn_args.inc htab_gpu; it also sets bindless): likewise
     uint8_t drv_read[3];     // B: reads driver segments c0 / c2 at runtime (indices 0, 2; gathered statically from the MSL at packaging time, tools/dmsh_reflect.py drv_reads)
     uint16_t c1_len;         // Length of the c1 constant segment (B; 0 / 256 / 512 / 768 across the whole library)
     // For the fully-covering-first-draw proof (dmsh_reflect.py raster_facts; missing field = not provable): vertex - position xyz taken as-is from attribute pos_attr (-1 = no), w is the constant 1 (pos_w1) or taken from the same attribute's .w;
     // fragment - may discard, writes sample_mask, bitmap of the color numbers written
     int8_t pos_attr; uint8_t pos_w1, may_discard, writes_smask, color_mask, color_known;   // color_known: the color list was recorded at packaging (color_mask can be trusted)
-    uint8_t fcols, ucols, scols, fcols_known;   // fragment: bitmaps of the colour outputs main0 declares float, unsigned and signed (dmsh_reflect.py raster_facts float_colors, uint_colors, sint_colors); a target of another class takes the typed-output entry point (nvn_mtl.m pso_cls)
-    uint8_t reads_prim_id;   // fragment: reads the primitive ID, so its pipelines are built whole (nvn_mtl.m pso_build_ex)
-    uint8_t pos_far;         // vertex: gl_Position z = w (dmsh_reflect.py far_plane): drawn with a depth bias past the far value and depth clamping (nvn_mtl.m draw)
+    uint8_t fcols, ucols, scols, fcols_known;   // fragment: bitmaps of the colour outputs main0 declares float, unsigned and signed (dmsh_reflect.py raster_facts float_colors, uint_colors, sint_colors); a target of another class takes the typed-output entry point (nvn_pso_desc.inc pso_cls)
+    uint8_t reads_prim_id;   // fragment: reads the primitive ID, so its pipelines are built whole (nvn_pso.inc pso_build_ex)
+    uint8_t pos_far;         // vertex: gl_Position z = w (dmsh_reflect.py far_plane): drawn with a depth bias past the far value and depth clamping (nvn_draw.inc draw)
     // fragment: the SPH's output map (word 18, dmsh_build.py ps_omap): 4 bits per colour output, R G B A from the low bit; the GPU writes only these components of the target.
     // omap_known: recorded at packaging (libraries of an older chain have none and get no component mask)
     uint32_t omap; uint8_t omap_known;
@@ -90,7 +90,7 @@ typedef struct {
     // Pixel-position samples (dmsh_fetch.py 'frag_pos'): bit i: the i-th redirectable sample reads at (gl_FragCoord.x * U, gl_FragCoord.y * V), fc_scale[i] = {U, V} as uniform references
     // (slot << 16) | (vector 0..4095 << 2) | component; its fc_locn is 0xff
     uint32_t fc_fpos; uint32_t fc_scale[32][2];
-    // gmem_map's fixed pointer sources, read before argument-block reuse as well as a fresh encode (nvn_mtl.m gmem_discover).
+    // gmem_map's fixed pointer sources, read before argument-block reuse as well as a fresh encode (nvn_args.inc gmem_discover).
     uint8_t ngptr; struct { uint8_t reg; uint16_t off; } gptr[64];   // DMSH_GPTR_MAX, checked in nvn_refl.m
     uint8_t *c1;             // c1 constant segment as-is (B): c1_len bytes, malloc'd by nvn_refl_from_json (NULL without one). It was a 4 KB array; Hyrule Warriors: Age of Calamity has 6 KB segments (its soldiers' vertex shaders)
 } nvn_refl;

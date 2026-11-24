@@ -1,4 +1,4 @@
-// Shared Core Haptics output for the Mac and iOS front ends. Configure routes before guest boot.
+// Core Haptics output for the Mac front end. Configure routes before guest boot.
 #pragma once
 #import <GameController/GameController.h>
 #include "hle_haptics.h"

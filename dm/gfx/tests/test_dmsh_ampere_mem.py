@@ -594,7 +594,7 @@ class Pokopia(Translated):
         self.assertIn('trunc(0.0)', self.msl(self.MERGE_FIRST, self.F2I_HIGH))
         self.assertRegex(self.msl(self.MERGE_FIRST, self.F2I_LOW), r'trunc\(\(\*spvDescriptorSet0\.cp_c3\)\._m0\[1\]\.z\)')
 
-    def test_1d_fetch_wraps_into_rows(self):   # a texture buffer in the slot is bound as rows of 16384 texels (nvn_mtl.m tbuf_as_2d); a 1D texture, one row, reads the same texel
+    def test_1d_fetch_wraps_into_rows(self):   # a texture buffer in the slot is bound as rows of 16384 texels (nvn_descpool.inc tbuf_as_2d); a 1D texture, one row, reads the same texel
         msl = self.msl(self.MERGE_FIRST, self.TLD_1D)
         self.assertRegex(msl, r'& 16383')
         self.assertRegex(msl, r'>> uint\(14\)')
@@ -691,7 +691,7 @@ SURED64 = (mov(0, 5), mov(1, 2), mov(2, 0xffffffff), mov(3, 1), inst(*SURED_MAX_
 
 
 class Sured64(Translated):
-    """64-bit image max / min: one texture2d<ulong> atomic on the rg32ui image, low word then high word (dmsh_atomic.wide_atomics, nvn_mtl.m pf_atomic)"""
+    """64-bit image max / min: one texture2d<ulong> atomic on the rg32ui image, low word then high word (dmsh_atomic.wide_atomics, nvn_texture.inc pf_atomic)"""
     def msl(self, *code):
         return self.translate(b''.join(code) + inst(*EXIT), atomics=True)
 

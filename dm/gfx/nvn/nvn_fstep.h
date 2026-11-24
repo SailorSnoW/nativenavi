@@ -13,15 +13,14 @@
 // frame is slow motion) three late frames still raise the hold. The step goes to the cheapest of the three late frames' cost: a hitch as the third no longer meant 20 fps.
 // The average leaves out the window's longest frame: a lone stall (43-68 ms of texture streaming or a pipeline built in play) among those near-misses filled two thirds of
 // the limit and stepped to 30 for a second: four of the five rises in a few races (issue #1823, after the fix above). Two stalls in 30 frames still count one.
-// A probe is a trial back to kmin that the cost does not justify: while the caller reports the CPU slowed for reasons other than heat (an iPhone's performance controller
-// parked a game that waited out a long hold on the efficiency cores at half the clock, where its cost never fit k − 1 again), the hold-off alone starts one. Its first
+// A probe is a trial back to kmin that the cost does not justify: while the caller reports the CPU slowed for reasons other than heat (a performance controller can
+// park a game that waits out a long hold on the efficiency cores at a lower clock, where its cost never fits k − 1 again), the hold-off alone starts one. Its first
 // FSTEP_GRACE frames may be late without failing it, the time the controller needs to raise the clock for the shorter deadline; after them it is judged like a trial.
 // A probe that holds leaves the hold-off as it is, and the run at kmin it starts must last FSTEP_HOLD_MAX (8 s) before the hold-off returns to 1 s: a shorter one counts as
 // a failed probe, so a CPU that really cannot hold kmin is not probed every second.
 // A step up after a run at kmin of FSTEP_HOLD_MAX keeps the cost that held there, and a cost at the longer hold of at most FSTEP_SAME times it starts a probe too: the scene
-// costs what it did, so the step up came from a hitch (Breath of the Wild on an iPhone: pipeline compiles after a cutscene). The fit trial alone does not bring such a game
-// back: an iPhone lowered its GPU clock until the work filled most of the frame, so a GPU-bound game's cost sits near FSTEP_FIT at either hold (BotW: GPU 12.8–15.2 ms at hold
-// 2, p50, where hold 1 had held for minutes; the same 4,900 draws took 5.8 ms after a trip to the background and 13.5 ms half a minute later).
+// costs what it did, so the step up came from a hitch (Breath of the Wild: pipeline compiles after a cutscene). The fit trial alone does not bring such a game
+// back: a GPU that lowers its clock until the work fills most of the frame keeps a GPU-bound game's cost near FSTEP_FIT at either hold.
 // A cap that falls and rises again (a movie, hle_movie.c dm_movie_hz; the thermal cap in hle_nvn.c) keeps what was learned at each kmin: the cost that held it
 // (cref) and the GPU reference (nvn_fgpu below); and the frames after the cap rises are a probe with its grace, as the clocks are still set for the longer hold. Before, the
 // rise set k to kmin with no grace, so three frames late while the clock rose stepped up again, with cref dropped at the cap change and a GPU reference taken at the 30 fps
@@ -82,7 +81,7 @@ static inline int nvn_fheld_judged(nvn_fheld *h, uint64_t stepped) {
 #define FSTEP_SAME 1.1        // the cost at the longer hold against the cost that held kmin: at most this much is the same scene (BotW at hold 2: 1.0–1.07 times its hold-1 GPU time)
 // The grace is renewed (nvn_fstep.ramp) while the probe's frames keep getting cheaper: a controller that raises the clock slowly is still raising it. macOS raises the GPU clock
 // of a game that misses its deadline at 85–100% GPU occupancy by about 100 MHz a second (Breath of the Wild on an M5 Pro: 338 → 432 MHz over a 33-frame probe, GPU 24.8 → 18.5 ms,
-// then the probe failed at 22 ms frames; hold 1 needs about 560 MHz there), where the iPhone's controller settles within the 30 frames. A window of FSTEP_GRACE frames whose
+// then the probe failed at 22 ms frames; hold 1 needs about 560 MHz there). A window of FSTEP_GRACE frames whose
 // second half cost at most 1 − FSTEP_RAMP of its first half, and had a late frame (a window on time is judged as a trial), starts another, up to FSTEP_PROBE_MAX frames in all
 #define FSTEP_RAMP 0.05       // the fall in cost from one half of a grace window to the next that shows the clock still rising (the per-frame noise of a 25 ms frame is 4%, of 15 frames 1%)
 #define FSTEP_PROBE_MAX 180   // grace frames a probe may take in all (3 s at 60 fps): a clock that keeps rising without reaching the hold is not waited for longer
@@ -262,8 +261,8 @@ static inline double nvn_fstep_measured(nvn_fstep *s, double vs) {
     return vs;
 }
 
-// The GPU clock follows the hold too: Breath of the Wild on an iPhone went from 14.4 to about 25 ms of GPU time a frame at hold 2 with the same 4,900 draws, the CPU still on its
-// performance cores, so its cost never fitted hold 1 again. The GPU counts as slowed (another reason for nvn_fstep_next's slow) when its time at a hold above kmin is at least
+// The GPU clock follows the hold too: a GPU that lowers its clock at hold 2 takes longer for the same draws, the CPU still on its
+// performance cores, so the cost never fits hold 1 again. The GPU counts as slowed (another reason for nvn_fstep_next's slow) when its time at a hold above kmin is at least
 // FSTEP_GPU_SLOW times its time at kmin and it alone does not fit kmin (a GPU at 3 ms of 17, 6 times its time on a loading screen, is not what holds a frame back). Fitting
 // k − 1 is not enough: at hold 3 that sent a slowed GPU on a fit trial to hold 2, whose ratio is not learned yet, and it stayed there where the probe went to 60.
 // The reference is not updated during a probe's trial (its frames run while the clock is still rising), so a failed probe leaves it as it was. It is kept for each kmin: one
@@ -278,8 +277,8 @@ static inline double nvn_fstep_measured(nvn_fstep *s, double vs) {
 // Forest at 1.6 times the GPU time at hold 3: a ratio of 2.15 where the hold-3 stretch began in the heavy view, and the light view's 2.0 at hold 3 started a probe again). Once FSTEP_GPU_FAILS failed probes have given a hold's ratio, the GPU counts as slowed there when cur over it, the scene's time at kmin, fits kmin, in place
 // of the reference: the scene that failed starts no probe while it costs what it did, and a lighter one starts one even when its cur is not FSTEP_GPU_SLOW times a reference
 // learned in a heavier scene (a gate on the reference itself, which kmin's frames relearn only after a probe, would keep that lighter scene at the longer hold).
-// The ratio is the largest the failed probes gave, and one probe alone does not set it: a probe can fail before the clock is at its top (the iOS thermal cap's end, where it
-// took 1 s), which reads as a ratio too small, and one too small keeps a scene that fits kmin at the longer hold, where one too large costs a failed probe now and then, as
+// The ratio is the largest the failed probes gave, and one probe alone does not set it: a probe can fail before the clock is at its top (the end of a
+// thermal cap), which reads as a ratio too small, and one too small keeps a scene that fits kmin at the longer hold, where one too large costs a failed probe now and then, as
 // before the ratio, spaced out by the hold's doubling. A probe that holds gives none: it needs no gate, and its frames may be a lighter scene (a menu) than the hold's
 #define FSTEP_GPU_SLOW 1.3    // GPU time at the longer hold against its time at kmin
 #define FSTEP_GPU_N 30        // frames at the longer hold before the comparison counts

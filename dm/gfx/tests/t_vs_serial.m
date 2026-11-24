@@ -1,4 +1,4 @@
-// Pipelines that share a vertex function are built one at a time (DM_PSO_VS_SERIAL, vs_enter in nvn_mtl.m): Apple's G16X driver crashed in createVertexProgramVariant's completion block
+// Pipelines that share a vertex function are built one at a time (DM_PSO_VS_SERIAL, vs_enter in nvn_pso.inc): Apple's G16X driver crashed in createVertexProgramVariant's completion block
 // when several threads built pipelines of one vertex function at once. Checks: the stripe follows the library's name and the entry name (a specialized function too, one file loaded twice
 // is one function); a build of the same function waits for the holder, one of another function does not, a lookup that must not compile never waits, a game thread waits 50 ms at most,
 // a holder that does not return stalls its stripe once (builds go on unguarded) and the stripe guards again when it returns; threads building bases of one vertex function through pso_build
@@ -45,6 +45,7 @@ int main(int argc, char **argv) { @autoreleasepool {
 
     int sa = vs_stripe_of(pipeline(a, @"vs", 0));
     EXPECT("a stripe for a library function", 1, sa >= 0 && sa < VS_STRIPES);
+    if (sa < 0 || sa >= VS_STRIPES) return 1;   // the checks below index the stripe tables with it
     EXPECT("the same function has the same stripe", sa, vs_stripe_of(pipeline(a, @"vs", 0)));
     EXPECT("one file loaded twice is one function", sa, vs_stripe_of(pipeline(a2, @"vs", 0)));
     EXPECT("a specialized function takes the stripe of the function it specializes", sa, vs_stripe_of(pipeline(a, @"vs", 1)));

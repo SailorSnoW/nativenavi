@@ -17,12 +17,12 @@ void *front_metal_layer(void);
 int front_screen_max_fps(void);
 // Whether the window's current screen mode supports variable refresh (front_mac.m). Any thread
 int front_screen_variable_refresh(void);
-// The frame rate the display link paces the game at (60, 30, 120; nvn_mtl.m link_sync): in fullscreen, a screen whose refresh rate is not a multiple of it is switched, while the game runs,
+// The frame rate the display link paces the game at (60, 30, 120; nvn_display.inc link_sync): in fullscreen, a screen whose refresh rate is not a multiple of it is switched, while the game runs,
 // to a mode of the same size whose rate is, and back when the window leaves fullscreen or that screen (front_mac.m). Called from the present thread
 void front_screen_match(int fps);
 // Whether startup fullscreen or a screen mode switch is still settling, so the display link waits before starting (front_mac.m). Any thread
 int front_screen_settling(void);
-// Progress screen of the first-start prepare step (nvn_mtl.m warm_prepare: "Preparing shaders" while the pipelines of the prewarm lists are built before the game's first frame):
+// Progress screen of the first-start prepare step (nvn_prewarm.inc warm_prepare: "Preparing shaders" while the pipelines of the prewarm lists are built before the game's first frame):
 // title and done of total shown over the game's view (a dark screen, the title, a bar and a count), updated on each call; title NULL hides it. Any thread; the front end switches to its main
 // thread and does not block. Nothing is shown without a window
 void front_progress(const char *title, long done, long total);
@@ -37,7 +37,7 @@ extern void (*front_progress_hook)(const char *title, long done, long total);
 // 0: closed (B, Escape); -1 with no window: nothing shown, the caller answers as the player closing it
 int front_ctrl_support(int min, int max);
 
-// Save not written (called by the host's hle_fs.c; a front end may provide a strong implementation of the same name that tells the player, as nxnative's iOS front end did; the Mac front end has none, and the default weak implementation only logs).
+// Save not written (called by the host's hle_fs.c; a front end may provide a strong implementation of the same name that tells the player; the Mac front end has none, and the default weak implementation only logs).
 // Timing: when a save write fails (disk full etc.) within one of the game's save transactions (between two Commits), so that this Commit is refused and the previously committed save is unchanged, it is called once per refused transaction;
 // the next transaction that succeeds commits as usual, and the front end need not do any recovery. err = the first failing errno (ENOSPC = 28 means out of space). Called on the game thread; the front end switches to the main thread itself and must not block
 void front_save_failed(int err);

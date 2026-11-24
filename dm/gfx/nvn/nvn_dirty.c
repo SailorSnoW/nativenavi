@@ -439,7 +439,7 @@ void nvn_dirty_protect(const void *addr, size_t len) {
     pthread_mutex_unlock(&g_slot_mu);
 }
 // As nvn_dirty_protect, for the pages behind a placement sparse tile: a write to one of them moves nvn_dirty_sparse_writes, which nothing else moves, so its textures need no look at their tiles
-// until one is written (the page table's walk per look is what this replaces; nvn_mtl.m sparse_look)
+// until one is written (the page table's walk per look is what this replaces; nvn_sparse.inc sparse_look)
 void nvn_dirty_protect_sparse(const void *addr, size_t len) {
     nvn_dirty_protect(addr, len);
     pthread_mutex_lock(&g_slot_mu);

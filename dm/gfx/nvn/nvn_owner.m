@@ -47,7 +47,7 @@ static nvn_hmap g_ghost_held = {.klen = sizeof(uintptr_t)};
 // texture object (tex_snap in hle_nvn.c, mtl_reg_tex), so replay can resolve a texture the game has already finalized: Breath of the Wild records each frame's transient render targets
 // (the HUD captures, the 640x360 half-resolution buffers) and finalizes their objects before it submits. Those serials went back into g_by_serial and stayed there for good, as no second
 // Finalize comes: about 10 a frame, 200,000 after an hour in the first shrine. A dead serial resolves through g_ghost instead, so a record replayed again soon still finds its texture.
-// So does a registered ID whose texture the game finalized (a retired registration): its view goes at the end of each submission (treg_finish_submission in nvn_mtl.m) and the next
+// So does a registered ID whose texture the game finalized (a retired registration): its view goes at the end of each submission (treg_finish_submission in nvn_descpool.inc) and the next
 // one resolves it again. The table was a ring of NGHOST (512) whose oldest entry went when a new one came, whatever its use: while Ocarina of Time streams an area in, or rides into
 // Hyrule Field, its pools name thousands of finalized textures at once, so each resolution evicted one the next would need, whose note sent its ID to be resolved again, and the ring
 // never settled (3.7 million puts in 300 frames at an area transition, frames of 100-490 ms on the submit thread; up to 43 million in a window and 10-25 fps for minutes in
@@ -227,7 +227,7 @@ static uint32_t alias_take_over(const alias_key *nk, uint64_t now) {
             if (k->off >= hi || v->e[i].end <= lo) continue;
             // An entry is indexed in every cell its storage reaches, so it is met in each cell of the overlap: it is looked at in the first one alone. Looked at in each, an entry
             // spared (looked up lately, or held) cost a key compare and two hash lookups per 64 KB cell: a 16 MB render target made again over storage that others share
-            // repeated that hundreds of times per new texture (Ocarina of Time, iPhone 17 and Mac: alias_take_over 6% of the submit thread's busy time)
+            // repeated that hundreds of times per new texture (Ocarina of Time on the Mac: alias_take_over 6% of the submit thread's busy time)
             if (c != (k->off > lo ? k->off : lo) >> ALIAS_CELL) continue;
             if (!memcmp(k, nk, sizeof *k)) continue;
             g_alias_looks++;
@@ -430,7 +430,7 @@ int own_upgrade(id from, id to, uint64_t serial, id put) {
 // object still resolves to, as an object rebuilt over the same storage must keep finding it (SMBW's transient render targets). An entry a live object holds stayed for as long as the
 // object lived, then: Ocarina of Time keeps about 900 texture objects over its 304 MB render-target pool and uses about 70 of them at a time, each of the rest a Metal copy of bytes
 // newer targets have drawn over. They held 2.7 of the pool's 2.9 GB in Kakariko Village on the Mac (a census of the test host: unused for 20 s or more, overlapped by a texture used
-// since), and iOS ended the game for memory at an area load (about 6.1 GB). So an entry the replay layer covers goes once it has been unused for `idle` while another covered entry of
+// since). So an entry the replay layer covers goes once it has been unused for `idle` while another covered entry of
 // its pool wrote its bytes after that use: the content is dead on the console as well. The idle time keeps a texture whose bytes lie in a part of a larger one that the larger one's
 // writes leave alone (a smaller resolution's target in a dynamic-resolution buffer, PR #1453): it is read every frame. Its serial entries go with it, live and ghost, and the next use
 // makes it again (tex_mtl_), as after a finalize; a pin (a queued descriptor or a saved binding) keeps it. Caller holds g_smu

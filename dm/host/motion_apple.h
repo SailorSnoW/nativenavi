@@ -22,7 +22,7 @@ static inline void dm_motion_attach(GCController *c, int player) {
         rot[0] = (float)m.rotationRate.x; rot[1] = (float)m.rotationRate.y; rot[2] = (float)m.rotationRate.z;
         // Liveness heuristic: work around incorrect platform capability reporting (#296; NX2Apple #971, GameSir X5 Lite). Publish only once a raw rotation component differs
         // exactly from the first report; acceleration alone does not qualify. Motion or noise is expected to vary a working gyro, but constant output does not prove a
-        // missing sensor, nor varying output a real one. Once qualified, pass stationary/zero samples until detach; each attach starts again. The GameSir's retest on an iPhone was never done.
+        // missing sensor, nor varying output a real one. Once qualified, pass stationary/zero samples until detach; each attach starts again.
         if (!live) {
             if (!primed) { primed = 1; first = m.rotationRate; return; }
             if (m.rotationRate.x == first.x && m.rotationRate.y == first.y && m.rotationRate.z == first.z) return;

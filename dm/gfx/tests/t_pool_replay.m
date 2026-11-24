@@ -1,4 +1,4 @@
-// A patched pool table goes into another buffer, as draws already encoded read the old one (nvn_mtl.m pool_patch_take): a finished spare of the same table's build, brought up to date
+// A patched pool table goes into another buffer, as draws already encoded read the old one (nvn_pooltab.inc pool_patch_take): a finished spare of the same table's build, brought up to date
 // from the table's log, or a copy of the whole table when the table has no spare of its own, none of them finished, or the log has moved past them. Each case holds what the table
 // holds; a table built anew takes nothing from the spares of its earlier build, and the spares stay within their byte cap
 #define nvn_game_fps nvn_game_fps_mtl_default

@@ -183,7 +183,7 @@ int main(void) {
 
     // A pool destroyed and another registered over the same memory (the same slot): the new pool's data was written while the memory was in no pool, so no page fault and no
     // generation saw it, and the generations start again at 0. A stamp from the old pool's time must count as written (born): a kept index range of the vertex conversion
-    // (nvn_mtl.m ix_range) is keyed by address and outlives its pool
+    // (nvn_vertex.inc ix_range) is keyed by address and outlives its pool
     void *again = page_map();
     nvn_dirty_add_range(again, 4096);
     nvn_dirty_protect(again, 4096);

@@ -362,7 +362,7 @@ HLE_FORCE("_ZN2nn3nfp29StartNicknameAndOwnerSettingsEPNS0_12DeviceHandleEPbPNS0_
 // ---------- vi: vsync event ----------
 // The game passes a SystemEventType; after binding, a host thread fires it at 60 Hz, at 120 while 120 fps holds one tick of 1/120 s (nvn_vsync_hz; DM_VSYNC_HZ fixes another rate). While the display link presents, the event follows its ticks, as a
 // Switch's follows its display: Super Mario Galaxy 2 runs the Wii's VI retrace (and with it each emulated frame) on this event, and on a clock of the host's own the frames drifted
-// against the screen's vsyncs, two in some display-link ticks and none in others (iPhone: about one tick in seven, a stutter the frame-rate counter showed as 50 to 60).
+// against the screen's vsyncs, two in some display-link ticks and none in others (a stutter the frame-rate counter showed as 50 to 60).
 // One thread per binding lifetime: repeated requests must not double its rate.
 // A destroyed binding retires its worker even if another service reuses the same
 // guest storage and handle number before the next tick (MacNativeGames dab728a).

@@ -1,6 +1,7 @@
 // The amiibo library (nfp) with no tag and with a scanned amiibo file.
 // Exercise the real forced registrations, no guest SDK.
 #include "../hle_sdk16.c"
+#include "t_files.h"
 
 static int checks, fails;
 #define CHECK(c, msg) do { checks++; if (!(c)) { fails++; fprintf(stderr, "FAIL: %s\n", msg); } } while (0)
@@ -87,7 +88,8 @@ int main(void) {
         CHECK(open_area(&h, 0x1019C800) == NFP_RES_AREA_NOT_CREATED, "a fresh amiibo has no application area");
         uint8_t info[0x48] = {0}, data[4] = {1, 2, 3, 4}; uint32_t id = 0x1019C800, size = 4; const void *dp = data;
         memcpy(info, &id, 4); memcpy(info + 8, &dp, 8); memcpy(info + 0x10, &size, 4);
-        CHECK(create_area(&h, info) == RES_OK && create_area(&h, info) == NFP_RES_AREA_EXISTS, "the application area is created once");
+        Result created = create_area(&h, info), again = create_area(&h, info);
+        CHECK(created == RES_OK && again == NFP_RES_AREA_EXISTS, "the application area is created once");
         uint8_t five = 5; CHECK(set_area(&h, &five, 1) == RES_OK, "a write to the application area");
         CHECK(flush(&h) == RES_OK && device_state(&h) == NFP_STATE_MOUNTED, "a flush leaves the amiibo mounted");
         stop(&h);
@@ -101,7 +103,7 @@ int main(void) {
         dm_amiibo_remove();
         CHECK(device_state(&h) == NFP_STATE_REMOVED && tag_info(out, &h) == NFP_RES_TAG_NOT_FOUND, "taking the amiibo away is seen by the game");
         stop(&h); nfp_fini();
-        snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); if (system(cmd)) fails++;
+        if (t_rmtree(root)) fails++;
     }
     printf("nfp: %d checks, %d failed\n", checks, fails);
     return fails != 0;

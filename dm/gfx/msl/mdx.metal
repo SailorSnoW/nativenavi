@@ -1,4 +1,4 @@
-// Indirect-count multi-draws masked on the GPU (nvn_mtl.m mdx_run)
+// Indirect-count multi-draws masked on the GPU (nvn_indirect.inc mdx_run)
 #include <metal_stdlib>
 using namespace metal;
 struct mjob { device const uint *rec; device const uint *cnt; device uint *out; uint i, words; };   // i: the draw's index in its multi-draw; for an indirect mesh draw (words 0) the mesh grid's limit

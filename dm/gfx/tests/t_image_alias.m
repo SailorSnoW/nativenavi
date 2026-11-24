@@ -72,7 +72,8 @@ static void atomic_pixel(id<MTLTexture> t, uint32_t seed) {
     NSError *error=nil;
     id<MTLLibrary> lib=[g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
         "kernel void bump(texture2d<uint,access::read_write> image [[texture(0)]]) { image.atomic_fetch_add(uint2(0,0),5u); }\n" options:nil error:&error];
-    id<MTLComputePipelineState> ps=lib?[g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"bump"] error:&error]:nil;
+    id<MTLFunction> bump=[lib newFunctionWithName:@"bump"];
+    id<MTLComputePipelineState> ps=bump?[g_dev newComputePipelineStateWithFunction:bump error:&error]:nil;
     CHECK(ps!=nil,"native texture-atomic reader compiles"); if (!ps) return;
     MTL4ArgumentTableDescriptor *ad=[MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount=1;
     id<MTL4ArgumentTable> at=rec_table([g_dev newArgumentTableWithDescriptor:ad error:&error]);
@@ -104,7 +105,8 @@ static void depth_planes(pool_t *pool) {
     NSError *error=nil;
     id<MTLLibrary> lib=[g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
         "kernel void planes(texture2d<uint,access::read> s [[texture(0)]], depth2d<float,access::read> d [[texture(1)]], device uint2 *o [[buffer(0)]], uint2 p [[thread_position_in_grid]]) { o[p.y*d.get_width()+p.x]=uint2(s.read(p).r,as_type<uint>(d.read(p))); }\n" options:nil error:&error];
-    id<MTLComputePipelineState> ps=[g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"planes"] error:&error];
+    id<MTLFunction> planes=[lib newFunctionWithName:@"planes"];
+    id<MTLComputePipelineState> ps=planes?[g_dev newComputePipelineStateWithFunction:planes error:&error]:nil;
     CHECK(ps!=nil,"depth/stencil reader compiles"); if (!ps) return;
     for (int i=0;i<3;i++) {
         tex_t *t=&d[i%2]; id<MTLTexture> base=tex_mtl(t);

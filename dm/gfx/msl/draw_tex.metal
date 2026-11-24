@@ -1,4 +1,4 @@
-// nvnCommandBufferDrawTexture drawn as a render pass (nvn_mtl.m draw_tex)
+// nvnCommandBufferDrawTexture drawn as a render pass (nvn_copy.inc draw_tex)
 #include <metal_stdlib>
 using namespace metal;
 struct V { float4 p [[position]]; };

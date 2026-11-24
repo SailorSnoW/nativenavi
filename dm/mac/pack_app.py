@@ -28,7 +28,7 @@ MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*
 PRACTICE_FILES = MODULE_FILES + ('*.ips', 'LICENSE')   # what the host reads of the practice tools' folder (hle_practice.c), and their license
 PRACTICE_SETTING = 'DM_PRACTICE'   # the switch that loads them, the settings list's Practice tools (settings.tsv), offered only by an app that carries them
 MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json); the shader chain's b-<chain> goes in as one file of them (shader_lib.py)
-# read beside DM_NVN_SHMAP; any of them may be absent. The shader pairs are the pipeline prebuild's (nvn_mtl.m pso_prebuild): without them the
+# read beside DM_NVN_SHMAP; any of them may be absent. The shader pairs are the pipeline prebuild's (nvn_prewarm.inc pso_prebuild): without them the
 # app makes no pulling bases, a hybrid draw has no stand-in and a new pipeline compiles on the submit thread
 TABLES = ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv')
 PSO_FILES = ('*.mtl4a', '*-prewarm-*.keys', 'prebuilt.tsv', 'rest_pairs.tsv', 'archive.tsv', 'prewarm.tsv')   # what the app takes of pso_offline.py's output folder

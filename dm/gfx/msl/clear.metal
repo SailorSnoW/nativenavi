@@ -1,4 +1,4 @@
-// Clears a load action cannot express, drawn as one triangle over the pass (nvn_mtl.m clr_pso): clr_vs places it at the depth in buffer 0, and clr_fs_<slot>_<type> writes the
+// Clears a load action cannot express, drawn as one triangle over the pass (nvn_exec.inc clr_pso): clr_vs places it at the depth in buffer 0, and clr_fs_<slot>_<type> writes the
 // value in buffer 0 to colour attachment <slot> as float, uint or int. Every slot and type is in this one library, so no clear compiles a shader when it is first met
 #include <metal_stdlib>
 using namespace metal;

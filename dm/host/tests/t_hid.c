@@ -335,7 +335,7 @@ static void t_joycon_vibration_lifetime(void) {
     g_mode = 1; ids((uint32_t[]){0, 1}, 2); dm_pad_players(1);
     h_hid_SetStyles(STYLE_JOYDUAL | STYLE_JOYLEFT | STYLE_JOYRIGHT);
     dm_joy_attach(0, 3); joy_assign(0, 0); dm_haptics_route(0, 1);
-    uint32_t dual[2], left, right;
+    uint32_t dual[2] = {0}, left = 0, right = 0;   // what a failed lookup leaves is still a handle to send (an invalid one)
     dm_vibration values[] = {{0.2f, 160, 0, 320}, {0.7f, 160, 0, 320}};
     CHECK(h_hid_VibHandles(dual, 2, &(uint32_t){0}, STYLE_JOYDUAL) == 2, "rumbling pair: one handle per physical motor");
     h_hid_SendVibs(dual, values, 2);

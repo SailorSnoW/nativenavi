@@ -33,7 +33,7 @@ def name(path):
 
 
 def version(path):
-    """The display version (0x10 bytes at 0x3060, e.g. 1.2.1), cut to what iOS accepts as a bundle version (up to three dot-separated integers); a missing file or no leading number returns an empty string"""
+    """The display version (0x10 bytes at 0x3060, e.g. 1.2.1), cut to what a bundle version may be (CFBundleVersion: up to three dot-separated integers); a missing file or no leading number returns an empty string"""
     p = Path(path)
     if not p.is_file(): return ''
     m = re.match(rb'\d+(\.\d+){0,2}', p.read_bytes()[0x3060:0x3070])

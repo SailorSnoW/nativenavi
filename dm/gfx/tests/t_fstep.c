@@ -213,7 +213,7 @@ int main(void) {
         sim c = {0}; c.slow = 1; run(&c, 300, 0.5, 2, 2, 0);
         check(c.s.k == 2 && c.s.probes == 0, "  slowed at the 30 cap (kmin 2): nothing to probe");
     }
-    {   // Breath of the Wild on an iPhone: GPU 0.86 at hold 1, three heavy frames step to 2, where the GPU clock falls (1.5); after the probe it rises again within 20 frames
+    {   // a GPU-bound game: GPU 0.86 at hold 1, three heavy frames step to 2, where the GPU clock falls (1.5); after the probe it rises again within 20 frames
         sim m = {0}; nvn_fgpu g = {0}; int at1 = 0, stepped = 0;
         for (int i = 0; i < 2000; i++) {
             double w = i < 600 ? 0.86 : i < 603 ? 1.25 : m.s.k >= 2 ? 1.5 : at1++ < 20 ? 1.5 : 0.86;
@@ -374,7 +374,7 @@ int main(void) {
                 check(m.s.k == 1 && at1 >= n - from - 600 && fl == 0, b);
             }
         }
-    {   // Breath of the Wild on an iPhone (2026-10-21): frames of 0.80 / 0.92 vsyncs at hold 1 for 20 s, pipeline compiles step to 2, and the scene costs the same there:
+    {   // Breath of the Wild: frames of 0.80 / 0.92 vsyncs at hold 1 for 20 s, pipeline compiles step to 2, and the scene costs the same there:
         // the cost that held hold 1 starts one probe, which holds (both frames fit FSTEP_FIT too, but the probe starts before 30 of them in a row)
         sim m = {0};
         for (int i = 0; i < 1200; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
@@ -449,7 +449,7 @@ int main(void) {
         snprintf(b, sizeof b, "  a hitch 1 s after a movie: the cost that held hold 1 starts a probe (k %d, at hold 1 %d of the last 600)", m.s.k, at1);
         check(held > 0.85 && m.s.k == 1 && at1 == 600, b);
     }
-    // The thermal cap (hle_nvn.c thermal_capped; from the iOS port): 30 fps from frame 600 for 30 s. Breath of the Wild on an iPhone, GPU-bound: 0.86 vsyncs (14.4 ms) at hold 1, 1.5 (25 ms)
+    // The thermal cap (hle_nvn.c thermal_capped): 30 fps from frame 600 for 30 s. A GPU-bound game: 0.86 vsyncs (14.4 ms) at hold 1, 1.5 (25 ms)
     // at hold 2, where the clock follows the hold. After the cap and after each run at hold 2, the first 10 frames at hold 1 take 1.5 until the clock rises again; c = 1: the
     // first 60 frames after the cap (a clock slower to come back), so the probe at the cap's end fails; c = 2: hold 1 takes 1.3 for good after the cap (a heavier scene)
     for (int c = 0; c < 3; c++) {
@@ -476,7 +476,7 @@ int main(void) {
             check(at1 < 100 && gap >= FSTEP_HOLD_MAX && m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01, b);
         }
     }
-    {   // 165 Hz with virtual ticks (nvn_mtl.m link_range): cheap frames show on the refreshes nearest their slots, 12.1 / 18.2 ms at hold 1, 30.3 / 36.4 at 2, 48.5 / 54.5 at 3
+    {   // 165 Hz with virtual ticks (nvn_display.inc link_range): cheap frames show on the refreshes nearest their slots, 12.1 / 18.2 ms at hold 1, 30.3 / 36.4 at 2, 48.5 / 54.5 at 3
         for (int sl = 1; sl >= 0; sl--) {
             nvn_fstep s = {.k = 3, .step = 3, .kmin = 1, .hold = FSTEP_HOLD0, .shown_slack = sl ? 60.0 / 165 : 0};
             for (int i = 0; i < 360; i++) {

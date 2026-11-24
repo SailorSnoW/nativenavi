@@ -70,7 +70,7 @@ class Nvn2Buffers(unittest.TestCase):
 
     def test_a_bindless_constant_read_loads_through_a_pushed_handle(self):
         # UR4:UR5 = the first 8 bytes of push block 1 (a handle the game pushed, in the hardware's layout: address >> 4, size >> 4 at 45), then a word of that buffer through it.
-        # The address the shader decodes (handle << 4) is traced back to the handle's words, which the host decodes (nvn_mtl.m ucb_handle_addr)
+        # The address the shader decodes (handle << 4) is traced back to the handle's words, which the host decodes (nvn_query.inc ucb_handle_addr)
         res = self.translate(inst(*ULDC64_C0_10) + inst(*ULDCX) + inst(*MOV_R5_UR5) + inst(*SUATOM_R5) + inst(*EXIT), [1, 0, 0, 0x40, 0, 0, 0, 0x10])
         self.assertIn((24, 0x100 // 4), [(s['cb_slot'], s['cb_offset']) for s in res['sbufs']])
 

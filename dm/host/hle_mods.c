@@ -21,7 +21,8 @@ typedef struct { char path[1536], sha[65], why[400]; int refused, seen; } baked_
 static mod_t g_mods[MOD_MAX]; static int g_nmods;
 static pfile_t g_pfiles[PFILE_MAX]; static int g_npfiles;
 static applied_t *g_applied; static int g_napplied, g_applied_cap;
-static struct { char name[256]; char romfs[1300]; int on, at_start; } g_all[MOD_MAX * 4]; static int g_nall, g_edited;
+typedef struct { char name[256]; char romfs[1300]; int on, at_start; } mod_entry;
+static mod_entry g_all[MOD_MAX * 4]; static int g_nall, g_edited;
 static char g_overlay_first[4096];
 static char g_base[1024];
 static FILE *g_check;
@@ -125,17 +126,20 @@ static void mod_root(const char *dir, const char *tid, char *root, size_t n) {
     }
 }
 
-// What the Mods menu needs of a mod, on or off: its romfs folder (changed while the game runs), and whether it has anything that is only read at the start
-static void list_mod(const char *base, const char *name, const char *tid, int on) {
+// What the Mods menu needs of a mod, on or off: its romfs folder (changed while the game runs), and whether it has anything that is only read at the start.
+// Its entry in g_all, or NULL when the list is full (the folders found are at most as many, so a full list is a bug)
+static mod_entry *list_mod(const char *base, const char *name, const char *tid, int on) {
+    if (g_nall >= (int)(sizeof g_all / sizeof *g_all)) { LOG("[RED] mods: more than %d mods listed: %s is left out of the Mods menu", (int)(sizeof g_all / sizeof *g_all), name); return NULL; }
+    mod_entry *m = &g_all[g_nall++];
     char dir[1280], root[1280], p[1400];
-    strcpy(g_all[g_nall].name, name); g_all[g_nall].on = on;
+    strlcpy(m->name, name, sizeof m->name); m->on = on;
     snprintf(dir, sizeof dir, "%s/%s", base, name); mod_root(dir, tid, root, sizeof root);
     snprintf(p, sizeof p, "%s/romfs", root);
-    if (is_dir(p) && !strchr(p, ':')) strlcpy(g_all[g_nall].romfs, p, sizeof g_all[0].romfs);
-    snprintf(p, sizeof p, "%s/exefs", root); if (is_dir(p)) g_all[g_nall].at_start = 1;
-    snprintf(p, sizeof p, "%s/atmosphere/exefs_patches", dir); if (is_dir(p)) g_all[g_nall].at_start = 1;
-    snprintf(p, sizeof p, "%s/exefs_patches", dir); if (is_dir(p)) g_all[g_nall].at_start = 1;
-    g_nall++;
+    if (is_dir(p) && !strchr(p, ':')) strlcpy(m->romfs, p, sizeof m->romfs);
+    snprintf(p, sizeof p, "%s/exefs", root); if (is_dir(p)) m->at_start = 1;
+    snprintf(p, sizeof p, "%s/atmosphere/exefs_patches", dir); if (is_dir(p)) m->at_start = 1;
+    snprintf(p, sizeof p, "%s/exefs_patches", dir); if (is_dir(p)) m->at_start = 1;
+    return m;
 }
 
 static void add_mod(const char *base, const char *name, const char *tid, char *overlay, size_t overlay_n) {
@@ -249,18 +253,20 @@ void dm_mods_init(void) {
         if (!*s) continue;
         for (int i = 0; i < nfound; i++) if (!taken[i] && !strcmp(found[i], s)) {
             taken[i] = 1;
-            list_mod(base, s, tid, 0);
-            if (!disabled && alternative_on(g_nall - 1)) { LOG("mods: %s is left off: a variant of its pack that replaces the same files is on", s); disabled = 1; }
-            g_all[g_nall - 1].on = !disabled;
+            mod_entry *m = list_mod(base, s, tid, 0);
+            if (!m) break;
+            if (!disabled && alternative_on((int)(m - g_all))) { LOG("mods: %s is left off: a variant of its pack that replaces the same files is on", s); disabled = 1; }
+            m->on = !disabled;
             if (disabled) off++; else add_mod(base, s, tid, overlay, sizeof overlay);
             break;
         }
     }
     if (f) fclose(f);
     for (int i = 0; i < nfound; i++) if (!taken[i]) {
-        list_mod(base, found[i], tid, 0);
-        int on = !alternative_on(g_nall - 1);   // of alternatives order.txt does not name, the first
-        g_all[g_nall - 1].on = on;
+        mod_entry *m = list_mod(base, found[i], tid, 0);
+        if (!m) break;
+        int on = !alternative_on((int)(m - g_all));   // of alternatives order.txt does not name, the first
+        m->on = on;
         if (on) add_mod(base, found[i], tid, overlay, sizeof overlay); else off++;
     }
     if (overlay[0]) setenv("DM_ROMFS_OVERLAY", overlay, 1);
@@ -520,7 +526,7 @@ static void note_applied(const module_t *m, uint64_t off, uint64_t len, int mod)
         g_applied_cap = g_applied_cap ? g_applied_cap * 2 : 256;
         g_applied = dm_realloc(g_applied, (size_t)g_applied_cap * sizeof *g_applied, "the mods' applied patches");
     }
-    g_applied[g_napplied++] = (applied_t){m, off, len, mod};
+    g_applied[g_napplied++] = (applied_t){m, off, len, mod};   // NOLINT(clang-analyzer-security.ArrayBound): the count starts at 0 and the table grows when it is full (the analyzer takes the globals as any value)
 }
 
 static void sha256_hex(const uint8_t *buf, size_t n, char out[65]) {

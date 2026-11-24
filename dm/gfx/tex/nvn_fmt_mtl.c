@@ -1,6 +1,6 @@
 // NVNformat (nvn.h 0x01–0x9C) → Metal. The table is written entry by entry in NVN enum order; unlisted formats (including 0 and out of range) return 0.
 // Component remapping: "no alpha" formats such as RGBX / RGB_DXT1 read a as 1; RGB-family 16-bit packed formats swap r/b; RGBA4 reverses all four; all others are identity.
-// BC1–7 need GPU BC support (MTLDevice.supportsBCTextureCompression: every Apple silicon Mac); the table does not check it, mtl_init (nvn_mtl.m) refuses a device without it.
+// BC1–7 need GPU BC support (MTLDevice.supportsBCTextureCompression: every Apple silicon Mac); the table does not check it, mtl_init (nvn_pool.inc) refuses a device without it.
 #include "nvn_fmt_mtl.h"
 
 enum {   // MTLPixelFormat
@@ -48,7 +48,7 @@ static const ent T[0x9D] = {
     [0x35] = S(Depth32Float_Stencil8), E(Depth32Float_Stencil8),
     [0x37] = X(RGBA8Unorm_sRGB), E(RGBA8Unorm_sRGB),
     // 16-bit packed formats: matched by name - the BGR family (0x95–0x98) maps directly to the same-named Metal format, the RGB family uses the same Metal format with r/b swapped.
-    // RGBA4 has R, G, B, A from bit 0 up, Metal's ABGR4 A, B, G, R: all four reversed. The RGB family and RGBA4 are substitutes, their bits converted where they cross (nvn_mtl.m rb_packed_shift);
+    // RGBA4 has R, G, B, A from bit 0 up, Metal's ABGR4 A, B, G, R: all four reversed. The RGB family and RGBA4 are substitutes, their bits converted where they cross (nvn_texture.inc rb_packed_shift);
     // the BGR family's bit order has not been verified with real data
     [0x39] = SV(ABGR4Unorm), SXR(BGR5A1Unorm), SR(BGR5A1Unorm), SR(B5G6R5Unorm),
     [0x3D] = E(RGB10A2Unorm), E(RGB10A2Uint), E(RG11B10Float), E(RGB9E5Float),

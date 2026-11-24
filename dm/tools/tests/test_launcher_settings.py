@@ -51,7 +51,7 @@ class LauncherSettingsTests(unittest.TestCase):
     def test_sections_keep_the_host_defaults(self):
         oot = build(OOT)
         self.assertEqual([e for e, s in oot.items() if s['section'] == 'Performance'], PERFORMANCE_NVN)
-        # nvn_mtl.m pso4_on: on; nvn_rec.h rec_on: off unless the profile says enc_thread on, as this game's does
+        # nvn_archive.inc pso4_on: on; nvn_rec.h rec_on: off unless the profile says enc_thread on, as this game's does
         self.assertEqual((oot['DM_PSO_MTL4']['default'], oot['DM_PSO_PREBUILD']['default'], oot['DM_NVN_ENC_THREAD']['default'], oot['DM_METAL_HUD']['default']), ('1', '1', '1', '0'))
         self.assertEqual(list(dict.fromkeys(s['section'] for s in oot.values())), ['Game', 'Controls', 'Performance'])
         self.assertIn('DM_FPS_HOLD', oot)   # a frame step (fps_target), as the Frame rate row
@@ -65,7 +65,7 @@ class LauncherSettingsTests(unittest.TestCase):
 
     def test_the_mac_front_ends_rows(self):   # the window's Display mode (front_mac.m reads 1 or 0); Switch 2 controllers (pad_switch2_apple.m)
         mac = build(OOT)
-        self.assertFalse({'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS', 'DM_PICTURE_FIT', 'DM_SCREEN_ASPECT'} & set(mac))   # the iPhone app's
+        self.assertFalse({'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS', 'DM_PICTURE_FIT', 'DM_SCREEN_ASPECT'} & set(mac))   # no other front end's switches
         self.assertTrue({'DM_RUMBLE', 'DM_METAL_HUD', 'DM_FULLSCREEN', 'DM_SW2'} <= set(mac))
         s = mac['DM_FULLSCREEN']
         self.assertEqual((s['kind'], s['default'], s['options'], s['level']), ('choice', '0', [['0', 'Window'], ['1', 'Fullscreen']], 'basic'))

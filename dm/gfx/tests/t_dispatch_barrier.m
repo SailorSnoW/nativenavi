@@ -1,4 +1,4 @@
-// Compute dispatches ordered by the game's own barriers (nvn_mtl.m dispatch_enc_cs, the default): a barrier where the game issued one, where a copy's
+// Compute dispatches ordered by the game's own barriers (nvn_dispatch.inc dispatch_enc_cs, the default): a barrier where the game issued one, where a copy's
 // range meets the dispatch's, and between a dispatch whose reach is no range and the copies on either side of it; none between dispatches the game did not order. Run in both modes
 // (DM_NVN_DISPATCH_BARRIER=full / game) and with DM_NVN_DISPATCH_RANGELESS=0 / 1 (a dispatch with no range in the full order on both sides, or by the game's barriers; the profile key
 // dispatch_rangeless sets the default): the results are the same, the barriers differ.

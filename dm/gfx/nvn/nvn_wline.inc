@@ -78,7 +78,7 @@ static int wl_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     p_draw dwl = dw0 ? *dw0 : (p_draw){0}; p_draw_idx dil = di0 ? *di0 : (p_draw_idx){0};   // an indirect draw's arguments go into these copies
     const p_draw *dw = dw0 ? &dwl : NULL; const p_draw_idx *di = di0 ? &dil : NULL;
     if (di && (di->itype < 0 || di->itype > 2)) WL_NO("index type");
-    if (dw ? dw->ind : di->ind) {
+    if (dw ? dw->ind : di->ind) {   // NOLINT(clang-analyzer-core.NullDereference): draw passes a direct or an indexed draw, never neither
         int drained = 0, r = wl_indirect_args(dw ? &dwl : NULL, di ? &dil : NULL, &drained, "wide line");
         if (r < 0) WL_NO("indirect arguments");
         if (!r) return 1;

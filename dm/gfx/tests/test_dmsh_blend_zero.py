@@ -181,7 +181,7 @@ class BlendZero(unittest.TestCase):
         self.assertIn('if (!((m == 1u && c.w == 0.0f) || (m == 2u && c.w == 1.0f))) return c;', h)
         self.assertIn('(as_type<uint3>(c.xyz) & uint3(0x7f800000u)) == uint3(0x7f800000u)', h)
         self.assertIn('if ((m | r) == 0u) return;', h)   # a draw with no such weight and no normalized target pays two loads and one test
-        self.assertIn('struct dm_blend_state { uint zero; uint round; };', h)   # the host's two words (nvn_mtl.m bz_bind)
+        self.assertIn('struct dm_blend_state { uint zero; uint round; };', h)   # the host's two words (nvn_pso_desc.inc bz_bind)
         self.assertEqual(PARAM, f'constant dm_blend_state& dm_blend [[buffer({dmsh_abi.BLEND_BUFFER})]]')
         self.assertNotIn(dmsh_abi.BLEND_BUFFER, (dmsh_abi.ALPHA_BUFFER, dmsh_abi.LOGIC_BUFFER, 0))
 

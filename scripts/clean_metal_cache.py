@@ -50,7 +50,7 @@ def scan(d):   # → (last change of the folder or anything in it, bytes on disk
 
 
 def listing(d):
-    """d's gpuarchiver-* folders; None when a copy of the app that owns d is running (it holds the lock beside d shared for its run, nvn_mtl.m ga_claim). Listed under the
+    """d's gpuarchiver-* folders; None when a copy of the app that owns d is running (it holds the lock beside d shared for its run, nvn_archive.inc ga_claim). Listed under the
     exclusive lock and removed after it, so an app starting meanwhile waits only for the listing, and its own folders, made after, are not among them"""
     lock = d.parent / 'gpuarchiver.lock'
     if not lock.exists(): return sorted(d.glob('gpuarchiver-*'))   # the shared folder, or an app from before the lock (the idle rule spares its running hosts)

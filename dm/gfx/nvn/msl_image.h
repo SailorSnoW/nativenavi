@@ -1,5 +1,5 @@
 // A file inside a game's shader library image, <DM_MSL_DIR>/b-<chain>.img (dm/tools/shader_lib.py). The image is one flat folder in the RomFS image's format, read in place: one descriptor for the
-// whole library, a binary search by name, and a mapping of only the pages a shader's file lies on, since an iPhone without extended addressing had about 6 GB of address space to share with the game (nxnative's iOS port).
+// whole library, a binary search by name, and a mapping of only the pages a shader's file lies on, so a run maps only what it loads of a library of several GB.
 #pragma once
 #include "../../host/romfs_image.h"
 #include <sys/mman.h>

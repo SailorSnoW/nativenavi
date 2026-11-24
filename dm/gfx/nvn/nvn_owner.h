@@ -150,7 +150,7 @@ typedef struct { uint32_t live, live_cap, ghost, retire_wait; uint64_t ghost_put
 own_stats own_stats_locked(void);
 void own_each_locked(void (^fn)(uint64_t serial, id o, int ghost));
 // Every entry, live or ghost, whose object gone() names goes (each serial noted, its ring slot freed, its object dropped as serial_del drops it); each(serial) is told of
-// each. The replay layer's eviction of idle uploaded textures (nvn_mtl.m pkg_evict_idle). → how many went
+// each. The replay layer's eviction of idle uploaded textures (nvn_pooltab.inc pkg_evict_idle). → how many went
 uint32_t own_drop_where_locked(int (^gone)(id o), void (^each)(uint64_t serial));
 
 // ---- What the replay layer provides (nvn_mtl.m). Called with g_smu held

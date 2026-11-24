@@ -1,4 +1,4 @@
-// Per-frame arena blocks (nvn_mtl.m arena_new / arena_begin / arena_commit / arena_trim). With the GPU held by a shared-event gate, 24 submissions of 3 MB each make a block apiece,
+// Per-frame arena blocks (nvn_descpool.inc arena_new / arena_begin / arena_commit / arena_trim). With the GPU held by a shared-event gate, 24 submissions of 3 MB each make a block apiece,
 // past ARENA_KEEP_BLOCKS: the idle trims at the starts after them free none of those while their GPU work is pending, and once the gate opens every submission's GPU copy reads the
 // bytes it wrote. ARENA_IDLE small submissions later the blocks above the keep count have left the residency set and are freed (DM_NVN_ARENA_TRIM=0: all kept). Shared blocks: 32 small
 // submissions with the GPU held take one block between them (DM_NVN_ARENA_SHARE=0: one each), and each one's GPU copy still reads its own bytes. A shared block cannot be reset after

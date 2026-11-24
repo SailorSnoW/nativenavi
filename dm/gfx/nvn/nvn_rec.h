@@ -9,7 +9,7 @@
 // A selector the stand-ins do not implement stops the host with its name (forwardingTargetForSelector), so a missing one cannot silently drop work.
 
 // ---------- Copy queue: large uniform shadows (ubp_get) are filled by a worker thread ----------
-// A shadow is the bytes of a uniform range as the GPU will read them at that point of the submission (nvn_mtl.m ubp_get): memory, or the previous shadow of the range, with the inline
+// A shadow is the bytes of a uniform range as the GPU will read them at that point of the submission (nvn_ubuf.inc ubp_get): memory, or the previous shadow of the range, with the inline
 // updates queued since laid over it. Breath of the Wild makes about 440 a frame, 14 MB of copies, a tenth of the submit thread's time. The submit thread queues the copies in order and
 // goes on; one worker makes them in the same order (a shadow may start from the previous one). The GPU reads shadows only after its command buffer is committed, and every commit first
 // waits for the copies queued before it (ubc_wait, from the encode thread when Metal encoding is deferred); a CPU read of a shadow waits for its own copies. DM_NVN_UB_COPY_THREAD=0
@@ -98,7 +98,7 @@ typedef struct { uint32_t op, nobj; uint64_t a[15]; } rec_t;   // the first nobj
 enum { REC_BLK = 256 };
 typedef struct rec_blk { struct rec_blk *next; int n; rec_t r[REC_BLK]; } rec_blk;
 
-// On by the profile's enc_thread or DM_NVN_ENC_THREAD=1: Breath of the Wild on an iPhone 17 Pro Max (handheld, the Great Plateau) took about 8 ms of submit thread per frame without it and 3.3–4.5 ms with it
+// On by the profile's enc_thread or DM_NVN_ENC_THREAD=1: Metal's encoding leaves the submit thread
 static int g_rec = -1;
 static inline int rec_on(void) {
     if (__builtin_expect(g_rec >= 0, 1)) return g_rec;
@@ -142,7 +142,7 @@ static NSMutableArray *g_hold_ops;           // the encode thread's
 static pthread_mutex_t g_hold_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_hold_cv = PTHREAD_COND_INITIALIZER;
 static uint64_t g_hold_n, g_hold_ops_n, g_hold_forced, g_hold_drained, g_hold_blocks, g_hold_block_recs, g_hold_ns;   // statistics
 static const char *volatile g_hold_force_why;
-static uint64_t g_rc_ahead_waits;   // nvn_mtl.m rc_value
+static uint64_t g_rc_ahead_waits;   // nvn_query.inc rc_value
 static const char HOLD_DRAIN[] = "drain";   // hold_poke: the host's own drain, where the game does not run on
 static int on_sub_thread(void);
 void nvn_queue_ahead_refuse(volatile uint32_t *word);   // nvn_queue.inc
@@ -176,12 +176,12 @@ static id g_rx_cb, g_rx_enc;   // the encode thread's real command buffer and op
 // of their own, and the held ones reach the queue in one commit call, in order. A game that splits its frame at every event signal makes many small submissions (Ocarina of Time 22
 // to 30 a frame, each cut again at its waits, signals and fences by the queue scheduler), and they all reach the queue within a few milliseconds, behind the frame's first one.
 // Command buffers queued behind running work are the condition for the kernel's stall (docs/reference/frame-rate.md, "The GPU idles with the next command buffer already
-// committed"): on the iPhone 17, with the GPU at a low clock, the second command buffer of a frame started 22 to 37 ms after the first had ended in three frames of four, the GPU then
-// read 55 to 75 % busy and its governor never raised the clock again (5 to 12 fps where the same scene holds 30). The held ones are committed when the GPU runs out of work (read at the end
+// committed"): with the GPU at a low clock, the next command buffer of a frame can start long after the one before it ended, and a governor that then
+// reads the GPU as partly busy does not raise the clock again. The held ones are committed when the GPU runs out of work (read at the end
 // of an encoder, and every 50 us while nothing is recorded, for half a millisecond at most), when the submit thread drains the encode thread, and before anything else goes to the queue (an
 // upload batch, a snapshot copy, a queue operation, a signal of its own): each command buffer keeps its place among those exactly as when it was committed on its own. A first version
 // put the next submissions into the held command buffer itself; an upload batch recorded inside a submission then went to the queue after the draws of that submission recorded
-// before it, which sampled the textures before their upload (pink and dark flashes on the iPhone, and a GPU error and recovery). Each held submission's feedback gets its own part of
+// before it, which sampled the textures before their upload (pink and dark flashes, and a GPU error and recovery). Each held submission's feedback gets its own part of
 // the commit's GPU time, from the stamp its successor's first encoder writes (ts_sub_begin) where there is one, so a counter report that falls back to its command buffer's times
 // (rep_ticks) reads what it read on its own. DM_NVN_SUB_MERGE=0 commits every submission on its own again (ab: alternates with the DM_AB phases, for measurement)
 // Whether the GPU still has work is read from an event the encode thread signals after each of its commits (g_rx_ev: the GPU has run out of its work once that reads g_rx_seq):
@@ -349,7 +349,7 @@ static void rec_exec(const rec_t *r) {
     case RO_R_DRAW_IDX: [(id<MTL4RenderCommandEncoder>)e drawIndexedPrimitives:a[0] indexCount:a[1] indexType:a[2] indexBuffer:a[3] indexBufferLength:a[4] instanceCount:a[5] baseVertex:(NSInteger)a[6] baseInstance:a[7]]; break;
     case RO_R_DRAW_IDX_IND: [(id<MTL4RenderCommandEncoder>)e drawIndexedPrimitives:a[0] indexType:a[1] indexBuffer:a[2] indexBufferLength:a[3] indirectBuffer:a[4]]; break;
     case RO_R_MESH: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroups:MTLSizeMake(a[0], 1, 1) threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;
-    case RO_R_MESH_IND: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroupsWithIndirectBuffer:a[0] threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;   // PR #1312's indirect task / mesh draws: the encode thread (then iOS's default) aborted on the selector
+    case RO_R_MESH_IND: [(id<MTL4RenderCommandEncoder>)e drawMeshThreadgroupsWithIndirectBuffer:a[0] threadsPerObjectThreadgroup:MTLSizeMake(a[2] ? a[2] : 1, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(a[1], 1, 1)]; break;   // PR #1312's indirect task / mesh draws: the encode thread aborted on the selector
     case RO_R_STORE_C: [(id<MTL4RenderCommandEncoder>)e setColorStoreAction:a[0] atIndex:a[1]]; break;
     case RO_R_STORE_D: [(id<MTL4RenderCommandEncoder>)e setDepthStoreAction:a[0]]; break;
     case RO_R_STORE_S: [(id<MTL4RenderCommandEncoder>)e setStencilStoreAction:a[0]]; break;
@@ -622,7 +622,7 @@ static void rec_commit_upload(id cb, MTL4CommitOptions *o) {
 // committed after it and after the command buffers committed before it
 static void rec_queue_block(void (^block)(void)) { if (rec_on() && g_rb_started) { rec_put(RO_Q_BLOCK, 1)->a[0] = rec_obj([block copy]); atomic_fetch_add(&g_hold_recs, 1); } else block(); }
 static void rec_signal(id ev, uint64_t v) { if (rec_on() && g_rb_started) { rec_t *r = rec_put(RO_SIGNAL, 1); r->a[0] = rec_obj(ev); r->a[1] = v; atomic_fetch_add(&g_hold_recs, 1); } else [g_q4 signalEvent:ev value:v]; }
-// The submit thread, idle between submissions (nvn_mtl.m mtl_hold_begin): from here on what reaches the queue is kept until the wait (word, mode, value) is satisfied
+// The submit thread, idle between submissions (nvn_fence.inc mtl_hold_begin): from here on what reaches the queue is kept until the wait (word, mode, value) is satisfied
 static int hold_begin(volatile uint32_t *word, unsigned mode, uint32_t value, uint64_t first_fence) {
     if (!rec_on() || !g_rb_started || atomic_load(&g_hold_on)) return 0;
     rec_drain_soft();

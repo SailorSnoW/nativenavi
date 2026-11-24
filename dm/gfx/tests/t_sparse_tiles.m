@@ -1,4 +1,4 @@
-// Large sparse textures as placement sparse textures (nvn_mtl.m sparse_make, sparse_sync, sparse_look) through the real NVN entry points: a tile the game maps holds what its physical pages hold, in
+// Large sparse textures as placement sparse textures (nvn_sparse.inc sparse_make, sparse_sync, sparse_look) through the real NVN entry points: a tile the game maps holds what its physical pages hold, in
 // level 0 and in the mip tail; nothing is uploaded or mapped without a request; an unmapped tile gives its heap tile back; a tile rewritten in place is uploaded again; more requests than the pool's
 // log holds still end right; a GPU-written texture gets tiles and no uploads; a small sparse texture stays whole. Shared tiles: one physical page mapped at two places is one heap tile, a GPU
 // write through one place shows at the other, a drawn tile keeps its content for the next place until the CPU writes its memory or its pool's Finalize gives it back, an undrawn one goes back with

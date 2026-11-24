@@ -3,7 +3,7 @@
 // Usage: t_global_memory <metallib> [c0=<member>] [s=<member>,...] [map=<member> log=<member> guest=<address>] [<c0 byte offset>=<word>]... [w<index>=<word>]...
 //   s: the storage buffer members of the c0 descriptor (the translator may give one descriptor several: a constant offset folded, a runtime one range-checked), each
 //   bound to the buffer. map / log: the memory pool table and its write log (dmsh_abi.h DMSH_GMEM_MAP_*, DMSH_GMEM_LOG_*), for addresses the translator traced to no
-//   storage buffer: the table maps the buffer at guest address <address> in entry 1, as the host's (nvn_mtl.m gmem_map) does a pool
+//   storage buffer: the table maps the buffer at guest address <address> in entry 1, as the host's (nvn_args.inc gmem_map) does a pool
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <assert.h>

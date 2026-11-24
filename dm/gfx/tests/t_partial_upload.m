@@ -1,5 +1,5 @@
 // Re-uploads of a texture taken from guest memory read only the images (a layer's level, a 3D level) whose pages were written since its upload and copy the others from the
-// texture they replace (pkg_written in nvn_mtl.m), through the production lookup (tex_mtl): after each write every image of the texture the host returns is compared with a CPU
+// texture they replace (pkg_written in nvn_texture.inc), through the production lookup (tex_mtl): after each write every image of the texture the host returns is compared with a CPU
 // reference, and the bytes read from guest memory with those of the images whose pages the write touched. Ocarina of Time's 1800x1380x8 R16 array, written layer by layer while
 // drawn, was read whole 13 times in 6 frames (docs/reference/frame-rate.md)
 #include "../nvn/nvn_mtl.m"

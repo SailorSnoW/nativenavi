@@ -33,8 +33,8 @@ static MTL4MeshRenderPipelineDescriptor *mtk_desc4(MTLRenderPipelineDescriptor *
     return m;
 }
 // A native mesh pipeline for key k (mesh shader ms, optional task shader ts, optional pixel shader fs), on any thread, kept in the pipeline archive as compute pipelines are
-// (cps_new_b). With the Metal 4 compiler it is looked up in the archive files (the app's bundle among them): a hit costs a lookup, where a build took 1.9-5 s on an iPad Pro (M5)
-// and up to 40 s on an M1 with Metal's own cache cold (Ocarina of Time). On a miss the MTLDevice builds it, which the system's shader cache serves when it holds it, and the
+// (cps_new_b). With the Metal 4 compiler it is looked up in the archive files (the app's bundle among them): a hit costs a lookup, where a build took
+// up to 40 s on an M1 with Metal's own cache cold (Ocarina of Time). On a miss the MTLDevice builds it, which the system's shader cache serves when it holds it, and the
 // Metal 4 compiler compiles it again into the current flush period in the background (arch_harvest), so the next start takes it from the file that period writes; the capture
 // compiles it whole, which the draw or the prewarm does not wait for. A pipeline written with other pipelines may sit in a plain file, which a compacting prewarm replaces, so one
 // taken from such a file then is captured again. Without the compiler, or for a function with no Metal 4 descriptor, only the MTLDevice build. *archived: taken from the archive

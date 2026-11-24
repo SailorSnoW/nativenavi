@@ -46,7 +46,7 @@ static void flags_init(void) {
     g_flag.bootprof = !!getenv("DM_BOOTPROF");
 }
 
-// Zero point of the boot timeline = process creation time (p_starttime from sysctl KERN_PROC_PID, wall clock) converted to the now_ns monotonic time base; same definition on Mac / iOS
+// Zero point of the boot timeline = process creation time (p_starttime from sysctl KERN_PROC_PID, wall clock) converted to the now_ns monotonic time base
 static uint64_t proc_start_mono_ns(void) {
     struct kinfo_proc kp; size_t n = sizeof kp; int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
     uint64_t mono = now_ns(); struct timeval tv; gettimeofday(&tv, NULL);

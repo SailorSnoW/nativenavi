@@ -24,7 +24,7 @@ from dmsh_rewrite import raw_noinline   # noqa: E402
 LDG = (0x000ea200081e890f, 0x0000000405067981)   # LDG.E R6, [R5.64 + UR4]: R5 the thread index, an address the translator traces to no storage buffer
 HELPER = re.compile(r'(?m)^int (_\d+)\(thread const int& _\d+, thread const int& _\d+, const device (_\d+)& \w+, thread uint& (_\d+)\)\n\{\n')
 
-# The pool table as the host writes it (nvn_mtl.m gmem_map, dmsh_abi.h DMSH_GMEM_MAP_*): 8,192 entries of 8 words {start lo, start hi, end lo, end hi, delta lo, delta hi, hint, span}, sorted by start,
+# The pool table as the host writes it (nvn_args.inc gmem_map, dmsh_abi.h DMSH_GMEM_MAP_*): 8,192 entries of 8 words {start lo, start hi, end lo, end hi, delta lo, delta hi, hint, span}, sorted by start,
 # entry 0 empty, unused entries starting at ~0. Pools A and B are adjacent, C lies past a gap and above 4 GiB, and its 2 MiB chunk has a hint naming it (the only pool there; the gap after it is in
 # the chunk too, so the hint's entry does not hold that address)
 RUNNER = '''#import <Metal/Metal.h>

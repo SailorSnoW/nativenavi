@@ -18,14 +18,14 @@ kernel void deswz_direct(device const uchar *src [[buffer(0)]], constant D& p [[
  off+=p.gob2?((x&63u)>>5)*256u+((y&7u)>>2)*128u+((x&31u)>>4)*64u+((y&3u)>>1)*32u+(y&1u)*16u+(x&15u):((x&63u)>>5)*256u+((y&7u)>>1)*64u+((x&31u)>>4)*32u+(y&1u)*16u+(x&15u);
  dst.write(uint4(*(device const ushort4*)(src+off)),id.xy,id.z,p.level);
 }
-// The other way: a region of one level of a texture, linear in src (pitch apart, images img apart, from column x0 & ~15), written into its storage in dst (nvn_mtl.m gsb_store, what
+// The other way: a region of one level of a texture, linear in src (pitch apart, images img apart, from column x0 & ~15), written into its storage in dst (nvn_pass.inc gsb_store, what
 // the GPU wrote into a texture into the storage the game may read or upload from). One thread per 16 bytes of a row: within a GOB they are contiguous, so a whole segment is one 16-byte
 // store. Only bytes in [x0, x1) of block rows [y0, y0 + rows) are written: the rest of the storage (other texels, GOB padding, a neighbour's bytes) keeps what it holds. Images are
 // layers layer_stride apart, or (d3) a 3D level's depth planes from z0, interleaved by its block depth (td); lin != 0: linear storage, rows lin bytes apart. pt != 0: a texture of a
 // sparse pool, whose storage is the physical memory mapped behind it (swz_at)
 struct W { ulong src_off, dst_off, base, pitch, img, layer_stride, e0n, e1s, e1n, pt, va, pt_pg; uint x0, x1, y0, rows, th, gobs_x, gob2, td, z0, blocks_y, d3, lin; };
 // Where the byte at o (dst_off + its offset in the storage) goes: into dst, or for a texture of a sparse pool through its page table, pt (a GPU address) holding the GPU address of each
-// 4 KB page from page pt_pg of the address space on, 0 where nothing is mapped (nvn_mtl.m sp_pages_gpu), and va the storage's address there. nullptr where nothing is mapped: the write
+// 4 KB page from page pt_pg of the address space on, 0 where nothing is mapped (nvn_texture.inc sp_pages_gpu), and va the storage's address there. nullptr where nothing is mapped: the write
 // is dropped, as the hardware drops a write to an unmapped page of a sparse texture
 static device uchar *swz_at(device uchar *dst, constant W& p, ulong o) {
  if (!p.pt) return dst + o;
@@ -55,7 +55,7 @@ kernel void swz(device const uchar *src [[buffer(0)]], device uchar *dst [[buffe
   if (q < p.e0n) eb[q] = v; else if (q >= p.e1s && q - p.e1s < p.e1n) eb[p.e0n + q - p.e1s] = v;
  }
 }
-// A texture of a sparse pool gathered for an upload (nvn_mtl.m pkg_upload_), n bytes from address va into dst: 16 bytes a thread, read from the physical memory mapped behind each 4 KB
+// A texture of a sparse pool gathered for an upload (nvn_texture.inc pkg_upload_), n bytes from address va into dst: 16 bytes a thread, read from the physical memory mapped behind each 4 KB
 // page (pt and pt_pg as in swz_at), 0 where nothing is mapped. The upload batch runs after every command buffer committed before it, so this reads what their GPU writes stored
 // into that memory (swz), which a gather on the CPU when the upload is encoded did not
 struct G { ulong va, pt_pg, n; };

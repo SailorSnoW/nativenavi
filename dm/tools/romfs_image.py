@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Pack an extracted RomFS folder into one image file the host reads in place of the folder (hle_fs.c, "RomFS image"): DM_ROMFS may name the image instead of a folder.
-# One file instead of hundreds of thousands: the format was made for copies to an iPhone at full speed (Tears of the Kingdom's 304,000 files ran the phone's file service out of open files), and the host
+# One file instead of hundreds of thousands: one copy at full speed (Tears of the Kingdom has 304,000 files), and the host
 # keeps one descriptor open for the whole RomFS.
 # Layout (little-endian):
 #   header  32 bytes: magic "DMROMFS1", u64 index offset, u64 index size, u64 entry count

@@ -1,4 +1,4 @@
-// The pulling vertex fetch (dm/gfx/tools/dmsh_pull.metal) against Metal's own: for every NVN vertex format the host knows (nvn_mtl.m vfmt), the words dm_fetch gives must be bit
+// The pulling vertex fetch (dm/gfx/tools/dmsh_pull.metal) against Metal's own: for every NVN vertex format the host knows (nvn_vertex.inc vfmt), the words dm_fetch gives must be bit
 // for bit the ones Metal's vertex-descriptor fetch gives an input of the format's class (float4, uint4 or int4); for the formats Metal has no fetch for (integers read as floats,
 // vconv_i2f), the ones the host's CPU conversion gives (vconv_fill). Every byte value, half and float specials, snorm -128, 10:10:10:2 extremes, 8-bit attributes at aligned and
 // at 2-byte offsets, a stride-1 stream; then stride 0 and a divisor with a base instance, which must pick the elements Metal's step functions pick; then the host's layout block

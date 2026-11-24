@@ -1,4 +1,4 @@
-// A storage pair's layout on this GPU (nvn_mtl.m pair_layout_ok): every sample s of pixel p of the 4-sample texture against texel (2p.x + (s & 1), 2p.y + (s >> 1)) of the
+// A storage pair's layout on this GPU (nvn_storage.inc pair_layout_ok): every sample s of pixel p of the 4-sample texture against texel (2p.x + (s & 1), 2p.y + (s >> 1)) of the
 // single-sample one over the same bytes, compared as read; each sample that differs counts once
 #include <metal_stdlib>
 using namespace metal;

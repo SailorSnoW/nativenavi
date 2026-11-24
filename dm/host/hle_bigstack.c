@@ -8,7 +8,7 @@
 // and dm_bigstack_caller (hle.h) gives it back, so take-overs that log their call site (audio Start / Stop / Close) name the game's code on either path.
 // Stack arguments: a take-over's stub with more than 8 parameters enters at dm_bigstack_enter_n with how many bytes the caller put on its stack in x17, 8 per parameter past the eighth (hle.h; the video decoder's and Opus's take-overs have 9-12),
 // rounded up to 16, at most 64; only those are read, all inside the caller's own frame (none for 8 parameters or fewer). Variadic functions reading their arguments from the stack cannot use it.
-// iOS does not allow generating executable code at run time, so the stubs are generated at compile time by the macro, not written at run time as DM_HLECOUNT does
+// The stubs are generated at compile time by the macro, not written at run time as DM_HLECOUNT does
 // Log lines take the same entry (dm_log below, dm.h LOG): any take-over may log, and formatting one line takes about 2.7 KB of stack, so a line logged on a guest stack is
 // written on the host stack wherever it is called from: a HLE_FORCE_DIRECT take-over, or host code called on a guest stack (the controller applet's stand-in from a game thread of Drag x Drive, PR #1943)
 #include <pthread.h>
@@ -45,7 +45,7 @@ uintptr_t dm_bigstack_top(uintptr_t sp) {
     return (uintptr_t)top;
 }
 
-// x16 = implementation. dm_bigstack_enter carries over no stack arguments (the NVN, Vulkan and GL layers' entries, log lines, take-overs with 8 parameters or fewer);
+// x16 = implementation. dm_bigstack_enter carries over no stack arguments (the NVN layer's entries, log lines, take-overs with 8 parameters or fewer);
 // dm_bigstack_enter_n takes their size in x17 (16-64 bytes, a multiple of 16; the take-over's stub sets it). Frame (on the original stack, 0xb0 bytes): +0x00 x0-x8, x16,
 // +0x50 d0-d7, +0x90 x17 / x19, +0xa0 x29 / x30. After the switch the original sp and the game's return address are stored at the new stack top, the stack arguments copied below
 // them, and x19 (callee-saved, so the implementation keeps it) holds where the pair is; the sp and x19 are restored when the implementation returns

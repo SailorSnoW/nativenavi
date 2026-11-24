@@ -1,6 +1,6 @@
-// Shadow vertex inputs (dm/gfx/tools/dmsh_vin.py, nvn_mtl.m vin_ct): an integer shader input also declared as a float4 and as the integer of the other sign, the three ORed, with the
+// Shadow vertex inputs (dm/gfx/tools/dmsh_vin.py, nvn_vertex.inc vin_ct): an integer shader input also declared as a float4 and as the integer of the other sign, the three ORed, with the
 // attribute routed to the declaration of its format's class and the zero buffer to the others. Checks that Metal's fetch then gives the 32-bit register values the CPU conversion
-// (nvn_mtl.m vconv_elem) made: the converted float32 bits for half / normalized / packed formats (missing components 0, 0, 0, 1.0), the value widened by the format's own sign for
+// (nvn_vertex.inc vconv_elem) made: the converted float32 bits for half / normalized / packed formats (missing components 0, 0, 0, 1.0), the value widened by the format's own sign for
 // 8 / 16-bit integers (missing 0, 0, 0, 1), into a uint input and into an int input. The reference below follows vconv_elem's formulas; half and integer formats must match exactly,
 // normalized formats within one ULP. Negative control: the same data routed to the input's own declaration with the other class's format is refused by Metal or differs.
 #import <Metal/Metal.h>
