@@ -62,6 +62,24 @@ class OcarinaDrsStub(unittest.TestCase):
         self.assertIn('RENDER_SCALE', ctx.capabilities)
         self.assertEqual(puts, [0x8000000, 0x31d3200 + 0xce4, 0x31d3200 + 0xd48])
 
+    def test_v0_view_moves_only_the_scale_field(self):
+        # v0's view-size update: the status ubfx at +0xcd4, the store at +0xd38, its scale at +0xe54. The stub bodies differ from v131072's in the two words that address the
+        # scale (ldr w17 / str s0, [x20, #scale]), and the store's site is checked against v0's str s0, [x20, #0xe54]
+        for body, word in ((patch.render_scale_status_body, 11), (patch.render_scale_store_body, 12)):
+            a, b = body(MOVX(16, 1)), body(MOVX(16, 1), 0xe54)
+            self.assertEqual([i for i in range(len(a)) if a[i] != b[i]], [word])
+        self.assertEqual(patch.render_scale_status_body(MOVX(16, 1), 0xe54)[11], 0xb94e5691)   # ldr w17, [x20, #0xe54]
+        self.assertEqual(patch.render_scale_store_body(MOVX(16, 1), 0xe54)[12], 0xbd0e5680)    # str s0, [x20, #0xe54]
+        pos, sites, puts = [0x6000000], {}, []
+        def emit(w): pos[0] += 4
+        ctx = types.SimpleNamespace(here=lambda: pos[0], emit=emit, site=sites.__setitem__, put=lambda off, ws, why: puts.append(off),
+                                    state=0x9000000, base=0x6b5900, capabilities=set(),
+                                    others={'dynamic resolution': 0x7e8920, 'dynamic resolution update': 0x7e7de0, 'render scale': 0x317be20})
+        patch.frame_step_v0(ctx)
+        self.assertEqual(puts, [0x6b5900 + 0x108, 0x7e8920, 0x317be20 + 0xcd4, 0x317be20 + 0xd38])
+        self.assertEqual(sites[0x6b5900 + 0x108], '2818201e')
+        self.assertEqual(sites[0x317be20 + 0xd38], '80560ebd')
+
     @unittest.skipUnless(platform.system() == 'Darwin' and platform.machine() == 'arm64' and shutil.which('clang'), 'needs macOS arm64 and clang')
     def test_drs_controller_threshold_scaling_and_steps(self):
         drs_words = '\n'.join(f'    .long 0x{w:08x}' for w in patch.drs_controller)
