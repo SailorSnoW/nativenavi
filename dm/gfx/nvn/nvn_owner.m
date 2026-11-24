@@ -506,7 +506,7 @@ id own_alias_publish(uint64_t serial, const alias_key *k, id o) {
     return o;
 }
 
-// sRGB / linear views share bytes only while their parent is in the sharing table; checked in the same g_smu hold as the view's entry changes
+// Views of a shared storage (an sRGB / linear twin, another 32-bit format) share bytes only while their parent is in the sharing table; checked in the same g_smu hold as the view's entry changes
 static id view_parent(id o) { return [o respondsToSelector:@selector(parentTexture)] ? ((id<MTLTexture>)o).parentTexture : nil; }
 int own_view_put(uint64_t k, const alias_key *pk, id<MTLTexture> view) {
     pthread_mutex_lock(&g_smu);

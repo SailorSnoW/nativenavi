@@ -116,7 +116,8 @@ int main(void) { @autoreleasepool {
     CHECK(g_treg[4].retired && entry(b9, 4) != dummy_of(b9), "the finalized texture's ID resolves to the shared texture");
     CHECK(!g_treg[4].view && lists(&snap()->trans, 4), "its view went at the submission's end, and the table lists it");
     for (int i = 0; i <= ALIAS_IDLE; i++) { mtl_sub_begin(); mtl_wait(mtl_sub_commit(), 5000000000ull); }   // until the sharing table no longer spares the entry
-    NVNtexture t5 = {0}; h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_R32F); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&dpool, 0);
+    // the textures over another's storage below have texels of another size: two 32-bit formats would be views of one texture (tex_mtl_resolve's storage twins)
+    NVNtexture t5 = {0}; h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA16F); h_nvnTextureBuilderSetStorage(&tb, (NVNmemoryPool *)&dpool, 0);
     CHECK(h_nvnTextureInitialize(&t5, &tb), "texture 5 over the same storage initialized");
     mtl_reg_tex(5, (const tex_t *)&t5, NULL);
     builds = g_stat_pool_builds; uint64_t taken = alias_taken(), ep = g_treg_ep;
@@ -174,7 +175,7 @@ int main(void) { @autoreleasepool {
     table();
     mtl_reg_tex(7, NULL, NULL); h_nvnTextureFinalize(&t7);
     for (int i = 0; i <= ALIAS_IDLE; i++) { mtl_sub_begin(); mtl_wait(mtl_sub_commit(), 5000000000ull); }   // until the sharing table no longer spares the entry
-    h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_R32F);
+    h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA16F);
     CHECK(h_nvnTextureInitialize(&t9, &tb), "texture 9 over the same storage initialized");
     mtl_reg_tex(9, (const tex_t *)&t9, NULL);
     builds = g_stat_pool_builds; taken = alias_taken(); ep = g_treg_ep;
@@ -192,7 +193,7 @@ int main(void) { @autoreleasepool {
     // twin finalized and unregistered: the next takeover takes the base
     mtl_reg_tex(8, NULL, NULL); h_nvnTextureFinalize(&t8);
     for (int i = 0; i <= ALIAS_IDLE; i++) { mtl_sub_begin(); mtl_wait(mtl_sub_commit(), 5000000000ull); }
-    h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RG16F);
+    h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_R16F);
     CHECK(h_nvnTextureInitialize(&t10, &tb), "texture 10 over the same storage initialized");
     mtl_reg_tex(7, (const tex_t *)&t10, NULL);
     builds = g_stat_pool_builds; taken = alias_taken(); ep = g_treg_ep;

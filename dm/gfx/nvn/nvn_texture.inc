@@ -20,7 +20,7 @@ static BOOL obj_is_tex(id object) {
     return is_texture;
 }
 
-static int g_red_once[175];   // one past the highest key: a new key raises this, and the macro refuses to compile otherwise
+static int g_red_once[176];   // one past the highest key: a new key raises this, and the macro refuses to compile otherwise
 #define RED_ONCE(k, ...) do { _Static_assert((k) < sizeof g_red_once / sizeof *g_red_once, "a RED_ONCE key past g_red_once: raise its size"); if (!g_red_once[k]++) MLOG("[RED] " __VA_ARGS__); } while (0)
 // Metal has only buffer slots 0–30 (30 is the constant fallback buffer): streams 0–13 go to 16–29, 14 and 15 stay.
 #define VB_SLOT(st) ((st) < 14 ? 16 + (st) : (st))
@@ -292,14 +292,22 @@ static MTLTextureUsage img_usage(const tex_t *t, MTLPixelFormat pf) {
 }
 // Metal leaves MTLTextureUsageShaderAtomic out of a texture's usage property: every shader-writable R32 texture the host makes has it, and this tests that.
 static int tex_atomic_capable(id<MTLTexture> base) { return pf_atomic(base.pixelFormat) && (base.usage & MTLTextureUsageShaderWrite); }
+// The 32-bit colour formats other than R32 integers, whose bytes NVN reads through an R32 image and Metal views as R32
+static int pf_bytes32(MTLPixelFormat pf) {
+    return pf == MTLPixelFormatRGBA8Unorm || pf == MTLPixelFormatRGBA8Unorm_sRGB || pf == MTLPixelFormatBGRA8Unorm || pf == MTLPixelFormatBGRA8Unorm_sRGB || pf == MTLPixelFormatRGBA8Snorm
+        || pf == MTLPixelFormatRGBA8Uint || pf == MTLPixelFormatRGBA8Sint || pf == MTLPixelFormatRGB10A2Unorm || pf == MTLPixelFormatRGB10A2Uint || pf == MTLPixelFormatRG11B10Float || pf == MTLPixelFormatRGB9E5Float
+        || pf == MTLPixelFormatRG16Unorm || pf == MTLPixelFormatRG16Snorm || pf == MTLPixelFormatRG16Uint || pf == MTLPixelFormatRG16Sint || pf == MTLPixelFormatRG16Float || pf == MTLPixelFormatR32Float;
+}
 // Metal runs texture atomics only on R32 storage, NVN on any 32-bit format through an R32 image: such a texture moves to R32 storage with its own format as a view.
 // Not packaged textures: those are the guest's bytes.
 static int tex_atomic_alias(id<MTLTexture> base) {
-    MTLPixelFormat pf = base.pixelFormat;
-    int bytes32 = pf == MTLPixelFormatRGBA8Unorm || pf == MTLPixelFormatRGBA8Unorm_sRGB || pf == MTLPixelFormatBGRA8Unorm || pf == MTLPixelFormatBGRA8Unorm_sRGB || pf == MTLPixelFormatRGBA8Snorm
-        || pf == MTLPixelFormatRGBA8Uint || pf == MTLPixelFormatRGBA8Sint || pf == MTLPixelFormatRGB10A2Unorm || pf == MTLPixelFormatRGB10A2Uint || pf == MTLPixelFormatRG11B10Float || pf == MTLPixelFormatRGB9E5Float
-        || pf == MTLPixelFormatRG16Unorm || pf == MTLPixelFormatRG16Snorm || pf == MTLPixelFormatRG16Uint || pf == MTLPixelFormatRG16Sint || pf == MTLPixelFormatRG16Float || pf == MTLPixelFormatR32Float;
-    return bytes32 && (base.textureType == MTLTextureType2D || base.textureType == MTLTextureType2DArray) && base.sampleCount == 1 && base.storageMode == MTLStorageModePrivate && !base.buffer && !base.isSparse;
+    return pf_bytes32(base.pixelFormat) && (base.textureType == MTLTextureType2D || base.textureType == MTLTextureType2DArray) && base.sampleCount == 1 && base.storageMode == MTLStorageModePrivate && !base.buffer && !base.isSparse;
+}
+// Formats whose textures over one storage are views of one Metal texture: an sRGB / linear pair, or two of the 32-bit colour formats and R32 integers
+static int pf_storage_twins(MTLPixelFormat a, MTLPixelFormat b) {
+    if (a == b) return 0;
+    if (!tex_need_pfv(a, b)) return 1;
+    return (pf_bytes32(a) || pf_r32i(a)) && (pf_bytes32(b) || pf_r32i(b));
 }
 static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     uint32_t pf = 0; uint8_t swz[4];
@@ -363,7 +371,7 @@ static inline void tex_lsize(const tex_t *t, unsigned l, uint32_t *w, uint32_t *
 // render-target usage for a whole-level clear.
 static id<MTLTexture> tex_upgrade(const tex_t *t, id<MTLTexture> asked, MTLTextureUsage add, MTLPixelFormat view_pf) {
     id holder = tex_get(t->serial);
-    // the parent is upgraded and the sRGB / linear view made again on it, so the pair keeps sharing its bytes
+    // the parent is upgraded and the view of its storage (an sRGB / linear twin, another 32-bit format) made again on it, so the two keep sharing its bytes
     id<MTLTexture> view = ![holder isKindOfClass:[NvPkg class]] && obj_is_tex(holder) && ((id<MTLTexture>)holder).parentTexture
         && (holder == asked || ((id<MTLTexture>)holder).parentTexture == asked) ? holder : nil;
     id<MTLTexture> base = view ? view.parentTexture : asked;
@@ -403,8 +411,8 @@ static id<MTLTexture> tex_upgrade(const tex_t *t, id<MTLTexture> asked, MTLTextu
         // twin's view is published in the rename's hold, so no reader finds the old view once its parent left the sharing table.
         if (view) {
             upgraded_view = [upgraded newTextureViewWithPixelFormat:view.pixelFormat textureType:view.textureType levels:NSMakeRange(0, upgraded.mipmapLevelCount) slices:NSMakeRange(0, upgraded.arrayLength) swizzle:view.swizzle];
-            static int nview; if (nview++ < 4) MLOG("sRGB / linear view ser=%llu made again on its upgraded parent (%d so far)", (unsigned long long)t->serial, nview);
-            if (!upgraded_view) RED_ONCE(151, "cannot make the sRGB / linear view ser=%llu again on its upgraded parent: it keeps the old storage", (unsigned long long)t->serial);
+            static int nview; if (nview++ < 4) MLOG("storage view ser=%llu made again on its upgraded parent (%d so far)", (unsigned long long)t->serial, nview);
+            if (!upgraded_view) RED_ONCE(151, "cannot make the storage view ser=%llu again on its upgraded parent: it keeps the old storage", (unsigned long long)t->serial);
         }
         own_upgrade(base, upgraded, t->serial, view ? upgraded_view : upgraded);
         defer_obj_release(base);

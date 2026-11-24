@@ -28,11 +28,12 @@ int main(void) { @autoreleasepool {
     void *mem = NULL; posix_memalign(&mem, 16384, 64 << 20); memset(mem, 0, 64 << 20);
     pool_t pool = {.magic = MAGIC('P','O','O','L'), .flags = NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS | NVN_MEMORY_POOL_FLAGS_GPU_CACHED | NVN_MEMORY_POOL_FLAGS_COMPRESSIBLE, .mem = mem, .size = 64 << 20};
     at(100);
-    tex_t a = target(&pool, 97001, 0, NVN_FORMAT_RGBA8, 64), b = target(&pool, 97002, 0, NVN_FORMAT_R32F, 64);           // b over a's bytes
+    // the targets over others' bytes have texels of another size: two 32-bit formats over one storage would be views of one texture (tex_mtl_resolve's storage twins)
+    tex_t a = target(&pool, 97001, 0, NVN_FORMAT_RGBA8, 64), b = target(&pool, 97002, 0, NVN_FORMAT_RGBA16F, 64);           // b over a's bytes
     tex_t c = target(&pool, 97003, 1 << 20, NVN_FORMAT_RGBA8, 64);                                                         // nothing over it
-    tex_t d = target(&pool, 97004, 2 << 20, NVN_FORMAT_RGBA8, 64), e = target(&pool, 97005, 2 << 20, NVN_FORMAT_R32F, 64); // e over d, d read every frame
-    tex_t f = target(&pool, 97006, 3 << 20, NVN_FORMAT_RGBA8, 64), g = target(&pool, 97007, 3 << 20, NVN_FORMAT_R32F, 64); // g over f, f pinned
-    tex_t h = target(&pool, 97008, 4 << 20, NVN_FORMAT_RGBA8, 64), i = target(&pool, 97009, 4 << 20, NVN_FORMAT_R32F, 64); // i wrote before h was made, h drew over i
+    tex_t d = target(&pool, 97004, 2 << 20, NVN_FORMAT_RGBA8, 64), e = target(&pool, 97005, 2 << 20, NVN_FORMAT_RGBA16F, 64); // e over d, d read every frame
+    tex_t f = target(&pool, 97006, 3 << 20, NVN_FORMAT_RGBA8, 64), g = target(&pool, 97007, 3 << 20, NVN_FORMAT_RGBA16F, 64); // g over f, f pinned
+    tex_t h = target(&pool, 97008, 4 << 20, NVN_FORMAT_RGBA8, 64), i = target(&pool, 97009, 4 << 20, NVN_FORMAT_RGBA16F, 64); // i wrote before h was made, h drew over i
     id<MTLTexture> ta = tex_mtl(&a), tc = tex_mtl(&c), td = tex_mtl(&d), tf = tex_mtl(&f), ti = tex_mtl(&i);
     CHECK(ta && (ta.usage & MTLTextureUsageRenderTarget) && covered(ta), "a compressible render target of a GPU-only pool is covered");
     drawn(ta); drawn(tc); drawn(td); drawn(tf); drawn(ti);
@@ -73,7 +74,7 @@ int main(void) { @autoreleasepool {
         at(300);
         for (int k = 0; k < N; k++) { ts[2 * k] = target(&pool, 98000 + 2 * k, (8 << 20) + ((int64_t)k << 14), NVN_FORMAT_RGBA8, 32); drawn(tex_mtl(&ts[2 * k])); }
         at(310);
-        for (int k = 0; k < N; k++) { ts[2 * k + 1] = target(&pool, 98001 + 2 * k, (8 << 20) + ((int64_t)k << 14), NVN_FORMAT_R32F, 32); drawn(tex_mtl(&ts[2 * k + 1])); }
+        for (int k = 0; k < N; k++) { ts[2 * k + 1] = target(&pool, 98001 + 2 * k, (8 << 20) + ((int64_t)k << 14), NVN_FORMAT_RGBA16F, 32); drawn(tex_mtl(&ts[2 * k + 1])); }
         uint64_t n0 = g_tu_n, ns0 = g_tu_ns;
         int64_t rounds = 0; for (uint32_t now = 350; g_tu_n - n0 < N && rounds < 20; now += 10, rounds++) pass(now);
         double ms = (g_tu_ns - ns0) / 1e6 / (double)rounds;

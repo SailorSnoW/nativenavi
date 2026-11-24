@@ -832,23 +832,20 @@ static unsigned tex_level_shift(const tex_t *t, id<MTLTexture> base) {
 // copies name levels as NVN does: through the view, a copy into level 0 of a texture bound from level 1 would go to level 1
 static id<MTLTexture> tex_mtl_all(const tex_t *t) { id<MTLTexture> mt = tex_mtl_replay(t); return mt && tex_level_shift(t, mt) ? mt.parentTexture : mt; }
 // up to 4, zero-terminated (an RGBA8 texture has RGBA8_SRGB and RGBX8_SRGB)
-static const uint8_t *srgb_twins(uint32_t f) {
-    static uint8_t tw[256][5];
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        for (int a = 1; a < 256; a++) {
-            uint32_t pa = 0, pb = 0;
-            uint8_t sw[4];
-            int n = 0;
-            if (!nvn_fmt_to_mtl(a, &pa, sw) || !pa) continue;
-            for (int b = 1; b < 256 && n < 4; b++) {
-                if (b == a || !nvn_fmt_to_mtl(b, &pb, sw) || !pb || pa == pb) continue;
-                for (size_t i = 0; i < sizeof g_pfv_srgb / sizeof *g_pfv_srgb; i++)
-                    if ((pa == g_pfv_srgb[i].a && pb == g_pfv_srgb[i].b) || (pa == g_pfv_srgb[i].b && pb == g_pfv_srgb[i].a)) { tw[a][n++] = (uint8_t)b; break; }
-            }
-        }
+// The shared texture over ak's storage whose key differs only by a format pf_storage_twins pairs with pf, nil if none; *pk its key. The first one made over the storage is the
+// parent, so the order the game's textures are first used in does not matter. Formats other than an sRGB / linear twin only in a memory pool: textures with none share no storage
+static id<MTLTexture> storage_twin(const alias_key *ak, MTLPixelFormat pf, alias_key *pk) {
+    __block id<MTLTexture> got = nil;
+    pthread_mutex_lock(&g_smu);
+    own_alias_at_locked((const void *)(uintptr_t)ak->pool, ak->off, ^(const alias_key *k, id o) {
+        if (got || k->d.format == ak->d.format || ![o conformsToProtocol:@protocol(MTLTexture)]) return;
+        alias_key x; memcpy(&x, k, sizeof x); x.d.format = ak->d.format;   // memcpy keeps the zeroed padding the table hashes
+        id<MTLTexture> b = o;
+        if (memcmp(&x, ak, sizeof x) || b.parentTexture || !pf_storage_twins(b.pixelFormat, pf) || (!ak->pool && tex_need_pfv(b.pixelFormat, pf))) return;
+        got = b; memcpy(pk, k, sizeof *pk);
     });
-    return f < 256 ? tw[f] : tw[0];
+    pthread_mutex_unlock(&g_smu);
+    return got;
 }
 // Every use the guest may make, whatever its IMAGE flag: a buffer view has no compression to lose, and its NVN texture objects share one view. Metal makes no writable BGRA8Unorm texture buffer.
 static MTLTextureUsage tbuf_usage(MTLPixelFormat pf) {
@@ -1064,10 +1061,10 @@ static void *tex_mtl_resolve(const tex_t *ct, int *in_storage, id<MTLTexture> __
         if (!pk->sparse) { pkg_share_put(t, pk); bcp_up_follow(t, pk->tex); }   // the CPU's bytes reach the other side of a compressed-alias pair too
         return tex_mtl_result(pk->view ? pk->view : pk->tex, owned);
     }
-    // An sRGB / linear view whose parent left the sharing table no longer shares the storage's bytes: dropped, so no thread resolves to it.
+    // A view of a shared storage (tex_mtl_resolve's storage twins) whose parent left the sharing table no longer shares the storage's bytes: dropped, so no thread resolves to it.
     if (obj_is_tex(have) && ((id<MTLTexture>)have).parentTexture && own_view_drop_stale(t->serial, have)) {
         static int nstale;
-        if (nstale++ < 4) MLOG("stale sRGB / linear view dropped ser=%llu format %lu (%d so far)", (unsigned long long)t->serial, (unsigned long)((id<MTLTexture>)have).pixelFormat, nstale);
+        if (nstale++ < 4) MLOG("stale storage view dropped ser=%llu format %lu (%d so far)", (unsigned long long)t->serial, (unsigned long)((id<MTLTexture>)have).pixelFormat, nstale);
         have = nil;
     }
     if (!have && t->d.target == NVN_TEXTURE_TARGET_BUFFER) { alias_key key = tex_alias_key(t); have = own_alias_take(t->serial, &key); }
@@ -1106,22 +1103,28 @@ static void *tex_mtl_resolve(const tex_t *ct, int *in_storage, id<MTLTexture> __
         if (got != mt) defer_obj_release(mt);   // another thread registered one over the same storage meanwhile: that one is shared
         return tex_mtl_result(got, owned);
     }
-    {   // textures over the same storage share its bytes; an sRGB / linear twin is a view of the shared one
-        const uint8_t *tw = srgb_twins(ak.d.format);
-        id<MTLTexture> v = nil;
-        for (int j = 0; j < 4 && tw[j] && !v; j++) {
-            alias_key k; memcpy(&k, &ak, sizeof k); k.d.format = tw[j];   // memcpy keeps the zeroed padding the table hashes
-            id<MTLTexture> b = own_alias_peek(&k);   // borrowed: a texture the table lets go meanwhile is released only after the submission in flight
-            if (!b) continue;
-            MTLTextureDescriptor *d = tex_desc(t, 0);
-            if (!d || d.sampleCount > 1 || (d.textureType != MTLTextureType2D && d.textureType != MTLTextureType2DArray)) break;
-            if (b.pixelFormat == d.pixelFormat || tex_need_pfv(b.pixelFormat, d.pixelFormat) || b.textureType != d.textureType) continue;
+    {   // textures over the same storage share its bytes; one of another format the two share (pf_storage_twins) is a view of the shared one
+        uint32_t pf = 0; uint8_t swz[4];
+        alias_key k;
+        id<MTLTexture> b = nvn_fmt_to_mtl(t->d.format, &pf, swz) && pf ? storage_twin(&ak, (MTLPixelFormat)pf, &k) : nil, v = nil;
+        MTLTextureDescriptor *d = b ? tex_desc(t, 0) : nil;
+        if (!d || d.sampleCount > 1 || (d.textureType != MTLTextureType2D && d.textureType != MTLTextureType2DArray) || b.textureType != d.textureType) b = nil;
+        // A view of another format than an sRGB / linear twin needs the format-view usage, which costs compression: the parent is made again with it on the submit thread
+        // (tex_upgrade copies its content and renames it everywhere)
+        // Not a resolution family's member or a storage pair's half: made again outside its heap, it would no longer alias the others
+        int pfv = b && tex_need_pfv(b.pixelFormat, d.pixelFormat), up = pfv && !(b.usage & MTLTextureUsagePixelFormatView);
+        int placed = up && (objc_getAssociatedObject(b, &g_image_heap_owner_key) || objc_getAssociatedObject(b, &g_pair_key));
+        if (up && !off && !b.isSparse && !placed) b = tex_upgrade_pfv(t, b, d.pixelFormat);
+        if (b && (!pfv || (b.usage & MTLTextureUsagePixelFormatView)))
             v = [b newTextureViewWithPixelFormat:d.pixelFormat textureType:b.textureType levels:NSMakeRange(0, b.mipmapLevelCount) slices:NSMakeRange(0, b.arrayLength) swizzle:b.swizzle];
-            if (!v) continue;
-            // b may have left the sharing table on another thread since the lookup: own_view_put checks that k still names b in the same hold of g_smu.
-            if (!own_view_put(t->serial, &k, v)) { v = nil; continue; }
-        }
+        // b may have left the sharing table on another thread since the lookup: own_view_put checks that k still names b in the same hold of g_smu.
+        if (v && !own_view_put(t->serial, &k, v)) v = nil;
+        if (b && !v) RED_ONCE(175, "texture ser=%llu %ux%u format %#x over the storage of a shared texture of format %lu: no view of it (%s), so it keeps its own and does not see what is written through the other",
+                              (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, (unsigned long)b.pixelFormat, placed ? "its parent, placed in a heap with other textures over the storage, has no format-view usage" : up && (off || b.isSparse) ? "its parent needs the format-view usage, given only on the submit thread and not to a sparse texture" : "Metal made none, or the parent left the sharing table");
         if (v) {
+            static int nv;
+            if (pfv && nv++ < 4) MLOG("texture ser=%llu %ux%u format %#x is a view of the shared texture over its storage, format %lu (%d so far)",
+                                                                              (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, (unsigned long)b.pixelFormat, nv);
             if (!g_pool_walk) tu_stamp(v, 0);
             return tex_mtl_result(v, owned);
         }
