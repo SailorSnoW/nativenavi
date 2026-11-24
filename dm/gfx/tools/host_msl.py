@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
-# The host's own Metal shaders (dm/gfx/msl/<name>.metal: clears, copies, the present, index conversions, geometry packing, ...), compiled when the host is built, so the host
-# never compiles MSL source at run time. MTL4Compiler's newLibraryWithDescriptor: with a source compiles it through the MTLDevice (it calls newLibraryWithSource:), which
-# the Metal performance HUD reports ("Compiled 2 shaders ... Consider adopting MTL4Compiler") and which held the submitting thread for each library.
-# Writes one C header (the host Makefile includes its directory; dm/gfx/nvn/host_msl.m reads it) with, per library, its name, its source (the fallback when the library
-# is missing) and the metallib compiled for the SDK. Without the Metal toolchain the header has the sources only: the host then compiles them and says so in a [RED] line.
-# Each run rechecks the compiler, SDK, deployment target and source contents. Matching inputs reuse the header without compiling; a toolchain installed after a source-only
-# build regenerates the libraries. The header is written only when it changes, so an unchanged run does not rebuild the host.
+# Compiles the host's own Metal shaders (dm/gfx/msl) into a C header of sources and metallibs at build time: a source compiled at run time holds the submitting
+# thread. Without the Metal toolchain the header holds the sources only, which the host compiles with a [RED] line.
 # Usage: host_msl.py --sdk macosx [--min <OS version>] <header> <name.metal>...
 import argparse, hashlib, os, subprocess, sys, tempfile
 
@@ -25,7 +20,7 @@ ver = subprocess.run(['xcrun', '-sdk', a.sdk, 'metal', '--version'], capture_out
 ver = ver.stdout.splitlines()[0].strip() if ver.returncode == 0 and ver.stdout else ''
 sdk = subprocess.run(['xcrun', '-sdk', a.sdk, '--show-sdk-path'], capture_output=True, text=True).stdout.strip()
 sources = [(src, open(src).read()) for src in sorted(a.sources)]
-# The generator itself is an input too: a changed compile flag or header format must invalidate an existing library.
+# The generator itself is an input: a changed flag or header format must invalidate a library.
 inputs = hashlib.sha256(repr((a.sdk, a.min, ver, sdk, sources)).encode() + open(__file__, 'rb').read()).hexdigest()
 stamp = f'// Inputs: {inputs}'
 if os.path.exists(a.out):

@@ -1,31 +1,24 @@
 #!/usr/bin/env python3
-# Writes docs/agents/game-patches.md, the index of game-specific code: per game, the rewriter's patches of its builds (CUTS, OBS, FRAME_STEP and STUBS sites, MATCH_CUTS and CAPABILITIES of its
-# dm/games/<id>/patches.py, with each patch's reason), the host's rows keyed by its build IDs (32-hex string literals in dm/host and dm/gfx), and each patch's binding (below); then the SDK
-# cuts of dm/tools/sdk_patches.py by sdk build and the games that ship it, the SDK-wide function-matched rules, translator rules keyed by a shader's code hash, and the profile keys that switch
-# host behaviour away from their default, with the games that set them. The gaps (patches bound tighter than they could be) are listed first: the work list. Frame-step sites are found by running each
-# FRAME_STEP function against a recording context (no game files). Run it after changing a patch file, a build-keyed host table or a profile key; --check only reports whether the page is
-# current (dm/tools/tests/test_docs.py runs it).
+# Writes docs/agents/game-patches.md, the index of game-specific code: patches by build, build-keyed host rows, SDK cuts, translator rules keyed by a
+# shader's hash and profile switches, each with its binding; gaps first. Frame-step sites come from running each stub against a recording context.
 # Usage: docs_patches.py [--check]
 import importlib.util, re, subprocess, sys, pathlib, types
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / 'dm/tools')); sys.path.insert(0, str(REPO / 'dm/games'))
+sys.path.insert(0, str(REPO / 'dm/tools'))
+sys.path.insert(0, str(REPO / 'dm/games'))
 import game   # noqa: E402
 
 OUT = REPO / 'docs' / 'agents' / 'game-patches.md'
 SDK = REPO / 'dm/tools/sdk_patches.py'
-HOST = ['dm/host', 'dm/gfx', 'dm/mac']   # tracked files only: dm/host/gen and other build output are git-ignored
+HOST = ['dm/host', 'dm/gfx', 'dm/mac']   # tracked files only: build output is git-ignored
 HOST_EXT = ('.c', '.m', '.mm', '.h', '.inc', '.swift', '.rs')
-# What a build-keyed host table does (the table's name in the source; a row of another table is listed under its own name)
 TABLES = {}   # none in this host: a build-keyed table added to it is named here
-# Profile keys that are not behaviour switches: per-game data or controls, not something the host does differently
+# per-game data, not something the host does differently
 NOT_SWITCHES = {'depth_mode', 'mem_used', 'sys_resource'}
 
-# ---- Binding: what a patch's correctness is anchored to, from the loosest (GitHub issue #635). A patch is at its goal when its binding is the loosest it could have; the gap between the two
-# is the work list. A patch file's BINDING is a list of {'what', 'now', 'goal', 'purpose', 'why'} with an optional 'blocked' (why the gap cannot close yet) or 'kept' (why it stays
-# open on purpose: a decision, not an oversight), and an optional 'checked' (what was checked on game files, and when; without it the goal is a judgement); the host's build-keyed rows,
-# translator rules and profile switches have their entries below, since they have no patch file. Every one must be classified: the page is not written otherwise. A bring-up need not guess
-# the goal: a game's own build-bound patch may say goal 'unreviewed' (listed under Gaps, after the reviewed ones); nothing shared (sdk_patches.py, host rows, translator rules, switches) may
+# Binding: what a patch's correctness is anchored to, from the loosest; the gap to its goal is the work list. BINDING entries: {'what', 'now', 'goal',
+# 'purpose', 'why'} [+ 'blocked' | 'kept'] [+ 'checked']. Every patch must be classified. Only a game's own patch may have goal 'unreviewed'.
 BINDINGS = {   # binding: (anchored to, found by, survives)
     'host': ('Horizon / NVN semantics', 'nothing in the binary', 'every game and update'),
     'sdk': ('Nintendo SDK code (the `sdk` module)', 'a symbol, or a fingerprint of a reviewed SDK implementation', 'any game shipping that implementation'),
@@ -35,10 +28,10 @@ BINDINGS = {   # binding: (anchored to, found by, survives)
 }
 RANK = {b: i for i, b in enumerate(BINDINGS)}
 PURPOSES = ('address space', 'memory', 'race', 'frame rate', 'power', 'rendering', 'shaders', 'runtime')
-UNREVIEWED = 'unreviewed'   # a goal nobody has judged yet
+UNREVIEWED = 'unreviewed'
 
 
-def binding_error(e, own=False):   # what is wrong with a BINDING entry (own: in a game's own patches.py), or None
+def binding_error(e, own=False):
     if not isinstance(e, dict) or set(e) - {'what', 'now', 'goal', 'purpose', 'why', 'blocked', 'kept', 'checked'} or \
             not all(isinstance(e.get(k), str) and e[k] for k in ('what', 'now', 'goal', 'purpose', 'why')) or not all(isinstance(e[k], str) and e[k] for k in ('blocked', 'kept', 'checked') if k in e):
         return f'not {{what, now, goal, purpose, why[, blocked or kept][, checked]}} strings: {e!r}'
@@ -53,32 +46,25 @@ def binding_error(e, own=False):   # what is wrong with a BINDING entry (own: in
     return None
 
 
-def same(e): return (e['what'], e['now'], e['goal'], e['purpose'])   # one patch, wherever it is listed (several games, or a cut and its host row)
+def same(e): return (e['what'], e['now'], e['goal'], e['purpose'])   # one patch, wherever it is listed
 def status(e):
     if e['goal'] == UNREVIEWED: return UNREVIEWED
     return 'at goal' if e['now'] == e['goal'] else f'blocked: {e["blocked"]}' if 'blocked' in e else f'kept: {e["kept"]}' if 'kept' in e else 'gap'
 def checked(e): return f'checked: {e["checked"]}' if 'checked' in e else 'judgement'
 def reason(e): return e["why"][:1].upper() + e["why"][1:]
 def arrow(e): return f'`{e["now"]}`' if e['now'] == e['goal'] else f'`{e["now"]}` → {UNREVIEWED}' if e['goal'] == UNREVIEWED else f'`{e["now"]}` → `{e["goal"]}`'
-def payoff(gap):   # the Gaps order: open gaps, then blocked, kept and unreviewed ones; in each, the most games reached first, then the farthest from the goal
+def payoff(gap):   # open gaps, then blocked, kept and unreviewed; most games reached first, then the farthest from the goal
     e, _, ids = gap
     group = 3 if e['goal'] == UNREVIEWED else 1 if 'blocked' in e else 2 if 'kept' in e else 0
     return group, -max(1, len(ids)), RANK.get(e['goal'], 0) - RANK[e['now']], e['what'].casefold()
 
 
-# The host's build-keyed rows: (table, the start of the row's label ('' = any), main build ('' = any), entry); the first that fits classifies a row
+# (table, label prefix ('' = any), main build ('' = any), entry); the first that fits classifies a row
 HOST_BINDING = [
 ]
-# Translator rules keyed by one shader's code hash: (the start of the rule's comment, entry)
-SHADER_BINDING = [
-    ('Tears of the Kingdom 1.4.3 visibility counter', {'what': 'one vertex shader\'s visibility counter (VertexCounterLowering)', 'now': 'game', 'goal': 'host', 'purpose': 'shaders',
-     'why': 'a general lowering of subgroup ballots in vertex shaders (subgroups of one invocation: ballots, votes, lane ids and counts, refusing shuffles that exchange '
-            'data between lanes) would cover any shader that counts that way',
-     'checked': 'the shader-build logs of the 51 game builds on the game drive: no shader failed to translate or compile, none mentions a subgroup operation (2026-11-09)',
-     'kept': 'one shader in one game, already handled; a general lowering is a chain change (every game\'s shaders rebuilt) for no measured gain: revisit when a vertex shader '
-             'with subgroup operations fails in another game'}),
-]
-# Profile switches: (key, the start of its value ('' = any), entry). A key is per-game data, so `game`; its goal is `host` where it is the semantics every game should get
+# (the start of the rule's comment, entry)
+SHADER_BINDING = []
+# (key, value prefix ('' = any), entry). A key is per-game data, so `game`; its goal is `host` where every game should get those semantics
 DEFAULT_SOON = 'a default for every game after `regress.py check` on the games'
 SWITCH_BINDING = [
     ('draw_barriers', '', {'what': 'draw passes ordered by the game\'s own barriers', 'now': 'game', 'goal': 'host', 'purpose': 'frame rate', 'why': f'what NVN specifies: {DEFAULT_SOON}'}),
@@ -104,7 +90,7 @@ SWITCH_BINDING = [
 ]
 
 
-def classify(table, *keys):   # the entry of the first row whose keys each match (equal, or a prefix of the value, or '' for any)
+def classify(table, *keys):
     for r in table:
         if all(k == '' or (v or '').startswith(k) for k, v in zip(r[:-1], keys)): return r[-1]
     return None
@@ -113,13 +99,16 @@ def classify(table, *keys):   # the entry of the first row whose keys each match
 def rel(p): return p.relative_to(REPO).as_posix()
 def link(p, line=None): return f'[{p.name}{f":{line}" if line else ""}](../../{rel(p)}{f"#L{line}" if line else ""})'
 def short(bid): return f'`{bid[:8]}…`'
-def lineno(text, needle): i = text.find(needle); return text.count('\n', 0, i) + 1 if i >= 0 else None
+def lineno(text, needle):
+    i = text.find(needle)
+    return text.count('\n', 0, i) + 1 if i >= 0 else None
 
 
 def load(path, n):
     spec = importlib.util.spec_from_file_location(f'patches_doc_{n}', path)
     if spec is None or spec.loader is None: raise ImportError(f'cannot load {path}')
-    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
     return m
 
 
@@ -127,7 +116,7 @@ def games():
     return [game.Game(d) for d in sorted((REPO / 'dm/games').iterdir()) if (d / 'game.tsv').is_file()]
 
 
-def build_rows(gs):   # {build ID: [(game, display version, module)]}
+def build_rows(gs):
     out = {}
     for g in gs:
         for b in g.builds().values():
@@ -136,12 +125,12 @@ def build_rows(gs):   # {build ID: [(game, display version, module)]}
     return out
 
 
-OTHER_BASE = 0x8000000   # where the dry run puts a MATCH_FRAME_STEP rule's other functions, 16 MB apart, so their sites read as offsets in them; its patch area starts at 0x6000000,
-                          # within a b's reach (128 MB) of a main's sites below it and of up to six other functions above
+OTHER_BASE = 0x8000000   # a MATCH_FRAME_STEP rule's other functions, 16 MB apart; the patch area starts at 0x6000000,
+                          # within a b's reach of a main's sites below it and of up to six other functions above
 
 
-def frame_step_sites(fn, base=0, others=(), found=None):   # (offset, reason) of each site a FRAME_STEP function (or a MATCH_FRAME_STEP stub, its function at base) writes,
-    pos, puts = [0x6000000], []                    # the sites in each of the rule's other functions ({label: [(offset, reason)]}) and the capabilities it declares
+def frame_step_sites(fn, base=0, others=(), found=None):
+    pos, puts = [0x6000000], []
     def emit(w): pos[0] += 4
     at = {label: OTHER_BASE + i * 0x1000000 for i, label in enumerate(others)}
     ctx = types.SimpleNamespace(here=lambda: pos[0], emit=emit, site=lambda off, orig: None, put=lambda off, words, why: puts.append((off, why)), state=0x9000000, base=base,
@@ -151,13 +140,13 @@ def frame_step_sites(fn, base=0, others=(), found=None):   # (offset, reason) of
     return sorted((off, why) for off, why in puts if off < OTHER_BASE), in_others, sorted(ctx.capabilities)
 
 
-def host_files():   # the host's tracked sources without its tests: what the build-ID scan below and the title-ID check (test_architecture.py) read
+def host_files():   # also read by test_architecture.py's title-ID check
     tracked = subprocess.run(['git', 'ls-files', *HOST], cwd=REPO, capture_output=True, text=True, check=True).stdout.split('\n')
-    files = sorted(REPO / f for f in set(tracked) if f)   # a set: ls-files lists a file in a merge conflict once per stage
+    files = sorted(REPO / f for f in set(tracked) if f)   # ls-files lists a file in a merge conflict once per stage
     return [p for p in files if p.suffix in HOST_EXT and 'tests' not in p.relative_to(REPO).parts[2:]]
 
 
-def host_rows(builds):   # {build ID: [(file, line, what)]}: rows and checks of the host keyed by a main build ID
+def host_rows(builds):
     out = {}
     for p in host_files():
         table = None
@@ -176,7 +165,7 @@ def host_rows(builds):   # {build ID: [(file, line, what)]}: rows and checks of 
     return out
 
 
-def shader_rules():   # (file, line, comment) of translator rules keyed by a shader's code hash (64-hex literals in the C# tools)
+def shader_rules():   # 64-hex literals in the C# tools
     out = []
     for p in sorted((REPO / 'dm/gfx/tools').rglob('*.cs')):
         lines = p.read_text(errors='replace').split('\n')
@@ -194,8 +183,10 @@ def shader_rules():   # (file, line, comment) of translator rules keyed by a sha
     return out
 
 
-def switches(gs):   # [(key, value, [games])] of every profile key set away from its default in game.py
-    src = (REPO / 'dm/games/game.py').read_text(); src = src[src.find('def header('):]; src = re.split(r'\n(?=\S)', src)[0]   # the keys the host's header takes (to the next top-level line)
+def switches(gs):
+    src = (REPO / 'dm/games/game.py').read_text()
+    src = src[src.find('def header('):]
+    src = re.split(r'\n(?=\S)', src)[0]   # to the next top-level line
     defaults = {}
     for k, d in re.findall(r'g\.(?:get|words)\(\s*[\'"](\w+)[\'"]\s*,\s*[\'"]([^\'"]*)[\'"]\s*\)', src): defaults.setdefault(k, d)
     out = {}
@@ -213,24 +204,31 @@ def name(g): return g.get('name', g.id) + (f' ({g.id})' if g.id in DUP else '')
 def note(g): return f'[{name(g)}](../../dm/games/{g.id}/README.md)'
 
 
-def version(builds, bid, owner=None):   # "1.4.3 main" from the build rows (of the owning profile first)
+def version(builds, bid, owner=None):
     rows = [r for r in builds.get(bid, []) if owner is None or r[0].id == owner.id] or builds.get(bid, [])
     return f'{rows[0][1]} `{rows[0][2]}`' if rows else 'unregistered build'
 
 
 def page():
-    gs = games(); names = [g.get('name', g.id) for g in gs]; DUP.update(g.id for g in gs if names.count(g.get('name', g.id)) > 1)
-    gs.sort(key=lambda g: name(g).casefold()); builds = build_rows(gs); host = host_rows(builds)
+    gs = games()
+    names = [g.get('name', g.id) for g in gs]
+    DUP.update(g.id for g in gs if names.count(g.get('name', g.id)) > 1)
+    gs.sort(key=lambda g: name(g).casefold())
+    builds = build_rows(gs)
+    host = host_rows(builds)
     files = {p.parent.name: p for p in sorted((REPO / 'dm/games').glob('*/patches.py'))}
     mods = {gid: load(p, n) for n, (gid, p) in enumerate(files.items())}
-    sdk = load(SDK, 'sdk'); sdk_text = SDK.read_text()
+    sdk = load(SDK, 'sdk')
+    sdk_text = SDK.read_text()
     host_games = {}
     for bid, rows in host.items():
         for g, _, _ in builds.get(bid, []): host_games.setdefault(g.id, set()).add(bid)
-    gaps = []   # (entry, where, the IDs of the games it reaches)
+    gaps = []
     def gap(e):
         x = next((t for t in gaps if same(t[0]) == same(e)), None)
-        if x is None: x = (e, [], set()); gaps.append(x)
+        if x is None:
+            x = (e, [], set())
+            gaps.append(x)
         return x
     def bound(m, where, own=False):
         es = getattr(m, 'BINDING', None)
@@ -247,7 +245,8 @@ def page():
         text = files[g.id].read_text() if m else ''
         cuts, obs, fs, st, mc, mfs, mst, caps = (getattr(m, k, {}) for k in ('CUTS', 'OBS', 'FRAME_STEP', 'STUBS', 'MATCH_CUTS', 'MATCH_FRAME_STEP', 'MATCH_STUBS', 'CAPABILITIES'))
         bids = list(dict.fromkeys([*cuts, *obs, *fs, *st, *caps, *sorted(host_games.get(g.id, ()))]))
-        n_fs = 0; lines = [f'### {name(g)}', '', f'{note(g)}, `{g.id}`' + (f', {link(files[g.id])}' if m else '') + '.', '']
+        n_fs = 0
+        lines = [f'### {name(g)}', '', f'{note(g)}, `{g.id}`' + (f', {link(files[g.id])}' if m else '') + '.', '']
         es = list(bound(m, rel(files[g.id]), own=True)) if m else []
         for b in sorted(host_games.get(g.id, ())):
             for _, _, _, e in host.get(b, []):
@@ -255,7 +254,8 @@ def page():
         for e in es:
             lines.append(f'- **{arrow(e)}**, {e["purpose"]}, {status(e)}, {checked(e)}: {e["what"]}. {reason(e)}')
             if e['now'] != e['goal']:
-                _, where, ids = gap(e); ids.add(g.id)
+                _, where, ids = gap(e)
+                ids.add(g.id)
                 if note(g) not in where: where.append(note(g))
         if es: lines.append('')
         for bid in bids:
@@ -263,29 +263,35 @@ def page():
             for off, ob, nb, why in cuts.get(bid, []): lines.append(f'  - cut `+{off:#x}`: {why}')
             for off, gate, word, why in obs.get(bid, []): lines.append(f'  - gate {gate} at `+{off:#x}`: {why}')
             if bid in fs:
-                sites, _, fs_caps = frame_step_sites(fs[bid]); n_fs += len(sites)
-                fold = len(sites) > 12   # a long list (ASTRAL CHAIN's) folds
+                sites, _, fs_caps = frame_step_sites(fs[bid])
+                n_fs += len(sites)
+                fold = len(sites) > 12
                 if fold: lines += [f'  <details><summary>{len(sites)} frame-step sites</summary>', '']
                 for off, why in sites: lines.append(f'  - frame step `+{off:#x}`: {why}')
                 if fold: lines += ['', '  </details>', '']
             if bid in st:
-                st_sites = frame_step_sites(st[bid])[0]; n_fs += len(st_sites)
+                st_sites = frame_step_sites(st[bid])[0]
+                n_fs += len(st_sites)
                 for off, why in st_sites: lines.append(f'  - stub `+{off:#x}`: {why}')
             if caps.get(bid) or (bid in fs and fs_caps): lines.append(f'  - launcher capabilities: {", ".join(sorted(set(caps.get(bid, ())) | set(fs_caps if bid in fs else ())))}')
             for p, n, what, _ in host.get(bid, []): lines.append(f'  - host {link(p, n)}: {what}')
         for module, rules in mc.items():
             for r in rules:
-                fns = r.get('functions', [r]); ncut = sum(len(f['cuts']) for f in fns)
+                fns = r.get('functions', [r])
+                ncut = sum(len(f['cuts']) for f in fns)
                 lines.append(f'- **function-matched** (`{module}` of builds without CUTS): {r["name"]}: {len(fns)} function{"s" * (len(fns) > 1)}, {ncut} cut{"s" * (ncut > 1)}')
         for module, rules in mfs.items():
             for i, r in enumerate(rules):
-                if 'calls' in r:   # anchored: its sites on the reviewed builds
-                    got = [frame_step_sites(r['stub'], found=f) for f in r['reviewed']]; n_fs += len(got[0][0]) * (i == 0); caps_a = got[0][2]
+                if 'calls' in r:
+                    got = [frame_step_sites(r['stub'], found=f) for f in r['reviewed']]
+                    n_fs += len(got[0][0]) * (i == 0)
+                    caps_a = got[0][2]
                     lines.append(f'- **anchored frame step** (`{module}` of builds without FRAME_STEP): {r["name"]}: the one function that calls `{r["calls"]}`, its sites checked in each build\'s code; '
                                  + 'on the reviewed builds ' + '; '.join(', '.join(f'`+{off:#x}`' for off, _ in g[0]) for g in got) + ' in it'
                                  + (f'; launcher capabilities: {", ".join(caps_a)}' if caps_a else ''))
                     continue
-                sites, in_others, fs_caps = frame_step_sites(r['stub'], others=r.get('others', {})); n_fs += (len(sites) + sum(map(len, in_others.values()))) * (i == 0)
+                sites, in_others, fs_caps = frame_step_sites(r['stub'], others=r.get('others', {}))
+                n_fs += (len(sites) + sum(map(len, in_others.values()))) * (i == 0)
                 lines.append(f'- **function-matched frame step** (`{module}` of builds without FRAME_STEP): {r["name"]}: a function of {r["size"]:#x} bytes, '
                              + ', '.join(f'`+{off:#x}`' for off, _ in sites) + ' in it'
                              + ''.join(f'; {label}, a function of {r["others"][label]["size"]:#x} bytes, ' + ', '.join(f'`+{off:#x}`' for off, _ in got) + ' in it'
@@ -312,9 +318,10 @@ def page():
 
     orphans = [f'- {short(bid)}: {link(p, n)}: {what}' for bid, rows in host.items() if bid not in builds for p, n, what, _ in rows]
     sdk_bind = bound(sdk, rel(SDK))
-    for e in sdk_bind:   # the games that ship the builds an entry names (by their first 8 hex digits)
+    for e in sdk_bind:   # by their first 8 hex digits
         if e['now'] == e['goal']: continue
-        _, where, ids = gap(e); where.append(link(SDK))
+        _, where, ids = gap(e)
+        where.append(link(SDK))
         for b in re.findall(r'\b[0-9a-f]{8}\b', e['what']): ids.update(g.id for bid, rows in builds.items() if bid.startswith(b) for g, _, mod in rows if mod == 'sdk')
     shaders = shader_rules()
     for p, n, c, e in shaders:
@@ -325,7 +332,8 @@ def page():
         if e is None: raise SystemExit(f'profile key {k} {v}: a switch docs_patches.py SWITCH_BINDING does not classify')
         sw.append((k, v, gl, e))
         if e['now'] != e['goal']:
-            _, where, ids = gap(e); ids.update(g.id for g in gl)
+            _, where, ids = gap(e)
+            ids.update(g.id for g in gl)
             where.append(f'`{k}`: ' + ', '.join(note(g) for g in gl))
     gaps.sort(key=payoff)
     n_unreviewed = sum(e['goal'] == UNREVIEWED for e, _, _ in gaps)
@@ -341,7 +349,8 @@ def page():
         s = line.strip()
         if s.startswith('#'): comment = (comment + ' ' if comment else '') + s.lstrip('# ')
         elif s.startswith('node('):
-            rule_lines.append(f'- node area 1 GB → 62 MB: {comment}'); comment = ''
+            rule_lines.append(f'- node area 1 GB → 62 MB: {comment}')
+            comment = ''
         elif s.startswith(']}'): break
     n_rules = sum(len(v) for v in getattr(sdk, 'MATCH_CUTS', {}).values())
     assert len(rule_lines) == n_rules, f'sdk_patches.py MATCH_CUTS: {len(rule_lines)} commented rules of {n_rules}'

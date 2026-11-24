@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-# c1_guard.py <dmsh_b version dir> <output tsv>: lists the shaders whose reads of c1 (the shader's embedded constant segment) are not proven to stay inside the span the host's
-# shared c1 banks give them. nvn_mtl.m c1_store packs the c1 of unlisted shaders into 4 MB banks: the data rounded up to 256 bytes, then a 256-byte zero gap, then the next shader's data.
-# A listed shader gets an exclusive 64 KiB of zeros instead (reads past the data return 0, as on the Switch). The host loads the list only when its header names its library's chain version
-# and inputs stamp (shader_lib.py table_head). dmsh_build.py runs it after each full build.
-# An index is proven when interval arithmetic over the whole expression, following each variable's definition, gives 0 <= index and 16 * (index + 1) <= that span (_m0 is float4[4096]).
-# Literals, & K, % K, >> K, min, max, clamp and casts bound a value; inputs, buffer reads and anything not understood are unbounded. Every stage's c1 counts (vp_, fp_, cp_, gp_ ...).
-# The first version followed only the last variable of an index and took any mask, min or clamp it met as proof: `_1 + (_2 & 3u)` with _1 read from an input passed,
-# masks wider than the data passed, and compute shaders (cp_c1) were never checked.
+# c1_guard.py <dmsh_b version dir> <output tsv>: lists the shaders whose c1 reads are not proven to stay in the span a shared c1 bank gives them (a listed
+# shader gets an exclusive 64 KiB of zeros). Proven: interval arithmetic gives 0 <= index and 16 * (index + 1) <= span (_m0 is float4[4096]).
 import datetime
 import hashlib
 import json
@@ -27,7 +21,7 @@ ASSIGNMENT = re.compile(r"(?<![\w.])(_\d+)\s*(?:<<|>>|[-+*/%&|^])?=(?!=)|(?<![\w
 TOKEN = re.compile(r"\s*(0[xX][0-9a-fA-F]+[uU]?|\d+\.\d*(?:[eE][-+]?\d+)?f?|\d+[uU]?|[A-Za-z_]\w*(?:\.\w+)*|\.\w+|<<|>>|<=|>=|==|!=|&&|\|\||[-+*/%&|^~!?:(),<>\[\]])")
 UNBOUNDED = (None, None)
 CASTS = {"int", "uint", "short", "ushort", "long", "ulong"}
-OUTPUT = re.compile(r"[0-9a-f]{16}_b\w*\.(metal|json)")   # what dmsh_build.py writes: <key>_b.metal, <key>_b.json (as its OUT_KEY); nothing else in the folder is a shader
+OUTPUT = re.compile(r"[0-9a-f]{16}_b\w*\.(metal|json)")
 BINARY = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5, "==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7, "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10}
 
 
@@ -41,7 +35,8 @@ def tokens(text):
         if not m:
             if text[i:].strip(): raise ValueError(text[i:])
             break
-        out.append(m.group(1)); i = m.end()
+        out.append(m.group(1))
+        i = m.end()
     return out
 
 
@@ -50,7 +45,7 @@ def known(*values):
 
 
 class Interval:
-    """Bounds of integer expressions in one shader's MSL; definitions are evaluated once each, at most 32 deep."""
+    """Definitions are evaluated once each, at most 32 deep."""
     def __init__(self, definitions):
         self.definitions, self.memo, self.depth = definitions, {}, 0
 
@@ -63,7 +58,7 @@ class Interval:
         try: value = self.expression(text)
         finally: self.depth -= 1
         if kind == "bool": value = (0, 1)
-        elif kind.startswith("u") and not (known(value[0]) and value[0] >= 0): value = (0, None)   # an unsigned variable: a possibly negative value wraps to a huge one
+        elif kind.startswith("u") and not (known(value[0]) and value[0] >= 0): value = (0, None)   # a possibly negative value wraps to a huge unsigned one
         self.memo[name] = value
         return value
 
@@ -87,13 +82,17 @@ class Interval:
     def ternary(self):
         cond = self.binary(1)
         if self.peek() != "?": return cond
-        self.take("?"); a = self.ternary(); self.take(":"); b = self.ternary()
+        self.take("?")
+        a = self.ternary()
+        self.take(":")
+        b = self.ternary()
         return (min(a[0], b[0]) if known(a[0], b[0]) else None, max(a[1], b[1]) if known(a[1], b[1]) else None)
 
     def binary(self, level):
         left = self.unary()
         while self.peek() in BINARY and BINARY[self.peek()] >= level:
-            op = self.take(); right = self.binary(BINARY[op] + 1)
+            op = self.take()
+            right = self.binary(BINARY[op] + 1)
             left = self.combine(op, left, right)
         return left
 
@@ -105,7 +104,8 @@ class Interval:
         if op == "-": return (al - bh if known(al, bh) else None, ah - bl if known(ah, bl) else None)
         if op == "*":
             if not known(al, ah, bl, bh): return UNBOUNDED
-            p = [al * bl, al * bh, ah * bl, ah * bh]; return (min(p), max(p))
+            p = [al * bl, al * bh, ah * bl, ah * bh]
+            return (min(p), max(p))
         if op in ("/", ">>", "<<"):
             if not known(al, ah, bl, bh) or bl != bh or bl < 0 or (op == "/" and bl == 0): return UNBOUNDED
             if op == "<<": return (al << bl, ah << bl)
@@ -124,24 +124,40 @@ class Interval:
 
     def unary(self):
         t = self.peek()
-        if t == "-": self.take(); l, h = self.unary(); return (-h if known(h) else None, -l if known(l) else None)
-        if t == "+": self.take(); return self.unary()
-        if t == "!": self.take(); self.unary(); return (0, 1)
-        if t in ("~", "*"): self.take(); self.unary(); return UNBOUNDED   # complement; a dereference reads memory
+        if t == "-":
+            self.take()
+            l, h = self.unary()
+            return (-h if known(h) else None, -l if known(l) else None)
+        if t == "+":
+            self.take()
+            return self.unary()
+        if t == "!":
+            self.take()
+            self.unary()
+            return (0, 1)
+        if t in ("~", "*"):   # a dereference reads memory
+            self.take()
+            self.unary()
+            return UNBOUNDED
         return self.postfix(self.primary())
 
     def postfix(self, value):
-        while self.peek() is not None and (self.peek() == "[" or self.peek().startswith(".")):   # an array element or a member: unbounded
-            if self.take() == "[": self.ternary(); self.take("]")
+        while self.peek() is not None and (self.peek() == "[" or self.peek().startswith(".")):
+            if self.take() == "[":
+                self.ternary()
+                self.take("]")
             value = UNBOUNDED
         return value
 
     def primary(self):
         t = self.take()
         if t == "(":
-            v = self.ternary(); self.take(")"); return v
+            v = self.ternary()
+            self.take(")")
+            return v
         if re.fullmatch(r"0[xX][0-9a-fA-F]+[uU]?|\d+[uU]?", t):
-            v = int(t.rstrip("uU"), 0); return (v, v)
+            v = int(t.rstrip("uU"), 0)
+            return (v, v)
         if re.fullmatch(r"\d+\.\d*(?:[eE][-+]?\d+)?f?", t): return UNBOUNDED
         if not re.fullmatch(r"[A-Za-z_]\w*(?:\.\w+)*", t): raise ValueError(t)
         if self.peek() == "(":
@@ -149,22 +165,24 @@ class Interval:
             args = []
             if self.peek() != ")":
                 args.append(self.ternary())
-                while self.peek() == ",": self.take(","); args.append(self.ternary())
+                while self.peek() == ",":
+                    self.take(",")
+                    args.append(self.ternary())
             self.take(")")
             return self.call(t, args)
-        if re.fullmatch(r"_\d+", t):   # a temporary: its definition is in the same function
+        if re.fullmatch(r"_\d+", t):
             save = (self.toks, self.pos)
             try: return self.variable(t)
             finally: self.toks, self.pos = save
         if t in ("true", "false"): return (0, 1)
-        return UNBOUNDED   # inputs, uniforms, vector components, constants we do not track
+        return UNBOUNDED
 
     @staticmethod
     def call(name, args):
         if name == "as_type_u" and len(args) == 1: return (0, None)
         if name in CASTS and len(args) == 1:
             l, h = args[0]
-            if name.startswith("u") and not (known(l) and l >= 0): return (0, None)   # a negative value wraps to a huge unsigned one
+            if name.startswith("u") and not (known(l) and l >= 0): return (0, None)
             return (l, h)
         if name == "min" and len(args) == 2:
             (al, ah), (bl, bh) = args
@@ -179,17 +197,12 @@ class Interval:
         return UNBOUNDED
 
 
-def c1_span(json_path):
-    """Bytes a shared bank gives the shader's c1: its data rounded up to 256 bytes plus the 256-byte zero gap (nvn_mtl.m c1_store); None when the reflection has no c1."""
-    return c1_span_of(read_bytes(json_path))
-
-
 def definitions_of(source):
-    """Integer temporaries written only where they are declared. A variable assigned again (a loop counter, a value merged from branches) is left out, so it reads as unbounded.
-    A name may be declared more than once with the same text: vertex shaders carry a copy of the main function (main0_z, dmsh_entry.py vs_depth); differing declarations are left out too"""
+    """Integer temporaries written only where declared. One assigned again, or declared twice with differing text (vs_depth's main0_z copy), is left out: unbounded."""
     writes, decls = {}, {}
     for m in ASSIGNMENT.finditer(source):
-        name = m.group(1) or m.group(2) or m.group(3); writes[name] = writes.get(name, 0) + 1
+        name = m.group(1) or m.group(2) or m.group(3)
+        writes[name] = writes.get(name, 0) + 1
     for kind, name, text in DEFINITION.findall(source): decls.setdefault(name, set()).add((kind, text.strip()))
     counts = {}
     for _, name, _ in DEFINITION.findall(source): counts[name] = counts.get(name, 0) + 1
@@ -202,18 +215,16 @@ def proven(index, definitions, span):
 
 
 def outputs(version_dir, ext):
-    """The names of the shader build's .<ext> outputs in version_dir, sorted. Other files are left out: on an exFAT or FAT drive macOS writes a binary AppleDouble `._<name>` beside each file"""
+    """Sorted; skips the AppleDouble `._<name>` files macOS writes on exFAT / FAT drives"""
     return [n for n in sorted(romfs.os.listdir(version_dir)) if (m := OUTPUT.fullmatch(n)) and m.group(1) == ext]
 
 
-# Each shader's answer follows from its own files alone (its .metal and its reflection json) and from these tools' code, so with DMSH_TABLE_MEMO set to a folder (the packing script sets its
-# shader cache folder) c1_guard.py and cb_extent.py keep it there as <tool>.memo: a line per shader, the SHA-256 of the files it read, then its answer. A build that restores every shader
-# from the cache gives back the same files, so the tables are made again from the memo instead of the analysis: about 100 s of a 42,848-shader game's reuse build (Ocarina of Time), the
-# progress bar at 99% meanwhile. The memo's first line is the tools' fingerprint; another one (an edit to these files) starts it empty. It keeps the answers of the last run only
+# With DMSH_TABLE_MEMO set to a folder, c1_guard.py and cb_extent.py keep each shader's answer in <tool>.memo, keyed by the SHA-256 of the files
+# it read; the first line is MEMO_CODE's fingerprint, and the memo holds the last run's answers only
 MEMO_ENV = "DMSH_TABLE_MEMO"
-MEMO_CODE = ("c1_guard.py", "cb_extent.py", "dmsh_abi.py", os.path.join("..", "nvn", "dmsh_abi.h"))   # cb_extent.py runs this file's interval arithmetic and the binding kinds
-# dmsh_abi.py reads from the header when it loads: a header-only edit of a kind changes cb_extent.py's answer for the same files
-_memo = None   # the worker processes' copy of the memo ({digest: answer}); None without one, and then nothing is hashed
+MEMO_CODE = ("c1_guard.py", "cb_extent.py", "dmsh_abi.py", os.path.join("..", "nvn", "dmsh_abi.h"))
+# dmsh_abi.py reads its kinds from the header, so the header changes cb_extent.py's answers
+_memo = None   # None: no memo, nothing is hashed
 
 
 def memo_path(tool):
@@ -229,7 +240,6 @@ def memo_fingerprint(tool):
 
 
 def memo_load(tool):
-    """{digest: answer} of the tool's last run; empty when there is none, it is unreadable or another version of the tools made it"""
     path = memo_path(tool)
     if not path: return None
     try:
@@ -240,7 +250,7 @@ def memo_load(tool):
         return {}
 
 
-def memo_save(tool, answers):   # answers: [(digest, answer)] of this run; a memo that cannot be written only costs the next run its time
+def memo_save(tool, answers):
     path = memo_path(tool)
     if not path: return
     tmp = f"{path}.tmp-{os.getpid()}"
@@ -255,38 +265,35 @@ def memo_save(tool, answers):   # answers: [(digest, answer)] of this run; a mem
         except OSError: pass
 
 
-def _memo_start(memo):   # the pool's initializer
+def _memo_start(memo):
     global _memo
     _memo = memo
 
 
 def memo_map(tool, worker, jobs):
-    """pool.map of worker over jobs, every core, in order, with the memo given to each process; worker returns (digest or None, answer, its own value), and answers are strings without tabs
-    or newlines. → the workers' own values"""
+    """worker returns (digest or None, answer, its own value); answers hold no tabs or newlines. → the workers' own values"""
     memo = memo_load(tool)
-    with multiprocessing.Pool(initializer=_memo_start, initargs=(memo,)) as pool:   # map keeps the sorted order, so the list is the same as one core's
+    with multiprocessing.Pool(initializer=_memo_start, initargs=(memo,)) as pool:   # map keeps the order: the same list as one core's
         results = pool.map(worker, jobs, chunksize=64)
     if memo is not None: memo_save(tool, [(digest, answer) for digest, answer, _ in results if digest])
     return [value for _, _, value in results]
 
 
-def memo_digest(*files):   # the files' bytes (None: missing), as the memo's key
+def memo_digest(*files):
     h = hashlib.sha256()
     for data in files: h.update(b"none\0" if data is None else b"%d\0" % len(data) + data)
     return h.hexdigest()
 
 
-CHAIN_LABEL = re.compile(rb'("chain"\s*:\s*")[^"]*"')   # a reflection's chain version, as dmsh_build.py writes it (and writes it again in an output it restores from its cache)
+CHAIN_LABEL = re.compile(rb'("chain"\s*:\s*")[^"]*"')
 
 
 def memo_reflection(data):
-    """A reflection json's bytes as the memo's key takes them (None: missing): without the chain version it names. Neither tool reads that (c1_guard.py takes the c1 data's length,
-    cb_extent.py the bindings), and after a chain change every reflection names the new one: every digest missed, and both analyses ran whole on shaders whose MSL and reflection
-    were otherwise what they had been (Ocarina of Time, 42,848 shaders: 86 s of the build after each chain change)"""
+    """Without the chain version it names: neither tool reads it, and every digest would miss after a chain change"""
     return None if data is None else CHAIN_LABEL.sub(rb'\1"', data, count=1)
 
 
-def memo_answer(files, compute):   # (digest, answer): the memo's when it holds the files, else compute()'s; no digest without a memo
+def memo_answer(files, compute):
     if _memo is None: return None, compute()
     digest = memo_digest(*files)
     answer = _memo.get(digest)
@@ -300,18 +307,19 @@ def read_bytes(path):
         return None
 
 
-def text_of(data):   # what romfs.open(path, encoding="utf-8") reads: UTF-8, universal newlines
+def text_of(data):   # as romfs.open(path, encoding="utf-8") reads: universal newlines
     return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
-def c1_span_of(data):   # c1_span on the reflection's bytes (None: missing)
+def c1_span_of(data):
+    """its data rounded up to 256 bytes plus the 256-byte zero gap (nvn_mtl.m c1_store); None when missing"""
     if data is None: return None
     try: length = len(json.loads(text_of(data)).get("c1") or "") // 2
     except ValueError: return None
     return (length + 255) // 256 * 256 + 256
 
 
-def unproven_in(source, reflection):   # whether one of the shader's c1 reads is not proven bounded: its MSL, its reflection json's bytes
+def unproven_in(source, reflection):
     accesses = set(ACCESS.findall(source))
     if not accesses: return False
     definitions, span = definitions_of(source), c1_span_of(reflection)
@@ -319,8 +327,7 @@ def unproven_in(source, reflection):   # whether one of the shader's c1 reads is
 
 
 def unproven(job):
-    """(version dir, a .metal file name) → (memo digest, answer, the shader's key when one of its c1 reads is not proven bounded, else None). Each shader is checked on its own, so main()
-    spreads them over every core, as cb_extent.py does (Breath of the Wild's 19,592 libraries, FINAL FANTASY RESONANCE's 73,496: minutes on one core)"""
+    """→ (memo digest, answer, the shader's key when a c1 read is unproven, else None)"""
     version_dir, name = job
     key = name[:-len("_b.metal")] if name.endswith("_b.metal") else name[:-6]
     with romfs.open(os.path.join(version_dir, name), "rb") as stream: metal = stream.read()
@@ -333,13 +340,13 @@ def main():
     if len(sys.argv) != 3:
         raise SystemExit(f"usage: {sys.argv[0]} <dmsh_b version dir> <output tsv>")
     lib, output = map(os.path.abspath, sys.argv[1:])
-    version_dir = str(shader_lib.view(lib))   # its folder or its one file, read in place
+    version_dir = str(shader_lib.view(lib))
     jobs = [(version_dir, name) for name in outputs(version_dir, "metal")]
     keys = [key for key in memo_map("c1_guard", unproven, jobs) if key]
     os.makedirs(os.path.dirname(output), exist_ok=True)
     with open(output, "w", encoding="utf-8", newline="") as stream:
         stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-        stream.write(f"{shader_lib.table_head(lib)} {stamp}\n")   # the library's chain version and the profile inputs it was built from
+        stream.write(f"{shader_lib.table_head(lib)} {stamp}\n")
         for key in keys:
             stream.write(key + "\n")
     print(f"not proven bounded: {len(keys)} shaders")

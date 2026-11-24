@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Runs a kernel on the Jetson through libcuda alone (no toolkit, no numpy): the driver JIT-compiles PTX for this GPU, or loads a cubin as given.
+"""Runs a kernel on the Jetson through libcuda alone (PTX or a cubin).
 
-  cu.py ptx2cubin   k.ptx k.cubin                      JIT the PTX for this GPU and save the cubin the linker produced
-  cu.py run         k.(ptx|cubin) kernel grid block shared in.bin out_bytes out.bin [more in.bin ...]
-                    launches kernel(in0, [in1, ...,] out) with grid x block threads and `shared` bytes of dynamic shared memory
-
-Every buffer is a plain device allocation; the kernel gets their addresses in argument order, the output last."""
+  cu.py ptx2cubin k.ptx k.cubin
+  cu.py run k.(ptx|cubin) kernel grid block shared in.bin out_bytes out.bin [in.bin ...]   (kernel(in0, [in1, ...,] out))"""
 import ctypes as C
 import sys
 
@@ -17,6 +14,16 @@ def ck(r, what):
         s = C.c_char_p()
         cu.cuGetErrorString(r, C.byref(s))
         raise SystemExit(f'{what}: {r} {s.value.decode() if s.value else ""}')
+
+
+def declare():
+    cu.cuGetErrorString.argtypes = [C.c_int, C.POINTER(C.c_char_p)]
+    cu.cuLinkAddData_v2.argtypes = [C.c_void_p, C.c_int, C.c_void_p, C.c_size_t, C.c_char_p, C.c_uint, C.c_void_p, C.c_void_p]
+    cu.cuMemcpyHtoD_v2.argtypes = [C.c_uint64, C.c_char_p, C.c_size_t]
+    cu.cuMemcpyDtoH_v2.argtypes = [C.c_void_p, C.c_uint64, C.c_size_t]
+    cu.cuMemsetD8_v2.argtypes = [C.c_uint64, C.c_ubyte, C.c_size_t]
+    cu.cuMemFree_v2.argtypes = [C.c_uint64]
+    cu.cuLaunchKernel.argtypes = [C.c_void_p] + [C.c_uint] * 7 + [C.c_void_p, C.c_void_p, C.c_void_p]
 
 
 def init():
@@ -59,7 +66,7 @@ def run(image: bytes, kernel: str, grid: int, block: int, shared: int, inputs, o
     fn = C.c_void_p()
     ck(cu.cuModuleGetFunction(C.byref(fn), mod, kernel.encode()), 'cuModuleGetFunction')
     if shared > 48 * 1024:
-        ck(cu.cuFuncSetAttribute(fn, 8, shared), 'cuFuncSetAttribute(max dynamic shared)')   # CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
+        ck(cu.cuFuncSetAttribute(fn, 8, shared), 'cuFuncSetAttribute(max dynamic shared)')
     ptrs = []
     for data in inputs:
         p = C.c_uint64()
@@ -68,7 +75,7 @@ def run(image: bytes, kernel: str, grid: int, block: int, shared: int, inputs, o
         ptrs.append(p)
     o = C.c_uint64()
     ck(cu.cuMemAlloc_v2(C.byref(o), C.c_size_t(out_bytes)), 'cuMemAlloc')
-    ck(cu.cuMemsetD8_v2(o, 0xcd, C.c_size_t(out_bytes)), 'cuMemsetD8')   # a fill no result is likely to equal, so an unwritten word shows
+    ck(cu.cuMemsetD8_v2(o, 0xcd, C.c_size_t(out_bytes)), 'cuMemsetD8')   # so an unwritten word shows
     ptrs.append(o)
     args = (C.c_void_p * len(ptrs))(*[C.cast(C.byref(p), C.c_void_p) for p in ptrs])
     ck(cu.cuLaunchKernel(fn, grid, 1, 1, block, 1, 1, shared, None, args, None), 'cuLaunchKernel')
@@ -82,13 +89,7 @@ def run(image: bytes, kernel: str, grid: int, block: int, shared: int, inputs, o
 
 
 if __name__ == '__main__':
-    cu.cuGetErrorString.argtypes = [C.c_int, C.POINTER(C.c_char_p)]
-    cu.cuLinkAddData_v2.argtypes = [C.c_void_p, C.c_int, C.c_void_p, C.c_size_t, C.c_char_p, C.c_uint, C.c_void_p, C.c_void_p]
-    cu.cuMemcpyHtoD_v2.argtypes = [C.c_uint64, C.c_char_p, C.c_size_t]
-    cu.cuMemcpyDtoH_v2.argtypes = [C.c_void_p, C.c_uint64, C.c_size_t]
-    cu.cuMemsetD8_v2.argtypes = [C.c_uint64, C.c_ubyte, C.c_size_t]
-    cu.cuMemFree_v2.argtypes = [C.c_uint64]
-    cu.cuLaunchKernel.argtypes = [C.c_void_p] + [C.c_uint] * 7 + [C.c_void_p, C.c_void_p, C.c_void_p]
+    declare()
     init()
     cmd, a = sys.argv[1], sys.argv[2:]
     if cmd == 'ptx2cubin':

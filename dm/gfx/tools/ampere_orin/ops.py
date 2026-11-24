@@ -1,7 +1,6 @@
-"""The ops the batch checks: each a PTX body over 32-bit inputs %i0.. that writes 32-bit outputs %o0...
+"""The ops the batch checks: (name, family, input kinds, output kinds, PTX body over %i0.. writing %o0..).
 
-Input kinds (gen.py makes the values): f = f32, h = f16x2, b = bf16x2, u = 32-bit integer, s = shift or bit count, l = lane index, p = predicate-ish bit.
-Output kinds (compare.py reads them): f, h, b, u. An op is (name, family, inputs, outputs, body)."""
+Kinds: f = f32, h = f16x2, b = bf16x2, u = u32, s = shift or bit count, l = lane index, p = predicate-ish bit; upper case: ordinary values only."""
 
 OPS = []
 
@@ -10,11 +9,11 @@ def op(name, family, ins, outs, body):
     OPS.append(dict(name=name, family=family, ins=ins, outs=outs, body=body))
 
 
-def fbin(o, extra=''):   # f32 a op b
+def fbin(o):
     return f'mov.b32 %f0, %i0; mov.b32 %f1, %i1; {o} %f2, %f0, %f1; mov.b32 %o0, %f2;'
 
 
-def fun(o):   # f32 op a
+def fun(o):
     return f'mov.b32 %f0, %i0; {o} %f2, %f0; mov.b32 %o0, %f2;'
 
 
@@ -22,7 +21,7 @@ def fter(o):
     return f'mov.b32 %f0, %i0; mov.b32 %f1, %i1; mov.b32 %f3, %i2; {o} %f2, %f0, %f1, %f3; mov.b32 %o0, %f2;'
 
 
-def hbin(o):   # f16x2 a op b
+def hbin(o):
     return f'mov.b32 %x0, %i0; mov.b32 %x1, %i1; {o} %x2, %x0, %x1; mov.b32 %o0, %x2;'
 
 
@@ -30,7 +29,6 @@ def hter(o):
     return f'mov.b32 %x0, %i0; mov.b32 %x1, %i1; mov.b32 %x3, %i2; {o} %x2, %x0, %x1, %x3; mov.b32 %o0, %x2;'
 
 
-# --- f32 arithmetic (FADD / FMUL / FFMA / FMNMX), every rounding mode, ftz and sat
 for rnd in ('rn', 'rz', 'rm', 'rp'):
     op(f'fadd_{rnd}', 'f32 arith', 'ff', 'f', fbin(f'add.{rnd}.f32'))
     op(f'fmul_{rnd}', 'f32 arith', 'ff', 'f', fbin(f'mul.{rnd}.f32'))
@@ -54,7 +52,6 @@ op('fcopysign', 'f32 arith', 'ff', 'f', fbin('copysign.f32'))
 op('fabs', 'f32 arith', 'f', 'f', fun('abs.f32'))
 op('fneg', 'f32 arith', 'f', 'f', fun('neg.f32'))
 
-# --- f32 compares (FSETP / FSET), many predicates in one kernel
 CMPS = ('eq', 'ne', 'lt', 'le', 'gt', 'ge', 'equ', 'neu', 'ltu', 'leu', 'gtu', 'geu', 'num', 'nan')
 op('fsetp', 'f32 compare', 'ff', 'u' * len(CMPS), 'mov.b32 %f0, %i0; mov.b32 %f1, %i1; ' + ' '.join(
     f'setp.{c}.f32 %p0, %f0, %f1; selp.u32 %o{k}, 1, 0, %p0;' for k, c in enumerate(CMPS)))
@@ -66,7 +63,6 @@ op('ftestp', 'f32 compare', 'f', 'uuuuu', 'mov.b32 %f0, %i0; ' + ' '.join(
     f'testp.{t}.f32 %p0, %f0; selp.u32 %o{k}, 1, 0, %p0;' for k, t in enumerate(('finite', 'infinite', 'number', 'normal', 'subnormal'))))
 op('fsel_cmp', 'f32 compare', 'fff', 'f', 'mov.b32 %f0, %i0; mov.b32 %f1, %i1; mov.b32 %f3, %i2; setp.gt.f32 %p0, %f0, 0f00000000; selp.f32 %f2, %f1, %f3, %p0; mov.b32 %o0, %f2;')
 
-# --- MUFU and the precise sequences built on it
 for o in ('ex2.approx.f32', 'ex2.approx.ftz.f32', 'lg2.approx.f32', 'lg2.approx.ftz.f32', 'rcp.approx.f32', 'rcp.approx.ftz.f32', 'rsqrt.approx.f32',
           'rsqrt.approx.ftz.f32', 'sqrt.approx.f32', 'sqrt.approx.ftz.f32', 'sin.approx.f32', 'cos.approx.f32', 'tanh.approx.f32'):
     op('mufu_' + o.replace('.approx', '').replace('.f32', '').replace('.', '_'), 'mufu', 'f', 'f', fun(o))
@@ -78,7 +74,6 @@ op('fdiv_approx', 'f32 precise', 'ff', 'f', fbin('div.approx.f32'))
 op('frcp_rn', 'f32 precise', 'f', 'f', fun('rcp.rn.f32'))
 op('fsqrt_rn', 'f32 precise', 'f', 'f', fun('sqrt.rn.f32'))
 
-# --- conversions (F2I, I2F, F2F, FRND, F2FP, I2I)
 for rnd in ('rni', 'rzi', 'rmi', 'rpi'):
     op(f'f2i_s32_{rnd}', 'convert', 'f', 'u', f'mov.b32 %f0, %i0; cvt.{rnd}.s32.f32 %o0, %f0;')
     op(f'frnd_{rnd}', 'convert', 'f', 'f', f'mov.b32 %f0, %i0; cvt.{rnd}.f32.f32 %f2, %f0; mov.b32 %o0, %f2;')
@@ -103,7 +98,6 @@ op('i2i_s8_sat', 'convert', 'u', 'u', 'cvt.sat.s8.s32 %w0, %i0; cvt.s32.s8 %o0, 
 op('i2i_u16_sat', 'convert', 'u', 'u', 'cvt.sat.u16.s32 %w0, %i0; cvt.u32.u16 %o0, %w0;')
 op('sext_s8', 'convert', 'u', 'u', 'cvt.s32.s8 %o0, %i0;')
 
-# --- f16x2 / bf16x2 (HADD2 / HMUL2 / HFMA2 / HMNMX2 / HSETP2 / HSET2)
 op('hadd2', 'f16x2', 'hh', 'h', hbin('add.rn.f16x2'))
 op('hadd2_ftz', 'f16x2', 'hh', 'h', hbin('add.rn.ftz.f16x2'))
 op('hadd2_sat', 'f16x2', 'hh', 'h', hbin('add.rn.sat.f16x2'))
@@ -128,7 +122,6 @@ op('bfma2', 'bf16x2', 'bbb', 'b', hter('fma.rn.bf16x2'))
 op('bmin2', 'bf16x2', 'bb', 'b', hbin('min.bf16x2'))
 op('bmax2_nan', 'bf16x2', 'bb', 'b', hbin('max.NaN.bf16x2'))
 
-# --- integer ALU
 op('iadd', 'int', 'uu', 'u', 'add.u32 %o0, %i0, %i1;')
 op('iadd3', 'int', 'uuu', 'u', 'add.u32 %t0, %i0, %i1; sub.u32 %o0, %t0, %i2;')
 op('iadd_sat', 'int', 'uu', 'u', 'add.sat.s32 %o0, %i0, %i1;')
@@ -164,7 +157,6 @@ op('isetp64', 'int compare', 'uuuu', 'uu', 'mov.b64 %d0, {%i0, %i1}; mov.b64 %d1
 op('plop3', 'int compare', 'uuu', 'u', 'setp.ne.u32 %p0, %i0, 0; setp.ne.u32 %p1, %i1, 0; setp.ne.u32 %p2, %i2, 0; xor.pred %p3, %p0, %p1; or.pred %p3, %p3, %p2; '
    'not.pred %p3, %p3; selp.u32 %o0, 1, 0, %p3;')
 
-# --- bits
 op('shl', 'bits', 'us', 'u', 'shl.b32 %o0, %i0, %i1;')
 op('shr_u32', 'bits', 'us', 'u', 'shr.u32 %o0, %i0, %i1;')
 op('shr_s32', 'bits', 'us', 'u', 'shr.s32 %o0, %i0, %i1;')
@@ -203,7 +195,7 @@ op('dp4a_su', 'bits', 'uuu', 'u', 'dp4a.s32.u32 %o0, %i0, %i1, %i2;')
 op('dp2a_lo', 'bits', 'uuu', 'u', 'dp2a.lo.s32.s32 %o0, %i0, %i1, %i2;')
 op('dp2a_hi', 'bits', 'uuu', 'u', 'dp2a.hi.u32.u32 %o0, %i0, %i1, %i2;')
 
-# --- warp (SHFL / VOTE / MATCH / REDUX): 32 threads to a group on both sides, so a lane's neighbours are the same
+# warp: 32 threads to a group on both sides, so a lane's neighbours are the same
 op('shfl_idx', 'warp', 'ul', 'u', 'shfl.sync.idx.b32 %o0, %i0, %i1, 0x1f, 0xffffffff;')
 op('shfl_up', 'warp', 'us', 'uu', 'and.b32 %t0, %i1, 31; shfl.sync.up.b32 %o0|%p0, %i0, %t0, 0, 0xffffffff; selp.u32 %o1, 1, 0, %p0;')
 op('shfl_down', 'warp', 'us', 'uu', 'and.b32 %t0, %i1, 31; shfl.sync.down.b32 %o0|%p0, %i0, %t0, 0x1f, 0xffffffff; selp.u32 %o1, 1, 0, %p0;')
@@ -218,7 +210,6 @@ op('redux_add', 'warp', 'u', 'u', 'redux.sync.add.u32 %o0, %i0, 0xffffffff;')
 op('redux_min_s32', 'warp', 'u', 'u', 'redux.sync.min.s32 %o0, %i0, 0xffffffff;')
 op('redux_or', 'warp', 'u', 'u', 'redux.sync.or.b32 %o0, %i0, 0xffffffff;')
 
-# --- tensor (HMMA / IMMA): each thread holds its fragments, as the PTX layouts give them
 op('hmma_16816_f16', 'tensor', 'HHHHHHHH', 'hh', 'mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 {%o0, %o1}, {%i0, %i1, %i2, %i3}, {%i4, %i5}, {%i6, %i7};')
 op('hmma_16816_f32', 'tensor', 'HHHHHHFFFF', 'ffff', 'mov.b32 %f0, %i6; mov.b32 %f1, %i7; mov.b32 %f2, %i8; mov.b32 %f3, %i9; '
    'mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%f4, %f5, %f6, %f7}, {%i0, %i1, %i2, %i3}, {%i4, %i5}, {%f0, %f1, %f2, %f3}; '
@@ -232,6 +223,5 @@ op('hmma_1688_tf32', 'tensor', 'FFFFFFFFFF', 'ffff', 'mov.b32 %f0, %i6; mov.b32 
    'mov.b32 %o0, %f4; mov.b32 %o1, %f5; mov.b32 %o2, %f6; mov.b32 %o3, %f7;')
 op('imma_16832_s8', 'tensor', 'UUUUUUUUUU', 'uuuu', 'mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%o0, %o1, %o2, %o3}, {%i0, %i1, %i2, %i3}, {%i4, %i5}, {%i6, %i7, %i8, %i9};')
 
-# --- f64 (DADD / DMUL / DFMA): rare in shaders, here for the coverage list
 op('dadd', 'f64', 'uuuu', 'uu', 'mov.b64 %g0, {%i0, %i1}; mov.b64 %g1, {%i2, %i3}; add.rn.f64 %g2, %g0, %g1; mov.b64 {%o0, %o1}, %g2;')
 op('dmul', 'f64', 'uuuu', 'uu', 'mov.b64 %g0, {%i0, %i1}; mov.b64 %g1, {%i2, %i3}; mul.rn.f64 %g2, %g0, %g1; mov.b64 {%o0, %o1}, %g2;')

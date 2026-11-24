@@ -1,18 +1,7 @@
-"""Compares an op's outputs on Metal with the Ampere GPU's, word by word, and names why each differing lane differs (standard library only, for the tests).
+"""Compares an op's Metal outputs with the Ampere GPU's and names the first cause that fits each differing lane.
 
-An output word is one lane of kind f (f32), u (an integer or a predicate) or two lanes of kind h (f16x2) or b (bf16x2). A differing lane gets the first cause
-that fits:
-
-  nan-bits    both NaN, different bits: Ampere writes the canonical NaN (0x7fffffff, f16 0x7fff), Metal another
-  nan-one     one side NaN, the other a number
-  denorm-in   an f32 input is a denormal: Metal's f32 arithmetic flushes them, Ampere keeps them without .FTZ (Metal keeps f16 denormals, so a half input
-              does not count)
-  denorm-out  either f32 result is a denormal, or one is zero and the other a denormal or the smallest normal (a denormal intermediate rounded up)
-  zero-sign   +0 against -0
-  rn-result   a directed-rounding op (name ends in _rz / _rm / _rp) where Metal gave the round-to-nearest result: the rounding mode was not applied
-  other       the rest, with their ULP distances (float lanes) for the report
-
-PLATFORM is what Metal's float arithmetic itself gives (nothing a translation of one instruction can change cheaply): the test allows it on every op."""
+Ampere writes the canonical NaN (0x7fffffff, f16 0x7fff) and keeps f32 denormals without .FTZ; Metal's f32 arithmetic flushes them (not f16).
+PLATFORM: what Metal's float arithmetic itself gives, allowed on every op."""
 import struct
 from collections import Counter
 
@@ -37,7 +26,6 @@ def is_zero(v, k):
 
 
 def ulps(a, b, k):
-    """distance in units in the last place between two float lanes of kind k"""
     w = _MASK[k][2]
     s = 1 << (w - 1)
 
@@ -72,8 +60,7 @@ def _bits(x):
 
 
 def rn_reference(name, row):
-    """the round-to-nearest result of a directed-rounding op on one case, or None. Doubles hold a sum or product of two floats exactly (and an FMA's well enough
-    for this label), so rounding the double once to float is the nearest float"""
+    """Doubles hold a sum or product of two floats exactly, so rounding the double once to float is the nearest float"""
     mode = name.rsplit('_', 1)[-1]
     if mode not in ('rz', 'rm', 'rp'):
         return None
@@ -92,7 +79,7 @@ def rn_reference(name, row):
 
 
 def classify(op, rows, orin, metal):
-    """(Counter of causes over differing lanes, number of lanes, the largest ULP distance among 'other' float lanes, up to four differing cases as dicts)"""
+    """(Counter of causes, number of lanes, largest ULP distance among 'other' float lanes, up to four differing cases)"""
     causes, n, worst, examples = Counter(), 0, 0, []
     kinds_in, kinds_out = op['ins'], op['outs']
     for r, (row, o_row, m_row) in enumerate(zip(rows, orin, metal)):

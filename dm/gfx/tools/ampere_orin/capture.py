@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-"""Records the fixture of dm/gfx/tests/test_dmsh_ampere_orin.py on a Linux machine with an Ampere GPU and its NVIDIA driver (a Jetson Orin, sm_87, or a GeForce
-RTX 30, sm_86). Needs no CUDA toolkit there, only Python 3 and the driver's libcuda: the driver compiles each op's PTX itself.
-
-For each op in ops.py: a PTX kernel that loads its inputs from global memory, does the op and stores its outputs. On the device (over ssh) the driver compiles
-and runs it on the inputs made here, and prog.py rewrites the same machine code for the translator (LDG / STG become LDS / STS, the CUDA parameter reads and
-the addressing they feed become NOPs), which the device's nvdisasm checks. The fixture keeps, per op, that program, its disassembly, the inputs and the GPU's
-outputs.
+"""Records the fixture of dm/gfx/tests/test_dmsh_ampere_orin.py on a Linux machine with an Ampere GPU (Jetson Orin sm_87, RTX 30 sm_86) and its driver.
 
   capture.py --host user@machine [--arch sm_87] [--cases 1024] [--only names,families] [--out dm/gfx/tests/ampere_orin]
 
-The device needs nvdisasm in --device-dir (NVIDIA's cuda_nvdisasm redistributable for linux-aarch64 or linux-x86_64; no install). PTX is written here, so no
-compiler is needed on either side. Needs numpy here (.github/requirements/tools.txt)."""
+The device needs nvdisasm in --device-dir (NVIDIA's cuda_nvdisasm redistributable), no CUDA toolkit; numpy here."""
 import argparse
 import gzip
 import json
@@ -19,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np  # .github/requirements/tools.txt
+import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -52,7 +45,7 @@ def _halves(kind, m, rng, tame):
 
 
 def gen_kind(kind, n, rng):
-    """n input words of one kind (ops.py): special values, random bits and ordinary values mixed; an upper-case kind gives ordinary values only"""
+    """an upper-case kind gives ordinary values only"""
     tame, k = kind.isupper(), kind.lower()
     pick = rng.random(n)
     rand = rng.integers(0, 2 ** 32, n, dtype=np.uint64).astype(np.uint32)
@@ -62,7 +55,7 @@ def gen_kind(kind, n, rng):
         a = rng.choice(np.array(F32_SPECIAL, np.uint32), n)
         c = rng.uniform(-8, 8, n).astype(np.float32).view(np.uint32)
         d = (rng.choice([-1.0, 1.0], n) * np.exp2(rng.uniform(-30, 30, n))).astype(np.float32).view(np.uint32)
-        e = (rng.integers(-4, 5, n) * 0.5).astype(np.float32).view(np.uint32)   # halves and whole numbers: the ties of the roundings
+        e = (rng.integers(-4, 5, n) * 0.5).astype(np.float32).view(np.uint32)   # the ties of the roundings
         return np.select([pick < .25, pick < .4, pick < .65, pick < .85], [a, rand, c, d], e).astype(np.uint32)
     if k in 'hb':
         return (_halves(k, n, rng, tame) | _halves(k, n, rng, tame) << 16).astype(np.uint32)
@@ -78,7 +71,7 @@ def gen_kind(kind, n, rng):
         return np.select([pick < .7, pick < .85], [a, rand], c).astype(np.uint32)
     if k == 'l':
         return np.where(pick < .8, rng.integers(0, 32, n).astype(np.uint32), rand).astype(np.uint32)
-    if k == 'p':   # whole warps of one value now and then, so all / any / uni see both answers
+    if k == 'p':   # whole warps of one value, so all / any / uni see both answers
         same = np.repeat(rng.random(n // 32) < .3, 32)
         return np.where(same, np.repeat(rng.integers(0, 2 ** 32, n // 32, dtype=np.uint64).astype(np.uint32), 32), rand).astype(np.uint32)
     raise ValueError(kind)
@@ -101,7 +94,7 @@ PTX_HEAD = '''.version 8.5
 
 
 def ptx_for(o, arch):
-    """the op's kernel: volatile loads and stores, so the compiler keeps one 32-bit LDG / STG a word, which prog.py replaces one for one"""
+    """volatile, so each word is one 32-bit LDG / STG, which prog.py replaces one for one"""
     nin, nout = len(o['ins']), len(o['outs'])
     s = PTX_HEAD.replace('{arch}', arch).replace('{nin}', str(max(nin, 1))).replace('{nout}', str(nout)).replace('{inb}', str(nin * 4))
     s += ''.join(f'  ld.volatile.global.b32 %i{k}, [%a0+{k * 4}];\n' for k in range(nin))
@@ -155,7 +148,6 @@ def main():
 
 
 def trimmed_sass(text):
-    """a program's disassembly without the hex column and the NOP padding after its last EXIT"""
     lines = [ln for ln in text.splitlines() if ln.startswith('//') or '/*0' in ln]
     lines = [re.sub(r'\s*/\* 0x[0-9a-f]+ \*/', '', ln).rstrip() for ln in lines]
     while lines and lines[-1].rstrip(' ;').endswith('NOP'):
@@ -172,9 +164,7 @@ def trimmed_sass(text):
 
 
 def write_fixture(out, work, man, ops, arch):
-    """out/manifest.json (the device; per op its kinds, PTX body, case count and where its words lie), out/ampere_orin.u32.gz (per op: the program, then its
-    cases, a row of input words and the GPU's output words each) and out/ampere_orin.sass (each program's disassembly). Ops this run did not record keep their
-    old entries"""
+    """ampere_orin.u32.gz: per op, the program, then each case's input and output words. Ops not recorded this run keep their old entries"""
     info = json.loads((work / 'device.info').read_text()) if (work / 'device.info').exists() else {}
     old_doc = json.loads((out / 'manifest.json').read_text()) if (out / 'manifest.json').exists() else {'ops': []}
     old_blob = gzip.decompress((out / 'ampere_orin.u32.gz').read_bytes()) if (out / 'ampere_orin.u32.gz').exists() else b''

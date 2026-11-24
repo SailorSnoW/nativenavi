@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
-# Translation chain version of the B shader library: one version for every game, which the host is compiled with (dm/gfx/nvn/dmsh_chain.h). The build result must be determined by source alone.
-# Chain version V = first 12 digits of the sha256 of the contents of the following in-repo files + the translation options: this script, dmsh_build.py, dmsh_fetch.py (readable-tile version), dmsh_vin.py (shadow vertex inputs), dmsh_pull.py and dmsh_pull.metal (pulling vertex inputs),
-# dmsh_facts.py, dmsh_rewrite.py, dmsh_reflect.py and dmsh_entry.py (a shader's MSL rewrites, reflection and entry points), dmsh_meshstage.py (task and mesh shaders), the library ABI dm/gfx/nvn/dmsh_abi.h with its reader dmsh_abi.py, the dmsh_xlate sources (Program.cs, csproj), the Mac host's minimum macOS dm/mac/min_os.mk (MAC_MIN), and the tool lock dmsh_chain.lock (measured fingerprints of the native translator, which holds the Ryujinx shader library / spirv-cross / metal compiler).
-# A game's own inputs are not part of V: its profile's shader tables and nvn_* / shader_* keys are in each shader's cache key (dmsh_build.py shader_key), so a change rebuilds the shaders it affects,
-# and their digest (inputs below) stamps the library: <cache dir>/b-<V>/inputs.tsv says which game and which inputs it was built from. c1_full.tsv / cb_extent.tsv name V and that digest in their
-# header (dm/tools/shader_lib.py table_head), and the host takes them only when both match its library.
-# The build (dmsh_build.py) writes into <cache dir>/b-<V>/ and the reflection json records chain = V; at compile time the host takes V from dm/gfx/nvn/dmsh_chain.h, loads only from b-<V>/ and verifies each json.
+# Translation chain version V: the first 12 digits of the sha256 of FILES and the translation options. The host is compiled with it (dm/gfx/nvn/dmsh_chain.h) and
+# loads only b-<V>/. The game's own inputs are not part of V: they are in each shader's cache key, and their digest stamps b-<V>/inputs.tsv.
 # Usage: dmsh_chain.py                 print V (default options)
-#       dmsh_chain.py --header        rewrite dm/gfx/nvn/dmsh_chain.h (run after changing any file listed above, and commit it with the change)
-#       dmsh_chain.py --inputs        print the digest of the game profile's inputs, as b-<V>/inputs.tsv records it
-#       (checking the tools against dmsh_chain.lock, and rewriting it, is tool_lock.py's: the checks decide no output, so they are outside V and the shaders' cache keys)
-# Environment: XLATE_DEBUG / XLATE_REDUCED (same meaning as in dmsh_build.py, default 1 / 1), DMSH_SCONST (dmsh_wide.constant_reads, default fp; non-default options yield a different V, which the host will not load)
+#       dmsh_chain.py --header        rewrite dm/gfx/nvn/dmsh_chain.h (after changing a file of FILES; commit it with the change)
+#       dmsh_chain.py --inputs        print the digest of the game profile's inputs
+# Environment: XLATE_DEBUG / XLATE_REDUCED (default 1 / 1), DMSH_SCONST (default fp); other options give another V, which the host does not load
 from typing import Any
 import os, sys, ast, hashlib
-DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
-HERE = os.path.dirname(os.path.abspath(__file__)); GFX = os.path.dirname(HERE); HOME = os.path.expanduser('~')
+HERE = os.path.dirname(os.path.abspath(__file__))
+GFX = os.path.dirname(HERE)
 FILES = ['tools/dmsh_chain.py', 'tools/dmsh_build.py', 'tools/dmsh_atomic.py', 'tools/dmsh_wide.py', 'tools/dmsh_fetch.py', 'tools/dmsh_vin.py', 'tools/dmsh_pull.py', 'tools/dmsh_pull.metal', 'tools/dmsh_alpha.py', 'tools/dmsh_logic.py', 'tools/dmsh_side.py', 'tools/dmsh_rewrite.py', 'tools/dmsh_ndsr.py', 'tools/dmsh_reflect.py', 'tools/dmsh_entry.py', 'tools/dmsh_meshstage.py', 'tools/dmsh_facts.py', 'tools/dmsh_ampere.py', 'nvn/dmsh_abi.h', 'tools/dmsh_abi.py', 'tools/dmsh_xlate/Program.cs', 'tools/dmsh_xlate/dmsh_xlate.csproj', 'tools/dmsh_chain.lock']
-# This target-specific lowering lives in the vendored translator. Include its
-# sources as well as the rebuilt translator's fingerprint; no old shader cache can bypass it. The translator is the whole Ryujinx shader library, so the list also names sources of
-# stages the game has none of (geometry, ray tracing), which the binary still holds: they stay listed with it.
+# The vendored translator sources the chain's lowering lives in (the whole Ryujinx shader library, so stages the game lacks too)
 FILES += ['../third_party/ryujinx/src/Ryujinx.Graphics.Shader/' + f for f in (
     'Instructions/InstEmitSurface.cs', 'IntermediateRepresentation/TextureFlags.cs',
     'Translation/TranslationFlags.cs', 'Translation/HostCapabilities.cs',
@@ -36,43 +28,31 @@ FILES += ['../third_party/ryujinx/src/Ryujinx.Graphics.Shader/' + f for f in (
     'Translation/RayTracingControlFlow.cs', 'Translation/RayTracingDriver.cs',
     'Translation/RayTracingHitContext.cs', 'Translation/RayTracingProgram.cs', 'Translation/RayTracingSurfaces.cs')]
 FILES += ['../third_party/ryujinx/src/Spv.Generator/Autogenerated/CoreGrammar.cs']
-FILES += ['../mac/min_os.mk']   # MAC_MIN below
-# The Mac libraries are compiled for the Mac host's minimum macOS (dm/mac/min_os.mk), as the host's own Metal libraries are (dm/host/Makefile MSL_MIN_macosx). The deployment target
-# sets the Metal language version: with none the compiler takes the build Mac's system, so one source compiled on macOS 27 and failed on macOS 26 (a reference parameter with no address
-# space, which the newer language accepts: GitHub issue #2272), and a library made on the newer system names a language version the older one does not load. The NVN chain
-# (MAC_METAL below) passes this flag on every compile
-# Read when asked (MAC_MIN, MAC_MIN_FLAG, MAC_METAL below), not at import: an import needs only the inventory (FILES), which the tests read without min_os.mk
+FILES += ['../mac/min_os.mk']
+# Compiled for the host's minimum macOS: the deployment target sets the Metal language version, which an older system may not load.
+# Read when asked, not at import: the tests read FILES without min_os.mk
 def mac_min():
     with open(os.path.join(GFX, '../mac/min_os.mk')) as f: return f.read().split('MACOS_MIN := ')[1].split()[0]
-# The Metal compile of the game's shaders (dmsh_build.py). It is here, not in dmsh_build.py, which runs a build when imported, so tests compile with it
-# -fpreserve-invariance: vertex positions are marked [[invariant]], but without this flag Metal does not promise that two different shaders compute the same expression to the same value; on Maxwell the same multiply-adds always agree.
-# Super Mario Odyssey draws a depth pre-pass with alRenderDepthOnly, then the G-buffer with another vertex shader and depth test less-or-equal: a hair off and the test failed, leaving those pixels with old content (Cap Kingdom's ground in 32x32 blocks)
-# -O1: the front end's -O2 (CorrelatedValuePropagation, then SimplifyCFG) folds the translated shaders' repeated tests of one value into switches whose cases jump past their own join.
-# Apple's GPU backend then exceeds its control-flow ID budget ("Max Unstruct ID 758 ... exceeds supported limit", a note, not an error) and falls back to a slower lowering:
-# Odyssey's alRenderMaterialUber took 25 minutes and 17.3 MB of GPU code, 31 s and 1.3 MB at -O1. Ordinary shaders come out within a few percent either way (the backend optimizes again)
-# -fwrapv: signed integer overflow wraps, as SPIR-V's integer arithmetic and the Switch's GPUs do; in MSL it is undefined, and the front end folds around it. Ocarina of Time's mesh shader
-# 35785cddc971290c sign-extends a packed 16-bit vertex field as a = w * 65536, then (a >> 31) << 16 | uint(a) >> 16; without the flag the compiler took the sign bits from bits 15-30 of w,
-# so the lightmap / probe UV's x came out far too large and models drawn with mesh shaders took their ambient light from the wrong texels (the bright band on the Deku Tree's walls).
-# The flag also drops inbounds from pointer arithmetic (Metal's clang has no -fwrapv-pointer) and keeps loop bounds that may wrap (test_dmsh_wrapv.py)
-# -mmacosx-version-min: the deployment target, above
+# Here, not in dmsh_build.py (which builds when imported), so tests compile with it.
+# -fpreserve-invariance: two shaders must compute an [[invariant]] position to the same value, as on Maxwell, for EQUAL depth passes.
+# -O1: -O2 folds repeated tests into switches past Apple's backend control-flow ID budget ("Max Unstruct ID"), whose fallback lowering is far slower.
+# -fwrapv: signed overflow wraps, as in SPIR-V and on the Switch's GPUs; shaders sign-extend packed 16-bit fields that way (test_dmsh_wrapv.py)
 def mac_metal(): return ['xcrun', '-sdk', 'macosx', 'metal', '-c', '-O1', f'-mmacosx-version-min={mac_min()}', '-fpreserve-invariance', '-fwrapv']
-def __getattr__(name) -> Any:   # MAC_MIN, MAC_MIN_FLAG and MAC_METAL as the module's constants (PEP 562), each read from min_os.mk when used
+def __getattr__(name) -> Any:   # PEP 562: read from min_os.mk when used
     if name == 'MAC_MIN': return mac_min()
     if name == 'MAC_MIN_FLAG': return f'-mmacosx-version-min={mac_min()}'
     if name == 'MAC_METAL': return mac_metal()
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
-# The MSL that spirv-cross writes for every shader of the chain (dmsh_build.py XC; tests convert with MSL_VERSION too). 3.2 is what the deployment target compiles (macOS 26.6) and the
-# first version in which spirv-cross writes a memory barrier as the fence it is: OpMemoryBarrier (MEMBAR.CTA, .GL / .SYS) becomes atomic_thread_fence at threadgroup or device scope, with no
-# execution barrier, and OpControlBarrier (BAR.SYNC) is always written. Below 3.2 it wrote both MEMBARs as one threadgroup_barrier, an execution barrier, and left out a BAR.SYNC that
-# directly followed one (spirv_msl.cpp, OpControlBarrier): a fence made of that line ordered memory and no longer waited for the group (GitHub issue #2786). 3.1's texture atomics follow
+# 3.2: the first version in which spirv-cross writes OpMemoryBarrier as a fence and always writes OpControlBarrier (below, a BAR.SYNC after a MEMBAR was dropped)
 MSL_VERSION = '30200'
 CROSS_MSL = ['--msl', '--msl-version', MSL_VERSION, '--msl-argument-buffers', '--msl-texture-buffer-native']
-INPUT_TABLES = ['shader_facts.tsv', 'shader_map.tsv', 'shader_map.tsv.conflicts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv', 'bf_want.tsv', 'dual_want.tsv']   # in the game profile folder
-LOCK = os.path.join(HERE, 'dmsh_chain.lock'); HEADER = os.path.join(GFX, 'nvn/dmsh_chain.h')
-STAMP = 'inputs.tsv'   # in the library directory b-<V>/
-# the translator defaults to the in-repo build that matches the lock file (dm/tools/native_tools.sh; a rebuild has another fingerprint)
+INPUT_TABLES = ['shader_facts.tsv', 'shader_map.tsv', 'shader_map.tsv.conflicts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv', 'bf_want.tsv', 'dual_want.tsv']
+LOCK = os.path.join(HERE, 'dmsh_chain.lock')
+HEADER = os.path.join(GFX, 'nvn/dmsh_chain.h')
+STAMP = 'inputs.tsv'
+# the in-repo translator build the lock matches
 XLATE_DIR = os.path.dirname(os.environ.get('XLATE', os.path.join(HERE, 'dmsh_xlate_bin/dmsh_xlate')))
-# spirv-cross likewise: the in-repo build (spirv_cross_bin/build.sh, a pinned upstream commit) that matches the lock file, not the one on PATH, so every Mac converts with the same build
+# a pinned build, not the one on PATH
 SPIRV_CROSS = os.environ.get('SPIRV_CROSS', os.path.join(HERE, 'spirv_cross_bin/spirv-cross'))
 
 def storage_constant_mode():
@@ -89,9 +69,8 @@ def version():
     return h.hexdigest()[:12]
 
 def code_form(source, blank=()):
-    """The part of a Python source that can change what it computes, as bytes: the AST dump (comments, blank lines, formatting and line numbers are not in it) without docstrings, and with the bodies of
-    the functions named in `blank` replaced by `pass` (dmsh_build.py: the rule functions, which have their own per-shader fingerprints). Anything else, a constant, a string literal that is not a
-    docstring, a default argument, a decorator, changes it. ast.dump's text differs between Python versions, so the version is part of the form: two Macs with different Pythons just do not share a cache"""
+    """The AST dump without docstrings, the functions named in `blank` reduced to `pass`. ast.dump's text differs between Python versions, so Macs with
+    different Pythons do not share a cache"""
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -100,16 +79,16 @@ def code_form(source, blank=()):
                 node.body = node.body[1:] or [ast.Pass()]
     return ('python %d.%d\0' % sys.version_info[:2]).encode() + ast.dump(tree).encode()
 
-def load_game():   # the current game profile (DM_GAME), only for what needs one: the version itself does not
-    sys.path.insert(0, os.path.join(GFX, '../games')); import game
+def load_game():
+    sys.path.insert(0, os.path.join(GFX, '../games'))
+    import game
     return game.load()
 
-def profile_rows(g):   # the profile keys that change how a shader is built (nvn_*, shader_*)
+def profile_rows(g):
     return ''.join(f'{k}\t{chr(9).join(v)}\n' for k, v in g.rows if k.startswith(('nvn_', 'shader_'))).encode()
 
 def inputs(g):
-    """Digest of a game profile's inputs to its shader library: the shader tables (a missing one counts as such) and the nvn_* / shader_* keys. The pipeline record
-    (pso_manifest.tsv) is not one: no shader is built from it, so recording pipelines again changes nothing"""
+    """A missing table counts as such. The pipeline record (pso_manifest.tsv) is not an input: no shader is built from it"""
     h = hashlib.sha256()
     for f in INPUT_TABLES:
         p = g.table(f)
@@ -117,12 +96,12 @@ def inputs(g):
     h.update(profile_rows(g))
     return h.hexdigest()[:12]
 
-def write_stamp(lib, game_id, digest):   # read back by shader_lib.read_stamp (a library folder or its image)
+def write_stamp(lib, game_id, digest):
     tmp = os.path.join(lib, STAMP + '.tmp')
     with open(tmp, 'w') as f: f.write(f'# the game and the profile inputs this library was built from (dm/gfx/tools/dmsh_chain.py inputs)\ngame\t{game_id}\ninputs\t{digest}\n')
     os.replace(tmp, os.path.join(lib, STAMP))
 
-def xlate_source_sha():   # same convention as dmsh_xlate --source-sha: the embedded Program.cs and csproj concatenated in that order
+def xlate_source_sha():   # as dmsh_xlate --source-sha: Program.cs then the csproj
     return hashlib.sha256(b''.join(open(os.path.join(HERE, 'dmsh_xlate', f), 'rb').read() for f in ('Program.cs', 'dmsh_xlate.csproj'))).hexdigest()[:16]
 
 def header_text(v):
@@ -137,4 +116,4 @@ if __name__ == '__main__':
         print(version())
     elif a == ['--inputs']: print(inputs(load_game()))
     elif not a: print(version())
-    else: sys.exit(__doc__ if __doc__ else 'usage: see the file header')
+    else: sys.exit('usage: dmsh_chain.py [--header | --inputs]')

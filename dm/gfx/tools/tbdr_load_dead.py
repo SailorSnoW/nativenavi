@@ -1,6 +1,5 @@
-# Candidates for skippable TBDR loads: the P (attachment) and D (first-draw features of a pass) rows of DM_NVN_PASSDUMP. Conditions for a color attachment load to be a candidate:
-# the first draw is a single-instance triangle / quad / strip with 3–6 vertices, scissor and viewport cover the whole target, the attachment is not blended and has a full write mask, depth test off or ALWAYS, stencil off.
-# Whether coverage is truly fullscreen depends on the vertex shader; candidates must still be confirmed by a sentinel color experiment (change the load into a clear to the sentinel color and compare the final image).
+# Candidate skippable TBDR loads (DM_NVN_PASSDUMP P / D rows): a first draw of one 3-6-vertex instance over the target, unblended, full write mask, no depth
+# or stencil test. Confirm with a sentinel clear: coverage depends on the vertex shader.
 import re, sys, collections
 BPP={70:4,71:4,80:4,81:4,90:4,92:4,93:4,115:8,125:16,55:4,25:2,65:4,105:4,103:4,252:4,250:2,260:5,255:4,10:1,20:2,30:2,60:4,53:4}
 P=collections.defaultdict(list); D={}; FA=None

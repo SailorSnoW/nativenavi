@@ -1,27 +1,13 @@
-# Pulling vertex inputs (<key>_bp): the vertex shader with no [[stage_in]], reading its inputs itself from the game's vertex streams through a per-draw layout block
-# (dmsh_pull.metal, at [[buffer(16)]]). A pipeline made with it has no vertex descriptor, so it serves every vertex layout the game binds with that pair of shaders: the host draws
-# with it while the pipeline for the draw's own layout is being built (nvn_mtl.m, hybrid pipelines), and so never waits for the Metal compiler on a draw. dm_fetch decodes the
-# NVN attribute format at run time into the 32-bit register words Maxwell's fetch gives the shader, bit-identical to Metal's vertex-descriptor fetch (t_pull.m), and the input
-# takes them with as_type, so the body runs unchanged. Entry points main0 / main0_z (the depth modes); another (main0_discard) is left out, and
-# its pipelines keep the vertex descriptor. Built offline into a library of its own beside <key>_b, with the same argument buffer and the same compile flags (-fpreserve-invariance:
-# the position is [[invariant]] there, so both pipelines of a draw compute it alike). Usage: variant(msl) → (new MSL, {'entry', 'entry_z', 'slot', 'inputs'[, 'entry_wl', 'entry_z_wl']}) or (None, reason)
+# Pulling vertex inputs (<key>_bp): the vertex shader without [[stage_in]], decoding its inputs through a per-draw layout block (dmsh_pull.metal), bit-identical to
+# Metal's vertex fetch, so one pipeline serves every layout while the layout's own builds. main0 / main0_z; main0_discard keeps the vertex descriptor.
+# Usage: variant(msl) → (new MSL, {'entry', 'entry_z', 'slot', 'inputs'[, 'entry_wl', 'entry_z_wl']}) or (None, reason)
 import os, re
 
-SLOT = 16   # the layout block's buffer index: the vertex buffers' first slot (nvn_mtl.m VB_SLOT), which a pipeline with no vertex descriptor does not use
-WL_LINE = 15   # the wide-line entry's line block (nvn_wline.inc), beside the vertex stage's 1-13 and 16-30
-# Wide lines (<entry>_wl): Metal draws 1-pixel lines only. A line wider than that is drawn as a quad per segment, two triangles (a-, b-, b+), (a-, b+, a+), in one draw of 6 vertices
-# a segment in the game's own render pass (nvn_wline.inc). Vertex v finds its segment and corner from v, and the segment's two endpoints from the line block: their places in the
-# draw (lines 2s and 2s+1, a strip s and s+1, a loop s and s+1 or 0), and their vertex IDs (the first vertex plus the place, or the index read from the index buffer plus the base
-# vertex; a restart index drops the segment). It runs the shader's body (dm_wlb_<entry>, the entry's body as a function) for its own endpoint, whose outputs it keeps, and for the
-# other one, whose position gives the segment's direction, and moves its position by half the width along the segment's minor axis in window space: OpenGL's non-antialiased wide
-# line, a parallelogram whose ends lie on the major axis, so consecutive segments meet; Maxwell draws lines this way. With multisampling on (rect: the host's flag, set when the
-# pass has more than one sample and the multisample state enables it), OpenGL's rule is a rectangle instead: w pixels wide across the segment, as long as it. The offset is scaled
-# by the corner's w, so it stays the same number of pixels
-# wherever the clipper cuts the quad, as long as every corner is in front of the eye: inside a triangle with a corner behind it (w < 0) the corners' offsets do not
-# combine convexly, and the quad spills past the line (t_wline.m). So the segment is clipped first, as the clipper would clip a 1-pixel line (dm_wl_cut): to w >= 1e-6 of its larger
-# |w| (positive whatever the rounding, and far closer to the eye than any near plane), and to z >= 0 when depth clipping is on; an endpoint outside moves along the segment, its
-# outputs interpolated in clip space with it (dm_wl_mix, as the clipper interpolates them), and a segment wholly outside draws nothing. The body runs twice a corner, 12 times
-# a segment: a vertex shader's stores or atomics would run that often (a 1-pixel line runs it once a vertex); no line-drawing shader seen has any
+SLOT = 16   # the vertex buffers' first slot, which a pipeline without a vertex descriptor does not use
+WL_LINE = 15   # beside the vertex stage's 1-13 and 16-30
+# Wide lines (<entry>_wl): Metal draws 1-pixel lines only, so a segment is a quad of 6 vertices (nvn_wline.inc). The body runs for both endpoints; the position moves half
+# the width along the minor axis in window space (OpenGL's non-antialiased wide line; with multisampling, rect, a rectangle), scaled by w, after the segment is clipped to
+# w >= 1e-6 of its larger |w| and z >= 0 (dm_wl_cut). The body runs 12 times a segment, and so would its stores: no line-drawing shader has any
 WL_MSL = '''struct dm_wline { device const uchar* ib; float2 vp; float width; uint prim; uint count; int base; uint isz; uint restart; uint ri; uint zclip; uint rect; };   // nvn_wline.inc wl_block
 static inline uint dm_wl_vid(constant dm_wline& L, uint i, thread bool& cut)
 {
@@ -61,21 +47,24 @@ static inline float4 dm_wl_offset(float4 p, float4 q, constant dm_wline& L, uint
     return p;
 }
 '''
-WL_ATTRS = ('buffer', 'texture', 'sampler', 'vertex_id', 'instance_id', 'base_instance', 'base_vertex')   # the parameters a wide-line entry can pass on to the body
+WL_ATTRS = ('buffer', 'texture', 'sampler', 'vertex_id', 'instance_id', 'base_instance', 'base_vertex')
 
 def _params(rest):
-    """An entry's parameter list split at its top-level commas (a template argument list has commas of its own)"""
+    """a template argument list has commas of its own"""
     out, depth, cur = [], 0, ''
     for ch in rest:
         if ch in '<(': depth += 1
         elif ch in '>)': depth -= 1
-        if ch == ',' and depth == 0: out.append(cur.strip()); cur = ''
-        else: cur += ch
+        if ch == ',' and depth == 0:
+            out.append(cur.strip())
+            cur = ''
+        else:
+            cur += ch
     if cur.strip(): out.append(cur.strip())
     return out
 
 def _wl_mix(msl):
-    """dm_wl_mix: main0_out at t between two endpoints' outputs (floating-point members, arrays element by element; flat and integer ones keep the first's), or None"""
+    """floating-point members interpolated, arrays element by element; flat and integer ones keep the first's. None when it cannot"""
     m = re.search(r'\nstruct main0_out\n\{\n(.*?)\n\};', msl, re.S)
     if not m: return None
     body = ''
@@ -88,7 +77,7 @@ def _wl_mix(msl):
     return '\nstatic inline main0_out dm_wl_mix(main0_out a, main0_out b, float t)\n{\n    main0_out r = a;\n' + body + '    return r;\n}\n'
 
 def _wide_line(entry, params, fbody, pos, inn, bn):
-    """The wide-line entry of entry and its body function, or None when a parameter is not one it can pass on"""
+    """None when a parameter is not one it can pass on"""
     decl, args = [], []
     for p in params:
         m = re.fullmatch(r'(.*?)(\w+) \[\[(\w+)(?:\(\d+\))?\]\]', p)
@@ -112,30 +101,34 @@ def _wide_line(entry, params, fbody, pos, inn, bn):
 FETCH = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dmsh_pull.metal')).read()
 
 def _drop_entries(msl, keep):
-    """msl without its top-level vertex functions other than those named in keep (a function runs from a line 'vertex ...' to the next line '}')"""
+    """a function runs from a line 'vertex ...' to the next line '}'"""
     out, lines, i = [], msl.split('\n'), 0
     while i < len(lines):
         m = re.match(r'vertex \S+ (\w+)\(', lines[i])
         if m and m.group(1) not in keep:
             j = i
             while j < len(lines) and lines[j] != '}': j += 1
-            i = j + 1; continue
-        out.append(lines[i]); i += 1
+            i = j + 1
+            continue
+        out.append(lines[i])
+        i += 1
     return '\n'.join(out)
 
 def variant(msl) -> 'tuple[str, dict] | tuple[None, str]':
     m = re.search(r'\nstruct main0_in\n\{\n(.*?)\n\};', msl, re.S)
-    if not m: return None, 'no stage input'   # reads no vertex attribute: its pipelines have no vertex descriptor to vary
+    if not m: return None, 'no stage input'   # reads no vertex attribute: no vertex descriptor to vary
     if f'[[buffer({SLOT})]]' in msl: return None, f'buffer {SLOT} is taken'
     members = []
     for ln in m.group(1).split('\n'):
         mm = re.fullmatch(r'    (float4|uint4|int4) (m_\d+(?:_\d+)*) \[\[attribute\((\d+)\)\]\];', ln)   # m_28_0: an input array split per element
         if not mm: return None, 'an input declaration not understood: ' + ln.strip()[:60]
         members.append((mm.group(1), mm.group(2), int(mm.group(3))))
-    if any(l >= 32 for _, _, l in members): return None, 'an input at attribute 32 or above'   # NVN2 has 32 attributes; the layout block holds them all
+    if any(l >= 32 for _, _, l in members): return None, 'an input at attribute 32 or above'   # NVN2 has 32 attributes
     head = msl[:m.start()] + '\nstruct main0_in\n{\n' + '\n'.join(f'    {t} {n};' for t, n, _ in members) + '\n};'
     body = _drop_entries(msl[m.end():], ('main0', 'main0_z'))
-    entries = {}; wl = []; wle = set()
+    entries = {}
+    wl = []
+    wle = set()
     posm = re.search(r'struct main0_out\n\{[^}]*?float4 (\w+) \[\[position', msl)
     pos = posm.group(1) if posm else None
     for entry in ('main0', 'main0_z'):
@@ -144,7 +137,9 @@ def variant(msl) -> 'tuple[str, dict] | tuple[None, str]':
             if entry == 'main0': return None, 'main0 signature not recognized'
             continue
         rest = hdr.group(1)
-        vid = re.search(r'uint (\w+) \[\[vertex_id\]\]', rest); iid = re.search(r'uint (\w+) \[\[instance_id\]\]', rest); bi = re.search(r'uint (\w+) \[\[base_instance\]\]', rest)
+        vid = re.search(r'uint (\w+) \[\[vertex_id\]\]', rest)
+        iid = re.search(r'uint (\w+) \[\[instance_id\]\]', rest)
+        bi = re.search(r'uint (\w+) \[\[base_instance\]\]', rest)
         params = _params(rest[2:]) if rest else []
         params.append(f'constant dm_vlayout& dm_lay [[buffer({SLOT})]]')
         if not vid: params.append('uint dm_vid [[vertex_id]]')
@@ -154,18 +149,20 @@ def variant(msl) -> 'tuple[str, dict] | tuple[None, str]':
         pro = '    main0_in in;\n' + ''.join(f'    in.{n} = as_type<{t}>(dm_fetch(dm_lay, {l}u, {vn}, {inn}, {bn}));\n' for t, n, l in members)
         fn_end = body.find('\n}\n', hdr.end())
         if fn_end < 0: return None, 'end of ' + entry + ' not found'
-        fbody = body[hdr.end():fn_end + 3]   # through the closing brace
+        fbody = body[hdr.end():fn_end + 3]
         body = body[:hdr.start()] + f'\nvertex main0_out {entry}(' + ', '.join(params) + ')\n{\n' + pro + body[hdr.end():]
         entries[entry] = 1
         w = _wide_line(entry, params, fbody, pos, inn, bn) if pos else None
-        if w: wl.append(w); wle.add(entry)
+        if w:
+            wl.append(w)
+            wle.add(entry)
     ui = head.find('using namespace metal;')
     if ui < 0: return None, 'no "using namespace metal;"'
     ui += len('using namespace metal;')
     mix = _wl_mix(msl) if wl else None
     if not mix: wl, wle = [], set()   # an output it cannot interpolate: no wide-line entries
     head = head[:ui] + '\n\n' + FETCH + (WL_MSL if wl else '') + head[ui:]
-    if wl and mix:   # an endpoint's inputs, as the pulling entry's prologue reads them
+    if wl and mix:
         wl.insert(0, '\nstatic inline main0_in dm_wl_in(constant dm_vlayout& dm_lay, uint dm_v, uint dm_i, uint dm_b)\n{\n    main0_in in;\n'
                   + ''.join(f'    in.{n} = as_type<{t}>(dm_fetch(dm_lay, {l}u, dm_v, dm_i, dm_b));\n' for t, n, l in members) + '    return in;\n}\n' + mix)
     return head + body + ''.join(wl), {'entry': 'main0', 'entry_z': 'main0_z' if 'main0_z' in entries else None, 'slot': SLOT, 'inputs': [l for _, _, l in members],

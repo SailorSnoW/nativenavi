@@ -19,13 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def main():
     import ctypes as C
-    cu.cu.cuGetErrorString.argtypes = [C.c_int, C.POINTER(C.c_char_p)]
-    cu.cu.cuLinkAddData_v2.argtypes = [C.c_void_p, C.c_int, C.c_void_p, C.c_size_t, C.c_char_p, C.c_uint, C.c_void_p, C.c_void_p]
-    cu.cu.cuMemcpyHtoD_v2.argtypes = [C.c_uint64, C.c_char_p, C.c_size_t]
-    cu.cu.cuMemcpyDtoH_v2.argtypes = [C.c_void_p, C.c_uint64, C.c_size_t]
-    cu.cu.cuMemsetD8_v2.argtypes = [C.c_uint64, C.c_ubyte, C.c_size_t]
-    cu.cu.cuMemFree_v2.argtypes = [C.c_uint64]
-    cu.cu.cuLaunchKernel.argtypes = [C.c_void_p] + [C.c_uint] * 7 + [C.c_void_p, C.c_void_p, C.c_void_p]
+    cu.declare()
     cu.init()
     ops = json.load(open(sys.argv[1]))
     ok = 0

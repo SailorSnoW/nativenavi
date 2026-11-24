@@ -1,15 +1,7 @@
-# "Readable-tile" version of a fragment shader (merge B step 2): within one pass, when a later draw samples, at its own pixel, a color attachment written by an earlier draw,
-# it is changed to read the color directly from the tile (framebuffer fetch); the two render passes become one, and the intermediate attachment need not be stored to main memory and loaded back just to be sampled.
-# Built offline, as the entry point main0_f of the shader's own compile (fold); at runtime only function-constant specialization is done (no source compilation).
-# Usage: fold(msl, bindings, om_only_ok=False) → (the source with main0_f, metadata) or (None, reason)
-# Function constant numbering: FX_i (which color index the i-th rewritable sample reads, -1 = sample as usual) = i; FB_k (enable color input k) = 32 + k;
-#               OM_j_k (the j-th output writes to attachment k) = 64 + 8 j + k
-# Rewritable samples: .sample(sampler, select(_N, float2(0.0), isnan(_N))) on a 2D float texture, where _N = float2(in.m_X.x, in.m_X.y) (interpolated output unchanged),
-# or _N = float2(in.m_X.x / in.m_X.w, in.m_X.y / in.m_X.w) (projective: 'proj', the screen position deferred decals sample their G-buffer at; screen_varyings gives the vertex side),
-# or _N = float2(gl_FragCoord.x [/ render scale] * U, gl_FragCoord.y [/ render scale] * V) with U, V uniform components ('frag_pos': their [slot, vector, component]; Splatoon Raiders'
-# ink stamps read their map at gl_FragCoord / 6400);
-# whether the texel is really fetched at this pixel is proven at runtime (correspondence between vertex uv and position, a screen varying with the viewport over the whole target,
-# or U and V = 1 / the target's size; texture size = target size); if it cannot be proven, the original version is used
+# Readable-tile version main0_f: a draw that samples at its own pixel an attachment an earlier draw of the pass wrote reads the tile instead (framebuffer fetch).
+# Function constants: FX_i = i (the colour index the i-th rewritable sample reads, -1: sample), FB_k = 32 + k (colour input k), OM_j_k = 64 + 8 j + k (output j writes attachment k).
+# Rewritable: a 2D float .sample at an unchanged varying, a projective one ('proj', screen_varyings) or gl_FragCoord * uniform ('frag_pos'); the host proves at run time
+# that the texel is this pixel's, else uses the original version
 import collections
 import re
 import dmsh_abi as abi
@@ -17,9 +9,8 @@ import dmsh_side
 
 NFB = 8
 
-def _once(msl, name):   # name is assigned exactly once in the source (its declaration): spirv-cross also declares variables first and assigns them in branches
-    # Found as text, with a look at the character before: a pattern that starts with a lookbehind has no literal prefix to skip to, so re tries every character (4 ms each on Pokopia's 220 KB sources,
-    # and 24 calls a pixel shader made this 38% of the builder's Python, under the GIL, GitHub issue #1036)
+def _once(msl, name):   # assigned exactly once (its declaration): spirv-cross also declares first and assigns in branches
+    # Found as text, then the character before checked: a leading lookbehind makes re try every character
     text, n = name + ' = ', 0
     i = msl.find(text)
     while i >= 0:
@@ -28,7 +19,7 @@ def _once(msl, name):   # name is assigned exactly once in the source (its decla
     return n == 1
 
 def _proj(msl, var, comp, locn):
-    """var = in.m_X.<comp> / in.m_X.w, written as a product with 1.0 / w or as a quotient (each name assigned once) → m_X, or None"""
+    """var = in.m_X.<comp> / in.m_X.w (a product with 1.0 / w or a quotient) → m_X, or None"""
     def src(n, c):   # float n = in.m_X.c; → m_X
         m = re.search(r'float %s = in\.(m_\d+)\.%s;' % (re.escape(n), c), msl)
         return m.group(1) if m and _once(msl, n) and m.group(1) in locn else None
@@ -44,15 +35,14 @@ def _proj(msl, var, comp, locn):
 
 _UNI = re.compile(r'\(\*spvDescriptorSet0\.fp_c(\d+)\)\._m0\[(\d+)\]\.([xyzw])')
 
-_SCALE = '(*spvDescriptorSet0.support_buffer)._m5[0].x'   # the support buffer's render scale (Ryujinx's layout), which the host fills with 1 (nvn_mtl.m support buffer)
+_SCALE = '(*spvDescriptorSet0.support_buffer)._m5[0].x'   # the support buffer's render scale, which the host fills with 1
 
 def _frag_pos(msl, var, comp):
-    """var = gl_FragCoord.<comp> [/ render scale] * U (either order), U a fragment uniform component, each name assigned once → [uniform slot, vector, component] (fp_cN is slot N − 3,
-    as dmsh_reflect.py raster_facts reads vp_cN), or None"""
+    """→ [uniform slot, vector, component] (fp_cN is slot N − 3), or None"""
     def one(n, pat):
         m = re.search(r'float %s = %s;' % (re.escape(n), pat), msl)
         return m if m and _once(msl, n) else None
-    def pixel(n):   # n = gl_FragCoord.<comp>, or that over the render scale
+    def pixel(n):
         if one(n, r'gl_FragCoord\.%s' % comp): return True
         q = one(n, r'(_\d+) / (_\d+)')
         return bool(q and one(q.group(1), r'gl_FragCoord\.%s' % comp) and one(q.group(2), re.escape(_SCALE)))
@@ -63,22 +53,20 @@ def _frag_pos(msl, var, comp):
         if k and int(k.group(1)) >= 3 and re.fullmatch(r'_\d+', a) and pixel(a): return [int(k.group(1)) - 3, int(k.group(2)), 'xyzw'.index(k.group(3))]
     return None
 
-# ---- Screen varyings (vertex side of a projective sample) ----
-# Interpolated output locn K is the clip → screen varying when, in every vertex entry point (main0, main0_z, ...), its .x = (P.x + P.w) / 2, .y = (P.w − P.y) / 2 and .w = P.w,
-# P being the final gl_Position: in.m_K.xy / in.m_K.w is then this fragment's position over the viewport (u from the left, v from the top, the convention of nvn_mtl.m uv_proof).
-# Proven on the source: the final assignments of those components are at the function's top level after any branch, the main function returns only at its end, and every
-# variable they read is assigned once, as a linear form of P's components with constant coefficients (+, -, *, / by a constant, fma). Breath of the Wild's and Tears of the
-# Kingdom's G-buffer decals (095cd6ad97fd779a, bb19fab2f950e587)
+# Screen varyings: locn K is the clip → screen varying when every vertex entry point sets .x = (P.x + P.w) / 2, .y = (P.w − P.y) / 2, .w = P.w (P the final
+# gl_Position) at top level after any branch, from variables assigned once as linear forms of P. u runs from the left, v from the top
 _TOK = re.compile(r'\s*(?:(out\.gl_Position\.[xyzw])|(_\d+)|(\d+\.\d*(?:e[+-]?\d+)?|\d+)f?|(fma)|([-+*/(),]))')
 
 def _lin(expr, env):
-    """expr as {symbol: coefficient} ('1' the constant), or None: env(name) gives a variable's form"""
+    """{symbol: coefficient} ('1' the constant), or None"""
     toks, pos = [], 0
     while pos < len(expr):
         m = _TOK.match(expr, pos)
         if not m or m.end() == pos: return None
-        toks.append(m.group(1) or m.group(2) or ('#' + m.group(3) if m.group(3) else None) or m.group(4) or m.group(5)); pos = m.end()
-    toks = [t for t in toks if t]; i = [0]
+        toks.append(m.group(1) or m.group(2) or ('#' + m.group(3) if m.group(3) else None) or m.group(4) or m.group(5))
+        pos = m.end()
+    toks = [t for t in toks if t]
+    i = [0]
     def add(a, b, s=1.0):
         r = dict(a)
         for k_, v in b.items(): r[k_] = r.get(k_, 0.0) + s * v
@@ -89,13 +77,23 @@ def _lin(expr, env):
     def take(t=None):
         x = peek()
         if x is None or (t and x != t): raise ValueError
-        i[0] += 1; return x
+        i[0] += 1
+        return x
     def atom():
         t = take()
         if t == '-': return scale(unary(), -1.0)
-        if t == '(': v = add_(); take(')'); return v
+        if t == '(':
+            v = add_()
+            take(')')
+            return v
         if t == 'fma':
-            take('('); a = add_(); take(','); b = add_(); take(','); c = add_(); take(')')
+            take('(')
+            a = add_()
+            take(',')
+            b = add_()
+            take(',')
+            c = add_()
+            take(')')
             return add(mul(a, b), c)
         if t.startswith('#'): return {'1': float(t[1:])} if float(t[1:]) else {}
         v = env(t)
@@ -109,7 +107,8 @@ def _lin(expr, env):
     def mul_():
         v = unary()
         while peek() in ('*', '/'):
-            op = take(); w = unary()
+            op = take()
+            w = unary()
             if op == '*': v = mul(v, w)
             elif const(w) and w.get('1'): v = scale(v, 1.0 / w['1'])
             else: raise ValueError
@@ -117,7 +116,8 @@ def _lin(expr, env):
     def add_():
         v = mul_()
         while peek() in ('+', '-'):
-            op = take(); v = add(v, mul_(), 1.0 if op == '+' else -1.0)
+            op = take()
+            v = add(v, mul_(), 1.0 if op == '+' else -1.0)
         return v
     try:
         v = add_()
@@ -126,23 +126,30 @@ def _lin(expr, env):
         return None
 
 def _entry_screen(body, locn):
-    """The locns (out struct members → K) that are screen varyings in one entry point's body (the text between its braces)"""
     if len(re.findall(r'\breturn\b', body)) != 1 or not re.search(r'\n    return out;\n$', body + '\n'): return set()
-    depth, stmts = 0, []   # (depth, text) of each statement line
+    depth, stmts = 0, []
     lines = [ln.strip() for ln in body.split('\n')]
-    for n, s in enumerate(lines):   # spirv-cross braces every block on lines of their own: a control statement without one is not read
+    for n, s in enumerate(lines):   # spirv-cross braces every block on lines of its own: a control statement without one is not read
         if re.match(r'(if|else|for|while|do|switch)\b', s) and (n + 1 >= len(lines) or lines[n + 1] != '{'): return set()
     for s in lines:
-        if s == '{': depth += 1; continue
-        if s == '}': depth -= 1; continue
+        if s == '{':
+            depth += 1
+            continue
+        if s == '}':
+            depth -= 1
+            continue
         if s: stmts.append((depth, s))
     decl, last = {}, {}   # variable → (statement index, expression); output component → (statement index, depth, expression)
     nassign = collections.Counter(re.findall(r'(?<![\w.])(_\d+) = ', body))
     for n, (dp, s) in enumerate(stmts):
         m = re.fullmatch(r'(?:float|int|uint|bool|half) (_\d+) = (.+);', s)
-        if m: decl[m.group(1)] = (n, dp, m.group(2)); continue
+        if m:
+            decl[m.group(1)] = (n, dp, m.group(2))
+            continue
         m = re.fullmatch(r'out\.(gl_Position|m_\d+)\.([xyzw]) = (.+);', s)
-        if m: last[(m.group(1), m.group(2))] = (n, dp, m.group(3)); continue
+        if m:
+            last[(m.group(1), m.group(2))] = (n, dp, m.group(3))
+            continue
         m = re.fullmatch(r'out\.(gl_Position|m_\d+) = float4\((.+)\);', s)
         if m:
             parts = [p.strip() for p in m.group(2).split(',')]
@@ -152,18 +159,21 @@ def _entry_screen(body, locn):
         p = last.get(('gl_Position', c))
         if p is None or p[1] != 0 or p[2] is None: return set()
         pos[c] = p
-    sym = {p[2]: 'P' + c for c, p in pos.items() if re.fullmatch(r'_\d+', p[2])}   # a final position component that is a variable: that variable is the symbol
+    sym = {p[2]: 'P' + c for c, p in pos.items() if re.fullmatch(r'_\d+', p[2])}
     def env_at(at):
         memo = {}
         def env(name):
             if name.startswith('out.gl_Position.'):
-                c = name[-1]; p = pos.get(c)
-                return {'P' + c: 1.0} if p and p[0] < at else None   # read after its final assignment
+                c = name[-1]
+                p = pos.get(c)
+                return {'P' + c: 1.0} if p and p[0] < at else None
             if name in sym: return {sym[name]: 1.0}
             if name in memo: return memo[name]
             d = decl.get(name)
             if not d or d[0] >= at or nassign[name] != 1: return None
-            memo[name] = None; memo[name] = _lin(d[2], env_at(d[0])); return memo[name]
+            memo[name] = None
+            memo[name] = _lin(d[2], env_at(d[0]))
+            return memo[name]
         return env
     want = {'x': {'Px': 0.5, 'Pw': 0.5}, 'y': {'Py': -0.5, 'Pw': 0.5}, 'w': {'Pw': 1.0}}
     got = set()
@@ -171,12 +181,13 @@ def _entry_screen(body, locn):
         ok = True
         for c, w in want.items():
             a = last.get((mem, c))
-            if not a or a[1] != 0 or a[2] is None or _lin(a[2], env_at(a[0])) != w: ok = False; break
+            if not a or a[1] != 0 or a[2] is None or _lin(a[2], env_at(a[0])) != w:
+                ok = False
+                break
         if ok: got.add(k)
     return got
 
 def screen_varyings(msl):
-    """The interpolated outputs (locn numbers, sorted) of a vertex shader that are its clip → screen varying in every entry point that returns the output struct"""
     ost = re.search(r'struct main0_out\s*\{(.*?)\};', msl, re.S)
     locn = {m.group(1): int(m.group(2)) for m in re.finditer(r'float4 (m_\d+) \[\[user\(locn(\d+)\)\]\]', ost.group(1) if ost else '')}
     entries = list(re.finditer(r'\nvertex main0_out \w+\(.*?\)\n\{\n(.*?)\n\}\n', msl, re.S))
@@ -186,22 +197,19 @@ def screen_varyings(msl):
     return sorted(got)
 
 def fold(msl, bindings, om_only_ok=False):
-    """The readable-tile version main0_f added to msl (a pixel shader's source, or the compile unit dmsh_side.unit made of it), to be cut from the one compile of the shader's other entry
-    points (dmsh_build.py ps_libraries); it was a source and a compile of its own. main0's body is dm_body_main0 (dmsh_side.shared_body), and each rewritable sample in it becomes
-    (fx_i == k ? fb_k : the sample), fx_i and fb0-fb7 parameters of the body: main0_f passes its function constants FX_i and the tile's colours, every other caller -1 and zeros, which
-    the always-inline body folds back to the plain sample, so main0 and the side entry points stay functions without function constants. main0_f writes each output to the
-    attachments its OM_j_k name. Only the body is read and rewritten: a copy of a sample in another function would have no fb_k (483 of Breath of the Wild's variants once failed to
-    compile on main0_u's copy: use of undeclared identifier 'fb0'). → (the source with main0_f, {'calls', 'mixed_regs', 'outputs'}), or (None, why)"""
+    """Each rewritable sample in main0's shared body becomes (fx_i == k ? fb_k : the sample); other callers pass -1 and zeros, which the always-inline body folds back,
+    so they need no function constants. → (source, {'calls', 'mixed_regs', 'outputs'}), or (None, why)"""
     src = dmsh_side.shared_body(msl)
     if src is None: return None, 'main function signature not recognized'
     try: where, e = dmsh_side.body(src), dmsh_side.entry(src, 'main0')
     except ValueError as x: return None, str(x)
     if not where or not e: return None, 'main function signature not recognized'
-    start, head, end = where; text = src[head:end]
+    start, head, end = where
+    text = src[head:end]
     tex = {m.group(1) for m in re.finditer(r'texture2d<float> (\w+) \[\[id\(\d+\)\]\];', src)}
     locn = {m.group(1): int(m.group(2)) for m in re.finditer(r'float4 (m_\d+) \[\[user\(locn(\d+)\)\]\];', src.split('struct main0_in', 1)[-1].split('};', 1)[0])}
     reg = {b['msl_name']: b['reg'] for b in bindings if b.get('kind') == abi.KIND_TEX and b.get('msl_name') and b.get('reg') is not None}
-    # A sample the border colour correction wrapped (dmsh_rewrite.py border_emu) is taken whole: a tile read replaces the corrected sample, never feeds the correction
+    # a tile read replaces a border-corrected sample (border_emu) whole
     pat = re.compile(r'(dm_bs\()?spvDescriptorSet0\.(\w+)\.sample\(spvDescriptorSet0\.(\w+)Smplr, select\((_\d+), float2\(0\.0\), isnan\(\4\)\)\)'
                      r'(?(1), spvDescriptorSet0\.%s, \d+u, spvDescriptorSet0\.\2, spvDescriptorSet0\.\3Smplr%s, select\(\4, float2\(0\.0\), isnan\(\4\)\)\))' % (abi.BORDER_MEMBER, abi.BORDER_TWIN))
     calls, out_parts, pos = [], [], 0
@@ -209,7 +217,8 @@ def fold(msl, bindings, om_only_ok=False):
         member, var = m.group(2), m.group(4)
         if member not in tex or member != m.group(3) or member not in reg: continue
         d = re.search(r'float2 %s = float2\((_\d+), (_\d+)\);' % var, text)
-        a = d and re.search(r'float %s = in\.(m_\d+)\.x;' % d.group(1), text); b = d and re.search(r'float %s = in\.(m_\d+)\.y;' % d.group(2), text)
+        a = d and re.search(r'float %s = in\.(m_\d+)\.x;' % d.group(1), text)
+        b = d and re.search(r'float %s = in\.(m_\d+)\.y;' % d.group(2), text)
         if a and b and a.group(1) == b.group(1) and a.group(1) in locn: how = {'varying_locn': locn[a.group(1)]}
         else:
             pa, pb = (_proj(text, d.group(1), 'x', locn), _proj(text, d.group(2), 'y', locn)) if d else (None, None)
@@ -220,11 +229,13 @@ def fold(msl, bindings, om_only_ok=False):
         i = len(calls)
         if i >= 32: break
         sel = ''.join(f'fx{i} == {k} ? fb{k} : ' for k in range(NFB))
-        out_parts.append(text[pos:m.start()]); out_parts.append(f'({sel}{m.group(0)})'); pos = m.end()
+        out_parts.append(text[pos:m.start()])
+        out_parts.append(f'({sel}{m.group(0)})')
+        pos = m.end()
         calls.append({'fc': i, 'tex_reg': reg[member], **how})
     if not calls and not om_only_ok:
         return None, 'no rewritable sample'
-    # Mixed-use slots: the same texture also has other (non-rewritable) uses - at runtime this texture must not be switched to tile reads (the rewritten reads and the unrewritten ones would not see the same data)
+    # Mixed-use slots stay off tile reads: the two kinds of read would not see the same data
     conv = collections.Counter(c['tex_reg'] for c in calls)
     mixed = sorted({reg[mb] for mb in reg if mb in tex and text.count(f'spvDescriptorSet0.{mb}.') > conv[reg[mb]]})
     om = re.search(r'struct main0_out\s*\{(.*?)\};', src, re.S)
@@ -232,14 +243,16 @@ def fold(msl, bindings, om_only_ok=False):
     outs = [(t, n, int(c)) for t, n, c in re.findall(r'(\w+) (m_\d+) \[\[color\((\d+)\)\]\];', om.group(1))]
     if not outs or len(outs) > 4 or re.sub(r'\w+ m_\d+ \[\[color\(\d+\)\]\];', '', om.group(1)).strip(): return None, 'the output struct is not plain color outputs (or has more than 4)'
     rest = src[end:]
-    if calls:   # the body's new parameters, and every call of it (the definition comes first) passing what turns the tile read off
+    if calls:
         params = [f'int fx{i}' for i in range(len(calls))] + [f'float4 fb{k}' for k in range(NFB)]
         off = ', '.join(['-1'] * len(calls) + ['float4(0.0)'] * NFB)
-        sig = src[start:head - 1]; sig += (', ' if not sig.endswith('(') else '') + ', '.join(params) + ')'
+        sig = src[start:head - 1]
+        sig += (', ' if not sig.endswith('(') else '') + ', '.join(params) + ')'
         parts, at = [], 0
         for m in re.finditer(r'\bdm_body_main0\(', rest):
             close = dmsh_side._close(rest, m.end(), '(', ')') - 1
-            parts += [rest[at:close], (', ' if rest[m.end():close].strip() else '') + off]; at = close
+            parts += [rest[at:close], (', ' if rest[m.end():close].strip() else '') + off]
+            at = close
         rest = ''.join(parts) + rest[at:]
     else: sig = src[start:head]
     consts = ''.join(f'constant int FX_{c["fc"]} [[function_constant({c["fc"]})]];\n' for c in calls) + \
@@ -248,7 +261,7 @@ def fold(msl, bindings, om_only_ok=False):
     lead = src[:start]
     if 'using namespace metal;\n' not in lead: return None, 'no using namespace metal'
     lead = lead.replace('using namespace metal;\n', 'using namespace metal;\n\n' + consts, 1)
-    # main0_f: main0's parameters and the tile's colours; a colour the pipeline does not read (FB_k false) is not passed to the body
+    # a colour the pipeline does not read (FB_k false) is not passed to the body
     members = ''.join(f'    {t} {n}_at{k} [[color({k}), function_constant(OM_{j}_{k})]];\n' for j, (t, n, c) in enumerate(outs) for k in range(NFB))
     fbs = [f'float4 fb{k} [[color({k}), function_constant(FB_{k})]]' for k in range(NFB)]
     args = ', '.join(([e['args']] if e['args'] else []) + ([f'FX_{i}' for i in range(len(calls))] + [f'_fb{k}' for k in range(NFB)] if calls else []))

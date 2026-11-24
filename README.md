@@ -64,7 +64,7 @@ This project is built on other people's work ([licenses](dm/third_party/README.m
 - **[Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)**: its kernel, mesosphère, is the reference for Horizon's synchronization semantics (address arbiter, condition variables).
 - **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**: SPIR-V to Metal Shading Language.
 - **[dav1d](https://code.videolan.org/videolan/dav1d)** (BSD 2-Clause): decodes the game's AV1 movies on Macs without a hardware AV1 decoder.
-- **[MacNativeGames](https://github.com/ly05010419/MacNativeGames)** (MIT): the GPU widening of 8-bit indices and in-pass clears in `dm/gfx/nvn/nvn_mtl.m`, and the visibility-counter lowering in the shader translator.
+- **[MacNativeGames](https://github.com/ly05010419/MacNativeGames)** (MIT): the GPU widening of 8-bit indices (`dm/gfx/nvn/nvn_indirect.inc`) and the in-pass clears (`dm/gfx/nvn/nvn_exec.inc`).
 
 ## License
 

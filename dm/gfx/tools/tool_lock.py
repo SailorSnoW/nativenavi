@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-# The translation chain's tools against their lock file dm/gfx/tools/dmsh_chain.lock: the translator (its native executable, which holds Ryujinx's shader library, and the source digest it embeds), SPIRV-Cross and the Metal compiler.
-# The lock is part of the chain version (dmsh_chain.py); these checks are not: they decide no shader's output, so a fix to a check or its message neither changes V nor the shaders' cache keys
-# (dmsh_build.py CODE_FP). dmsh_build.py runs check_tools before it builds anything; own_compilers.py replaces it for a player's Mac.
-# Usage: tool_lock.py --check-tools   verify that the actual tools match the lock file; on mismatch print [RED] lines and exit 1
-#        tool_lock.py --update-lock   rewrite the lock file from the actual tools (run after rebuilding the translator (dm/tools/native_tools.sh) or spirv-cross, or changing Xcode, then dmsh_chain.py --header; both are committed)
+# The chain's tools (translator, SPIRV-Cross, Metal compiler) against dmsh_chain.lock. The lock is part of the chain version; these checks decide no output, so are not.
+# Usage: tool_lock.py --check-tools   on a mismatch: [RED] lines, exit 1
+#        tool_lock.py --update-lock   rewrite the lock from the actual tools (after rebuilding the translator or spirv-cross, or changing Xcode; then dmsh_chain.py --header)
 import os, sys, hashlib, subprocess, shutil
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dmsh_chain import LOCK, XLATE_DIR, SPIRV_CROSS, xlate_source_sha
@@ -11,7 +9,6 @@ from dmsh_chain import LOCK, XLATE_DIR, SPIRV_CROSS, xlate_source_sha
 def sha16(p): return hashlib.sha256(open(p, 'rb').read()).hexdigest()[:16]
 
 def tools_now():
-    """Actual tool fingerprints: the translator (a native executable that holds the Ryujinx shader library), spirv-cross, the Metal compiler"""
     xl = os.path.join(XLATE_DIR, 'dmsh_xlate')
     t: dict = {'dmsh_xlate': sha16(xl) if os.path.isfile(xl) else 'missing'}
     t['xlate_source'] = xlate_embedded()
@@ -22,8 +19,7 @@ def tools_now():
 
 NO_RUN = 'does not run'
 def xlate_embedded():
-    """The source digest the translator embeds (dmsh_xlate --source-sha), or 'does not run (<its first error line>)', so a translator that cannot start (missing, not executable, a download
-    quarantined by macOS) is named as such rather than read as an empty digest and a stale translator"""
+    """or 'does not run (<its first error line>)', so a translator that cannot start is not read as a stale one"""
     try: r = subprocess.run([os.path.join(XLATE_DIR, 'dmsh_xlate'), '--source-sha'], capture_output=True, text=True, errors='replace', timeout=60)
     except (OSError, subprocess.SubprocessError) as e: return f'{NO_RUN} ({e})'
     if r.returncode == 0 and r.stdout.strip(): return r.stdout.strip()
@@ -33,7 +29,8 @@ def no_run_message(embedded): return f'the translator {embedded}: {os.path.join(
 
 def check_tools():
     want = dict(l.rstrip('\n').split('\t', 1) for l in open(LOCK) if '\t' in l and not l.startswith('#'))
-    now = tools_now(); ran = not now['xlate_source'].startswith(NO_RUN)
+    now = tools_now()
+    ran = not now['xlate_source'].startswith(NO_RUN)
     bad = [f'{k}: lock {want.get(k)} / actual {v}' for k, v in now.items() if want.get(k) != v and (ran or k != 'xlate_source')]
     if not ran: bad.append(no_run_message(now['xlate_source']))
     elif now['xlate_source'] != xlate_source_sha(): bad.append(f'the translator was not built from the in-repo source: embedded source {now["xlate_source"]} / in repo {xlate_source_sha()} (rebuild it: dm/tools/native_tools.sh dmsh_xlate)')

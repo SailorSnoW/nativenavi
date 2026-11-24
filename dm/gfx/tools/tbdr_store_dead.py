@@ -1,8 +1,7 @@
-# Provably skippable TBDR stores: two frames of the DM_NVN_PASSDUMP data stream. Each attachment store (Store) in frame A is provably unnecessary (DontCare) if nothing reads it before that texture is next cleared
-# (sample R, load as an attachment, present X). Attachments are distinguished by (texture, level, layer): clearing another level / layer does not count as clearing it;
-# sample R only records the whole texture and is counted as a read (conservative). Copies / texture clears are not in the dump and cannot be seen here, so the result is an upper bound; the Z rows of runtime DM_NVN_STORESCAN are authoritative. Lookahead runs to the end of frame B; cross-frame history reads count as "needed". Loads are not judged (that requires proving full coverage).
+# Skippable TBDR stores over two frames of DM_NVN_PASSDUMP: a store nothing reads before its (texture, level, layer) is next cleared. An upper bound: copies and
+# texture clears are not in the dump (DM_NVN_STORESCAN's Z rows are authoritative).
 import re, sys, collections
-L=[l.split(None,2)[2].strip() if False else l.strip() for l in open(sys.argv[1])]
+L=[l.strip() for l in open(sys.argv[1])]
 BPP={70:4,71:4,80:4,81:4,90:4,92:4,93:4,115:8,125:16,55:4,25:2,65:4,105:4,103:4,252:4,250:2,260:5,255:4,10:1,20:2,30:2,60:4}
 ev=[]   # (frame, kind, pass, ser, load|clear, bytes, fmt, w, h, slot, (lv, sl))
 for l in L:
@@ -23,11 +22,11 @@ for i,e in enumerate(ev):
     need=False
     for g in ev[i+1:]:
         if g[3]!=e[3]: continue
-        if g[1]=='P' and g[2]==e[2]: continue          # the remaining attachment rows of the same pass
+        if g[1]=='P' and g[2]==e[2]: continue
         if g[1] in ('R','X'): need=True; break
-        if g[1]=='P' and g[10]!=e[10]: continue        # another level / layer of the same texture used as an attachment: unrelated to it
-        if g[1]=='P': need = g[4]=='load'; break      # next use is as an attachment: needed if loaded, not needed if cleared / load skippable (dontcare)
+        if g[1]=='P' and g[10]!=e[10]: continue
+        if g[1]=='P': need = g[4]=='load'; break      # needed if loaded
     if not need:
         save+=e[5]; nsave+=1; rows[(e[9][0],e[6],e[7],e[8])]+=e[5]
 print('frame %d: attachment stores %d, %.1f MB; provably unneeded %d, %.1f MB (%.0f%%); attachment loads %.1f MB (not judged)'%(FA,nst,tot/1e6,nsave,save/1e6,100*save/tot if tot else 0,load_b/1e6))
-for k,v in rows.most_common(10): print('  %s fmt%d %dx%d: %.1f MB'%(k[0]=='d' and 'depth' or 'color',k[1],k[2],k[3],v/1e6))
+for k,v in rows.most_common(10): print('  %s fmt%d %dx%d: %.1f MB'%('depth' if k[0]=='d' else 'color',k[1],k[2],k[3],v/1e6))

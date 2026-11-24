@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-# The entry points dmsh_build.py adds to a translated shader's MSL, or rewrites in it: a vertex shader's outputs and its void entry for rasterizer discard (vs_writes, vs_discard),
-# integer vertex inputs (int_inputs), outputs set before the body (vs_init), the base instance from Metal (vs_base_instance), a layer output, which the build refuses
-# (writes_layer), the depth entry point (vs_depth), and a pixel shader's typed-output and dual-source entry points (fs_uint, fs_dual). Functions of
-# the MSL text only, with no build state, so tests import them. Part of the translation chain (dmsh_chain.FILES) and of every shader's cache key (dmsh_build.py CODE_FP).
+# Entry points dmsh_build.py adds to, or rewrites in, a translated shader's MSL (text functions only, so tests import them).
 import re, sys
 import dmsh_abi, dmsh_side, dmsh_alpha, dmsh_logic
 from dmsh_reflect import attributes
 
 def vs_writes(src, binds):
-    """Whether a vertex shader has side effects that a draw with rasterizer discard still runs, so that it needs main0_discard: storage buffer writes (Xenoblade Chronicles 3's
-    vertex-only work before its skinned models) or image stores (Metroid Prime Remastered's volumetric fog: 1cbc19f806a08166 fills its 100x57x64 RGBA16F froxel volume from
-    5,700 points with rasterization off; without the entry the host skipped the draw, the volume stayed zero and the fog pass blended every scene to black)"""
+    """Storage buffer writes or image stores, which a draw with rasterizer discard still runs"""
     return any(b.get('rw') for b in binds) or bool(re.search(r'access::(read_)?write\b', src))
 
 def vs_discard(src):
-    """Metal requires a void vertex entry when rasterization is disabled.
-    Preserve all original side effects and early returns; omit only outputs."""
+    """the void vertex entry Metal requires with rasterization disabled: side effects and early returns kept, outputs dropped"""
     m = re.search(r'\bvertex\s+main0_out\s+main0\s*\((.*?)\)\s*\{', src, re.S)
     if not m: raise ValueError('vertex shader has no main0 entry for rasterizer discard')
     return '\nvertex void main0_discard(' + m.group(1) + ')\n{' + src[m.end():].replace('return out;', 'return;')
@@ -23,93 +17,80 @@ def vs_discard(src):
 _CAST = ('as_type<int>(', 'as_type<uint>(')
 
 def int_inputs(src):
-    """Inputs that a vertex shader only uses as integers (under a float declaration every use is an as_type<int/uint> bit cast, or a plain copy) → {location: 'uint'}.
-    Maxwell does no type conversion when reading vertex attribute registers: the bit pattern of integer formats (bone indices R8UI / RG8UI / RGBA8UI etc.) goes into the register as is and the shader uses it as an integer.
-    The answer table has no attribute types (the machine code does not say them), so the translator's attribute type queries all defaulted to float: Metal converts the integer format to a float value, and after the bit cast it is garbage - every bone index is wrong and skinned models (the characters) are stretched into streaks or thrown off screen."""
+    """Inputs only used as integers → {location: 'uint'}. Maxwell puts an integer format's bits in the attribute register unconverted; declared float, Metal would convert them"""
     ins = {m.group(2): int(m.group(3)) for m in attributes(src)}
     i = src.find('vertex main0_out main0(')
     if i < 0: return {}
-    body = src[i:]; out = {}
+    body = src[i:]
+    out = {}
     for name, loc_ in ins.items():
         uses = list(re.finditer(r'in\.%s\b' % re.escape(name), body))
-        nint = 0; bad = False
+        nint = 0
+        bad = False
         for u in uses:
-            ls = body.rfind('\n', 0, u.start()) + 1; le = body.find('\n', u.end())
+            ls = body.rfind('\n', 0, u.start()) + 1
+            le = body.find('\n', u.end())
             m = re.match(r'\s*float\s+(_\w+)\s*=\s*in\.%s\.[xyzw];$' % re.escape(name), body[ls:le])
             if not m:
-                if body[:u.start()].endswith(_CAST): nint += 1; continue
-                bad = True; break
+                if body[:u.start()].endswith(_CAST):
+                    nint += 1
+                    continue
+                bad = True
+                break
             v = m.group(1)
             for o in list(re.finditer(r'\b%s\b' % re.escape(v), body))[1:]:
-                if body[:o.start()].endswith(_CAST): nint += 1; continue
-                l2s = body.rfind('\n', 0, o.start()) + 1; l2e = body.find('\n', o.end())
-                if re.match(r'\s*[\w.\[\]]+\s*=\s*%s;$' % re.escape(v), body[l2s:l2e]): continue   # plain copy: the bit pattern is the same under either declaration
-                bad = True; break
+                if body[:o.start()].endswith(_CAST):
+                    nint += 1
+                    continue
+                l2s = body.rfind('\n', 0, o.start()) + 1
+                l2e = body.find('\n', o.end())
+                if re.match(r'\s*[\w.\[\]]+\s*=\s*%s;$' % re.escape(v), body[l2s:l2e]): continue   # the bit pattern is the same under either declaration
+                bad = True
+                break
             if bad: break
         if not bad and nint: out[str(loc_)] = 'uint'
     return out
 
 def vs_init(src):
-    """Every vertex shader output starts as (0,0,0,1) before the translated body runs: on the hardware that is what an unwritten component reads. The translator's source starts with out = {}, all zeros;
-    Ryujinx initializes the components the next stage reads this way when it links stages, and since every shader is translated offline on its own without knowing what the next stage reads, all are
-    initialized (components the body writes are overwritten as before). An output written only in xyz (a world position) is divided by its w in the pixel shader: with w = 0 every shadow-map
-    compare value became infinite and Link's Awakening was in shadow everywhere outdoors (dim, no shadows from the fences)."""
-    i = src.find('struct main0_out\n{\n'); j = src.find('\n};', i); k = src.find('main0_out out = {};')
+    """As an unwritten component reads on the hardware (the translator's out = {} is all zeros): an output written only in xyz would divide by w = 0"""
+    i = src.find('struct main0_out\n{\n')
+    j = src.find('\n};', i)
+    k = src.find('main0_out out = {};')
     if i < 0 or j < 0 or k < 0: return src
     outs = re.findall(r'\n    float4 (\w+) \[\[user\(locn\d+\)\]\];', src[i:j])
     k += len('main0_out out = {};')
     return src[:k] + ''.join(f'\n    out.{n} = float4(0.0, 0.0, 0.0, 1.0);' for n in outs) + src[k:]
 
-VP_BASE_INSTANCE = '(*spvDescriptorSet0.vp_c0)._m0[100].y'   # c0 + 0x644, the driver's base-instance word (row 100, second component)
+VP_BASE_INSTANCE = '(*spvDescriptorSet0.vp_c0)._m0[100].y'   # c0 + 0x644, the driver's base-instance word
 
 def vs_base_instance(src):
-    """The draw's base instance from Metal, not from the driver segment. GLSLC adds c0 + 0x644 to Maxwell's instance ID where a shader needs the absolute instance (gl_InstanceID +
-    gl_BaseInstance); the host writes that word from the draw command (nvn_mtl.m encode_args), but an indirect draw's base instance is in its argument record, which the GPU may write
-    earlier in the same submission. Metal passes every draw's base instance, direct or indirect, as [[base_instance]], so a vertex function reads it there. Super Mario Party Jamboree's
-    GPU-driven instances (276504dc5c987ecf writes the records, 4b05556737e9535f draws them: record = instance + c0 + 0x644, 80 bytes each) all took the first records' transforms
-    with 0 there, and stray grey triangles crossed the board. The segment's rows are float4 holding raw bits, so the word becomes the float with the base instance's bits; a function without
-    the parameter gets it"""
+    """GLSLC adds c0 + 0x644 to the instance ID; an indirect draw's base instance is in its argument record, which the GPU may write in the same submission, so it
+    comes from [[base_instance]] (as the float with its bits)"""
     if VP_BASE_INSTANCE not in src: return src
     src = src.replace(VP_BASE_INSTANCE, 'as_type<float>(gl_BaseInstance)')
     def add(m):
         return m.group(0) if '[[base_instance]]' in m.group(0) else m.group(0)[:-1] + ', uint gl_BaseInstance [[base_instance]])'
-    return re.sub(r'\bvertex\s+\w+\s+main0\s*\((?:[^()]|\([^()]*\))*\)', add, src)   # the parameter list, whose attributes hold parentheses ([[buffer(0)]])
+    return re.sub(r'\bvertex\s+\w+\s+main0\s*\((?:[^()]|\([^()]*\))*\)', add, src)   # attributes hold parentheses ([[buffer(0)]])
 
 def writes_layer(src):
-    """Whether main0 writes the layer: render_target_array_index in main0's output. No vertex shader of Ocarina of Time does (none of its 15,850), so the chain has no layered
-    vertex path (the point size taken out of such a shader, its pipelines given an input primitive class, a pass with every layer of its attachments): dmsh_build.py fails a
-    shader that does, by this test, where it would otherwise build a library that draws every layer into the first"""
-    i = src.find('struct main0_out\n{\n'); j = src.find('\n};', i)
+    i = src.find('struct main0_out\n{\n')
+    j = src.find('\n};', i)
     return i >= 0 and j >= 0 and '[[render_target_array_index]]' in src[i:j]
 
 def vs_depth(src):
-    """Two entry points for the depth convention: the translator's vertex shader leaves z unchanged (NVN's near=0 convention); the main function is copied here - main0 gets the GL convention's (near=-w) z' = z/2 + w/2 before every return out
-    (bit-identical to the formula Ryujinx used to emit in the translator), main0_z stays as is. The convention a game sets is runtime state (nvnDeviceSetDepthMode); the host picks the entry point by it, with nothing to configure per game.
-    Metal function constants could do this too, but a function with function constants must always be specialized before a pipeline can be built (measured about 2.4 ms per vertex shader); two entry points only compile the vertex shaders twice (about 30% of the library).
-    Returns (the source with only main0: reflection / raster facts are computed from it as before, the full source written into the metallib)."""
+    """main0 converts to the GL convention (near = -w: z' = z/2 + w/2), main0_z keeps NVN's near = 0; the host picks one by nvnDeviceSetDepthMode.
+    → (the source with only main0, for reflection and raster facts; the full source)"""
     m = re.search(r'\bvertex\s+main0_out\s+main0\s*\(', src)
     if not m: sys.exit('[RED] vertex shader without a main0 main function, cannot add the depth entry points')
-    body = src[m.start():]   # the main function is the last function in the file
+    body = src[m.start():]   # the main function is the last in the file
     gl = body.replace('return out;', 'out.gl_Position.z = fma(out.gl_Position.z, 0.5, out.gl_Position.w * 0.5);\n    return out;')
     single = src[:m.start()] + gl
     return single, single + '\n' + re.sub(r'\bmain0\s*\(', 'main0_z(', body, count=1)
 
 def fs_uint(src):
-    """The typed-output entry point main0_u, for every pixel shader. Maxwell writes an output register's bits to its target, and the target's format, not the shader, says what they are: a
-    float, unsigned or signed integer. With no PC version the translator declares every colour output float, and Metal refuses a pipeline whose float output meets an integer attachment
-    (a pipeline from a Metal 4 base is not refused, and the target takes undefined values). Luigi's Mansion 3 draws its whole scene into an R32Uint + RGBA8Uint G-buffer, Pokémon Sword
-    mixes float colours 0 and 2 with an RGBA16Uint colour 1, Kirby and the Forgotten Land writes an R8Uint colour 5 beside float ones (GitHub issue #2760), Mortal Kombat 11 needs signed and
-    unsigned ones (PR #2807). So the pipeline says which outputs are integers: main0_u is the same body (dmsh_side.shared_body) returning each colour output n as a float, an unsigned or a
-    signed vector of the same bits (as_type, nothing converted), by the bool function constants DMSH_UINT_FC + n (dm_ui<n>) and DMSH_SINT_FC + n (dm_si<n>), a float where neither is set
-    (dm_uf<n>); its output struct holds the three members on [[color(n)]], each present by its constant. It also holds the fixed-function work Metal lacks, each by a constant and with its
-    arguments present only then: NVN's alpha test (DMSH_TYPED_ALPHA_FC, dm_at: dmsh_alpha.test, on colour 0's alpha before the outputs are typed) and logic operation
-    (DMSH_TYPED_LOGIC_FC, dm_lo: dmsh_logic.parts, on the typed outputs, reading the attachments DMSH_LOGIC_FC + n names), so one function serves every variant a pipeline asks for, and the
-    side library holds one more body than before, not three (dmsh_side.unit gives main0 an alpha test entry point, which needs no specialization, and no logic one). The host specializes it
-    with the pipeline's targets and state (nvn_mtl.m typed_fn) when a target's class is not the one main0 declares or the pipeline has a logic operation. A shader got an integer entry
-    point only when its code looked like an integer writer, which took five rules and still missed (Trails in the Sky 2nd Chapter: a uniform word, zeros, a register reused by two branches,
-    a texel read as it is; Kirby's 76 shaders of #2760): every pixel shader gets it, and the build cuts it into the side library <key>_bx that the host loads on first need
-    (dmsh_build.py ps_libraries), so the base library every shader loads stays as it was. A colour member of another type (half) or shape (an index, a function constant) stays as it is.
-    → main0_u (with the helpers it uses), to append to the source with its body shared, or None when main0 is not of a shape dmsh_side.entry knows or has no colour output"""
+    """main0_u: main0's body returning each colour output n as a float, unsigned or signed vector of the same bits, by function constants DMSH_UINT_FC + n /
+    DMSH_SINT_FC + n (Metal refuses a float output on an integer attachment); also NVN's alpha test and logic operation, each under its constant.
+    → main0_u, or None when main0's shape is unknown or it has no colour output"""
     st = re.search(r'struct main0_out\s*\{(.*?)\};', src, re.S)
     try: e = dmsh_side.entry(src, 'main0')
     except ValueError: e = None
@@ -138,28 +119,28 @@ def fs_uint(src):
     logic = None if dmsh_logic.refused(src) else dmsh_logic.parts(members, 'r', 'dm_lo')
     helpers, params, pre, post = '', list(e['params']), '', ''
     if alpha:
-        helpers += dmsh_alpha.HELPER; consts += f'constant bool dm_at [[function_constant({dmsh_abi.TYPED_ALPHA_FC})]];\n'
-        params.append(f'constant dm_alpha_state& dm_alpha [[buffer({dmsh_abi.ALPHA_BUFFER}), function_constant(dm_at)]]'); pre = f'    if (dm_at) {{ {alpha} }}\n'
+        helpers += dmsh_alpha.HELPER
+        consts += f'constant bool dm_at [[function_constant({dmsh_abi.TYPED_ALPHA_FC})]];\n'
+        params.append(f'constant dm_alpha_state& dm_alpha [[buffer({dmsh_abi.ALPHA_BUFFER}), function_constant(dm_at)]]')
+        pre = f'    if (dm_at) {{ {alpha} }}\n'
     if logic:
         lc, fetch, apply, targets = logic
-        helpers += dmsh_logic.HELPER; consts += f'constant bool dm_lo [[function_constant({dmsh_abi.TYPED_LOGIC_FC})]];\n' + dmsh_logic.constants(targets) + lc
-        params += fetch + [f'constant dm_logic_state& dm_lop [[buffer({dmsh_abi.LOGIC_BUFFER}), function_constant(dm_lo)]]']; post = f'    {" ".join(apply)}\n'
+        helpers += dmsh_logic.HELPER
+        consts += f'constant bool dm_lo [[function_constant({dmsh_abi.TYPED_LOGIC_FC})]];\n' + dmsh_logic.constants(targets) + lc
+        params += fetch + [f'constant dm_logic_state& dm_lop [[buffer({dmsh_abi.LOGIC_BUFFER}), function_constant(dm_lo)]]']
+        post = f'    {" ".join(apply)}\n'
     struct = 'struct main0_out_u\n{\n' + members + '};\n\n'
     return ('\n' + helpers + consts + '\n' + struct + f'{e["attr"]}fragment main0_out_u main0_u({", ".join(params)})\n{{\n    main0_out out = dm_body_main0({e["args"]});\n'
             + pre + '    main0_out_u r = {};\n' + ''.join(store(nm) for _, nm, _ in mem) + post + '    return r;\n}\n')
 
 
-def typed_ops(msl):   # what the typed-output entry point of msl holds besides its outputs (nvn_mtl.m: the reflection's entry_u_alpha, entry_u_logic)
+def typed_ops(msl):
     return {'alpha': f'dm_at [[function_constant({dmsh_abi.TYPED_ALPHA_FC})]]' in msl, 'logic': f'dm_lo [[function_constant({dmsh_abi.TYPED_LOGIC_FC})]]' in msl}
 
 
 def fs_dual(src):
-    """Dual-source blending. NVN's SRC1 blend factors read the pixel shader's output 1 as target 0's second source (Maxwell feeds MRT 1 to it), and the translator declares that
-    output [[color(1)]]; Metal reads the second source only from [[color(0), index(1)]], and its compiler crashes building a pipeline that blends with an absent one (Pokémon Legends:
-    Arceus's ha_post_effects, f4f36a03b0c6691d). A shader in the profile's dual_want.tsv that writes exactly colours 0 and 1 gets a second entry point, main0_d, the same body with
-    output 1 as index 1 of colour 0; the host takes it for a pipeline whose target 0 blends with a SRC1 factor (nvn_mtl.m pso_desc). Not every such shader gets one: most write a
-    second render target (5,474 of Arceus's 6,156 pixel shaders write exactly colours 0 and 1). It calls main0's body (dmsh_side.shared_body): a copy of the body was compiled again, and
-    a readable-tile rewrite of its samples would not build there (dmsh_fetch.fold). → main0_d, to append to the source with its body shared (with its other entry points), or None"""
+    """main0_d: output 1 as [[color(0), index(1)]], the only second source Metal reads (its compiler crashes on a pipeline blending with an absent one), for
+    dual_want.tsv shaders that write exactly colours 0 and 1. → main0_d, or None"""
     st = re.search(r'struct main0_out\s*\{(.*?)\};', src, re.S)
     if not st: return None
     try: e = dmsh_side.entry(src, 'main0')

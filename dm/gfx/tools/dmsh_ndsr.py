@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
-# agl's NDSR upscaler network (agl_ndsr_vr_light.pck, Ocarina of Time's docked 1920x1080 to 2560x1440 step) recognised in its translated MSL and its HMMA core rewritten
-# on simdgroup matrices, then split in two passes by a function constant (network, then the shader's own epilogue). A step of dmsh_build.py at the end of a compute shader's
-# rewrites; functions of the MSL text only, so tests import them. Part of the translation chain (dmsh_chain.FILES) and of every shader's cache key (dmsh_build.py CODE_FP).
-# The game's code is not here: the pass reads the shader the build translated on the player's Mac, proves that its HMMA calls compute this network (the graph below,
-# from the calls' flags, operands and the per-thread addresses they read), keeps its own prologue and epilogue, and replaces only the calls. Anything else is left as
-# translated, with the reason in the reflection (docs/reference/shaders.md, "agl's NDSR network on simdgroup matrices, in two passes").
+# agl's NDSR upscaler network recognised in its translated MSL, its HMMA core rewritten on simdgroup matrices, in two passes by a function constant
+# (docs/reference/shaders.md#agls-ndsr-network-on-simdgroup-matrices-in-two-passes)
 import re
 from typing import Any
 import dmsh_abi as abi, dmsh_rewrite
 
-# The network, as its translated calls compute it. A threadgroup of 4 SIMD-groups (128 threads) covers 8x4 output blocks; SIMD-group sg runs 8 patches (bx 0..7), each three
-# blocks of two groups g: H = W1_g . X (16x16 halves) and Y += H . W2_g, X the patch's 16x16 window for block 0 and ReLU(Y) for blocks 1 and 2; block 2 keeps n 0-7 only, and the
-# epilogue reads each patch's last D word d0. Weights: 12 matrices of 16x16 halves in PTX A-fragment order (lane L's four words at 512 j + 16 L), block b's W1_g = 4b + 2g,
-# W2_g = 4b + 2g + 1. The window: halves in the shader's own threadgroup array, row stride WIN_ROW bytes; lane (g, t) of SIMD-group sg reads B words at
-# WIN_ROW * (6 sg + g) + 4 t + 12 bx + 1152 nb (+16 for k 8-15)
+# SIMD-group sg runs 8 patches (bx), each three blocks of two groups g: H = W1_g . X, Y += H . W2_g (X the window for block 0, ReLU(Y) after; block 2 keeps n 0-7).
+# Weights: 12 16x16-half matrices in PTX A-fragment order (lane L's words at 512 j + 16 L), W1_g = 4b + 2g, W2_g = 4b + 2g + 1
 THREADS = 128
 PATCHES = 8
 BLOCKS = 3
@@ -21,14 +14,14 @@ WIN_ROW = 144
 MATRIX = 512
 CALLS = 176
 FINAL_WORDS = PATCHES
-ARGS = ['lane', 'blk', 'a0', 'a1', 'a2', 'a3', 'b0', 'b1', 'acc0', 'acc1', 'fl', 'aaddr', 'ao0', 'ao1', 'ao2', 'ao3', 'astr', 'd1']   # dmsh_rewrite.HMMA_ARGS
+ARGS = ['lane', 'blk', 'a0', 'a1', 'a2', 'a3', 'b0', 'b1', 'acc0', 'acc1', 'fl', 'aaddr', 'ao0', 'ao1', 'ao2', 'ao3', 'astr', 'd1']   # as dmsh_rewrite.HMMA_ARGS
 
 
 class Refused(Exception):
     pass
 
 
-# ---- the MSL subset the analysis reads: spirv-cross's straight-line statements, one a line ----
+# spirv-cross's straight-line statements, one a line
 _TOKEN = re.compile(r'\s*(?:(?P<num>0x[0-9a-fA-F]+u?|\d+\.\d*(?:[eE][-+]?\d+)?[fh]?|\d+[eE][-+]?\d+[fh]?|\d+u?)|(?P<id>[A-Za-z_]\w*)|(?P<op><<|>>|<=|>=|==|!=|&&|\|\||::|[-+*/%&|^!~<>?:()\[\].,]))')
 
 
@@ -46,8 +39,6 @@ def tokens(text):
 
 
 class Expr:
-    """A recursive-descent parse of one C expression into nested tuples: ('name', n), ('num', text), ('call', fn, targs, args), ('member', e, m), ('index', e, i), ('un', op, e),
-    ('bin', op, a, b), ('sel', c, a, b). Template arguments are kept as text"""
     PREC = [('||',), ('&&',), ('|',), ('^',), ('&',), ('==', '!='), ('<', '>', '<=', '>='), ('<<', '>>'), ('+', '-'), ('*', '/', '%')]
 
     def __init__(self, text):
@@ -70,7 +61,10 @@ class Expr:
     def cond(self):
         c = self.binary(0)
         if self.peek() == '?':
-            self.take(); a = self.cond(); self.take(':'); b = self.cond()
+            self.take()
+            a = self.cond()
+            self.take(':')
+            b = self.cond()
             return ('sel', c, a, b)
         return c
 
@@ -78,36 +72,50 @@ class Expr:
         if level == len(self.PREC): return self.unary()
         e = self.binary(level + 1)
         while self.peek() in self.PREC[level]:
-            op = self.take(); e = ('bin', op, e, self.binary(level + 1))
+            op = self.take()
+            e = ('bin', op, e, self.binary(level + 1))
         return e
 
     def unary(self):
         if self.peek() in ('-', '!', '~', '+'):
-            op = self.take(); return ('un', op, self.unary())
+            op = self.take()
+            return ('un', op, self.unary())
         return self.postfix(self.primary())
 
-    def targs(self):   # <...> after a name, as text
+    def targs(self):
         depth, out = 0, []
         while True:
-            v = self.take(); depth += {'<': 1, '>': -1}.get(v, 0)
+            v = self.take()
+            depth += {'<': 1, '>': -1}.get(v, 0)
             if depth == 0: return ''.join(out)
             if not (depth == 1 and v == '<'): out.append(v)
 
     def primary(self):
         kind, v = self.t[self.i] if self.i < len(self.t) else (None, None)
         if v == '(':
-            self.take(); e = self.cond(); self.take(')'); return e
-        if kind == 'num': self.take(); return ('num', v)
+            self.take()
+            e = self.cond()
+            self.take(')')
+            return e
+        if kind == 'num':
+            self.take()
+            return ('num', v)
         if kind == 'id':
-            self.take(); name = v
-            while self.peek() == '::': self.take(); name += '::' + self.take()
+            self.take()
+            name = v
+            while self.peek() == '::':
+                self.take()
+                name += '::' + self.take()
             ta = None
             if self.peek() == '<' and name in ('as_type', 'spvMulExtended'): ta = self.targs()
             if self.peek() == '(':
-                self.take(); args = []
+                self.take()
+                args = []
                 if self.peek() != ')':
                     args.append(self.cond())
-                    while self.peek() == ',': self.take(); args.append(self.cond())
+                    while self.peek() == ',':
+                        self.take()
+                        args.append(self.cond())
                 self.take(')')
                 return ('call', name, ta, tuple(args))
             return ('name', name)
@@ -116,7 +124,10 @@ class Expr:
     def postfix(self, e):
         while self.peek() in ('.', '['):
             if self.take() == '.': e = ('member', e, self.take())
-            else: i = self.cond(); self.take(']'); e = ('index', e, i)
+            else:
+                i = self.cond()
+                self.take(']')
+                e = ('index', e, i)
         return e
 
 
@@ -127,12 +138,13 @@ DECL = re.compile(r'^    (?:const )?([A-Za-z_][\w:]*(?:<[^;=]*>)?)\s+(_\w+)(?:\s
 U32 = 0xffffffff
 
 
-def s32(v): v &= U32; return v - (1 << 32) if v >> 31 else v
+def s32(v):
+    v &= U32
+    return v - (1 << 32) if v >> 31 else v
 
 
 class Threads:
-    """Concrete values of integer expressions for each thread of one 128-thread threadgroup (the local index x, its lane x % 32), as 32-bit patterns with a type. A value that
-    depends on anything else (the workgroup, a texture, memory) raises Refused: the analysis needs only the addresses and the flags, which depend on the thread alone"""
+    """Per-thread values of one 128-thread threadgroup; one that depends on anything but the thread raises Refused"""
     INT = {'int', 'uint', 'bool', 'short', 'ushort'}
 
     def __init__(self, defs, types):
@@ -147,14 +159,14 @@ class Threads:
         return v
 
     @staticmethod
-    def conv(ty, v):   # an initialisation or a cast: int <-> uint keep the bits, bool is 0 / 1; float holds bits only through as_type
+    def conv(ty, v):   # int <-> uint keep the bits; float holds bits only through as_type
         t, xs = v
         if ty in ('int', 'uint', 'short', 'ushort'):
             if t == 'float': raise Refused('a float converted to an integer')
             if t == 'bool': return (ty, tuple(int(x) for x in xs))
             return (ty, tuple(x & (0xffff if ty in ('short', 'ushort') else U32) for x in xs))
         if ty == 'bool': return ('bool', tuple(int(x != 0) for x in xs))
-        if ty == 'float' and t == 'float': return v   # bits, from as_type
+        if ty == 'float' and t == 'float': return v
         if ty == 'float': raise Refused('a float value conversion')
         raise Refused(f'a value of type {ty}')
 
@@ -163,7 +175,8 @@ class Threads:
         if k == 'num':
             s = e[1]
             if '.' in s or s[-1] in 'fh' or ('e' in s and not s.startswith('0x')): raise Refused('a float literal in an address')
-            u = s.endswith('u'); v = int(s.rstrip('u'), 0)
+            u = s.endswith('u')
+            v = int(s.rstrip('u'), 0)
             return ('uint' if u else 'int', (v & U32,) * THREADS)
         if k == 'name':
             if e[1] in self.defs: return self.var(e[1])
@@ -208,8 +221,11 @@ class Threads:
             if op in ('/', '%'):
                 if any(y == 0 for y in b): raise Refused('a division by zero')
                 def div(x, y, rem):
-                    if sg: x, y = s32(x), s32(y); q = abs(x) // abs(y) * (1 if (x < 0) == (y < 0) else -1)
-                    else: q = x // y
+                    if sg:
+                        x, y = s32(x), s32(y)
+                        q = abs(x) // abs(y) * (1 if (x < 0) == (y < 0) else -1)
+                    else:
+                        q = x // y
                     return (x - q * y if rem else q) & U32
                 return (t, tuple(div(x, y, op == '%') for x, y in zip(a, b)))
             f = {'+': lambda x, y: x + y, '-': lambda x, y: x - y, '*': lambda x, y: x * y, '&': lambda x, y: x & y, '|': lambda x, y: x | y, '^': lambda x, y: x ^ y}[op]
@@ -220,7 +236,6 @@ class Threads:
         raise Refused(f'an expression of kind {k} in an address')
 
 
-# ---- the calls' graph ----
 KERNEL = re.compile(r'\nkernel void main0\(([^\n]*)\)\n\{\n')
 CALL = re.compile(r'^    int (_\d+) = dmsh_hmma16816_f16\((.*)\);$')
 BARRIER = '    threadgroup_barrier(mem_flags::mem_threadgroup);'
@@ -230,18 +245,20 @@ NAME = re.compile(r'\b_\w+\b')
 
 
 class Graph:
-    """The terms of the network's values, interned: ('Z',) zero, ('W', j, w) word w of weight matrix j, ('S', off) the window word at the lane's base + off bytes,
-    ('R', x) word x with ReLU on both halves, ('H', a0..a3, b0, b1, c0, c1) one HMMA.16816 (dmsh_hmma16816_f16's arithmetic) and ('D', h, i) its D word i"""
+    """Interned terms: ('Z',), ('W', j, w) weight j word w, ('S', off) window word at base + off bytes, ('R', x) ReLU of both halves,
+    ('H', a0..a3, b0, b1, c0, c1) one HMMA.16816, ('D', h, i) its D word i"""
 
     def __init__(self):
         self.ids, self.terms = {}, []
 
     def __call__(self, t):
         i = self.ids.get(t)
-        if i is None: i = self.ids[t] = len(self.terms); self.terms.append(t)
+        if i is None:
+            i = self.ids[t] = len(self.terms)
+            self.terms.append(t)
         return i
 
-    def show(self, i, depth=3):   # a readable form, for refusals and tests
+    def show(self, i, depth=3):
         t = self.terms[i]
         if t[0] in ('Z', 'W', 'S'): return t[0] + ''.join(f'.{x}' for x in t[1:])
         if depth == 0: return '…'
@@ -250,13 +267,13 @@ class Graph:
         return 'H(' + ' '.join(self.show(x, depth) for x in t[1:]) + ')'
 
 
-def window_base(x):   # the byte offset of lane (g, t) of SIMD-group sg's B words in the window, patch 0, k 0-7 (see the network above)
+def window_base(x):
     sg, lane = x // 32, x % 32
     return WIN_ROW * (6 * sg + lane // 4) + 4 * (lane % 4)
 
 
 def expected(T):
-    """The 8 final words (d0 of each patch's last D), as terms of T, for the network this pass replaces"""
+    """d0 of each patch's last D"""
     Z = T(('Z',))
     W = lambda j, w: T(('W', j, w))   # noqa: E731
     D = lambda h, i: T(('D', h, i))   # noqa: E731
@@ -279,8 +296,7 @@ def expected(T):
 
 
 def relu_source(defs, e):
-    """The word x of as_type<uint>(half2(float2(r(x.x), r(x.y)))), r(v) = (as_type<int>(v) << 1) == 0 ? 0.0 : precise::max(v, 0.0) with v = float2(as_type<half2>(uint(x))).c:
-    the translated ReLU of a D word's two halves (+-0 to +0), as spirv-cross writes it; None for another expression"""
+    """spirv-cross's ReLU of a D word's two halves (+-0 to +0) → x, else None"""
     d = lambda n: parse(defs[n]) if n in defs else None   # noqa: E731
     if not (e[0] == 'call' and e[1] == 'as_type' and e[2] == 'uint' and len(e[3]) == 1): return None
     h = e[3][0]
@@ -296,7 +312,7 @@ def relu_source(defs, e):
         if not (sh and sh[0] == 'bin' and sh[1] == '<<' and sh[3] == ('num', '1') and sh[2][0] == 'call' and sh[2][1] == 'as_type' and sh[2][2] == 'int' and sh[2][3][0][0] == 'name'): return None
         v = sh[2][3][0][1]
         if not (m and m[0] == 'call' and m[1] == 'precise::max' and m[3] == (('name', v), ('num', '0.0'))): return None
-        f = d(v)   # float2(as_type<half2>(uint(x))).c
+        f = d(v)
         if not (f and f[0] == 'member' and f[2] == half and f[1][0] == 'call' and f[1][1] == 'float2' and len(f[1][3]) == 1): return None
         a = f[1][3][0]
         if not (a[0] == 'call' and a[1] == 'as_type' and a[2] == 'half2' and a[3][0][0] == 'call' and a[3][0][1] == 'uint' and a[3][0][3][0][0] == 'name'): return None
@@ -307,7 +323,7 @@ def relu_source(defs, e):
 
 
 def analyse(msl, local):
-    """The network in a translated kernel: the parts the rewrite needs, or Refused with the reason. None when the kernel calls no HMMA"""
+    """None when the kernel calls no HMMA; raises Refused with the reason"""
     k = KERNEL.search(msl)
     if not k or 'dmsh_hmma16816_f16(' not in msl[k.end():]: return None
     open_at = k.end() - 2
@@ -326,19 +342,21 @@ def analyse(msl, local):
         for m in ASSIGN.finditer(ln): writes[m.group(1)] = writes.get(m.group(1), 0) + 1
         if i > core1: continue
         m = DECL.match(ln)
-        if m and m.group(3) is not None: defs[m.group(2)] = m.group(3); types[m.group(2)] = m.group(1)
+        if m and m.group(3) is not None:
+            defs[m.group(2)] = m.group(3)
+            types[m.group(2)] = m.group(1)
         elif m: types[m.group(2)] = m.group(1)
-    for i in range(core0 + 1, core1 + 1):   # the core: straight-line declarations, barriers and the calls, nothing that writes memory
+    for i in range(core0 + 1, core1 + 1):   # straight-line declarations, barriers and the calls, nothing that writes memory
         ln = lines[i]
         if i in calls or ln == BARRIER: continue
         m = DECL.match(ln)
         if not m or '{' in ln or '}' in ln: raise Refused('a statement in the core the pass does not read: ' + ln.strip()[:80])
         if m.group(3) and re.search(r'\b(?:atomic_\w+|write|dmsh_\w+|simdgroup_\w+|threadgroup_barrier)\s*\(', m.group(3)): raise Refused('a call with effects in the core: ' + ln.strip()[:80])
     th = Threads(defs, types)
-    once = lambda n: writes.get(n, 0) <= 1   # noqa: E731  (a declaration with its value counts once; an out variable is written by its call alone)
+    once = lambda n: writes.get(n, 0) <= 1   # noqa: E731  (a declaration with its value counts once)
     T = Graph()
     Z = T(('Z',))
-    res, outs = {}, {}   # an HMMA call's result variable, its out variable (d1): the call's index
+    res, outs = {}, {}
     parsed = []
     matches = [m for c in calls if (m := CALL.match(lines[c]))]
     for m in matches:
@@ -346,18 +364,19 @@ def analyse(msl, local):
         if len(args) < len(ARGS) + 5 or args[len(ARGS) + 1:len(ARGS) + 4] != ['dm_acc', 'dm_am', 'dm_bm']: raise Refused('an HMMA call without hmma_msl\'s arguments')
         a = dict(zip(ARGS, args))
         if not re.fullmatch(r'-?\d+', args[len(ARGS) + 4]): raise Refused('an HMMA call whose B mode is not a literal')
-        res[m.group(1)] = len(parsed); outs[a['d1']] = len(parsed)
+        res[m.group(1)] = len(parsed)
+        outs[a['d1']] = len(parsed)
         parsed.append((m.group(1), a, int(args[len(ARGS) + 4])))
     weight_buf, window = set(), set()
     words = {}
 
-    def term(e, n, depth):   # the term of expression e's 32-bit word (n: the variable it defines, for the reason of a refusal)
+    def term(e, n, depth):
         if e == ('num', '0'): return Z
         if e[0] == 'name': return word(e[1], depth + 1)
         if (x := relu_source(defs, e)) is not None: return T(('R', word(x, depth + 1)))
         if e[0] == 'call' and e[1] == 'as_type' and e[2] in ('int', 'uint', 'float') and len(e[3]) == 1:
             x = e[3][0]
-            if x[0] == 'index' and x[1][0] == 'name':   # a word of a threadgroup array: the window
+            if x[0] == 'index' and x[1][0] == 'name':   # the window
                 arr = x[1][1]
                 if not re.search(r'^    threadgroup spvUnsafeArray<uint, \d+> %s;$' % re.escape(arr), msl[k.end():body_end], re.M): raise Refused(f'{n}: a read of {arr}, not a threadgroup array')
                 window.add(arr)
@@ -365,14 +384,16 @@ def analyse(msl, local):
                 off = {4 * ix[i] - window_base(i) for i in range(THREADS)}
                 if len(off) != 1: raise Refused(f'{n}: a window word at no fixed offset from the lane\'s base')
                 return T(('S', off.pop()))
-            if x[0] == 'member' and x[1][0] == 'name' and x[2] in 'xyzw' and x[1][1] in defs and (wl := WLOAD.match(defs[x[1][1]])):   # a word of a weight load
+            if x[0] == 'member' and x[1][0] == 'name' and x[2] in 'xyzw' and x[1][1] in defs and (wl := WLOAD.match(defs[x[1][1]])):
                 weight_buf.add(wl.group(2))
                 comp = 'xyzw'.index(x[2])
                 if comp >= int(wl.group(1)): raise Refused(f'{n}: a component past its load')
                 ix = th.var(wl.group(3))[1]
                 jw = set()
                 for i in range(THREADS):
-                    b = 4 * (ix[i] + comp); j = b // MATRIX; r = b - MATRIX * j - 16 * (i % 32)
+                    b = 4 * (ix[i] + comp)
+                    j = b // MATRIX
+                    r = b - MATRIX * j - 16 * (i % 32)
                     jw.add((j, r // 4) if 0 <= r < 16 and r % 4 == 0 else None)
                 if len(jw) != 1 or None in jw: raise Refused(f'{n}: a weight word not in the PTX fragment order')
                 return T(('W',) + jw.pop())
@@ -380,21 +401,23 @@ def analyse(msl, local):
         if e[0] == 'call' and e[1] in ('int', 'uint') and e[2] is None and len(e[3]) == 1 and e[3][0][0] == 'name' and types.get(e[3][0][1]) in ('int', 'uint'): return word(e[3][0][1], depth + 1)
         raise Refused(f'{n}: an operand of unknown origin ({defs.get(n, "")[:60]})')
 
-    def word(n, depth=0):   # the term of variable n's 32-bit word
+    def word(n, depth=0):
         if n in words: return words[n]
         if depth > 64: raise Refused('a copy chain too long')
         if not once(n): raise Refused(f'{n} is written more than once')
         if n in res or n in outs:
-            j = res.get(n, outs.get(n)); h = D_of.get(j)
+            j = res.get(n, outs.get(n))
+            h = D_of.get(j)
             if h is None: raise Refused(f'{n}: an HMMA result read before its call')
-            words[n] = h[0 if n in res else 1]; return words[n]
+            words[n] = h[0 if n in res else 1]
+            return words[n]
         if n not in defs: raise Refused(f'{n}: an operand with no definition')
         t = term(parse(defs[n]), n, depth)
         words[n] = t
         return t
 
     D_of, acc, bm, prev_a = {}, {}, {}, None
-    for j, (r, a, mode) in enumerate(parsed):   # each call as the helper computes it (dmsh_rewrite.HMMA_BODY): its flags pick A, B and C, and where D goes
+    for j, (r, a, mode) in enumerate(parsed):   # as dmsh_rewrite.HMMA_BODY computes it
         f = set(th.var(a['fl'])[1]) if a['fl'] in defs else None
         if not f or len(f) != 1: raise Refused(f'call {j}: flags that are not one constant')
         f = f.pop()
@@ -411,7 +434,9 @@ def analyse(msl, local):
         if C is None: raise Refused(f'call {j}: an accumulator slot read before it was written')
         h = T(('H',) + A + B + C)
         prev_a = A
-        if f & 4: acc[kk] = (T(('D', h, 0)), T(('D', h, 1))); D_of[j] = (Z, Z)
+        if f & 4:
+            acc[kk] = (T(('D', h, 0)), T(('D', h, 1)))
+            D_of[j] = (Z, Z)
         else: D_of[j] = (T(('D', h, 0)), T(('D', h, 1)))
     scratch = {dmsh_rewrite.split_params(m.group(2))[len(ARGS)] for m in matches}
     sdecl = [re.fullmatch(r'    threadgroup spvUnsafeArray<uint, (\d+)> (%s);' % re.escape(x), ln) for x in scratch for ln in lines[:core0]]
@@ -438,14 +463,13 @@ def analyse(msl, local):
     if sorted(set(finals.values())) != list(range(FINAL_WORDS)): raise Refused(f'the epilogue reads final words of patches {sorted(set(finals.values()))}')
     arr = window.pop()
     pro = lines[:core0]
-    for ln in pro:   # the prologue: gathers and window stores, nothing else that writes memory (pass 1 drops the stores)
+    for ln in pro:   # gathers and window stores, nothing else that writes memory (pass 1 drops the stores)
         if re.search(r'\]\s*=(?!=)', ln) and not re.match(r'^\s+%s\[[^\n]*\] = [^;]+;$' % re.escape(arr), ln): raise Refused('a store in the prologue other than the window\'s: ' + ln.strip()[:80])
         if re.search(r'\b(?:atomic_\w+|write)\s*\(', ln): raise Refused('a store in the prologue: ' + ln.strip()[:80])
     return {'lines': lines, 'start': k.end(), 'end': body_end, 'core0': core0, 'core1': core1, 'tainted': tainted, 'finals': finals, 'types': types,
             'window': arr, 'weights': weight_buf.pop(), 'params': k.group(1), 'sig': (k.start(), k.end(1)), 'graph': T, 'scratch': (int(sdecl[0].group(1)), sdecl[0].group(2)), 'matrices': mats[0]}
 
 
-# ---- the rewrite ----
 SPLIT_FC = abi.SPLIT_FC
 SPLIT_SLOT = abi.SPLIT_SLOT
 HELPERS = '''
@@ -559,18 +583,19 @@ PARAM = re.compile(r'\buint3 (\w+) \[\[(thread_position_in_threadgroup|threadgro
 
 
 def rewrite(msl, a):
-    """The kernel with its HMMA calls replaced by the network on simdgroup matrices, split by DMSH_SPLIT_FC (see HELPERS)"""
     names = {}
     for m in PARAM.finditer(a['params']): names[m.group(2) or 'lane'] = m.group(1) or m.group(3)
     if 'thread_position_in_threadgroup' not in names or 'lane' not in names or 'threadgroup_position_in_grid' not in names: raise Refused('the kernel lacks its local id, lane or workgroup parameter')
     if 'dm_ndsr' in msl: raise Refused('rewritten already')
     extra = ''
-    if 'threadgroups_per_grid' not in names: names['threadgroups_per_grid'] = 'dm_ndsr_ng'; extra += ', uint3 dm_ndsr_ng [[threadgroups_per_grid]]'
+    if 'threadgroups_per_grid' not in names:
+        names['threadgroups_per_grid'] = 'dm_ndsr_ng'
+        extra += ', uint3 dm_ndsr_ng [[threadgroups_per_grid]]'
     extra += f', device uint4* dm_ndsr_words [[buffer({SPLIT_SLOT}), function_constant(dm_ndsr_split)]]'
     if re.search(r'\[\[buffer\(%d\)' % SPLIT_SLOT, a['params']): raise Refused(f'buffer {SPLIT_SLOT} is the kernel\'s already')
     lines, core0, core1, arr = a['lines'], a['core0'], a['core1'], a['window']
     store = re.compile(r'^(\s+)(%s\[[^\n]*\] = [^;]+;)$' % re.escape(arr))
-    gone = {'    ' + a['matrices'], '    threadgroup spvUnsafeArray<uint, %d> %s;' % a['scratch']}   # the helper's matrices and scratch, which no call uses now
+    gone = {'    ' + a['matrices'], '    threadgroup spvUnsafeArray<uint, %d> %s;' % a['scratch']}
     out = [store.sub(r'\1if (dm_ndsr_net) \2', ln) for ln in lines[:core0] if ln not in gone]   # pass 1 fills no window
     out.append('    if (dm_ndsr_net) threadgroup_barrier(mem_flags::mem_threadgroup);')
     out += (CORE % {'wg': names['threadgroup_position_in_grid'], 'ng': names['threadgroups_per_grid'], 'lid': names['thread_position_in_threadgroup'], 'lane': names['lane'],
@@ -587,7 +612,7 @@ def rewrite(msl, a):
 
 
 def network(msl, local, spill=0):
-    """-> (msl, info). info: None for a kernel without HMMA calls; {'refused': reason} for one this pass leaves as translated; {'split': {fc, buffer, words}} when rewritten"""
+    """-> (msl, info): None without HMMA calls, {'refused': reason}, or {'split': {fc, buffer, words}}"""
     try:
         a = analyse(msl, local)
         if a is None: return msl, None

@@ -1,7 +1,5 @@
-# The shader library ABI for the chain's Python tools: the values of dm/gfx/nvn/dmsh_abi.h, the one place the driver segment layout and the binding kinds are written down,
-# which the host compiles in. Each "#define DMSH_<NAME> <value>" becomes the attribute <NAME> of this module (dmsh_abi.C2_TEX, dmsh_abi.KIND_CBUF), an int or a str; VALUES holds them all.
+# The values of dm/gfx/nvn/dmsh_abi.h for the chain's Python tools: each "#define DMSH_<NAME> <value>" becomes the attribute <NAME> (dmsh_abi.C2_TEX), an int or a str.
 # The reader takes only the form the header's top comment describes and stops on any other line, so a value it cannot read never silently goes missing.
-# Part of the translation chain (dmsh_chain.py FILES), with the header.
 import os, re
 from typing import Any
 
@@ -29,10 +27,10 @@ def load(path=HEADER):
 
 
 VALUES = load()
-KINDS = {v for k, v in VALUES.items() if k.startswith('KIND_')}   # every binding kind the build may write
+KINDS = {v for k, v in VALUES.items() if k.startswith('KIND_')}
 if set(VALUES) & set(globals()): raise ValueError(f'{HEADER}: names this module uses itself: {sorted(set(VALUES) & set(globals()))}')
 
 
-def __getattr__(name) -> Any:   # dmsh_abi.<NAME> = the value of DMSH_<NAME> (PEP 562: a module attribute found nowhere else is looked up here)
+def __getattr__(name) -> Any:   # PEP 562: dmsh_abi.<NAME> is DMSH_<NAME>
     try: return VALUES[name]
     except KeyError: raise AttributeError(f'{HEADER} defines no DMSH_{name}') from None
