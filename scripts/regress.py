@@ -1,81 +1,47 @@
 #!/usr/bin/env python3
-# A regression harness for changes to the translation chain, the host or the tools, run on the builds of the game this Mac has (GitHub issue #272: CI has no game files and no
-# Metal 4). It compares a BASELINE revision with a CANDIDATE and writes a report that holds only numbers,
-# hashes, shader keys, normalized [RED] texts and timings (no screenshots, game data or keys), so it can go into a pull request.
+# Regression harness for changes to the chain, the host or the tools, on this Mac's builds of the game (CI has no game files and no Metal 4): compares a BASELINE
+# revision with a CANDIDATE; the report holds only numbers, hashes, shader keys, normalized [RED] texts and timings (docs/development.md#the-regression-harness).
 #
 # Usage: python3 scripts/regress.py check    [--baseline REV] [--candidate REV|worktree] [--quick] [--games ID,...] [--no-smoke] [--out DIR]
 #        python3 scripts/regress.py baseline [--rev REV] [--quick] [--games ID,...] [--runs N]
-#        python3 scripts/regress.py chain    [--baseline REV] [--candidate REV|worktree] [--games ID,...]          (the static checks only, no game runs)
-#        python3 scripts/regress.py list                                                                       (the games found, their routes, stored baselines and last green chain)
-#        python3 scripts/regress.py capture  [--rev REV] [--games ID,...] [--repeat N]                     (each route's capture frame, and its replay noise)
+#        python3 scripts/regress.py chain    [--baseline REV] [--candidate REV|worktree] [--games ID,...]          (static checks only)
+#        python3 scripts/regress.py list                                                                       (games, routes, baselines, last green chain)
+#        python3 scripts/regress.py capture  [--rev REV] [--games ID,...] [--repeat N]                     (each route's capture frame and its replay noise)
 #        python3 scripts/regress.py replay   [--baseline REV] [--candidate REV|worktree] [--games ID,...] [--repeat N]   (those captures replayed by two revisions)
-#   check / baseline --record: for each repository profile with status PASS or CHANGED and successful boot runs (no run_failures, even known ones) write dm/games/<id>/validated.tsv of
-#   this checkout: the chain it was last green on, one row per mode (quick, full), the latest of each. `key <TAB> value` rows under a comment header; the value is `field=value` words:
+#   REV: a git revision; worktree = this checkout, uncommitted and untracked files included. check: baseline = merge base of HEAD and main, candidate = worktree;
+#   baseline: --rev main. Each revision is checked out once into <root>/trees/<id> (git worktree); its chain, host and rewriter are used.
+#   --root (REGRESS_ROOT; required): trees and public reports; game-derived files stay in <game folder>/<id>-work/regress/.
+#   --games-dir (REGRESS_GAMES; required): the folder of the game folders, each with its <id>_build (build_app.py --platform mac). A build takes part when dm/games
+#   has its profile and, for runs, a route dm/games/<id>/smoke.tsv. REGRESS_SKIP=ID,...: left out unless --games names them. --lock FILE (DM_MEASURE_LOCK): bench.py's lock.
+#   --record (check / baseline): a profile with PASS or CHANGED and boot runs without failures gets its row per mode in dm/games/<id>/validated.tsv:
 #     quick <TAB> chain=157e1b96c8da commit=4f2a9c01d3+dirty date=2026-10-27 machine=Mac14,6 macos=26.1
-#   chain = DMSH_CHAIN of the candidate (dm/gfx/nvn/dmsh_chain.h; for `baseline`, of the revision recorded), commit = its short SHA (+dirty: uncommitted changes in the worktree), date = UTC day,
-#   machine / macos = report.json's machine. No game data, paths, keys or hashes of game content. A red game keeps its row (it shows the last green chain), a game without a route or a run with
-#   --no-smoke writes nothing. Derived build profiles do not validate repository profiles. Without --record nothing in dm/games changes. `list` prints the rows and whether the chain is the current one.
-#   The report is saved before recording, so a metadata write failure leaves the test evidence intact. Commit the file with the pull request.
-#   REV: any git revision of this repository; worktree = this checkout as it is, uncommitted and untracked files included. check: baseline = the merge base of HEAD and main,
-#   candidate = worktree; baseline: --rev main. Each revision is checked out once into <root>/trees/<id> (git worktree), and the chain, host and rewriter come from there.
-#   --root (REGRESS_ROOT; no default, required): source trees and public reports; game-derived files stay in <game folder>/<id>-work/regress/.
-#   --games-dir (REGRESS_GAMES; no default, required): the folder of the game folders, each with the <id>_build of scripts/build_app.py --platform mac (the game's NUP beside it).
-#   A build takes part when its title has a profile in dm/games and, for the runs, a route dm/games/<id>/smoke.tsv (read from this checkout).
-#   REGRESS_SKIP=ID,...: games left out unless --games names them (a game another agent works on).
-#   --lock FILE (DM_MEASURE_LOCK): the measuring lock bench.py --lock shares, held only while a game runs.
+#   A red game keeps its row; no route, --no-smoke or a derived profile writes nothing.
 #
-# What it checks, per game:
-# 1. Chain (static): the game's shaders translated by each revision's chain (dmsh_build.py through own_compilers.py), compared shader by shader: built or failed
-#    (newly failing by the rule of dm/gfx/tools/shader_regressions.py, which the packing script applies to the game's previous build; a new shader that fails is listed apart),
-#    the SHA-256 of the MSL (<key>_b.metal), of the reflection (<key>_b.json without its chain fields) and of the variant libraries (_bf, _bv, _bp, _bx). A build is kept per chain version,
-#    shader package, profile inputs and compilers (<game folder>/<id>-work/regress/chain/<key>/; only the few used last stay, prune_chains), so a revision whose chain did not change costs nothing, and dmsh_build.py uses a bounded per-game regression cache with read-only reuse of the player's cache (DMSH_CAS), so MSL
-#    that did not change is not compiled again. Then the vertex / pixel interface of every pipeline base pso_offline.py would put into the pipeline archive (shader_pairs.tsv and
-#    pso_pairs.tsv): a pixel shader input [[user(locnN)]] the vertex shader does not write, or writes with another type, makes metal-tt refuse the whole archive (GitHub issue #283).
-# 2. Smoke (runtime): the game in the Mac host (window, no audio), from a copy of the route's save, with the route's buttons, under a watchdog: the frame it must reach, crash (exit status,
-#    the host's CRASH line, a DiagnosticReports file), hang (no frame for `hang` seconds once frames came; before stopping the host the harness asks for its state dump, DM_CTL
-#    "dump", into the log and samples every host thread into the run folder's hang_sample.txt), the prepare step's time, [RED] lines (numbers, addresses and paths normalized; a shader
-#    the chain build does not hold counts as one kind, MISSING_LIB, whatever its name) that the baseline did not print, frame times (bench.py's DM_NVN_TSV rows), peak memory footprint, and perceptual hashes of
-#    screenshots at fixed times. The full mode first runs the pipeline prebuild (the host's DM_PSO_PREBUILD=tool, the step the Mac app's "Preparing pipelines" runs) under a watchdog
-#    and starts the game on its archive; --quick runs the chain checks and a 60 s boot without the prebuild (DM_PSO_PREBUILD=0).
-#    A route, dm/games/<id>/smoke.tsv, key <TAB> value lines: save (a folder relative to the game folder, `run` = <id>_build/run/save, `new` = empty), keys (DM_KEYS), secs (full run),
-#    quick (quick run, default 60), reach (<frame>@<seconds>: the frame number the game must have presented by then), window (<start> <TAB> <length>: the frame-time window),
-#    shots (comma-separated seconds), hang (seconds without a frame, default 20), prebuild (on / off: the full mode's prebuild, default on), capture (the frame `capture` records).
-# 4. Replay (`replay`, a game with a capture; GPU, no game run): the game's current capture (DM_NVN_CAPTURE, made by `capture` from the route's `capture` frame with the wall clock,
-#    DM_PSO_HYBRID=0 and no prebuild) replayed --repeat times by each revision's dm/gfx/tests/nvn_replay, with that revision's shader libraries (DM_MSL_DIR, DM_NVN_SHMAP on the replayer's
-#    command line, so a capture made on another chain still replays while every program's bindings match). `capture` stores the frame's noise beside it in
-#    <game folder>/<id>-work/regress/captures/ (<tree>-f<frame>.nvncap and .json, current.json names the one in use): the most pixels any of --repeat fresh replays differs from the live frame.
-#    A candidate replay beyond the tolerance (TOL replay_noise_x times the noise; none for an exact capture) while the baseline's stay within it is a REGRESSION, a capture a revision cannot replay
-#    (record layout or shader bindings changed: nvn_replay exits 2) is an ERROR asking for a new capture. report.json: games.<id>.replay = {"capture": {frame, tree, chain, noise_px, date},
-#    "baseline" / "candidate": {"exit", "secs", "busy", "red", "replays": [{"digest" (16 hex), "same", "pixels", "largest", "box"}]}}; capture: games.<id>.capture.
-# 3. Baselines: `baseline` records the runs of a revision in <game folder>/<id>-work/regress/baselines/<commit>/; `check` compares with the one of the baseline revision and records it first when there is none.
+# Per game:
+# 1. Chain (static): each revision's shader build, shader by shader: built or failed (shader_regressions.py's rule; new failing shaders apart), SHA-256 of the MSL, the
+#    reflection without chain fields and the variant libraries; kept per chain, package, profile inputs and compilers (prune_chains), cached in DMSH_CAS. Then the
+#    vertex / pixel interface of the pipeline bases pso_offline.py would archive: one [[user(locnN)]] mismatch makes metal-tt refuse the whole archive.
+# 2. Smoke: the game in the Mac host from a copy of the route's save with its buttons, under a watchdog: the frame it must reach, crash, hang (DM_CTL "dump" into the log,
+#    threads sampled into hang_sample.txt), prepare time, new [RED] lines (normalized; shaders missing from the chain build are one kind, MISSING_LIB), frame times
+#    (DM_NVN_TSV), peak footprint, screenshot hashes. Full mode runs the pipeline prebuild first (DM_PSO_PREBUILD=tool); --quick does not.
+#    Route, dm/games/<id>/smoke.tsv, key <TAB> value: save (a folder of the game folder, `run` = <id>_build/run/save, `new` = empty), keys (DM_KEYS), secs (full run),
+#    quick (default 60), reach (<frame>@<seconds>), window (<start> <TAB> <length>: the frame-time window), shots (seconds, comma-separated), hang (seconds without
+#    a frame, default 20), prebuild (on / off, default on), capture (the frame `capture` records).
+# 3. Baselines: `baseline` records a revision's runs in regress/baselines/<commit>/; `check` records a missing one first.
+# 4. Replay (GPU only): the capture (DM_NVN_CAPTURE, wall clock, DM_PSO_HYBRID=0, no prebuild) replayed --repeat times by each revision's nvn_replay with its libraries.
+#    `capture` stores its noise (most pixels a fresh replay differs from the live frame) in regress/captures/. A candidate beyond TOL replay_noise_x × noise while the
+#    baseline stays within is a REGRESSION; a capture a revision cannot replay is an ERROR.
 #
-# report.json (beside report.md, in --out, default <root>/reports/<date-time>-<command>/):
-#   {"schema": "nativenavi-regress/1", "command", "mode": "quick"|"full", "status", "exit", "started", "secs", "machine": {model, gpu, macos, xcode},
-#    "baseline": {"rev", "sha"}, "candidate": {"rev", "sha", "dirty"},
-#    "games": {<title ID>: {"name", "status", "reasons": [text], "known": [text], "secs": {"chain", "smoke"},
-#       "chain": {"kind": "nvn", "baseline": BUILD, "candidate": BUILD, "newly_failing": [{"key", "status", "error"}], "added_failing": [same],
-#                 "newly_passing": [key],
-#                 "changed": {"msl", "reflection", "variants", "shaders", "keys": [key, at most 200]}, "added": n, "removed": n,
-#                 "interface": {"baseline": n, "candidate": n, "new": [PAIR], "known": [PAIR, at most 50]}},
-#       "smoke": {"route": {...}, "baseline": [RUN], "candidate": [RUN], "diff": {"new_red": [{"text", "count"}], "missing_libs": [baseline, candidate median per run], "shots": {<s>: {"dhash_bits", "rgb_diff", "baseline_noise"}},
-#                 "fps_p50_change_pct", "frame_p99_change_pct", "peak_footprint_change_pct", "prepare_change_s", "prebuild_change_s"}}}}}
-#   BUILD = {"key", "chain", "inputs", "total", "ok", "failed", "secs" (the build's time, 0 when reused), "failed_by_status": {status: n}}
-#   PAIR = {"vs", "entry", "ps", "missing": [locnN], "type": ["locnN vs-type/ps-type"]}
-#   RUN = {"exit": code or -signal or null (stopped by the harness), "crash": {"line", "type", "signal"} or null, "hang_at_s", "hang_sample" (file name or null), "hang_dump" (the log holds the host's state dump), "first_frame_s", "max_frame", "reached",
-#          "prepare_s", "prebuild": {"secs", "pairs", "built", "archived", "failed", "done", "hang"}, "fps", "frame_p50", "frame_p99", "frame_max", "dropped", "over_budget",
-#          "peak_footprint_mb", "red": {normalized text: count}, "shots": {<s>: {"dhash"}}, "secs", "modules", "host",
-#          "pipeline": {"depth_profile": "gl"|"zero", "depth_runtime": ["gl"|"zero"], "stamp_mismatch": bool} (no depth observation = [])}
-#   status per game, worst first: ERROR (the harness could not check it), NEW-FAIL (something that worked in the baseline fails: a shader, a shader that builds but lost more than in the
-#   baseline (a deleted bindless access, extra entry points: shader_regressions.losses), the interface check, a crash, a hang, the frame not reached), REGRESSION (new [RED] lines, a screenshot beyond the tolerance, frame time, memory or prepare time worse beyond it), CHANGED (MSL or numbers differ, nothing worse),
-#   PASS. "known" lists failures the baseline has too (they do not fail the check).
-# Exit status: 0 = no regression, 1 = a regression (NEW-FAIL or REGRESSION) in some game, 2 = a harness error (and no regression found).
+# report.json and report.md go in --out (default <root>/reports/<date-time>-<command>/). Status, worst first: ERROR (the harness could not check it), NEW-FAIL (what worked
+# fails), REGRESSION (new [RED] lines, a screenshot, frame time, memory or prepare time beyond TOL), CHANGED (MSL or numbers differ), PASS; "known": failures the baseline has too.
+# Exit status: 0 = no regression, 1 = NEW-FAIL or REGRESSION in some game, 2 = a harness error.
 import argparse, collections, concurrent.futures as cf, ctypes, datetime, fcntl, hashlib, importlib.util, json, math, os, re, shutil, signal, struct, subprocess, sys, time, traceback
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
 
-def load_module(name, path):   # a module from a file (another script or tool of this checkout)
+def load_module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None: raise ImportError(f'cannot load {path}')
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
@@ -84,24 +50,23 @@ def load_module(name, path):   # a module from a file (another script or tool of
 
 bench = load_module('bench', REPO / 'scripts/bench.py')
 shader_regressions = load_module('shader_regressions', REPO / 'dm/gfx/tools/shader_regressions.py')
-proc_group = load_module('proc_group', REPO / 'dm/tools/proc_group.py')   # a heavy job in a process group of its own, stopped whole (run_heavy)
-tree_tar = load_module('tree_tar', REPO / 'dm/tools/tree_tar.py')   # a work folder's quiet folders as one file each
-shader_cache = load_module('shader_cache', REPO / 'dm/tools/shader_cache.py')   # the per-game regression compile cache, with read-only reuse of the player's
-shader_lib = load_module('shader_lib', REPO / 'dm/tools/shader_lib.py')   # a chain build's libraries as one file, read in place
+proc_group = load_module('proc_group', REPO / 'dm/tools/proc_group.py')
+tree_tar = load_module('tree_tar', REPO / 'dm/tools/tree_tar.py')
+shader_cache = load_module('shader_cache', REPO / 'dm/tools/shader_cache.py')
+shader_lib = load_module('shader_lib', REPO / 'dm/tools/shader_lib.py')
 rfs = shader_lib.romfs
-# Where they are depends on the machine (a drive with room for the trees and the game folder): set with --root / --games-dir or REGRESS_ROOT / REGRESS_GAMES, checked in main
 ROOT = Path(os.environ.get('REGRESS_ROOT', ''))
 GAMES = Path(os.environ.get('REGRESS_GAMES', ''))
-HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex')   # as build_app.py: the host's sources and headers
-RUST_FILES = ('dm/host/rust.mk', 'dm/host/rust/Cargo.toml', 'dm/host/rust/Cargo.lock', 'dm/host/rust/rust-toolchain.toml')   # as build_app.py rust_files, with the sources under dm/host/rust/src
+HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex')
+RUST_FILES = ('dm/host/rust.mk', 'dm/host/rust/Cargo.toml', 'dm/host/rust/Cargo.lock', 'dm/host/rust/rust-toolchain.toml')
 REWRITER = ('dm/tools/patch_nso.py', 'dm/tools/jump_solver.py', 'dm/tools/nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py')
 HEAVY_EXE = {'clang', 'make', 'xcodebuild', 'ld', 'ld64', 'swift-frontend', 'dotnet', 'metal', 'metal-tt', 'air-tt', 'applegpu-nt', 'dmsh_xlate', 'spirv-cross', 'cargo', 'rustc'}   # jobs that skew a measurement
-HEAVY_PY = r'(dmsh_build|shader_split|own_compilers|patch_nso)\.py'   # (the shared measuring rule)
-# Tolerances, from runs of one revision against itself (docs/development.md, The regression harness)
+HEAVY_PY = r'(dmsh_build|shader_split|own_compilers|patch_nso)\.py'
+# from runs of one revision against itself
 TOL = {'fps_pct': 10.0, 'p99_pct': 30.0, 'p99_ms': 4.0, 'footprint_pct': 15.0, 'footprint_mb': 300.0, 'prepare_s': 10.0, 'prepare_x': 1.5, 'prebuild_x': 1.5, 'prebuild_s': 30.0,
        'dhash_bits': 12, 'rgb_diff': 12.0,
-       'replay_noise_x': 2.0,
-       'missing_libs_x': 2.0, 'missing_libs': 500}   # a replay may differ from the live frame in this many times the pixels capture measured (a few replays see less than the whole spread: Breath of the Wild 154, then 157)
+       'replay_noise_x': 2.0,   # a few replays see less than the whole spread
+       'missing_libs_x': 2.0, 'missing_libs': 500}
 
 
 class HarnessError(Exception):
@@ -111,15 +76,15 @@ class HarnessError(Exception):
 VALIDATED = 'validated.tsv'
 VALIDATED_HEAD = ('# The chain this game was last green on in scripts/regress.py check / baseline --record (one row per mode, the latest of each). Written by the harness, committed with the pull request.\n'
                   '# mode <TAB> chain=<DMSH_CHAIN> commit=<short SHA>[+dirty] date=<UTC day> machine=<model> macos=<version>. No game data.\n')
-GREEN = ('PASS', 'CHANGED')   # the statuses of a game that did not get worse (finish: no regression exit for them)
+GREEN = ('PASS', 'CHANGED')
 
 
-def chain_version(root=None):   # DMSH_CHAIN of a checkout (dm/gfx/nvn/dmsh_chain.h)
+def chain_version(root=None):
     m = re.search(r'#define\s+DMSH_CHAIN\s+"([^"]+)"', (Path(root or REPO) / 'dm/gfx/nvn/dmsh_chain.h').read_text())
     return m.group(1) if m else None
 
 
-def read_validated(f):   # {mode: {field: value}}
+def read_validated(f):
     out = {}
     if Path(f).is_file():
         for line in Path(f).read_text().splitlines():
@@ -130,7 +95,7 @@ def read_validated(f):   # {mode: {field: value}}
 
 
 def record_validated(a, rep, tree, games):
-    """--record: a game that is green after a boot run gets its row for the report's mode in dm/games/<id>/validated.tsv of this checkout; every other game keeps what it had"""
+    """Every other game keeps what it had"""
     mode = rep.get('mode')
     if not getattr(a, 'record', False) or mode not in ('quick', 'full'): return []
     v, hw = chain_version(tree.path), rep.get('machine') or {}
@@ -142,7 +107,7 @@ def record_validated(a, rep, tree, games):
         d = REPO / 'dm/games' / gid
         sm = gr.get('smoke') or {}
         runs = sm.get('candidate' if rep['command'] == 'check' else 'baseline') or []
-        # PASS means no new regression: a crash or missed frame shared with the baseline is still a failed boot.
+        # a crash or missed frame shared with the baseline is still a failed boot
         if gr['status'] not in GREEN or not runs or any(run_failures(r, sm['route']) for r in runs): continue
         if gid not in profiles or not d.is_dir(): continue
         rows = read_validated(d / VALIDATED); rows[mode] = row
@@ -176,11 +141,11 @@ def sha256_file(p, h=None):
     return h
 
 
-def digest(paths, extra=b'', root=None):   # path-independent names and bytes; use relative names when a tree's directory layout matters
+def digest(paths, extra=b'', root=None):
     h = hashlib.sha256(extra)
     for p in paths:
         h.update((Path(p).relative_to(root).as_posix() if root else Path(p).name).encode() + b'\0')
-        if rfs.isfile(p): sha256_file(p, h)   # a file in a folder, or one inside an image
+        if rfs.isfile(p): sha256_file(p, h)
         else: h.update(b'missing')
         h.update(b'\0')
     return h.hexdigest()
@@ -190,7 +155,7 @@ def disk_free_gb(path='/System/Volumes/Data'):
     st = os.statvfs(path); return st.f_bavail * st.f_frsize / 1e9
 
 
-def clean_metal_cache():   # Metal's idle build folders, which every host run adds to the internal disk (scripts/clean_metal_cache.py)
+def clean_metal_cache():
     m = load_module('clean_metal_cache', REPO / 'scripts/clean_metal_cache.py')
     try: n, size, _, _ = m.clean(say=say)
     except OSError as e: say(f'[RED] Metal build folders not cleaned: {e}'); return
@@ -198,17 +163,16 @@ def clean_metal_cache():   # Metal's idle build folders, which every host run ad
 
 
 def check_disk(min_gb, clean=False):
-    """clean: remove Metal's idle build folders first (at the start of a run); they are removed anyway when the disk is under the limit"""
+    """clean: remove Metal's idle build folders first; they go anyway when the disk is under the limit"""
     free = disk_free_gb()
     if clean or free < min_gb: clean_metal_cache(); free = disk_free_gb()
     if free < min_gb: raise HarnessError(f'the internal disk has {free:.1f} GB free, under {min_gb} GB (Metal caches land there): stopped')
     return free
 
 
-# ---------------------------------------------------------------- revisions
 
 class Tree:
-    """One revision checked out into <root>/trees/<id>: a commit, or this checkout's working tree (a stash commit of its tracked changes, its untracked files copied over)"""
+    """A commit, or this checkout's working tree (a stash commit of its tracked changes, its untracked files copied over)"""
     def __init__(self, rev):
         self.rev, self.dirty, untracked = rev, False, []
         if rev == 'worktree':
@@ -229,7 +193,7 @@ class Tree:
             for u in untracked:
                 (self.path / u).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(REPO / u, self.path / u)
 
-    def py(self, code, env=None, stdin=None):   # a Python snippet run in the tree (its own modules)
+    def py(self, code, env=None, stdin=None):
         r = sh([sys.executable, '-c', code], cwd=self.path, env=env, input=stdin)
         if r.returncode: raise HarnessError(f'{self.id}: {r.stderr.strip()[-400:]}')
         return r.stdout.strip()
@@ -238,7 +202,6 @@ class Tree:
         return {'rev': self.rev, 'sha': self.commit, **({'dirty': True, 'snapshot': self.sha} if self.dirty else {})}
 
 
-# ---------------------------------------------------------------- games
 
 def game_root(g):
     return g.folder / f'{g.id}-work' / 'regress'
@@ -250,8 +213,8 @@ class Game:
         self.name = re.sub(r'\s*\[[0-9A-Fa-f]{16}\]\s*$', '', folder.name)
         self.patched = bench.newest(build.glob('patched_v*'))
         self.ver = self.patched.name.removeprefix('patched_') if self.patched else None
-        self.split = (build / 'shader/pkg').is_dir()   # the shader split's package, which the chain checks translate
-        # The build's own profile runs instead of dm/games' only when it is derived (the packing script's <id>.derived.key beside it: a version the game's profile was not brought up on)
+        self.split = (build / 'shader/pkg').is_dir()
+        # the build's own profile only when the packing script derived it
         own = build / 'profile' / self.id
         self.derived = (own / 'game.tsv').is_file() and (build / 'profile' / f'{self.id}.derived.key').is_file()
 
@@ -264,7 +227,7 @@ class Game:
         if not f.is_file() and self.derived: f = self.build / 'profile' / self.id / 'smoke.tsv'
         return read_route(f) if f.is_file() else None
 
-    def env(self, tree):   # shader tools write profile tables: use a copy in the game's work folder, keeping the revision tree and the player's build untouched
+    def env(self, tree):   # shader tools write profile tables: a copy keeps the revision tree and the player's build untouched
         env = dict(os.environ, DM_GAME=self.id)
         prof = self.profile_dir(tree)
         env.update(DM_GAMES_DIR=str(prof.parent), DM_GAMES_FIRST='1')
@@ -275,7 +238,7 @@ class Game:
 
     def profile_dir(self, tree):
         src = (self.build / 'profile' if self.derived else tree.path / 'dm/games') / self.id
-        key = digest(sorted(p for p in src.glob('*') if p.is_file() and p.name != VALIDATED))[:16]   # validated.tsv records a result about the profile, it is not an input of it
+        key = digest(sorted(p for p in src.glob('*') if p.is_file() and p.name != VALIDATED))[:16]   # validated.tsv is a result, not an input
         dst = game_root(self) / 'profiles' / key / self.id
         if not (dst / 'game.tsv').is_file(): shutil.copytree(src, dst, ignore=shutil.ignore_patterns(VALIDATED))
         return dst
@@ -304,7 +267,7 @@ def find_games(want=None):
         for b in folder.glob('*_build'):
             if re.fullmatch(r'[0-9A-Fa-f]{16}_build', b.name) and (b / 'tools/dmhost').is_file():
                 g = Game(folder, b)
-                # a title without a profile in dm/games is not this repository's game (a build another project left beside it): no revision here can translate or run it
+                # another project's build: no revision here can translate or run it
                 if g.patched and g.split and (REPO / 'dm/games' / g.id / 'game.tsv').is_file(): found[g.id] = g
     for s in [x.strip().upper() for x in os.environ.get('REGRESS_SKIP', '').split(',') if x.strip()]:
         if not want or s not in [w.upper() for w in want]: found.pop(s, None)
@@ -315,11 +278,10 @@ def find_games(want=None):
     return list(found.values())
 
 
-# ---------------------------------------------------------------- chain: build and manifest
 
 def toolchain_fp():
     out = []
-    for cmd in (['xcrun', '-sdk', 'macosx', 'metal', '--version'], ['xcrun', '-sdk', 'macosx', '--show-sdk-build-version']):   # spirv-cross is each tree's own: in its chain key
+    for cmd in (['xcrun', '-sdk', 'macosx', 'metal', '--version'], ['xcrun', '-sdk', 'macosx', '--show-sdk-build-version']):
         r = sh(cmd); out.append(r.stdout + r.stderr)
     return hashlib.sha256('\0'.join(out).encode()).hexdigest()
 
@@ -333,22 +295,21 @@ def chain_key(tree, g, tools):
     if not pairs.is_file(): pairs = g.build / 'shader/pso_pairs.tsv'
     side += digest([pairs])
     env = g.env(tree)
-    selected = env.get('SPIRV_CROSS', str(tree.path / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'))   # the tree's own spirv-cross, or the one SPIRV_CROSS names
+    selected = env.get('SPIRV_CROSS', str(tree.path / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'))
     side += digest([Path(shutil.which(selected, path=env.get('PATH')) or selected)])
     return v, inp, f'{CHAIN_KIND}-{v}-{inp}-{hashlib.sha256((tools + side + sources).encode()).hexdigest()[:16]}'
 
 
-CHAIN_KIND = 'nvn'   # what a chain build's key starts with and its manifest and the report call the shaders' API (report.json: chain.kind)
-CHAIN_KEEP, CHAIN_KEEP_HOURS = 3, 24   # prune_chains
-WORK_FOLDERS = set()   # the work folders of the games this run built chains for: main packs their quiet folders (tree_tar.pack_quiet) at its end
+CHAIN_KIND = 'nvn'
+CHAIN_KEEP, CHAIN_KEEP_HOURS = 3, 24
+WORK_FOLDERS = set()
 
 
 def chain_build(tree, g, a):
-    """The game's shaders built into its work folder's regress/chain/<key>/ (reused when its manifest is there): → manifest"""
     v, inp, key = chain_key(tree, g, a.tools_fp)
     out = game_root(g) / 'chain' / key
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.parent / f'{key}.lock', 'w') as lk:   # one build per chain key: another regress.py building the same one (another session, the same game) is waited for, then reused
+    with open(out.parent / f'{key}.lock', 'w') as lk:   # another regress.py building the same key is waited for, then reused
         try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             say(f'  {g.id}: another process is building chain {key}: waiting for it'); fcntl.flock(lk, fcntl.LOCK_EX)
@@ -359,9 +320,8 @@ def chain_build(tree, g, a):
 
 
 def prune_chains(g):
-    """Remove the game's chain builds beyond the CHAIN_KEEP used last, which a later check that needs one builds again (its compile cache saves most of that): Tears of the Kingdom held 45, Breath of the Wild 57,
-    each a library for each of 28,669 shaders. Kept too: any used in the last CHAIN_KEEP_HOURS (another session's game may be running from it, holding no lock) and those of the newest
-    CHAIN_KEEP stored baselines. A build's <key>.lock is rewritten at each use, so its time is the last use. A build being made holds its lock and stays. Only names of the form chain_key gives go"""
+    """Kept: the CHAIN_KEEP used last, any used in the last CHAIN_KEEP_HOURS (another session may run from it without a lock), those of the newest
+    CHAIN_KEEP baselines. A build's <key>.lock is rewritten at each use, so its time is the last use. Only names of the form chain_key gives go"""
     root = game_root(g) / 'chain'
     def used(p):
         lock = p.with_name(p.name + '.lock')
@@ -390,23 +350,23 @@ def prune_chains(g):
 
 
 def chain_cache(g):
-    """One regression cache per game, shared across revisions and runs. The player's cache is only a read-only fallback, never copied or repaired here"""
+    """The player's cache is only a read-only fallback, never copied or repaired here"""
     return game_root(g) / 'cas.db'
 
 
 def shader_cache_limit(g, a):
-    """Four full libraries of headroom, at least 8 GiB; an explicit --shader-cache-gb is a fixed budget. Recomputed after a build, so a larger new library raises the automatic limit."""
+    """Recomputed after a build, so a larger new library raises the automatic limit."""
     explicit = getattr(a, 'shader_cache_gb', None)
     if explicit is not None: return int(explicit * (1 << 30))
     images = list((g.build / 'shader/cache').glob('b-*.img')) + list((game_root(g) / 'chain').glob('*/b-*.img'))
     largest = 0
     for p in images:
         try: largest = max(largest, p.stat().st_size)
-        except FileNotFoundError: pass   # another session pruned an old library
+        except FileNotFoundError: pass
     return max(8 << 30, 4 * largest)
 
 
-def regression_cache(g, a):   # the game's regression cache for the time of a build, trimmed to its limit while no build uses it
+def regression_cache(g, a):
     return shader_cache.bounded(chain_cache(g), lambda: shader_cache_limit(g, a), say)
 
 
@@ -417,7 +377,7 @@ def shader_cache_gb(value):
     return n
 
 
-def chain_lib(out):   # a chain build's library, to read: its folder or its one file
+def chain_lib(out):
     return shader_lib.view(next(p for p in sorted(out.glob('b-*')) if not p.name.endswith('.part')))
 
 
@@ -427,30 +387,28 @@ def chain_build_locked(tree, g, a, v, inp, key, out):
     if mf.is_file():
         m = json.loads(mf.read_text()); m['secs'] = 0
         lib = shader_lib.view(out / f'b-{v}')
-        if m.get('hashes') != NVN_HASHES and (lib / '_b_build.json').is_file():   # made by an older nvn_manifest: its hashes would not compare with this one's
+        if m.get('hashes') != NVN_HASHES and (lib / '_b_build.json').is_file():
             say(f'  {g.id}: hashing the outputs of chain {v} again (manifest hashes {m.get("hashes", 1)} → {NVN_HASHES})')
             m['shaders'] = nvn_manifest(lib, jobs); m['hashes'] = NVN_HASHES
             mf.write_text(json.dumps({k: x for k, x in m.items() if k != 'secs'}, indent=0))
-        # The archive planner and depth mode can change without changing the translation chain. The libraries become one file once this run has read what it needs from them;
-        # a host of another session running from the folder goes on from the image
+        # again: the archive planner and depth mode change without the chain
         m['interface'] = interface_check(tree, g, out); shader_lib.pack(out / f'b-{v}', say)
         return m, out
     out.mkdir(parents=True, exist_ok=True); tmp = game_root(g) / 'tmp'; tmp.mkdir(exist_ok=True)
     env = g.env(tree); env.update(WORK=str(tmp), TMPDIR=str(tmp) + '/', J=str(jobs))
     t0 = time.time(); log = out / 'build.log'
-    done = (out / 'built.ok').is_file()   # a build whose outputs are complete (a run stopped while hashing, or a build made by hand); its manifest is made again
+    done = (out / 'built.ok').is_file()
     tools_dir = tree.path / 'dm/gfx/tools'
     env.update(XLATE=str(tools_dir / 'dmsh_xlate_bin/dmsh_xlate'), DMSH_CAS=str(chain_cache(g)))
     lib = out / f'b-{v}'
     if not done:
         say(f'  {g.id}: chain {v} (inputs {inp}) of {tree.id}: translating the shaders ({jobs} workers) → {out}')
-        # the tree's builder with this checkout's shader_cache.py, which reads the player's cache without writing it
         command = [sys.executable, REPO / 'dm/tools/shader_cache.py', '--run', '--readonly', g.build / 'shader/cache', tools_dir / 'own_compilers.py', g.build / 'shader/pkg', out]
         rc, paused = run_heavy(command, log, tree.path, env, a, f'{g.id} shader build')
         t0 += paused
-        if rc or not (shader_lib.view(lib) / '_b_build.json').is_file():   # in the image dmsh_build.py writes, or in its folder when the image could not be written
+        if rc or not (shader_lib.view(lib) / '_b_build.json').is_file():
             raise HarnessError(f'{g.id}: dmsh_build.py of {tree.id} failed (exit {rc}); last lines of {log}:\n' + ''.join(collections.deque(open(log, errors='replace'), maxlen=8)))
-        prof = out / 'profile'; prof.mkdir(exist_ok=True)   # the tables the host reads beside the shader map, as this build made them
+        prof = out / 'profile'; prof.mkdir(exist_ok=True)
         for src in g.profile_dir(tree).glob('*.tsv'): shutil.copyfile(src, prof / src.name)
         (out / 'built.ok').write_text(f'{tree.id}\n')
     say(f'  {g.id}: hashing the outputs of chain {v}')
@@ -465,11 +423,11 @@ def chain_build_locked(tree, g, a, v, inp, key, out):
     return m, out
 
 
-NVN_HASHES = 3   # how nvn_manifest hashes; a reused manifest of another number is hashed again from its outputs (2: variant reflections without the chain stamps; 3: each shader's losses)
+NVN_HASHES = 3   # a reused manifest of another number is hashed again
 
 
 def refl_canon(p):
-    """A reflection's JSON without the chain stamps (chain, chain_metal, chain_compiler), which every chain change rewrites; None when it does not read"""
+    """Without the chain stamps, which every chain change rewrites"""
     try: j = json.loads(rfs.Path(p).read_bytes())
     except (OSError, ValueError): return None
     for k in ('chain', 'chain_metal', 'chain_compiler'): j.pop(k, None)
@@ -482,14 +440,12 @@ def refl_hash(p):
 
 
 def refl_losses(p):
-    """{deleted: {type: the accesses the translator deleted}, lost: {name: 1 for each entry point the library built without}}, each only when there are some (shader_regressions.losses)"""
     try: deleted, lost = shader_regressions.losses(json.loads(rfs.Path(p).read_bytes()))
     except (OSError, ValueError): return {}
     return {**({'deleted': dict(deleted)} if deleted else {}), **({'lost': dict(lost)} if lost else {})}
 
 
 def nvn_manifest(lib, jobs):
-    """{key: {st, err, msl, refl, var}} from dmsh_build.py's report and outputs"""
     files = collections.defaultdict(list)
     for n in rfs.os.listdir(lib):
         m = re.match(r'([0-9a-f]{16})_b', n)
@@ -503,7 +459,7 @@ def nvn_manifest(lib, jobs):
         var = [n for n in names if n not in (f'{k}_b.metal', f'{k}_b.json', f'{k}_b.metallib')]
         if var:
             h = hashlib.sha256()
-            for n in var:   # reflections without their chain stamps; MSL and metallibs as bytes (a metallib is the only output of some variants, and the same MSL compiles to the same bytes)
+            for n in var:   # metallibs as bytes: the only output of some variants, and the same MSL compiles to the same bytes
                 h.update(n[16:].encode())
                 j = refl_canon(lib / n) if n.endswith('.json') else None
                 if j is None: sha256_file(lib / n, h)
@@ -513,14 +469,12 @@ def nvn_manifest(lib, jobs):
     with cf.ThreadPoolExecutor(max(2, jobs)) as ex: return dict(ex.map(one, rows))
 
 
-# ---------------------------------------------------------------- the vertex / pixel interface of the archive's pipeline bases (GitHub issue #283)
 
 STRUCT = re.compile(r'struct\s+(\w+)\s*\{(.*?)\n\};', re.S)
 FIELD = re.compile(r'([\w:<>, ]+?)\s+(\w+)(?:\s*\[\d+\])?\s*\[\[([^\]]*)\]\]\s*;')
 
 
 def msl_io(src, entry, stage):
-    """{locnN: type} of an entry point's [[user(locnN)]] outputs (vertex: its return struct) or stage inputs (fragment: its [[stage_in]] struct); None when the entry is not found"""
     m = re.search(r'\b(vertex|fragment)\s+(\w+)\s+' + re.escape(entry) + r'\s*\(', src)
     if not m: return None
     if stage == 'vs': name = m.group(2)
@@ -538,16 +492,15 @@ def msl_io(src, entry, stage):
 
 
 def interface_check(tree, g, out):
-    """The shader pairs of shader_pairs.tsv and pso_pairs.tsv whose pixel shader reads a [[user(locnN)]] input that the vertex shader does not write, or writes with another type,
-    among the pipeline bases pso_offline.py would put into the archive (the tree's pso_offline.plan, run on those pairs only: it reads every library): metal-tt refuses such a
-    pipeline, and one refused pipeline fails the whole archive (GitHub issue #283). The entry points are pso_offline's: the reflection's entry (entry_z for a near = 0 game)"""
+    """Pairs whose pixel shader reads a [[user(locnN)]] input the vertex shader does not write or writes with another type, among the bases pso_offline.plan
+    would archive: one refused pipeline fails the whole archive"""
     lib = chain_lib(out); chain = shader_lib.name_of(lib)[2:]
     prof = g.profile_dir(tree)
     pairs = [prof / 'shader_pairs.tsv', prof / 'pso_pairs.tsv' if (prof / 'pso_pairs.tsv').is_file() else g.build / 'shader/pso_pairs.tsv']
     po = tree.path / 'dm/gfx/tools/pso_offline.py'
     if not po.is_file(): return {'checked': 0, 'note': 'no pso_offline.py in this revision', 'bad': []}
     env = g.env(tree)
-    # Run pso_offline in the tree's own Python process so baseline and candidate never share sys.modules (dmsh_abi, dmsh_side, romfs, ...)
+    # in the tree's own process, so the revisions never share sys.modules
     todo = [tuple(pr) for pr in json.loads(tree.py(
         "import json, sys; sys.path.insert(0, 'dm/gfx/tools'); import pso_offline as po; "
         "print(json.dumps(po.read_pairs(po.pair_text(json.load(sys.stdin)))))",
@@ -585,15 +538,14 @@ def chain_diff(b, c):
     bs, cs = b['shaders'], c['shaders']
     common = bs.keys() & cs.keys()
     rows = lambda m: [{'key': k, 'st': v['st'], 'err': v.get('err', '')} for k, v in sorted(m.items())]
-    # the rule of shader_regressions.py, which the packing script runs after each shader build: ok in the earlier build, not ok now; a new key does not count there
     nf = [{'key': k, 'status': st, 'error': err} for k, st, err in shader_regressions.lost(rows(bs), rows(cs))]
     af = [{'key': k, 'status': cs[k]['st'], 'error': cs[k].get('err', '')} for k in sorted(cs.keys() - bs.keys()) if cs[k]['st'] != 'ok']
     npass = [k for k in sorted(common) if bs[k]['st'] != 'ok' and cs[k]['st'] == 'ok']
     ch = collections.Counter(); keys = []
     for k in sorted(common):
         if bs[k]['st'] != 'ok' or cs[k]['st'] != 'ok': continue
-        d = [f for f, label in (('msl', 'msl'), ('refl', 'reflection'), ('var', 'variants')) if bs[k].get(f) != cs[k].get(f)]
-        for f in d: ch[{'msl': 'msl', 'refl': 'reflection', 'var': 'variants'}[f]] += 1
+        d = [label for f, label in (('msl', 'msl'), ('refl', 'reflection'), ('var', 'variants')) if bs[k].get(f) != cs[k].get(f)]
+        ch.update(d)
         if d: keys.append(k)
     out = {'newly_failing': nf, 'added_failing': af, 'newly_passing': npass, 'changed': {'msl': ch['msl'], 'reflection': ch['reflection'], 'variants': ch['variants'], 'shaders': len(keys), 'keys': keys[:200]},
            'added': len(cs.keys() - bs.keys()), 'removed': len(bs.keys() - cs.keys())}
@@ -612,7 +564,7 @@ LOSS_TEXT = {'deleted': 'bindless accesses the translator deleted', 'lost': 'ext
 
 
 def loss_diff(bs, cs):
-    """The shaders that lost more than in the baseline, shader by shader, not by totals: a fix in one shader must not hide a new loss in another. A shader new in the candidate starts from none."""
+    """Shader by shader, not by totals: a fix in one shader must not hide a new loss in another."""
     def total(m, kind): return sum(sum(e.get(kind, {}).values()) for e in m.values())
     out = {}
     for kind in LOSS_TEXT:
@@ -623,7 +575,6 @@ def loss_diff(bs, cs):
 
 
 def loss_levels(loss, levels, known):
-    """A rise is NEW-FAIL; the losses the baseline has too are known (the game notes list them), and fewer of them is CHANGED"""
     for kind, text in LOSS_TEXT.items():
         x = loss[kind]
         if x['rose']: levels['NEW-FAIL'].append(f"{x['rose']} shaders with more {text} than in the baseline")
@@ -635,15 +586,14 @@ def build_summary(m):
     return {k: m.get(k) for k in ('key', 'chain', 'inputs', 'total', 'ok', 'failed', 'failed_by_status')} | {'secs': m.get('secs', 0)}
 
 
-# ---------------------------------------------------------------- host and rewritten modules of a revision
 
 def host_for(tree, g, jobs):
     srcs = [p for d in HOST_DIRS for p in sorted((tree.path / d).iterdir()) if p.is_file() and p.suffix in ('.c', '.m', '.h', '.S', '.inc')]
     rs = tree.path / 'dm/host/rust/src'
-    srcs += [tree.path / f for f in RUST_FILES if (tree.path / f).is_file()] + (sorted(rs.rglob('*.rs')) if rs.is_dir() else [])   # a baseline from before the Rust library has none
-    r = sh(['make', '-s', f'GAME={g.id}', 'host_msl'], cwd=tree.path / 'dm/host', env=g.env(tree))   # the host's own Metal sources, compiled at build time (dm/gfx/tools/host_msl.py)
+    srcs += [tree.path / f for f in RUST_FILES if (tree.path / f).is_file()] + (sorted(rs.rglob('*.rs')) if rs.is_dir() else [])
+    r = sh(['make', '-s', f'GAME={g.id}', 'host_msl'], cwd=tree.path / 'dm/host', env=g.env(tree))
     if r.returncode: raise HarnessError(f'{g.id}: host shader libraries of {tree.id} do not build:\n{r.stdout}{r.stderr}')
-    srcs.append(tree.path / 'dm/host/gen/msl-macosx/host_msl_gen.h')   # includes sources, compiler, SDK and deployment target, even on a cache hit
+    srcs.append(tree.path / 'dm/host/gen/msl-macosx/host_msl_gen.h')
     key = digest(srcs + [tree.path / 'dm/host/Makefile', g.profile_dir(tree) / 'game.tsv', tree.path / 'dm/games/game.py'], g.id.encode())[:16]
     dst = game_root(g) / 'host' / key / 'dmhost'
     if dst.is_file(): return dst, key, 0
@@ -664,20 +614,17 @@ def rewriter_key(tree):
 
 
 def modules_for(tree, g, rewrite, jobs):
-    """The rewritten modules a run takes: the build's (rewrite False), or the tree's patch_nso.py on the build's extracted modules, cached by the rewriter's files"""
     if not rewrite: return g.patched, 'build'
     key = rewriter_key(tree)
     dst = game_root(g) / 'patched' / key / g.patched.name
     if (dst / '.done').is_file(): return dst, key
     mods = g.env(tree)
     if not g.derived:
-        # Registered builds rewrite with this revision's original profile. The
-        # shader-table copy also contains patches.py; exposing both registers
-        # each build's cuts twice. A derived profile still needs its path.
+        # with both on the path each build's cuts would register twice
         mods.pop('DM_GAMES_DIR', None)
         mods.pop('DM_GAMES_FIRST', None)
     names = tree.py(f"import sys; sys.path.insert(0, 'dm/games'); import game; print(' '.join(game.load({g.id!r}).words('modules')))", mods).split()
-    src = {m: g.build / 'extract' / g.ver / 'ExeFS' / m for m in names if m == 'main' or (g.build / 'extract' / g.ver / 'ExeFS' / m).is_file()}   # a version may lack a module another has
+    src = {m: g.build / 'extract' / g.ver / 'ExeFS' / m for m in names if m == 'main' or (g.build / 'extract' / g.ver / 'ExeFS' / m).is_file()}
     shutil.rmtree(dst, ignore_errors=True); dst.mkdir(parents=True)
     say(f'  {g.id}: rewriting {len(src)} modules with the rewriter of {tree.id}')
     procs, todo = {}, list(src)
@@ -693,7 +640,6 @@ def modules_for(tree, g, rewrite, jobs):
     return dst, key
 
 
-# ---------------------------------------------------------------- the measuring lock and the Mac's load
 
 def pid_alive(pid):
     try: os.kill(pid, 0); return True
@@ -714,7 +660,7 @@ def own_tree():
     return kids
 
 
-def heavy_jobs():   # other builds now running: not this process's, not stopped, not another regress.py's (whose builds pause while the measuring lock is held)
+def heavy_jobs():
     r = sh(['ps', '-axo', 'pid=,ppid=,stat=,%cpu=,command=']); out = []; rows = {}
     for ln in r.stdout.splitlines():
         pid, ppid, stat, cpu, cmd = (ln.split(None, 4) + ['', '', '', ''])[:5]
@@ -734,13 +680,13 @@ def heavy_jobs():   # other builds now running: not this process's, not stopped,
     for pid, (parent, stat, cpu, cmd) in rows.items():
         words = cmd.split(); exe = os.path.basename(words[0]) if words else ''
         if managed(pid) or stat.startswith('T') or not (exe in HEAVY_EXE or re.search(HEAVY_PY, cmd)): continue
-        # MSBuild reuse workers outlive their build. A sleeping, zero-CPU orphan is idle; active or I/O-blocked workers and build commands still count.
+        # MSBuild reuse workers outlive their build: a sleeping zero-CPU orphan is idle
         if exe == 'dotnet' and parent == 1 and stat.startswith('S') and cpu == 0 and any(w.endswith('/MSBuild.dll') for w in words[1:]) and '/nodemode:1' in words and '/nodeReuse:true' in words: continue
         out.append(f'{pid} {cmd}')
     return out
 
 
-def wait_idle(limit):   # the shared rule: measure only while no build or other heavy job runs
+def wait_idle(limit):
     t0, said = time.time(), False
     while time.time() - t0 < limit:
         jobs = heavy_jobs()
@@ -752,18 +698,16 @@ def wait_idle(limit):   # the shared rule: measure only while no build or other 
 
 def take_lock(lock, what):
     if not lock: return
-    say(f'    taking the measuring lock {lock}') if lock.exists() else None
+    if lock.exists(): say(f'    taking the measuring lock {lock}')
     bench.wait_lock(lock, f'regress.py {what}')
 
 
-HEAVY_POLL = 2   # seconds between looks at the measuring lock while a heavy job runs
+HEAVY_POLL = 2
 
 
 def run_heavy(cmd, log, cwd, env, a, what):
-    """A heavy job (a shader build) in its own process group, stopped (SIGSTOP) while another process holds the measuring lock and resumed when it is free, so it never
-    skews someone else's measurement (the shared rule: heavy jobs wait for the lock). The group is proc_group's: an interrupt, a SIGTERM (main) or an error here stops all of
-    it, resumed first; a process of the group still running proc_group.DRAIN s after the job's own exit is stopped and fails the job (exit status 1 when the job's own was 0;
-    its line ends the log: what it writes may be incomplete). → (exit status, seconds paused)"""
+    """Stopped (SIGSTOP) while another process holds the measuring lock, so it never skews someone else's measurement. A group process still running
+    proc_group.DRAIN s after the job's own exit is stopped and fails the job. → (exit status, seconds paused)"""
     paused, t_pause = 0.0, None
     with open(log, 'w') as f, proc_group.Group(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT) as g:
         while g.p.poll() is None:
@@ -774,50 +718,47 @@ def run_heavy(cmd, log, cwd, env, a, what):
                 g.resume(); paused += time.time() - t_pause; t_pause = None; say(f'    {what}: resumed')
             try: g.p.wait(HEAVY_POLL)
             except subprocess.TimeoutExpired: pass
-        if t_pause is not None: paused += time.time() - t_pause   # it ended while stopped (killed from outside)
+        if t_pause is not None: paused += time.time() - t_pause
         rc = g.finish()
-        if g.stragglers:   # at the log's end (the job's descriptor shares its offset), where the caller's message reads it
+        if g.stragglers:   # the job's descriptor shares the log's offset
             msg = f'[RED] the job exited, but {proc_group.describe(g.stragglers)} still ran {g.drain:g} s later and was stopped: what it writes may be incomplete\n'
             os.write(f.fileno(), msg.encode())
     if g.stragglers: say(f'    {what}: ' + msg.removeprefix('[RED] ').rstrip()); rc = rc or 1
     return rc, round(paused)
 
 
-# ---------------------------------------------------------------- one game run
 
 _libproc = ctypes.CDLL('/usr/lib/libproc.dylib')
 
 
-def footprint(pid):   # (current, lifetime peak) physical footprint in bytes (proc_pid_rusage, RUSAGE_INFO_V4)
+def footprint(pid):   # RUSAGE_INFO_V4
     buf = ctypes.create_string_buffer(512)
     if _libproc.proc_pid_rusage(pid, 4, buf) != 0: return None
     v = struct.unpack_from('<16x35Q', buf.raw)
     return v[7], v[28]
 
 
-# A shader the run asked for that the chain build does not hold (which ones a run asks for depends on its timing: about 2,000 per Tears of the Kingdom run, different names each
-# run, baseline too): one kind, counted, not one kind per name. A library Metal could not load ("failed to load shader <key>_b: <Metal's error>") stays a kind of its own.
+# which shaders a run asks for depends on its timing: one counted kind. A library Metal could not load stays its own kind.
 MISSING_LIB = 'shader library missing from the chain build'
 MISSING_RE = re.compile(r'failed to load shader [^\s:]*(: (cannot open|no reflection json)|$)|shader [^\s:]* \(\w+\) failed to load: build the shaders'
                         r'|pulling library of [^\s:]* not usable \(no library: cannot open')
 
 
 def red_messages(line):
-    """The [RED] messages of one log line: a message written past LOG's stream lock (dm/host/dm.h) can land before another line's newline, so two messages share a line
-    ("…_b.metallib[dm] [nvn-mtl] [RED] failed to load shader …")"""
+    """A message written past LOG's stream lock (dm/host/dm.h) can land before another line's newline, so two messages share a line"""
     return ['[RED] ' + re.sub(r'\[dm\](\s*\[[\w-]+\])*\s*$', '', m).strip() for m in line.split('[RED]')[1:]]
 
 
 def normalize_red(line):
     s = line.split('[RED]', 1)[1].strip()
-    s = re.sub(r'(/[^\s:;,()\'"]+)(\s+\S*/[^\s:;,()\'"]+)*', '<path>', s)   # a path, also one with spaces in its folder names
-    s = re.sub(r'\b0x[0-9a-fA-F]+\b', '#', s)   # a hex number is a number as a decimal one is: a value printed with %#x reads 0 when it is zero ("x1=0" against "x1=0x1")
-    s = re.sub(r'(?<![0-9a-fA-F])[0-9a-f]{16}(?![0-9a-fA-F])', '<key>', s)   # also one with a suffix ("c41c950044f80287_b": no word boundary before the "_")
+    s = re.sub(r'(/[^\s:;,()\'"]+)(\s+\S*/[^\s:;,()\'"]+)*', '<path>', s)
+    s = re.sub(r'\b0x[0-9a-fA-F]+\b', '#', s)   # %#x prints 0 for zero ("x1=0" against "x1=0x1")
+    s = re.sub(r'(?<![0-9a-fA-F])[0-9a-f]{16}(?![0-9a-fA-F])', '<key>', s)   # no word boundary before "_b"
     s = re.sub(r'\d+(\.\d+)?', '#', s)
     return MISSING_LIB if MISSING_RE.match(s) else s[:200]
 
 
-def red_counts(r):   # a run's [RED] kinds and their counts
+def red_counts(r):
     return collections.Counter(r.get('red', {}))
 
 
@@ -835,8 +776,7 @@ def read_log(text):
 
 
 def pipeline_status(text, zero):
-    """The depth selected by NVN versus the profile's archive input, and a bundled archive whose stamp was rejected (issue #758).
-    No depth line means unknown, not GL: a route that never initializes NVN gives no evidence about the game's mode."""
+    """No depth line means unknown, not GL: a route that never initializes NVN gives no evidence."""
     modes = re.findall(r'\[(?:nvn-mtl|nvn)\] depth mode:? near=(0|-w)\b', text)
     return {'depth_profile': 'zero' if zero else 'gl', 'depth_runtime': list(dict.fromkeys('zero' if m == '0' else 'gl' for m in modes)),
             'stamp_mismatch': bool(re.search(r'pipeline archive bundled with the app: made for [^\n]*, this run needs ', text))}
@@ -853,7 +793,7 @@ def crash_report(t0):
     return None
 
 
-def thumb(png, w, h):   # w × h RGB pixels of a PNG, resampled by sips (no Python imaging package needed)
+def thumb(png, w, h):   # sips: no Python imaging package needed
     bmp = png.with_name(f'{png.stem}.{w}x{h}.bmp')
     r = sh(['sips', '-s', 'format', 'bmp', '-z', h, w, png, '--out', bmp])
     if r.returncode or not bmp.is_file(): return None
@@ -868,7 +808,7 @@ def thumb(png, w, h):   # w × h RGB pixels of a PNG, resampled by sips (no Pyth
 
 
 def shot_hashes(png):
-    """dHash (64 bits: brightness gradients of a 9 × 8 thumbnail, hex) and a 16 × 16 RGB thumbnail (hex, kept in the baseline, not the report)"""
+    """dHash (64 bits, of a 9 × 8 thumbnail) and a 16 × 16 RGB thumbnail (kept in the baseline, not the report)"""
     a, t = thumb(png, 9, 8), thumb(png, 16, 16)
     if not a or not t: return None
     g = [0.299 * r + 0.587 * gg + 0.114 * bb for r, gg, bb in a]
@@ -883,8 +823,7 @@ def shot_distance(a, b):
 
 
 def save_source(g, route):
-    """The save a run starts from: a folder of the game folder (fixed saves, never written), none for `new`, and for `run` a copy of <id>_build/run/save frozen at its first
-    use in <game folder>/<id>-work/regress/save-run (the build's own save changes whenever someone plays)"""
+    """`run`: a copy of <id>_build/run/save frozen at its first use in regress/save-run (the build's own save changes whenever someone plays)"""
     if route['save'] == 'new': return None
     if route['save'] != 'run': return g.folder / route['save']
     frozen = game_root(g) / 'save-run'
@@ -898,16 +837,14 @@ def save_digest(d):
 
 
 def smoke_context(g, art, route, a, hardware):
-    """Reuse a baseline only for the same route, save bytes, build artifacts, machine and run settings. Old records without this context are recorded again."""
     env = {k: v for k, v in os.environ.items() if k.startswith(('DM_', 'DMSH_', 'XLATE_'))}
-    # Version 2 also records pipeline_status: older cached runs cannot establish whether the profile matched runtime depth.
+    # checks 2: a cached run of an earlier number cannot tell whether the profile's depth matched
     return json.loads(json.dumps({'checks': 2, 'route': route, 'save': save_digest(save_source(g, route)), 'host': art['host_key'], 'modules': art['modules_key'], 'chain': art['manifest']['key'],
                                  'profile': digest(sorted(art['profile'].glob('*.tsv'))), 'machine': hardware, 'tools': a.tools_fp, 'env': env, 'overrides': a.env,
                                  'no_hud': a.no_hud, 'runs': a.runs, 'prebuild_limit': a.prebuild_limit, 'prebuild_hang': a.prebuild_hang}))
 
 
 def run_env(g, art, route, outdir, a):
-    """A fresh run folder (a copy of the route's save, an empty temp) and the host's environment for it → (env, the save it started from)"""
     lib, prof = art['lib'], art['profile']
     shutil.rmtree(outdir, ignore_errors=True); outdir.mkdir(parents=True)
     save, temp = outdir / 'save', outdir / 'temp'
@@ -926,13 +863,12 @@ def run_env(g, art, route, outdir, a):
 
 
 def smoke_run(g, tree, art, route, quick, outdir, a):
-    """One run of the route: the prebuild (full mode), then the game, under the watchdog → RUN (see the header)"""
     host, modules = art['host'], art['modules']
     secs = route['quick'] if quick else route['secs']
     env, src_save = run_env(g, art, route, outdir, a)
     res = {'secs': secs, 'host': art['host_key'], 'modules': art['modules_key'], 'save': save_digest(src_save)}
     prebuild = not quick and route['prebuild'] == 'on'
-    if prebuild:   # the pipeline prebuild into <run>/pso_archive, as the packing script's Mac build and the Mac app's prepare step run it
+    if prebuild:
         penv = dict(env, DM_PSO_PREBUILD='tool'); penv.pop('DM_WINDOW', None)
         if g.get_depth_zero: penv['DM_PSO_PREBUILD_DEPTH'] = 'zero'
         r = run_watched([host], penv, outdir, outdir / 'prebuild.log', a, limit=a.prebuild_limit, hang=a.prebuild_hang, kind='prebuild', what=f'{g.id} prebuild')
@@ -969,8 +905,7 @@ def smoke_run(g, tree, art, route, quick, outdir, a):
 
 
 def hang_evidence(p, cwd):
-    """Before the watchdog stops a hung host: its own state dump into the log (DM_CTL "dump": what each guest thread waits on, the graphics wait points; a host from before
-    the command reads the line as a press of no button) and every host thread's stack (macOS sample) → the sample's file name in the run folder, None without one"""
+    """DM_CTL "dump" into the log (an older host reads it as a press of no button) and every host thread's stack (macOS sample)"""
     with open(cwd / 'ctl', 'a') as c: c.write('dump\n')
     time.sleep(1.5)   # the host polls DM_CTL every 100 ms
     out = cwd / 'hang_sample.txt'
@@ -980,8 +915,7 @@ def hang_evidence(p, cwd):
 
 
 def run_watched(cmd, env, cwd, log, a, limit, hang, kind, what, shots=(), frames=None, until=None):
-    """Runs one host process under the watchdog, holding the measuring lock and keeping the display on; stops it after limit seconds, or once its log has a line matching until.
-    kind: what counts as progress, 'prebuild' (the log grows) or 'game' (frames, the DM_NVN_TSV file, has a new frame's row)"""
+    """kind: what counts as progress, 'prebuild' (the log grows) or 'game' (a new row in the DM_NVN_TSV file)"""
     check_disk(a.min_free_gb)
     busy = not wait_idle(a.wait_idle)
     take_lock(a.lock, what)
@@ -1033,7 +967,7 @@ def run_watched(cmd, env, cwd, log, a, limit, hang, kind, what, shots=(), frames
             stopped = True
         else: stopped = False
         if caf is not None and caf.poll() is None: caf.terminate()
-        if a.lock and bench.lock_holder(a.lock) == os.getpid(): a.lock.unlink(missing_ok=True)   # only a lock this process holds
+        if a.lock and bench.lock_holder(a.lock) == os.getpid(): a.lock.unlink(missing_ok=True)
     rc = None if stopped or p is None else p.returncode
     ft = st['frame_t']
     def frame_at(t):
@@ -1046,7 +980,6 @@ def run_watched(cmd, env, cwd, log, a, limit, hang, kind, what, shots=(), frames
             'until': st['until'], 'hang_sample': st['sample']}
 
 
-# ---------------------------------------------------------------- comparing runs
 
 def med(xs):
     xs = [x for x in xs if x is not None]
@@ -1075,11 +1008,8 @@ def run_failures(r, route):
 
 
 def smoke_diff(base, cand, route):
-    """→ (status reasons by level, known failures, diff numbers)"""
     newfail, regress, changed, known = [], [], [], []
-    # a failure is matched by its kind: the numbers in its parentheses are each run's own (the reach's max frame, a hang's second, the prebuild's pairs), so one the
-    # baseline had too stays known (Pikmin 4's route missed its reach in every baseline run, "(max 4797)", and in a candidate run, "(max 4774)"); the words stay, so a crash
-    # with another signal ("(SIGSEGV)" against "(SIGABRT)") or an exit with another status is new
+    # matched by kind: the numbers in parentheses are each run's own; the words stay, so another signal or exit status is new
     kind = lambda x: re.sub(r'\(([^)]*)\)', lambda m: '(' + re.sub(r'(?<!exit )(?<![\w-])-?\d+(\.\d+)?(?![\w])', '#', m.group(1)) + ')', x)
     bf = set(kind(x) for r in base for x in run_failures(r, route)); cf_ = [x for r in cand for x in run_failures(r, route)]
     for x in dict.fromkeys(cf_):
@@ -1095,10 +1025,10 @@ def smoke_diff(base, cand, route):
     if nr: regress.append(f'{len(nr)} new [RED] line kinds')
     gone = bred - set(k for c in cc for k in c) if cand else set()
     if gone: changed.append(f'{len(gone)} [RED] line kinds gone'); d['gone_red'] = sorted(gone)[:30]
-    b, c = med(x[MISSING_LIB] for x in bc), med(x[MISSING_LIB] for x in cc)   # the missing libraries' count moves by hundreds from run to run (TotK 1641 to 2303): only a jump is news
+    b, c = med(x[MISSING_LIB] for x in bc), med(x[MISSING_LIB] for x in cc)   # the count moves by hundreds from run to run: only a jump is news
     d['missing_libs'] = [b, c]
     if b is not None and c is not None and MISSING_LIB in bred and c > b * TOL['missing_libs_x'] and c - b > TOL['missing_libs']: changed.append(f'missing shader libraries {b:g} → {c:g} per run')
-    def pct(k, invert=False):
+    def pct(k):
         b, c = med(r.get(k) for r in base), med(r.get(k) for r in cand)
         if b in (None, 0) or c is None: return None, b, c
         return round((c - b) / b * 100, 1), b, c
@@ -1135,7 +1065,12 @@ def worst(*levels):
     return min(levels, key=LEVELS.index) if levels else 'PASS'
 
 
-# ---------------------------------------------------------------- the commands
+def settle(g, gr, levels):
+    gr['status'] = worst(*[k for k, v in levels.items() if v])
+    gr['reasons'] = [f'{k}: {x}' for k in LEVELS for x in levels.get(k, [])]
+    say(f'  {g.id}: {gr["status"]}' + (' — ' + '; '.join(gr['reasons']) if gr['reasons'] else ''))
+
+
 
 def baseline_dir(tree, g):
     return game_root(g) / 'baselines' / tree.id
@@ -1149,7 +1084,6 @@ def artifacts(tree, g, a, rewrite):
 
 
 def profile_tables(tree, g, m, out):
-    """The tables the host reads beside the shader map (pso_manifest.tsv, the pair lists, ...): the tree's, with c1_full.tsv and cb_extent.tsv as the chain build made them"""
     prof = game_root(g) / 'profile' / f'{tree.id}-{m["key"]}'
     if not (prof / '.done').is_file():
         prof.mkdir(parents=True, exist_ok=True)
@@ -1171,7 +1105,7 @@ def smoke_series(g, tree, art, route, quick, label, a, runs):
         d = game_root(g) / 'runs' / f'{datetime.datetime.now():%Y%m%d-%H%M%S}-{label}-{"quick" if quick else "full"}-{i + 1}'
         say(f'  {g.id}: {label} run {i + 1}/{runs} ({"quick" if quick else "full"}, {route["quick"] if quick else route["secs"]:g} s) → {d}')
         r = smoke_run(g, tree, art, route, quick, d, a); r['dir'] = str(d)
-        if r.get('covered'):   # another window covered the game's (a covered window's display link fires about once a second): its frame times measure nothing, so once more
+        if r.get('covered'):   # a covered window's display link fires about once a second: its frame times measure nothing
             say(f'    the window was covered during the run ({d / "log.txt"}): once more')
             d = d.with_name(d.name + '-again'); r = smoke_run(g, tree, art, route, quick, d, a); r['dir'] = str(d)
         out.append(r)
@@ -1182,7 +1116,7 @@ def smoke_series(g, tree, art, route, quick, label, a, runs):
     return out
 
 
-def public_run(r):   # what a run contributes to the report: no thumbnails, no paths
+def public_run(r):
     x = {k: v for k, v in r.items() if k not in ('shots', 'dir')}
     x['shots'] = {t: {'dhash': h['dhash']} for t, h in r.get('shots', {}).items()}
     return x
@@ -1227,10 +1161,10 @@ def cmd_baseline(a):
 def cmd_check(a, smoke=True):
     smoke = smoke and not a.no_smoke
     base = Tree(a.baseline or git('merge-base', 'HEAD', 'main')); cand = Tree(a.candidate)
-    games = select(a, smoke=smoke and not a.no_smoke)
+    games = select(a, smoke=smoke)
     rep = new_report(a, 'check' if smoke else 'chain', baseline=base, candidate=cand)
     rewrite = a.rewrite or rewriter_key(base) != rewriter_key(cand)
-    if rewrite and smoke and not a.no_smoke: say('the rewriter differs between the revisions: both rewrite the modules')
+    if rewrite and smoke: say('the rewriter differs between the revisions: both rewrite the modules')
     for g in games:
         t0 = time.time(); gr = rep['games'][g.id] = {'name': g.name, 'status': 'PASS', 'reasons': [], 'known': [], 'secs': {}}
         levels = collections.defaultdict(list)
@@ -1273,30 +1207,26 @@ def cmd_check(a, smoke=True):
                 gr['secs']['smoke'] = round(time.time() - t1, 1)
         except HarnessError as e:
             levels['ERROR'].append(str(e)); say(f'  {g.id}: [RED] {e}')
-        except Exception as e:   # a bug in the harness: reported as an error of this game, the others go on
+        except Exception as e:   # a harness bug: an error of this game, the others go on
             levels['ERROR'].append(f'{type(e).__name__}: {e}'); traceback.print_exc()
-        gr['status'] = worst(*[k for k, v in levels.items() if v]) if any(levels.values()) else 'PASS'
-        gr['reasons'] = [f'{k}: {x}' for k in LEVELS for x in levels.get(k, [])]
-        say(f'  {g.id}: {gr["status"]}' + (' — ' + '; '.join(gr['reasons']) if gr['reasons'] else ''))
+        settle(g, gr, levels)
     result = finish(rep, a)
     record_validated(a, rep, cand, games)
     return result
 
 
-# ---------------------------------------------------------------- frame capture and replay (DM_NVN_CAPTURE, dm/gfx/tests/nvn_replay)
 
 def capture_dir(g):
     return game_root(g) / 'captures'
 
 
 def replayer_for(tree, g, a):
-    """dm/gfx/tests/nvn_replay of a revision, built for this game (it includes the tree's replay layer and profile header)"""
     dst = game_root(g) / 'replayer' / tree.id / 'nvn_replay'
     if dst.is_file(): return dst
     say(f'  {g.id}: building the replayer of {tree.id}')
     logs = game_root(g) / 'tmp'; logs.mkdir(parents=True, exist_ok=True); env = g.env(tree)
-    (tree.path / 'dm/gfx/tests/nvn_replay').unlink(missing_ok=True)   # one binary per tree but one header per game: make would keep another game's binary, newer than this game's header
-    for d, target in (('dm/host', 'game_profile'), ('dm/gfx/tests', 'nvn_replay')):   # the profile header first: the tests' rule keeps a stale one
+    (tree.path / 'dm/gfx/tests/nvn_replay').unlink(missing_ok=True)   # one binary per tree but one header per game: make would keep another game's binary
+    for d, target in (('dm/host', 'game_profile'), ('dm/gfx/tests', 'nvn_replay')):   # the tests' rule keeps a stale profile header
         log = logs / f'replayer-{tree.id}-{g.id}-{target}.log'
         rc, _ = run_heavy(['make', '-C', tree.path / d, f'GAME={g.id}', target], log, tree.path, env, a, f'{g.id} {target}')
         if rc: raise HarnessError(f'{g.id}: the replayer of {tree.id} does not build (see {log})')
@@ -1309,7 +1239,7 @@ REPLAY_PIXELS = re.compile(r'^replay (\d+): (\d+) pixels differ from the live fr
 
 
 def parse_replays(text):
-    """nvn_replay's output → [{index, digest, same, live, pixels, largest, box}] (pixels None: a replay that equals the live frame, or a capture without the live pixels)"""
+    """pixels None: a replay that equals the live frame, or a capture without the live pixels"""
     px = {int(m[1]): (int(m[2]), int(m[3]), [int(m[4]), int(m[5]), int(m[6]), int(m[7])]) for m in REPLAY_PIXELS.finditer(text)}
     out = []
     for m in REPLAY_DIGEST.finditer(text):
@@ -1320,7 +1250,7 @@ def parse_replays(text):
 
 
 def replay_runs(binary, cap, lib, prof, n, maxpx, g, a, what):
-    """n fresh replays of a capture against a revision's replay layer and its shader libraries (given on the command line, they win over the capture's own settings)"""
+    """The libraries on the command line win over the capture's own settings"""
     env = dict(os.environ, DM_MSL_DIR=str(lib), DM_NVN_SHMAP=str(prof / 'shader_map.tsv'), TMPDIR=str(game_root(g) / 'tmp') + '/')
     check_disk(a.min_free_gb)
     busy = not wait_idle(a.wait_idle)
@@ -1337,22 +1267,21 @@ def replay_runs(binary, cap, lib, prof, n, maxpx, g, a, what):
     return {'exit': r.returncode, 'replays': parse_replays(text), 'red': red, 'secs': secs, 'busy': busy, 'log': str(log)}
 
 
-def replay_ok(res, noise):   # every replay equals the live frame or differs in at most noise pixels
+def replay_ok(res, noise):
     return res['exit'] in (0, 1) and len(res['replays']) > 0 and all(x['same'] or (x['pixels'] is not None and x['pixels'] <= noise) for x in res['replays'])
 
 
-def public_replay(res):   # numbers and digests only (no paths)
+def public_replay(res):
     return {'exit': res['exit'], 'secs': res['secs'], 'busy': res['busy'], 'red': res['red'],
             'replays': [{'digest': x['digest'][:16], 'same': x['same'], 'pixels': x['pixels'], 'largest': x['largest'], 'box': x['box']} for x in res['replays']]}
 
 
-def replay_tolerance(noise):   # pixels a replay may differ from the live frame: none for a capture whose replays all equal it, else a margin over the measured noise
+def replay_tolerance(noise):
     return int(noise * TOL['replay_noise_x'])
 
 
 def replay_grade(base, cand, noise):
-    """→ ({level: [reason]}, [known]) for the candidate's replays of one capture, against the live frame within the tolerance of the capture's noise (a capture that replays exactly
-    has none); which of the frames within it a noisy capture gives is chance, so they are not compared with the baseline's"""
+    """Which frame within the noise a noisy capture gives is chance, so they are not compared with the baseline's"""
     tol = replay_tolerance(noise)
     lv, known = collections.defaultdict(list), []
     worst_px = lambda r: max((x['pixels'] or 0 for x in r['replays']), default=0)
@@ -1370,7 +1299,6 @@ def replay_grade(base, cand, noise):
         text = f"{x['pixels']} pixels differ from the live frame (largest byte difference {x['largest']}, box {x['box']}); the capture's noise is {noise}, the tolerance {tol}"
         if bok: lv['REGRESSION'].append(text)
         else: known.append(f'the baseline differs beyond the tolerance too ({worst_px(base)} pixels)'); lv['CHANGED'].append(text)
-
     return lv, known
 
 
@@ -1396,11 +1324,10 @@ def cmd_capture(a):
             name = f'{tree.id}-f{frame}'; cap = cd / f'{name}.nvncap'; cap.unlink(missing_ok=True)
             outdir = game_root(g) / 'runs' / f'{datetime.datetime.now():%Y%m%d-%H%M%S}-capture'
             env, _ = run_env(g, art, route, outdir, a)
-            # the wall clock (DM_DETCLOCK stops some games, waiting for guest time); no pipeline prebuild, and no stand-in pipelines, whose draws would differ from the replay's
+            # DM_DETCLOCK can stall a game waiting for guest time; stand-in pipelines would draw differently from the replay
             env.update(DM_KEYS=route['keys'], DM_PSO_PREBUILD='0', DM_PSO_HYBRID='0', DM_NVN_CAPTURE=f'{frame}:1:{cap}')
             say(f'  {g.id}: capturing frame {frame} with {tree.id} → {cap}')
-            # the capture step itself shows no frame until it ends (reading back the textures and compressing the pools: about 2 minutes for Breath of the Wild), so only the
-            # capture limit bounds it
+            # the capture step shows no frame until it ends (minutes): only the capture limit bounds it
             r = run_watched([art['host'], art['modules']], env, outdir, outdir / 'log.txt', a, limit=a.capture_limit, hang=max(route['hang'], a.capture_limit), kind='game',
                             what=f'{g.id} capture', frames=outdir / 'frames.tsv', until=r'DM_NVN_CAPTURE: frame \d+: [^\n]*')
             if not r['until'] or not cap.is_file():
@@ -1417,7 +1344,7 @@ def cmd_capture(a):
             say(f"  {g.id}: frame {frame} captured; {meta['matches']} of {a.repeat} fresh replays equal the live frame, noise {noise} pixels")
         except HarnessError as e:
             gr['status'] = 'ERROR'; gr['reasons'].append(str(e)); say(f'  {g.id}: [RED] {e}')
-        except Exception as e:   # a bug in the harness: reported as an error of this game, the others go on
+        except Exception as e:   # a harness bug: an error of this game, the others go on
             gr['status'] = 'ERROR'; gr['reasons'].append(f'{type(e).__name__}: {e}'); traceback.print_exc()
     return finish(rep, a)
 
@@ -1425,7 +1352,7 @@ def cmd_capture(a):
 def cmd_replay(a):
     base = Tree(a.baseline or git('merge-base', 'HEAD', 'main')); cand = Tree(a.candidate)
     games = select(a, smoke=False)
-    if not a.games: games = [g for g in games if capture_meta(g)]   # named games without a capture are reported as errors
+    if not a.games: games = [g for g in games if capture_meta(g)]
     rep = new_report(a, 'replay', baseline=base, candidate=cand)
     for g in games:
         t0 = time.time(); gr = rep['games'][g.id] = {'name': g.name, 'status': 'PASS', 'reasons': [], 'known': [], 'secs': {}}
@@ -1446,9 +1373,7 @@ def cmd_replay(a):
             levels['ERROR'].append(str(e)); say(f'  {g.id}: [RED] {e}')
         except Exception as e:
             levels['ERROR'].append(f'{type(e).__name__}: {e}'); traceback.print_exc()
-        gr['status'] = worst(*[k for k, v in levels.items() if v]) if any(levels.values()) else 'PASS'
-        gr['reasons'] = [f'{k}: {x}' for k in LEVELS for x in levels.get(k, [])]
-        say(f'  {g.id}: {gr["status"]}' + (' — ' + '; '.join(gr['reasons']) if gr['reasons'] else ''))
+        settle(g, gr, levels)
     return finish(rep, a)
 
 
@@ -1543,7 +1468,7 @@ def report_md(rep):
     return '\n'.join(L) + '\n'
 
 
-def validated_text(gid):   # the last green chain per mode, and whether it is the current one
+def validated_text(gid):
     rows, cur = read_validated(REPO / 'dm/games' / gid / VALIDATED), chain_version()
     return '; '.join(f"{m} chain {r.get('chain', '?')} ({'current' if r.get('chain') == cur else 'old, now ' + str(cur)}) {r.get('date', '?')} {r.get('commit', '?')}" for m, r in rows.items()) or 'never recorded'
 
@@ -1595,8 +1520,7 @@ def main():
     if missing: ap.error(f'set {" and ".join(missing)}: where the harness keeps its trees and reports, and the folder that holds the game folder with its <id>_build, for example '
                          f'regress.py --root <drive>/harness --games-dir <drive>/games {a.cmd} ... (the options go before the command)')
     ROOT, GAMES = Path(a.root), Path(a.games_dir)
-    # A stop runs the finally blocks: a game or a shader build in its own process group is stopped too. A SIGHUP (the terminal closed) the same way: the shell sends it to its
-    # job, which that group, a session of its own (proc_group), is not in, and its default action ended this script with no cleanup and left the game or build running
+    # the finally blocks stop games and builds in their own sessions, which a closed terminal's SIGHUP does not reach
     for sig in (signal.SIGTERM, signal.SIGHUP): signal.signal(sig, lambda s, _: sys.exit(128 + s))
     try:
         if a.cmd == 'list': return cmd_list(a)
@@ -1608,7 +1532,7 @@ def main():
         a.tools_fp = toolchain_fp()
         free = check_disk(a.min_free_gb, clean=True); say(f'internal disk: {free:.1f} GB free; root {ROOT}; {a.jobs} workers')
         rc = {'baseline': cmd_baseline, 'check': cmd_check, 'chain': lambda a: cmd_check(a, smoke=False), 'capture': cmd_capture, 'replay': cmd_replay}[a.cmd](a)
-        for w in sorted(WORK_FOLDERS): tree_tar.pack_quiet(w, say)   # at the end: nothing is measuring here any more
+        for w in sorted(WORK_FOLDERS): tree_tar.pack_quiet(w, say)
         return rc
     except HarnessError as e:
         print(f'[RED] regress.py: {e}', file=sys.stderr); return 2

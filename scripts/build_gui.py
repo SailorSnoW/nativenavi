@@ -1,20 +1,6 @@
 #!/usr/bin/env python3
-# The NativeNavi app (dm/gui, docs/gui.md): a Mac app for players who do not use Terminal. It takes the player's NUP, downloads what the build needs into
-#   ~/Library/Developer/NativeNavi (a Python with the repository's packages, Rust through rustup; and Apple's Metal toolchain for the tested Xcode), runs
-#   scripts/build_app.py --progress json (docs/frontends.md) and shows the app it made.
-# This script packs it from this checkout:
-#   Contents/MacOS/NativeNavi         dm/gui/*.swift, compiled with the selected Xcode's swiftc for macOS MACOS_MIN (dm/mac/min_os.mk), as the game app's launcher is
-#   Contents/Resources/setup.json      dm/gui/setup.json (the downloads, pinned by SHA-256) with this checkout's facts: its commit, the Xcode and Metal compiler the shaders were tested with
-#                                      (dm/gfx/tools/own_compilers.py XCODE_VERSION, dmsh_chain.lock metal_macosx), the Python packages' list, the host's Rust folder, and the NUP
-#                                      containers of the game the app builds from (the profile's nup.tsv: each one's SHA-256, size and what it holds; the app refuses any other file)
-#   Contents/Resources/source.tar.gz   this checkout's files as they are on disk: the tracked ones and the new ones git does not ignore (any change makes the commit
-#                                      <hash>+dirty.<digest of the packed files>, so that each changed copy is a commit of its own to the app).
-#                                      The app unpacks it into ~/Library/Developer/NativeNavi/Source and builds the game from there
-#   Contents/Resources/Assets.car, AppIcon.icns   dm/gui/AppIcon.icon, compiled with actool
-#   Contents/Info.plist                the .nup type it opens, and why it asks for the folders a NUP may be in
-# Signed ad-hoc, or with --sign <identity>, the hardened runtime and a secure timestamp, for notarization (this app runs none of the game's code, unlike the game's own app, which cannot
-# have the hardened runtime). --zip also writes <app>.zip beside it, for notarytool and a download page.
-# Usage: python3 scripts/build_gui.py [-o <path>.app] [--sign "Developer ID Application: <name> (<team ID>)"] [--zip]   (exit code 0 on success, 1 on error, 2 for invalid arguments)
+# Packs the NativeNavi app (dm/gui, docs/gui.md) with setup.json and source.tar.gz of this checkout. --sign adds the hardened runtime: this app runs none of the game's code.
+# Usage: python3 scripts/build_gui.py [-o <path>.app] [--sign "Developer ID Application: <name> (<team ID>)"] [--zip]
 import argparse
 import ast
 import hashlib
@@ -34,8 +20,8 @@ GUI = REPO / 'dm/gui'
 NAME = 'NativeNavi'
 BUNDLE_ID = 'org.nativenavi.NativeNavi'
 VERSION = '1.0'
-REQUIREMENTS = '.github/requirements/tools.txt'   # what the app's Python installs (pip, wheels only)
-RUST_DIR = 'dm/host/rust'   # where the app runs cargo once, so that rustup installs the Rust its rust-toolchain.toml names
+REQUIREMENTS = '.github/requirements/tools.txt'
+RUST_DIR = 'dm/host/rust'   # where the app runs cargo once, so rustup installs the Rust rust-toolchain.toml names
 NUP_TYPE = 'org.nativenavi.nup'
 WHY_FILES = 'NativeNavi reads the game file you chose there to build the game\'s app.'
 
@@ -51,35 +37,35 @@ def run(cmd, **kw):
     return r.stdout
 
 
-def min_os():   # the Mac host's minimum macOS, which the game app also has
+def min_os():
     m = re.search(r'^MACOS_MIN\s*:=\s*(\S+)', (REPO / 'dm/mac/min_os.mk').read_text(), re.M)
     if not m: raise Error('dm/mac/min_os.mk has no MACOS_MIN')
     return m.group(1)
 
 
-def constant(path, name):   # a module's constant, read without importing it (this script runs on any Python 3, the tools need 3.12)
+def constant(path, name):   # read without importing: this script runs on any Python 3, the tools need 3.12
     for node in ast.parse((REPO / path).read_text()).body:
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
             return ast.literal_eval(node.value)
     raise Error(f'{path} has no {name}')
 
 
-def xcode_version():   # the Xcode whose Metal compiler the shaders were tested with
+def xcode_version():
     return constant('dm/gfx/tools/own_compilers.py', 'XCODE_VERSION')
 
 
-def profile():   # the profile this repository builds (game.DEFAULT)
+def profile():
     return REPO / 'dm/games' / constant('dm/games/game.py', 'DEFAULT')
 
 
-def metal_version():   # the Metal compiler the shaders were tested with, as tool_lock.py records it
+def metal_version():
     for line in (REPO / 'dm/gfx/tools/dmsh_chain.lock').read_text().splitlines():
         key, _, value = line.partition('\t')
         if key == 'metal_macosx': return value
     raise Error('dm/gfx/tools/dmsh_chain.lock has no metal_macosx')
 
 
-def known_nups():   # the profile's nup.tsv: sha256 <TAB> bytes <TAB> what the container holds, '#' comments
+def known_nups():   # sha256 <TAB> bytes <TAB> what the container holds
     table = profile() / 'nup.tsv'
     rows = []
     for n, line in enumerate(table.read_text().splitlines() if table.is_file() else [], 1):
@@ -96,13 +82,12 @@ def git(*args):
     return run(['git', '-C', REPO, *args])
 
 
-def source_files():   # the checkout's files as the app packs them: tracked and new, not ignored, that are on disk
+def source_files():
     names = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split('\0')
     return sorted({n for n in names if n and ((REPO / n).is_file() or (REPO / n).is_symlink())})
 
 
-def commit(files):   # the checkout's commit; when its files differ from it, +dirty and a digest of the files packed (their names and bytes). The app unpacks its copy once per
-    # commit (Setup.swift prepareSource) and offers to build the game again when it changes (updateAvailable): with +dirty alone, a second app of other changes kept the first one's files
+def commit(files):   # the app unpacks its copy once per commit, so two changed copies must not share a name
     head = git('rev-parse', '--short=12', 'HEAD').strip()
     if not git('status', '--porcelain').strip(): return head
     h = hashlib.sha256()

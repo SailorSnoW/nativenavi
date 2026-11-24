@@ -3,7 +3,7 @@ host/dmhost_*
 host/*.dSYM/
 *.bin
 __pycache__/
-# Intermediate build outputs of the shader translation tool (dotnet writes them next to the sources)
+# dotnet's build outputs, written next to the sources
 gfx/tools/dmsh_xlate/obj/
 gfx/tools/dmsh_xlate/bin/
 third_party/ryujinx/**/obj/

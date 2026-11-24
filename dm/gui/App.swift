@@ -1,6 +1,5 @@
-// NativeNavi: a Mac app that builds The Legend of Zelda: Ocarina of Time (Nintendo Switch 2) for this Mac from the player's own NUP, for players who do not use Terminal
-// (docs/gui.md). One window (the setup, the build's progress, the finished app), a Settings window for where the build files go, and the Dock icon's progress while it builds.
-// Closing the window during a build keeps the build going; quitting asks first, then stops it as the packing script's front-end contract says (SIGTERM)
+// NativeNavi: builds the game's Mac app from the player's own NUP without Terminal (docs/gui.md).
+// Closing the window keeps a build going; quitting asks first, then stops it with SIGTERM (docs/frontends.md)
 import AppKit
 import SwiftUI
 import UserNotifications

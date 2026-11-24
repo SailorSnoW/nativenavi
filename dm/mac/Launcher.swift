@@ -1,9 +1,4 @@
-// Mac app launcher: the settings window shown before the game starts, in the launcher's own process (launcher.c calls dm_mac_launcher before it starts the host). Its settings come from the
-// app's Resources/dm/launcher.json (dm/games/settings.py); the model and the rows are LauncherSettings.swift and LauncherRow.swift,
-// and the store is launcher.<VAR> in the app's preferences, which launcher.c reads when the window is not shown (docs/frontends.md, Saved choices). Basic settings (level basic) come
-// first, the others under Advanced settings, each in the list's sections. Play puts the settings into this process's environment, which the host inherits; Quit and closing the window end the
-// app without the game. "Show this window at launch" off: no window unless Option is held at launch, and launcher.c applies the saved choices. The window never takes focus by itself: an app
-// opened in the background (open -g) keeps its window behind until the player switches to it
+// The settings window before the game starts (Resources/dm/launcher.json); Play's settings go into the environment the host inherits
 import AppKit
 import AVFAudio
 import CoreAudio
@@ -69,7 +64,6 @@ struct LauncherView: View {
                 Section(section) {
                     ForEach(rows) { SettingRow(s: $0, m: m) }
                 }
-                // The input device, while Microphone is on: under the section that has it, not after the sections that follow (Practice)
                 if rows.contains(where: { $0.env == "DM_MIC" }) && m.values["DM_MIC"] == "1" { MicrophoneDevicePicker() }
             }
         }
@@ -155,7 +149,6 @@ private enum MicrophoneInputDevices {
     }
 }
 
-
 private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model: LauncherModel
     var window: NSWindow?
@@ -168,25 +161,29 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         let menu = NSMenu(), item = NSMenuItem(), app = NSMenu()
         app.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         app.addItem(withTitle: "Quit \(name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        item.submenu = app; menu.addItem(item); NSApp.mainMenu = menu
+        item.submenu = app
+        menu.addItem(item)
+        NSApp.mainMenu = menu
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 660), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        w.title = name; w.isReleasedWhenClosed = false; w.delegate = self
+        w.title = name
+        w.isReleasedWhenClosed = false
+        w.delegate = self
         w.contentMinSize = NSSize(width: 520, height: 0)
         window = w
         if let screen = w.screen ?? NSScreen.main {
             w.setFrameTopLeftPoint(NSPoint(x: screen.visibleFrame.midX - w.frame.width / 2, y: screen.visibleFrame.maxY))
         }
         let host = NSHostingView(rootView: LauncherView(m: model, done: { [weak self] in self?.finish($0) }, fit: { [weak self] in self?.fit($0) }))
-        host.sizingOptions = []   // the Form's measured scroll content owns the height, including after collapse
+        host.sizingOptions = []   // the Form's scroll content owns the height
         w.contentView = host
         host.layoutSubtreeIfNeeded()
-        // no activation and no ordering in front of another app's windows: LaunchServices activates an app opened from Finder or the Dock (applicationDidBecomeActive), open -g does not
+        // open -g must leave the window behind
         if NSApp.isActive { w.makeKeyAndOrderFront(nil) } else { w.orderBack(nil) }
     }
     func applicationDidBecomeActive(_ n: Notification) { window?.makeKeyAndOrderFront(nil) }
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {   // ⌘Q, or a logout or restart: the app ends without the game (exit 0, as Quit)
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         fputs("launcher: quit without starting the game\n", stderr)
-        return .terminateNow   // not terminateCancel, which a logout or restart takes as a refusal and stops
+        return .terminateNow   // terminateCancel would stop a logout or restart
     }
     func windowWillClose(_ n: Notification) { finish(false) }
 
@@ -198,13 +195,14 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
 
     func finish(_ play: Bool) {
         guard let w = window else { return }
-        window = nil; self.play = play
-        // The main thread blocks in launcher.c's waitpid once run() returns, so the window must leave the screen now: no fade-out (it runs on later run-loop passes),
-        // and dmMacLauncher flushes the order-out (AppKit commits it at the end of a pass). Without both, the window stayed on screen, not responding, until the game ended
+        window = nil
+        self.play = play
+        // docs/reference/packing.md#the-mac-settings-window-stays-on-screen-after-play
         w.animationBehavior = .none
-        w.delegate = nil; w.orderOut(nil)
+        w.delegate = nil
+        w.orderOut(nil)
         NSApp.stop(nil)
-        NSApp.postEvent(NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!, atStart: true)   // run returns at the next event
+        NSApp.postEvent(NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!, atStart: true)
     }
 }
 
@@ -216,8 +214,6 @@ enum LauncherWindowLayout {
     }
 }
 
-// Called on the main thread after the settings. The OS can present
-// its consent alert even when the settings window is suppressed.
 @_cdecl("dm_mac_microphone_consent")
 public func dmMacMicrophoneConsent() -> Int32 {
     switch AVAudioApplication.shared.recordPermission {
@@ -241,7 +237,7 @@ public func dmMacMicrophoneConsent() -> Int32 {
     return 0
 }
 
-// 1: Play (the window's settings are in the environment), 0: the player quit, 2: no window (no launcher.json, or "Show this window at launch" off): launcher.c applies the saved choices
+// 1: Play, 0: quit, 2: no window (launcher.c applies the saved choices)
 @_cdecl("dm_mac_launcher")
 public func dmMacLauncher() -> Int32 {
     guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return 2 }
@@ -256,8 +252,8 @@ public func dmMacLauncher() -> Int32 {
     app.delegate = launcher
     fputs("launcher: \(file.settings.count) settings shown\n", stderr)
     app.run()
-    CATransaction.flush()   // finish's order-out
-    app.setActivationPolicy(.prohibited)   // the host is the game's app from here on
+    CATransaction.flush()
+    app.setActivationPolicy(.prohibited)
     guard launcher.play else { fputs("launcher: quit without starting the game\n", stderr); return 0 }
     model.apply()
     return 1

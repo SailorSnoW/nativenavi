@@ -1,4 +1,3 @@
-// What the app shows outside its window: a notice when a build ends in the background, and the build's progress on the Dock icon
 import AppKit
 import UserNotifications
 
@@ -25,8 +24,7 @@ final class Notify: NSObject, UNUserNotificationCenterDelegate, Sendable {
     }
 }
 
-/// The current stage's progress on the app's Dock icon while a build runs: the icon with a bar under it, redrawn at most twice a second; a stage whose work cannot be counted keeps the
-/// bar where it was
+/// The current stage's progress as a bar on the Dock icon, redrawn at most twice a second; an uncounted stage leaves the bar where it was
 @MainActor enum DockProgress {
     private static var bar: NSProgressIndicator?
     private static var last = Date.distantPast

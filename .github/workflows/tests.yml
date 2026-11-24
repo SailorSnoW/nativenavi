@@ -1,5 +1,5 @@
-# Tests that need no game files, keys or GPU. GitHub's macOS runners are virtual Macs without Metal 4 (issue #112), so the tests that go through mtl_init
-# (t_nvn, t_mip_extent, t_feedback and the rest of dm/gfx/tests' run list) stay local: run `make -C dm/gfx/tests GAME=<id> run` on an Apple-silicon Mac.
+# Tests that need no game files, keys or GPU. GitHub's macOS runners have no Metal 4, so the tests that go through mtl_init stay local
+# (`make -C dm/gfx/tests GAME=<id> run` on an Apple-silicon Mac).
 name: tests
 
 on:
@@ -11,24 +11,21 @@ on:
 permissions:
   contents: read
 
-# A new commit on a pull request replaces its older run. A push to main never cancels: main's pushes come faster than a run gets runners and finishes, so cancelling left main
-# with no finished run for 87 commits. The running one finishes and only the newest push waits behind it (GitHub replaces an older waiting run).
+# A push to main never cancels: pushes come faster than a run finishes, so cancelling would leave main with no finished run. Only the newest push waits behind it.
 concurrency:
   group: tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The toolchain the project supports (README: Xcode 27.2; dm/gfx/tools/dmsh_chain.lock: its Metal compiler), on GitHub's xcode-27 image (macOS 27, a preview image),
-  # named by path so the image's default moving to another Xcode does not move CI. The build check checks the Metal compiler against the lock first.
-  # dm/tools/tests/test_ci_toolchain.py keeps this version, the image and README's in step
+  # The supported Xcode, named by path so a change of the image's default does not move CI; test_ci_toolchain.py keeps it in step with README and the image
   DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
-  GAME: 0400486024DEC000   # The Legend of Zelda: Ocarina of Time: the one profile, which the host and gfx tests are built for
+  GAME: 0400486024DEC000   # the profile the host and gfx tests are built for
 
 defaults:
   run:
     shell: bash
 
-# Actions are pinned to commit SHAs (the tag in the comment): a tag can be moved, a SHA cannot. Dependabot (github-actions) can raise them.
+# Actions are pinned to commit SHAs (the tag in the comment): a tag can be moved, a SHA cannot.
 jobs:
   host-tests:
     name: Host unit tests and CPU-only gfx tests
@@ -77,7 +74,7 @@ jobs:
           make GAME="$GAME" -j3 perf-order-tsan 2>&1 | tee ../../../logs/t_perf_order-tsan.log
           make GAME="$GAME" -j3 tsan-dirty-init tsan-dirty-reuse 2>&1 | tee ../../../logs/t_dirty-tsan.log
           make GAME="$GAME" -j3 present-history-tsan 2>&1 | tee ../../../logs/t_present_history-tsan.log
-          # Each name is a test target in dm/gfx/tests/Makefile that runs without a GPU, listed by hand: a test removed there is removed here too
+          # The dm/gfx/tests targets that run without a GPU, listed by hand: a test removed there is removed here too
           tests="t_gfx_suspend t_capture t_dirty_slots t_dirty_race t_dirty_retire_race t_dirty_init t_dirty_reuse t_tex_layout t_pace t_fstep t_link_drain t_link_latch t_link_ticks t_present_history t_cpu_tex t_pkg_share t_hmap t_pso_skey t_refl t_present_rescue t_gpuprof t_sparse_layout t_timestamp t_counter_clock t_ub t_pso_pending t_rec_draws t_ubc_wait t_thread_rt t_rt_comp t_pend_index"
           make GAME="$GAME" -j3 $tests 2>&1 | tee ../../../logs/gfx-build.log
           failed=0
@@ -95,8 +92,7 @@ jobs:
           path: logs
           retention-days: 7
 
-  # Documented fixture/framework exceptions live in dm/sanitizers; new host findings fail the job and are fixed.
-  # A job of its own, so its time shows beside the plain tests'.
+  # Known fixture and framework exceptions are in dm/sanitizers; a new host finding fails the job.
   sanitizers:
     name: Sanitizers (ASan, UBSan and TSan over the host and CPU texture tests)
     runs-on: xcode-27
@@ -131,9 +127,7 @@ jobs:
           path: logs
           retention-days: 7
 
-  # Line coverage of the host and CPU texture tests (llvm-cov) and of the tool tests (coverage.py), as a job summary: totals per area, the largest files and, on a pull
-  # request, which of its changed lines the tests run. Report only: no coverage threshold fails it, and a failing test is the other jobs' to report (the runs here keep going,
-  # so the other tests' coverage is kept). The raw reports are uploaded on every run.
+  # Report only: no threshold fails it, and a failing test is the other jobs' to report, so the runs here keep going.
   coverage:
     name: Coverage (host, CPU texture and tool tests; report only)
     runs-on: xcode-27
@@ -142,7 +136,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2   # a pull request checks out its merge commit: HEAD^1 is the base branch it merges onto, the diff coverage's base
+          fetch-depth: 2   # a pull request checks out its merge commit: HEAD^1 is the base the diff coverage compares with
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'
@@ -215,13 +209,12 @@ jobs:
           cache: pip
           cache-dependency-path: .github/requirements/tools.txt
       - name: Install the Python packages the tools import
-        run: python -m pip install -r .github/requirements/tools.txt   # pinned versions; backports.zstd is for Python before 3.14 only
-      # The shader translator's tests (test_image_atomic_bounds, the test_dmsh_* ones that take DMSH_TEST_XLATE) run the committed translator on synthetic shaders, then spirv-val and the
-      # committed spirv-cross: they check a translator change without the game's files. Compiling their MSL with
-      # Metal (DMSH_TEST_METAL=1) and running it on the GPU (DMSH_TEST_GPU=1) stay local.
+        run: python -m pip install -r .github/requirements/tools.txt
+      # The translator tests run the committed translator on synthetic shaders, then spirv-val and spirv-cross; their Metal compile (DMSH_TEST_METAL=1)
+      # and GPU run (DMSH_TEST_GPU=1) stay local.
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'   # the committed translator is native (no .NET); the translator's own tests (test_dmsh_ast_optimizer, test_dmsh_goto_conditions) build their fixtures with it
+          dotnet-version: '10.0.x'   # the translator is native; some of its tests build their fixtures with .NET
       - name: Install spirv-val   # spirv-cross is the in-repo build (dm/gfx/tools/spirv_cross_bin)
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1

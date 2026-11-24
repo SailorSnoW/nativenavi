@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
-# Remove the build folders Metal leaves in the user cache folder (`getconf DARWIN_USER_CACHE_DIR`, then com.apple.gpuarchiver/gpuarchiver-*, and the built apps'
-# org.nativenavi.*/com.apple.gpuarchiver/gpuarchiver-*). The Metal 4 serializer makes them for the host's pipeline archive flushes and never removes them. A host from a build shares
-# the first folder with every other program and must not remove from it: Metal does not say which folder is its own, and a folder of another live compiler went with the former
-# cleanup (docs/reference/shaders.md, "Metal's build folders left by pipeline archive flushes"). A built app removes its own earlier runs' folders at its next start; this covers
-# the apps not started again. They grow without bound, up to about 127 MB each.
-# A folder goes only when nothing in it changed for --idle-min minutes (default 60) and its last change is older than the start of every running dmhost, so a running host keeps its own;
-# an app's folders only while no copy of that app holds its lock (gpuarchiver.lock beside them).
-# Usage: python3 scripts/clean_metal_cache.py [--idle-min N] [--dry-run] [--dir <folder>]. Exit code 0, also when there is nothing to remove; 1 when a folder could not be removed
-# or the running processes could not be listed. scripts/regress.py runs it before its free-space check.
+# Removes the build folders Metal 4 leaves for pipeline archive flushes (docs/reference/shaders.md, "Metal's build folders left by pipeline archive flushes").
+# Usage: python3 scripts/clean_metal_cache.py [--idle-min N] [--dry-run] [--dir <folder>]. Exit 1 when a folder could not be removed or the processes could not be listed.
 import argparse, fcntl, os, shutil, subprocess, sys, time
 from pathlib import Path
 
-HOSTS = {'dmhost'}   # the programs whose folders are spared while they run (the Mac app's launcher starts the host under this name too)
+HOSTS = {'dmhost'}   # the launcher's host too
 
 
-def cache_dirs():   # the shared folder, then each built app's (bundle ID org.nativenavi.<title ID>, pack_app.py)
+def cache_dirs():
     r = subprocess.run(['getconf', 'DARWIN_USER_CACHE_DIR'], capture_output=True, text=True)
     if r.returncode or not r.stdout.strip(): return []
     c = Path(r.stdout.strip())
     return [c / 'com.apple.gpuarchiver'] + sorted(c.glob('org.nativenavi.*/com.apple.gpuarchiver'))
 
 
-def etime_s(s):   # ps's elapsed time, [[dd-]hh:]mm:ss
+def etime_s(s):   # [[dd-]hh:]mm:ss
     d, _, hms = s.rpartition('-')
     p = [int(x) for x in hms.split(':')]
     p = [0] * (3 - len(p)) + p
@@ -29,7 +22,7 @@ def etime_s(s):   # ps's elapsed time, [[dd-]hh:]mm:ss
 
 
 def host_starts(now):
-    """The start times of the running hosts; an error when ps cannot list the processes, so nothing is removed without knowing"""
+    """Raises when ps fails, so nothing is removed without knowing"""
     r = subprocess.run(['ps', '-axo', 'etime=,comm='], capture_output=True, text=True)
     if r.returncode: raise OSError(f'ps failed: {r.stderr.strip()}')
     out = []
@@ -39,7 +32,7 @@ def host_starts(now):
     return out
 
 
-def scan(d):   # → (last change of the folder or anything in it, bytes on disk)
+def scan(d):
     st = d.lstat(); t, b = st.st_mtime, st.st_blocks * 512
     for root, dirs, files in os.walk(d):
         for n in dirs + files:
@@ -50,10 +43,9 @@ def scan(d):   # → (last change of the folder or anything in it, bytes on disk
 
 
 def listing(d):
-    """d's gpuarchiver-* folders; None when a copy of the app that owns d is running (it holds the lock beside d shared for its run, nvn_archive.inc ga_claim). Listed under the
-    exclusive lock and removed after it, so an app starting meanwhile waits only for the listing, and its own folders, made after, are not among them"""
+    """None while a copy of d's app runs. Listed under the exclusive lock and removed after it, so a starting app waits only for the listing"""
     lock = d.parent / 'gpuarchiver.lock'
-    if not lock.exists(): return sorted(d.glob('gpuarchiver-*'))   # the shared folder, or an app from before the lock (the idle rule spares its running hosts)
+    if not lock.exists(): return sorted(d.glob('gpuarchiver-*'))   # the idle rule spares its running hosts
     with open(lock, 'a') as f:
         try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: return None
@@ -61,12 +53,11 @@ def listing(d):
 
 
 def clean(folder=None, idle_min=60, dry_run=False, now=None, starts=None, say=print):
-    """→ (folders removed, their bytes, folders kept, folders that could not be removed). starts: the running hosts' start times (default: from ps)"""
     dirs = [d for d in ([Path(folder)] if folder else cache_dirs()) if d.is_dir()]
     if not dirs: return 0, 0, 0, 0
     now = time.time() if now is None else now
     starts = host_starts(now) if starts is None else starts
-    limit = min([now - idle_min * 60] + [s - 60 for s in starts])   # a minute's margin: ps gives whole seconds, and a host makes its first folder after it started
+    limit = min([now - idle_min * 60] + [s - 60 for s in starts])   # ps gives whole seconds, and a host makes its first folder after it started
     n = size = kept = bad = 0
     names = []
     for d in dirs:
@@ -76,7 +67,7 @@ def clean(folder=None, idle_min=60, dry_run=False, now=None, starts=None, say=pr
     for f in names:
         if f.is_symlink() or not f.is_dir(): continue
         try: t, b = scan(f)
-        except FileNotFoundError: continue   # removed meanwhile (another cleanup: regress.py's workers check the disk at the same time)
+        except FileNotFoundError: continue
         if t >= limit: kept += 1; continue
         if not dry_run:
             try: shutil.rmtree(f)

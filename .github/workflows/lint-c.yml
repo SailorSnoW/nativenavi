@@ -1,8 +1,6 @@
-# C and Objective-C lint of dm/host and dm/gfx (dm/tools/lint_c.py; docs/development.md has the commands):
-#   clang-tidy with the bug-finding checks of .clang-tidy and clang's static analyzer, as a ratchet like lint-python.yml's: the findings the code had when this came in are in
-#   dm/tools/lint_c_baseline.tsv (counts per file and check), so the job fails when a file has more findings of a check than listed there (a new one: fix it, or silence a
-#   false positive with // NOLINT(<check>) and a reason), when it has fewer (run lint_c.py tidy --update), and on a pull request whose baseline grew over its base's.
-# It runs on a Mac because the compile database comes from the Makefiles' dry runs, whose sources need the macOS SDK's headers and frameworks.
+# clang-tidy over dm/host and dm/gfx (dm/tools/lint_c.py, checks in .clang-tidy) as a ratchet on dm/tools/lint_c_baseline.tsv: it fails on a new finding (fix it, or
+# NOLINT(<check>) with a reason), on a fixed one still listed (lint_c.py tidy --update), and on a pull request whose baseline grew over its base's.
+# A Mac runner: the compile database comes from the Makefiles' dry runs, whose sources need the macOS SDK.
 name: lint-c
 
 on:
@@ -18,27 +16,24 @@ on:
 permissions:
   contents: read
 
-# As in tests.yml: it waits for the same Mac runners, so a push to main never cancels, or main's runs do not finish.
+# Shares tests.yml's Mac runners: a push to main never cancels, or main's runs would not finish.
 concurrency:
   group: lint-c-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The LLVM release whose clang-tidy runs here, and the sha256 of its macOS arm64 archive (github.com/llvm/llvm-project/releases). The baseline names
-  # the version it was made with; dm/tools/tests/test_lint_c.py keeps the two in step: raising LLVM means a new baseline (lint_c.py tidy --rebaseline) in the same change.
+  # The baseline names the LLVM it was made with (test_lint_c.py checks): raising it takes a new baseline (lint_c.py tidy --rebaseline) in the same change.
   LLVM_VERSION: 23.1.4
   LLVM_SHA256: 0f8b0db925ab54a63028d788e85b14abaa25492e9608819728c17f6786948da4
-  # The toolchain the project supports (README: Xcode 27.2) on GitHub's xcode-27 image, named by path: the SDK's headers are part of what clang-tidy reads
+  # The supported Xcode: its SDK headers are part of what clang-tidy reads
   DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
-  GAME: 0400486024DEC000   # The Legend of Zelda: Ocarina of Time: the profile header the sources are parsed with
+  GAME: 0400486024DEC000   # the profile header the sources are parsed with
 
 defaults:
   run:
     shell: bash
 
-# Actions are pinned to commit SHAs (the tag in the comment), as in tests.yml.
-# Time: about 5 minutes: 30 s for LLVM (an 870 MB download, of which clang-tidy and clang's headers are unpacked), 2-3 minutes of clang-tidy over the sources on the
-# runner's 3 cores (65 s on 8 cores of an M2 Max), seconds for the compile database.
+# About 5 minutes: 30 s for LLVM (870 MB download), 2-3 minutes of clang-tidy on the runner's 3 cores.
 jobs:
   lint:
     name: clang-tidy (ratchet)

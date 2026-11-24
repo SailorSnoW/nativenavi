@@ -1,20 +1,17 @@
-# Build outputs
 .DS_Store
 __pycache__/
-# Made from each shader build's Mac outputs (c1_guard.py, cb_extent.py; the packing script makes them), not committed
+# Written from each shader build's Mac outputs
 dm/games/*/c1_full.tsv
 dm/games/*/cb_extent.tsv
-# coverage.py data and its JSON report (pyproject.toml, [tool.coverage.run])
 .coverage
 .coverage.*
 /coverage.json
 /.venv/
 /result
 /result-*
-# .envrc is committed (the flake's default shell); a checkout's own additions go in .envrc.local, which it sources
 /.envrc.local
 /.direnv/
 # The NativeNavi app (scripts/build_gui.py)
 /dist/
-# The commit a copy of the sources was packed from (the NativeNavi app writes it; dm/mac/pack_app.py reads it)
+# The commit a copy of the sources was packed from (written by the NativeNavi app, read by dm/mac/pack_app.py)
 /.source-commit

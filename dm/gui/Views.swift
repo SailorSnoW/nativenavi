@@ -1,5 +1,4 @@
-// The window's screens: the setup (the game file, what the build needs, where the app goes), the build's progress, the finished app, a stopped build; and the Settings window.
-// System controls and grouped forms throughout; Liquid Glass where macOS 26 puts it, on the controls and the bars over the scrolling content (glass buttons, safeAreaBar)
+// The window's screens and the Settings window: system controls and grouped forms, Liquid Glass on the controls and the bars over scrolling content
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers

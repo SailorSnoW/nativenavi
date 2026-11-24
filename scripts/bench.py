@@ -1,22 +1,7 @@
 #!/usr/bin/env python3
-# A repeatable benchmark of a game in the Mac host: the same save, the same scripted route (button presses and stick moves at fixed times from start), the same measuring window,
-# and frame-time percentiles from the host's per-frame timing rows (DM_NVN_TSV): frame time (start to start), the interval each frame stayed on screen, GPU time, frames per second.
-# Variants run the same route with other settings, in turn and repeated, so two hosts or two sets of switches compare under the same load; a screenshot after the measurement
-# window of every run shows whether a variant changes the picture without stalling a measured frame.
-# Usage: python3 scripts/bench.py <id>_build folder [options]   (the folder the packing script made with --platform mac: tools/dmhost, the rewritten modules, the extracted RomFS,
-#   shader/cache and font; the game's title ID is the folder name's start). -h lists the options. Exit code 0 when every run gave frames, 1 otherwise.
-#   --route <name>: a route of the game's profile (dm/games/<id>/bench.tsv); the first one by default. --save <folder>: the save the route starts from (default <id>_build/run/save);
-#   each run gets a copy, the folder itself is not changed. --variant 'label:KEY=VALUE,KEY=VALUE': a variant (repeatable; KEY host=<path> runs another host binary, msl=<folder>
-#   other Mac shader libraries, shmap=<file> another shader map (with the c1_full.tsv / cb_extent.tsv of those libraries beside it), patched=<folder> other rewritten modules,
-#   pso=<folder> another pipeline archive); without one, a single variant 'base'. --runs N: each variant N times, in turn (default 2).
-#   --fps: DM_FPS_TARGET (with the display link at that rate) for every variant; --env KEY=VALUE for every variant. --out <folder>: where the runs go
-#   (default <id>_build/bench/<date-time>): per run log.txt, frames.tsv and the screenshots, and results.json and results.md for all. --headless: no window (no display link,
-#   no WindowServer compositing, nothing on the screen), for measuring while the Mac is in use.
-# A route line in bench.tsv: name, DM_KEYS (seconds from host start, or @<file>: a DM_REC recording in the profile's folder), the window's start and length in seconds, or in
-# presented frames with an f before both (f1000, f1950), a description, and optionally switches the route runs with (KEY=VALUE separated by spaces: DM_DETCLOCK for a recording,
-# so each frame steps the game by one vsync whatever the Mac's speed and the variants see the same frames). The window starts once the scene is loaded and the pipelines of the
-# first frames are built, so runs compare the scene rather than its loading. A frame route ends once the frame after its window and its screenshot are in, or at --timeout.
-# Load on the Mac moves the numbers: compare variants of one invocation, not invocations.
+# A repeatable benchmark of the game in the Mac host along a route of dm/games/<id>/bench.tsv (docs/development.md#a-benchmark-on-the-mac).
+# Usage: python3 scripts/bench.py <id>_build folder [--route NAME] [--save DIR] [--variant 'label:KEY=VALUE,…'] [--runs N] [--fps N] [--env KEY=VALUE] [--headless] [--out DIR]
+#   Exit code 0 when every run gave frames, 1 otherwise. Compare variants of one invocation, not invocations: load on the Mac moves the numbers.
 import argparse, datetime, json, math, os, re, shutil, signal, statistics, subprocess, sys, time
 from typing import NoReturn
 from pathlib import Path
@@ -30,7 +15,7 @@ def fail(msg) -> NoReturn:
     print(f'error: {msg}', file=sys.stderr); sys.exit(1)
 
 
-def newest(paths):   # the newest version folder (v<number>) of a glob
+def newest(paths):
     vs = sorted((p for p in paths if re.fullmatch(r'v\d+', p.name.removeprefix('patched_'))), key=lambda p: int(p.name.removeprefix('patched_')[1:]))
     return vs[-1] if vs else None
 
@@ -46,7 +31,7 @@ def routes(gid):
         by_frame = c[2].startswith('f')
         if by_frame != c[3].startswith('f'): fail(f'{f}: the window\'s start and length are both seconds or both frames (f<n>): {ln!r}')
         keys = c[1]
-        if keys.startswith('@'):   # a recording beside bench.tsv, played from its absolute path (DM_KEYS=@<file>)
+        if keys.startswith('@'):
             kf = f.parent / keys[1:]
             if not kf.is_file(): fail(f'{f}: route {c[0]!r}: no keys file {kf}')
             keys = '@' + str(kf)
@@ -61,7 +46,7 @@ def pct(xs, p):   # nearest-rank percentile
 
 
 def window_rows(tsv, t0, t1, by_frame=False):
-    """The per-frame rows of one run (frame / @name / value) in the window: the frames whose @t_s lies in [t0, t1), or with by_frame those numbered in [t0, t1)"""
+    """with by_frame, t0 and t1 are frame numbers"""
     rows = {}
     with open(tsv, errors='replace') as fh:
         for ln in fh:
@@ -73,7 +58,6 @@ def window_rows(tsv, t0, t1, by_frame=False):
 
 
 def frames(tsv, t0, t1, by_frame=False):
-    """The window's frame times, on-screen intervals and GPU times, the frames dropped and the frames in it (window_rows)"""
     sel = window_rows(tsv, t0, t1, by_frame)
     ft = [r['@frame_ms'] for r in sel if r.get('@frame_ms', 0) > 0]
     shown = [r['@presented_ms'] for r in sel if r.get('@presented_ms', 0) > 0]
@@ -87,13 +71,12 @@ def summary(ft, shown, gpu, dropped, n, secs, budget):
     for name, xs in (('frame', ft), ('shown', shown), ('gpu', gpu)):
         for p in (50, 95, 99): d[f'{name}_p{p}'] = round(pct(xs, p), 2) if xs else None
         d[f'{name}_max'] = round(max(xs), 2) if xs else None
-    d['over_budget'] = sum(1 for x in ft if x > budget * 1.5)   # frames taking more than 1.5 times the target's frame time: the spikes the Metal HUD shows
+    d['over_budget'] = sum(1 for x in ft if x > budget * 1.5)   # the spikes the Metal HUD shows
     return d
 
 
 def means(sel):
-    """Means of the window, steadier than the percentiles for a change of a few percent: frame time, GPU time (the command buffers summed), the GPU's real span (first start
-    to last end, which overlapping command buffers do not inflate) at p50, the CPU the submission took, passes and draws"""
+    """Steadier than the percentiles for a change of a few percent; span: the GPU's first start to last end, which overlapping command buffers do not inflate"""
     def mean(k, ok=lambda x: x >= 0):
         xs = [r[k] for r in sel if k in r and ok(r[k])]
         return round(statistics.fmean(xs), 2) if xs else None
@@ -103,7 +86,7 @@ def means(sel):
             'sub_cpu_mean': mean('@sub_cpu_ms'), 'passes': mean('@passes'), 'draws': mean('@draws')}
 
 
-def last_frame(tsv):   # the newest frame number in a growing DM_NVN_TSV, from its tail
+def last_frame(tsv):
     try:
         with open(tsv, 'rb') as fh:
             fh.seek(0, 2); fh.seek(max(0, fh.tell() - 4096)); lines = fh.read().decode(errors='replace').splitlines()
@@ -132,23 +115,22 @@ def run_one(a, gid, build, var, route, out, lock):
     headless = getattr(a, 'headless', False)
     if headless: env.pop('DM_WINDOW', None); env['DM_METAL_HUD'] = '0'
     else: env['DM_WINDOW'] = '1'
-    env.update(route.get('env') or {})   # the route's own switches (a recording's DM_DETCLOCK); --env and the variants come after them
-    if (build / 'pso/mac').is_dir(): env.setdefault('DM_PSO_BUNDLE', str(build / 'pso/mac'))   # the offline pipeline archive the Mac app bundles (launcher.c sets it there); without it an NVN game rebuilds every base before its first frame
+    env.update(route.get('env') or {})   # --env and the variants override the route's own switches
+    if (build / 'pso/mac').is_dir(): env.setdefault('DM_PSO_BUNDLE', str(build / 'pso/mac'))   # as the Mac app's launcher sets it; without it every base is rebuilt before the first frame
     if (build / 'aoc').is_dir(): env['DM_AOC_DIR'] = str(build / 'aoc')
     archive = var.get('pso') or a.pso_archive
     if archive: env['DM_PSO_ARCHIVE'] = archive if archive == 'off' else str(Path(archive).expanduser().resolve())
     if a.fps: env['DM_FPS_TARGET'] = str(a.fps)
-    if a.fps and a.fps > 60: env.update(DM_PRESENT_HZ=str(a.fps), DM_PRESENT_LINK='2')   # the display link at the screen's rate for the variable frame step; at 60 or 30 the host matches the screen to the cap itself
+    if a.fps and a.fps > 60: env.update(DM_PRESENT_HZ=str(a.fps), DM_PRESENT_LINK='2')   # at 60 or 30 the host matches the display link to the cap itself
     for kv in a.env: k, _, v = kv.partition('='); env[k] = v
     for k, v in var.items():
         if k not in ('host', 'msl', 'shmap', 'patched', 'pso'): env[k] = v
     (out / 'ctl').write_text('')
     by_frame = route.get('frames', False)
     end = route['from'] + route['secs'] + 2
-    # Readback/PNG capture can stall a frame and change adaptive pacing. Keep the
-    # default visual proof after the timing window, before the two-second exit tail.
+    # a capture can stall a frame: the default shot is after the window
     shots = sorted(a.shots) if a.shots else [route['from'] + route['secs'] + (20 if by_frame else 0.5)]
-    if by_frame:   # shots at presented frames (DM_NVN_SHOT), the same frames in every run; the run ends once the last one is written
+    if by_frame:
         env['DM_NVN_SHOT'] = ','.join(str(int(f)) for f in shots) + f':{out}/shot_f%d.png'
         last_shot, end_frame, shots = int(shots[-1]), int(max(shots[-1], route['from'] + route['secs'])), []
         end = getattr(a, 'timeout', None) or 600
@@ -175,7 +157,7 @@ def run_one(a, gid, build, var, route, out, lock):
     if (out / 'frames.tsv').is_file():
         sel = window_rows(out / 'frames.tsv', route['from'], route['from'] + route['secs'], by_frame)
         secs = route['secs']
-        if by_frame:   # the window's wall time: from the first frame's start to the last one's end
+        if by_frame:
             secs = (sel[-1]['@t_s'] - sel[0]['@t_s'] + sel[-1].get('@frame_ms', 0) / 1000) if len(sel) > 1 else 0
             if len(sel) < route['secs']: print(f'  [RED] the run stopped before the window\'s end: {len(sel)} of {route["secs"]:g} frames (see {out / "log.txt"})', flush=True)
         s = summary(*frames(out / 'frames.tsv', route['from'], route['from'] + route['secs'], by_frame), secs, budget)
@@ -188,8 +170,7 @@ def run_one(a, gid, build, var, route, out, lock):
 
 
 def lock_holder(lock):
-    """The process ID a measuring lock names (its text: the ID alone, or '… pid <ID>'), when that process still runs; None for a free lock, one naming no ID (taken as held: 0),
-    and a stale one: its process gone and no game running on this Mac"""
+    """0 for a lock naming no ID or a dead one while a game runs; None for a free or stale lock"""
     try: text = Path(lock).read_text()
     except OSError: return None
     m = re.search(r'(?:^|pid )(\d+)\s*$', text.strip())
@@ -201,10 +182,13 @@ def lock_holder(lock):
     return 0 if subprocess.run(['pgrep', '-x', 'dmhost'], capture_output=True).returncode == 0 else None
 
 
-def wait_lock(lock, owner=''):   # the measuring lock other runs on this Mac hold while a game runs (an empty file name turns it off); taken atomically; a stale one is removed
+def wait_lock(lock, owner=''):   # taken atomically; a stale one is removed
     while True:
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY); os.write(fd, (f'{owner} pid {os.getpid()}' if owner else str(os.getpid())).encode()); os.close(fd); return
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, (f'{owner} pid {os.getpid()}' if owner else str(os.getpid())).encode())
+            os.close(fd)
+            return
         except FileExistsError:
             if lock_holder(lock) is None:
                 print(f'removing the stale measuring lock {lock} ({Path(lock).read_text(errors="replace").strip()[:80]}: its process is gone, no game runs)', flush=True)
@@ -270,7 +254,9 @@ def main():
             'sub_cpu_mean', 'passes', 'draws', 'game_speed', 'red_lines']
     md = (f'{gid}, route `{a.route}` ({route["about"]}), window {route["secs"]:g} {unit}, fps target {a.fps or "profile"}; '
           f'medians over runs (range); times in ms; over_budget = frames longer than 1.5 frame times\n\n' + table(results, keys) + '\n')
-    (out / 'results.md').write_text(md); (out / 'results.json').write_text(json.dumps({'game': gid, 'route': a.route, **{k: v for k, v in vars(a).items() if k != 'build' and k != 'save'}, 'save': str(a.save), 'variants': variants, 'results': results}, indent=1, default=str))
+    (out / 'results.md').write_text(md)
+    options = {k: v for k, v in vars(a).items() if k not in ('build', 'save')}
+    (out / 'results.json').write_text(json.dumps({'game': gid, 'route': a.route, **options, 'save': str(a.save), 'variants': variants, 'results': results}, indent=1, default=str))
     print('\n' + md)
     sys.exit(0 if all(r.get('frames') for rs_ in results.values() for r in rs_) else 1)
 

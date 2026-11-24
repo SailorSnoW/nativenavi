@@ -1,15 +1,6 @@
-// Mac app launcher (CFBundleExecutable of the .app that dm/mac/pack_app.py packs): sets the host's environment from the bundle, then runs the Mac host (Contents/MacOS/dmhost) as a child.
-// The host is not exec'ed: macOS privacy checks (TCC) attribute a child's file access to the app that launched it, while a launcher that hands its process over (a shell script exec'ing
-// dmhost) gets EPERM on every open on a removable volume, with no prompt, signed or not. The launcher forwards SIGTERM / SIGINT / SIGHUP to the host and returns its exit code.
-// Bundle layout: Resources/romfs.img (the game's RomFS image; legacy romfs/ also supported), Resources/msl/<b-chain.img> (the Mac shader library), Resources/aoc/<index> (DLC), Resources/pso (the pipeline archive made
-// offline, handed to the host as DM_PSO_BUNDLE), Resources/dm (the rewritten modules, the shader tables and pairs, font/, env.txt); romfs.img, msl, aoc and pso are links into the signed data bundles in Contents/PlugIns (pack_app.py). Saves, the pipeline list and temporary files go to ~/Library/Application Support/NativeNavi/<title ID>/, the host's output to ~/Library/Logs/NativeNavi/<title ID>.log
-// (the previous run's kept as <title ID>.prev.log). An app with no Application Support folder of its own yet takes the one an nxnative build of the game left (take_nxnative). Environment switches: one KEY=VALUE per line in <Application Support folder>/env.txt, then Resources/dm/env.txt (the first one wins; neither
-// replaces a variable already set). Then the player's saved choices: launcher.<VAR> strings in the app's preferences domain (its bundle ID), which a
-// front end or a settings window writes, each checked against the bundle's settings (Info.plist DMSettings, from launcher.json) and used only for a variable still unset; DM_SAVED_CHOICES=0 ignores them.
-// So the order is: the launch environment, the player's env.txt, the bundle's, saved choices, the host's tested defaults (docs/frontends.md, Saved choices).
-// Before the host starts, the settings window (dm/mac/Launcher.swift dm_mac_launcher, linked in by pack_app.py) runs in this process and puts the player's settings into the environment; it keeps
-// what the launch environment and the env files set (DM_ENV_LAUNCH_KEYS, DM_ENV_FILE_KEYS). DM_LAUNCHER=0 or --no-launcher (open <app> --args --no-launcher) starts the game without the window,
-// with the saved choices; so does "Show this window at launch" turned off.
+// Mac app launcher: sets the host's environment from the bundle, shows the settings window, then runs Contents/MacOS/dmhost as a child. Not exec'ed:
+// TCC attributes a child's file access to the app, while an exec'ed process gets EPERM on every open on a removable volume, with no prompt.
+// Sources of the environment, in order: docs/frontends.md#saved-choices.
 #include <CoreFoundation/CoreFoundation.h>
 #include <copyfile.h>
 #include <ctype.h>
@@ -29,12 +20,13 @@
 #include "romfs_image.h"
 
 extern char **environ;
-int dm_mac_launcher(void);   // Launcher.swift: 1 = Play (the settings are in the environment), 0 = the player quit, 2 = no window (apply the saved choices here)
+int dm_mac_launcher(void);   // 1 = Play, 0 = quit, 2 = no window (apply the saved choices here)
 int dm_mac_microphone_consent(void);
 static pid_t g_child;
-static char *g_file_keys, *g_launch_keys;   // the variables the env files set, and the settings the launch environment set (DM_ENV_FILE_KEYS, DM_ENV_LAUNCH_KEYS)
+static char *g_file_keys;
+static char *g_launch_keys;
 
-static void add_key(char **list, const char *k) {   // a space-separated list of names
+static void add_key(char **list, const char *k) {
     char *s;
     if (asprintf(&s, "%s%s%s", *list ? *list : "", *list ? " " : "", k) < 0) { fputs("[RED] launcher: out of memory\n", stderr); exit(1); }
     free(*list); *list = s;
@@ -42,26 +34,32 @@ static void add_key(char **list, const char *k) {   // a space-separated list of
 
 static void forward(int sig) { if (g_child > 0) kill(g_child, sig); }
 
-static int info_string(const char *key, char *out, size_t n) {   // a string key of the bundle's Info.plist
+static int env_is(const char *key, const char *value) { const char *s = getenv(key); return s && !strcmp(s, value); }
+
+static int info_string(const char *key, char *out, size_t n) {
     CFBundleRef b = CFBundleGetMainBundle(); if (!b) return 0;
     CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
     CFTypeRef v = CFBundleGetValueForInfoDictionaryKey(b, k); CFRelease(k);
     return v && CFGetTypeID(v) == CFStringGetTypeID() && CFStringGetCString(v, out, (CFIndex)n, kCFStringEncodingUTF8) && *out;
 }
 
-static void alert(const char *title, const char *msg) {   // a dialog (the app has no window of its own), and the same line on stderr
+static void alert(const char *title, const char *msg) {
     fprintf(stderr, "[RED] %s\n", msg);
     char *script = "on run argv\ndisplay alert (item 1 of argv) message (item 2 of argv) as critical\nend run";
-    char *argv[] = {"osascript", "-e", script, (char *)title, (char *)msg, NULL}; pid_t pid; int st;
+    char *argv[] = {"osascript", "-e", script, (char *)title, (char *)msg, NULL};
+    pid_t pid;
+    int st;
     if (!posix_spawnp(&pid, "osascript", NULL, NULL, argv, environ)) while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
 }
 
-static int modules_present(const char *dm) {   // the packer's inventory detects even a missing binary/table pair
+static int modules_present(const char *dm) {
     CFBundleRef b = CFBundleGetMainBundle(); if (!b) return 0;
     CFTypeRef files = CFBundleGetValueForInfoDictionaryKey(b, CFSTR("DMModuleFiles"));
     if (!files || CFGetTypeID(files) != CFArrayGetTypeID() || !CFArrayGetCount(files)) return 0;
     for (CFIndex i = 0; i < CFArrayGetCount(files); i++) {
-        CFTypeRef v = CFArrayGetValueAtIndex(files, i); char name[PATH_MAX], path[PATH_MAX]; struct stat st;
+        CFTypeRef v = CFArrayGetValueAtIndex(files, i);
+        char name[PATH_MAX], path[PATH_MAX];
+        struct stat st;
         if (CFGetTypeID(v) != CFStringGetTypeID() || !CFStringGetCString(v, name, sizeof name, kCFStringEncodingUTF8) || !*name || strchr(name, '/')) return 0;
         int n = snprintf(path, sizeof path, "%s/%s", dm, name);
         if (n < 0 || (size_t)n >= sizeof path || stat(path, &st) || !S_ISREG(st.st_mode) || access(path, R_OK)) return 0;
@@ -69,20 +67,18 @@ static int modules_present(const char *dm) {   // the packer's inventory detects
     return 1;
 }
 
-static void mkdirs(const char *path) {   // mkdir -p
+static void mkdirs(const char *path) {
     char p[PATH_MAX]; snprintf(p, sizeof p, "%s", path);
     for (char *s = p + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(p, 0755); *s = '/'; }
     mkdir(p, 0755);
 }
 
-// Before this repository was named NativeNavi, an app kept its folder and saved choices under nxnative's names (~/Library/Application Support/nxnative/<title ID>, the
-// preferences domain org.nxnative.<title ID>), as nxnative's own builds still do. A first start with no folder of its own takes a clone of that folder (APFS: no space until
-// one copy changes), made under another name and renamed when whole, and the old domain's keys that the app's own does not have. The old folder and domain stay as they are
-static int take_folder(const char *old, const char *now) {   // 1 when `now` was made from `old`
+// nxnative's builds keep the folder and choices under its names: a first start takes an APFS clone of the old folder and the old domain's missing keys
+static int take_folder(const char *old, const char *now) {
     struct stat st; char part[PATH_MAX];
     if (!lstat(now, &st) || stat(old, &st) || !S_ISDIR(st.st_mode)) return 0;
     snprintf(part, sizeof part, "%s.partial", now);
-    removefile(part, NULL, REMOVEFILE_RECURSIVE);   // what a start stopped while copying left
+    removefile(part, NULL, REMOVEFILE_RECURSIVE);
     if (copyfile(old, part, NULL, COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_CLONE) || rename(part, now)) {
         fprintf(stderr, "[RED] launcher: cannot copy %s to %s: %s; this app starts without it\n", old, now, strerror(errno));
         removefile(part, NULL, REMOVEFILE_RECURSIVE); return 0;
@@ -91,10 +87,13 @@ static int take_folder(const char *old, const char *now) {   // 1 when `now` was
     return 1;
 }
 
-static void take_choices(void) {   // the app's bundle ID org.nativenavi.<x>: the keys of org.nxnative.<x> that its domain has not
+#define BUNDLE_PREFIX "org.nativenavi."
+
+static void take_choices(void) {
     CFStringRef now = CFBundleGetIdentifier(CFBundleGetMainBundle());
-    if (!now || !CFStringHasPrefix(now, CFSTR("org.nativenavi."))) return;   // packed with another bundle ID (--bundle-id): no old domain to name
-    CFStringRef rest = CFStringCreateWithSubstring(NULL, now, CFRangeMake(15, CFStringGetLength(now) - 15));
+    if (!now || !CFStringHasPrefix(now, CFSTR(BUNDLE_PREFIX))) return;   // packed with another bundle ID: no old domain to name
+    CFIndex skip = sizeof BUNDLE_PREFIX - 1;
+    CFStringRef rest = CFStringCreateWithSubstring(NULL, now, CFRangeMake(skip, CFStringGetLength(now) - skip));
     CFStringRef old = CFStringCreateWithFormat(NULL, NULL, CFSTR("org.nxnative.%@"), rest); CFRelease(rest);
     CFArrayRef keys = CFPreferencesCopyKeyList(old, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
     CFIndex taken = 0;
@@ -119,10 +118,10 @@ static void take_nxnative(const char *home, const char *id, const char *sup) {
     snprintf(old, sizeof old, "%s/Library/Application Support/nxnative/%s", home, id);
     if (take_folder(old, sup)) take_choices();
     snprintf(old, sizeof old, "%s/Library/Application Support/nxnative/system", home); snprintf(now, sizeof now, "%s/system", base);
-    take_folder(old, now);   // the player's console files (DM_SYSTEM_DIR below)
+    take_folder(old, now);
 }
 
-static void env_file(const char *path) {   // KEY=VALUE lines, # starts a comment; a variable already set stays
+static void env_file(const char *path) {   // a variable already set stays
     FILE *f = fopen(path, "r"); if (!f) return;
     char ln[4096];
     while (fgets(ln, sizeof ln, f)) {
@@ -130,13 +129,19 @@ static void env_file(const char *path) {   // KEY=VALUE lines, # starts a commen
         char *e = s + strlen(s); while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
         char *eq = strchr(s, '=');
         if (*s == '#' || !eq || eq == s) continue;
-        *eq = 0; char *k = s; for (char *t = eq - 1; t > k && (*t == ' ' || *t == '\t'); t--) *t = 0;
-        if (!getenv(k)) { setenv(k, eq + 1, 0); add_key(&g_file_keys, k); fprintf(stderr, "launcher: env %s=%s (%s)\n", k, eq + 1, path); }
+        *eq = 0;
+        char *k = s;
+        for (char *t = eq - 1; t > k && (*t == ' ' || *t == '\t'); t--) *t = 0;
+        if (!getenv(k)) {
+            setenv(k, eq + 1, 0);
+            add_key(&g_file_keys, k);
+            fprintf(stderr, "launcher: env %s=%s (%s)\n", k, eq + 1, path);
+        }
     }
     fclose(f);
 }
 
-static int saved_accepted(CFDictionaryRef rule, CFStringRef v, const char *s) {   // a saved choice this build still offers: one of its values, or a number in its range
+static int saved_accepted(CFDictionaryRef rule, CFStringRef v, const char *s) {
     CFTypeRef values = CFDictionaryGetValue(rule, CFSTR("values"));
     if (values && CFGetTypeID(values) == CFArrayGetTypeID()) {
         for (CFIndex i = 0; i < CFArrayGetCount(values); i++) {
@@ -152,23 +157,22 @@ static int saved_accepted(CFDictionaryRef rule, CFStringRef v, const char *s) { 
     return *s && !isspace((unsigned char)*s) && !strpbrk(s, "xX") && !*end && x == x && x >= l && x <= h;   // as Setting.accepts (LauncherSettings.swift): no leading space, no hex, no NaN
 }
 
-static CFArrayRef setting_rules(void) {   // Info.plist DMSettings (pack_app.py, from launcher.json): each setting's variable and the values it takes
+static CFArrayRef setting_rules(void) {
     CFBundleRef b = CFBundleGetMainBundle(); if (!b) return NULL;
     CFTypeRef rules = CFBundleGetValueForInfoDictionaryKey(b, CFSTR("DMSettings"));
     return rules && CFGetTypeID(rules) == CFArrayGetTypeID() ? rules : NULL;
 }
 
-static int rule_env(CFTypeRef rule, char *env, size_t n) {   // a rule's variable name
+static int rule_env(CFTypeRef rule, char *env, size_t n) {
     if (CFGetTypeID(rule) != CFDictionaryGetTypeID()) return 0;
     CFTypeRef e = CFDictionaryGetValue(rule, CFSTR("env"));
     return e && CFGetTypeID(e) == CFStringGetTypeID() && CFStringGetCString(e, env, (CFIndex)n, kCFStringEncodingUTF8);
 }
 
-static void saved_choices(void) {   // after the env files, before the bundle's own defaults (DM_LANG): a variable already set keeps its value
+static void saved_choices(void) {   // a variable already set keeps its value
     CFArrayRef rules = setting_rules(); CFStringRef domain = CFBundleGetIdentifier(CFBundleGetMainBundle());
-    if (!rules || !domain) return;   // packed without launcher settings: nothing to choose
-    const char *off = getenv("DM_SAVED_CHOICES");
-    if (off && !strcmp(off, "0")) { fprintf(stderr, "launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n"); return; }
+    if (!rules || !domain) return;
+    if (env_is("DM_SAVED_CHOICES", "0")) { fprintf(stderr, "launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n"); return; }
     for (CFIndex i = 0; i < CFArrayGetCount(rules); i++) {
         CFTypeRef rule = CFArrayGetValueAtIndex(rules, i); char env[128], s[256];
         if (!rule_env(rule, env, sizeof env)) continue;
@@ -183,20 +187,16 @@ static void saved_choices(void) {   // after the env files, before the bundle's 
     }
 }
 
-
-// Run after either launch path has applied its choices, before spawning dmhost. The bundle
-// owns the OS permission request. Denial disables capture for this run, without changing the saved choice.
+// a denial turns capture off for this run only
 static void microphone_at_launch(void) {
-    const char *enabled = getenv("DM_MIC");
-    if (!enabled || strcmp(enabled, "1")) return;
+    if (!env_is("DM_MIC", "1")) return;
     if (!CFBundleGetValueForInfoDictionaryKey(CFBundleGetMainBundle(), CFSTR("NSMicrophoneUsageDescription")) ||
         !dm_mac_microphone_consent()) {
         setenv("DM_MIC", "0", 1);
         return;
     }
-    const char *ignore = getenv("DM_SAVED_CHOICES");
     CFStringRef domain = CFBundleGetIdentifier(CFBundleGetMainBundle());
-    if (getenv("DM_MIC_DEVICE") || (ignore && !strcmp(ignore, "0")) || !domain) return;
+    if (getenv("DM_MIC_DEVICE") || env_is("DM_SAVED_CHOICES", "0") || !domain) return;
     CFPropertyListRef value = CFPreferencesCopyAppValue(CFSTR("launcher.DM_MIC_DEVICE"), domain);
     char uid[256];
     if (value && CFGetTypeID(value) == CFStringGetTypeID() && CFStringGetCString(value, uid, sizeof uid, kCFStringEncodingUTF8) && *uid)
@@ -204,18 +204,20 @@ static void microphone_at_launch(void) {
     if (value) CFRelease(value);
 }
 
-
 int main(int argc, char **argv) {
     char self[PATH_MAX], exe[PATH_MAX]; uint32_t n = sizeof self;
     if (_NSGetExecutablePath(self, &n) || !realpath(self, exe)) return 1;
     char contents[PATH_MAX], res[PATH_MAX], host[PATH_MAX], dm[PATH_MAX], romfs[PATH_MAX], p[PATH_MAX];
-    snprintf(contents, sizeof contents, "%s", exe); *strrchr(contents, '/') = 0; *strrchr(contents, '/') = 0;   // .../Contents/MacOS/<launcher> → .../Contents
+    snprintf(contents, sizeof contents, "%s", exe); *strrchr(contents, '/') = 0; *strrchr(contents, '/') = 0;
     snprintf(res, sizeof res, "%s/Resources", contents); snprintf(host, sizeof host, "%s/MacOS/dmhost", contents);
     snprintf(dm, sizeof dm, "%s/dm", res); snprintf(romfs, sizeof romfs, "%s/romfs", res);
     char name[256] = "NativeNavi", id[64] = "", marker[512] = "", lang[32] = "";
     if (!info_string("CFBundleName", name, sizeof name)) snprintf(name, sizeof name, "NativeNavi");
     info_string("DMRomfsMarker", marker, sizeof marker); info_string("DMLanguage", lang, sizeof lang);
-    if (!info_string("DMTitleID", id, sizeof id) || strchr(id, '/')) { alert(name, "This app has no title ID in its Info.plist (DMTitleID): pack it again with build_app.py --platform mac-app."); return 1; }
+    if (!info_string("DMTitleID", id, sizeof id) || strchr(id, '/')) {
+        alert(name, "This app has no title ID in its Info.plist (DMTitleID): pack it again with build_app.py --platform mac-app.");
+        return 1;
+    }
     struct stat st; snprintf(p, sizeof p, "%s/romfs.img", res);
     int valid_romfs;
     if (!stat(p, &st)) {
@@ -235,31 +237,41 @@ int main(int argc, char **argv) {
     mkdirs(logs);
     rename(log, prev);
     int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); setvbuf(stdout, NULL, _IOLBF, 0); }
+    if (fd >= 0) {
+        dup2(fd, 1);
+        dup2(fd, 2);
+        close(fd);
+        setvbuf(stdout, NULL, _IOLBF, 0);
+    }
     fprintf(stderr, "launcher: %s (%s), host %s\n", name, id, host);
     take_nxnative(home, id, sup);   // before anything makes the folder
     mkdirs(save); mkdirs(temp);
-    CFArrayRef rules = setting_rules();   // the settings the launch environment already set: the window shows them, fixed
-    for (CFIndex i = 0; rules && i < CFArrayGetCount(rules); i++) { char env[128]; if (rule_env(CFArrayGetValueAtIndex(rules, i), env, sizeof env) && getenv(env)) add_key(&g_launch_keys, env); }
+    CFArrayRef rules = setting_rules();
+    for (CFIndex i = 0; rules && i < CFArrayGetCount(rules); i++) {
+        char env[128];
+        if (rule_env(CFArrayGetValueAtIndex(rules, i), env, sizeof env) && getenv(env)) add_key(&g_launch_keys, env);
+    }
     snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p);
     snprintf(p, sizeof p, "%s/env.txt", dm); env_file(p);
-    setenv("DM_ENV_FILE_KEYS", g_file_keys ? g_file_keys : "", 1); setenv("DM_ENV_LAUNCH_KEYS", g_launch_keys ? g_launch_keys : "", 1);
-    free(g_file_keys); free(g_launch_keys);
+    setenv("DM_ENV_FILE_KEYS", g_file_keys ? g_file_keys : "", 1);
+    setenv("DM_ENV_LAUNCH_KEYS", g_launch_keys ? g_launch_keys : "", 1);
+    free(g_file_keys);
+    free(g_launch_keys);
     setenv("DM_SAVE", save, 0);   // before the window, which the host is started from
-    int window = !(getenv("DM_LAUNCHER") && !strcmp(getenv("DM_LAUNCHER"), "0"));
+    int window = !env_is("DM_LAUNCHER", "0");
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--no-launcher")) window = 0;
     if (!window) fprintf(stderr, "launcher: no settings window (DM_LAUNCHER=0 or --no-launcher)\n");
     int shown = window ? dm_mac_launcher() : 2;
-    if (!shown) return 0;   // Quit: no game
+    if (!shown) return 0;
     if (shown == 2) saved_choices();
     microphone_at_launch();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_TEMP", temp, 0);
-    snprintf(p, sizeof p, "%s/Library/Application Support/NativeNavi/system", home); setenv("DM_SYSTEM_DIR", p, 0);   // the player's own console files, for every game
+    snprintf(p, sizeof p, "%s/Library/Application Support/NativeNavi/system", home); setenv("DM_SYSTEM_DIR", p, 0);
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);
     snprintf(p, sizeof p, "%s/font", dm); setenv("DM_FONT_DIR", p, 0);
     snprintf(p, sizeof p, "%s/shader_map.tsv", dm); if (!stat(p, &st)) setenv("DM_NVN_SHMAP", p, 0);
     snprintf(p, sizeof p, "%s/aoc", res); if (!stat(p, &st)) setenv("DM_AOC_DIR", p, 0);
-    snprintf(p, sizeof p, "%s/pso", res); if (!stat(p, &st)) setenv("DM_PSO_BUNDLE", p, 0);   // the bases of every shader pair: the first start builds none
+    snprintf(p, sizeof p, "%s/pso", res); if (!stat(p, &st)) setenv("DM_PSO_BUNDLE", p, 0);
     if (*lang) setenv("DM_LANG", lang, 0);
     setenv("DM_WINDOW", "1", 0); setenv("DM_AUDIO", "1", 0);
     if (chdir(sup)) { fprintf(stderr, "[RED] launcher: cannot enter %s\n", sup); return 1; }

@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
-# Pack a self-contained, double-clickable Mac app of a game (the packing script's --platform mac-app): the launcher (dm/mac/launcher.c, linked here with its settings window,
-# dm/mac/Launcher.swift, with its model and rows) as CFBundleExecutable, the Mac host beside it,
-# and in Contents/Resources: romfs.img (the RomFS image), msl/<b-chain.img> (the Mac shader library),
-# aoc/<index>/ (DLC), pso/ (the pipeline archive made offline for this Mac's GPU, dm/gfx/tools/pso_offline.py: the launcher hands it to the host as DM_PSO_BUNDLE),
-# and dm/ (the rewritten modules and their rewriter tables, the profile's shader_map.tsv / pso_manifest.tsv / c1_full.tsv / cb_extent.tsv / shader_pairs.tsv / pso_pairs.tsv, font/, env.txt,
-# launcher.json: the game's launcher settings, dm/games/settings.py, which the settings window and Mac front ends show; practice/: the practice tools, the packing script's
-# practice_tools folder, which the host loads with DM_PRACTICE=1),
-# plus AppIcon.icns from the game's icon (sips, iconutil) and the Info.plist keys the launcher reads (DMTitleID, DMRomfsMarker, DMLanguage).
-# romfs.img, msl, aoc and pso are links into the signed data bundles in Contents/PlugIns that hold them (see Data bundles below), so that a pack which changes only the host signs in a second.
-# The large folders are APFS clones (cp -c) when the app is on the same APFS volume as the build, so they take no space; plain copies otherwise.
-# Signing: the new data bundles, the inner host, then the bundle (codesign --force --sign <identity>; '-' = ad-hoc), without the hardened runtime: the host maps the game's code executable, which the hardened
-# runtime refuses without entitlements, and so the app cannot be notarized. The bundle is stripped of its "._name" files first: on exFAT (an external drive for the build or the app) every
-# file's extended attributes live in such a file beside it, and codesign reads each one as a code object that is not signed, which fails the whole bundle.
+# Packs the Mac app (build_app.py --platform mac-app; layout: docs/development.md, "A Mac app"): launcher, host, and the game's data in data bundles.
+# Signed without the hardened runtime: the host maps the game's code executable, which it refuses without entitlements, so the app cannot be notarized.
 # Usage: pack_app.py <out.app> --host <dmhost> --patched <dir> --romfs <image or dir> --msl <dir> --tables <profile dir> --font <dir> --title-id <id> --name <name> [options]
-#   Reuses <out.app> while <out.app>.key matches, and otherwise each of its data bundles that still matches; writes <out.app>.partial and swaps it in at the end. Prints "step: ..." and "app: <path>[, reused (inputs unchanged)]".
-#   A pack that fails leaves no <out.app>.key; the last one is then <out.app>.key.replaced, from which the next pack takes the data bundles of the app still in place.
+#   Reuses <out.app> while <out.app>.key matches, else each data bundle that still matches; builds <out.app>.partial and swaps it in. Prints "step: ..." and "app: <path>[, reused (inputs unchanged)]".
+#   A failed pack leaves no <out.app>.key, only <out.app>.key.replaced, from which the next pack takes the data bundles of the app still in place.
 import argparse, concurrent.futures, contextlib, ctypes, errno, hashlib, json, os, plistlib, re, shutil, stat, subprocess, sys, tempfile
 from pathlib import Path
 
@@ -23,24 +12,23 @@ sys.path.insert(0, str(HERE.parent / 'tools'))
 import nso_syms
 import romfs as rfs
 import shader_lib
-import vol_space   # the space a build may write, with what APFS frees on demand
-MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv')   # what the host reads from the module folder (changed.tsv: the mods' code patches, hle_mods.c)
-PRACTICE_FILES = MODULE_FILES + ('*.ips', 'LICENSE')   # what the host reads of the practice tools' folder (hle_practice.c), and their license
-PRACTICE_SETTING = 'DM_PRACTICE'   # the switch that loads them, the settings list's Practice tools (settings.tsv), offered only by an app that carries them
-MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json); the shader chain's b-<chain> goes in as one file of them (shader_lib.py)
-# read beside DM_NVN_SHMAP; any of them may be absent. The shader pairs are the pipeline prebuild's (nvn_prewarm.inc pso_prebuild): without them the
-# app makes no pulling bases, a hybrid draw has no stand-in and a new pipeline compiles on the submit thread
+import vol_space
+MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', '*.changed.tsv')
+PRACTICE_FILES = MODULE_FILES + ('*.ips', 'LICENSE')
+PRACTICE_SETTING = 'DM_PRACTICE'   # offered by the settings only in an app that carries the practice tools
+MSL_FILES = ('*.metallib', '*.json', '*.tsv')
+# any may be absent
 TABLES = ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv')
-PSO_FILES = ('*.mtl4a', '*-prewarm-*.keys', 'prebuilt.tsv', 'rest_pairs.tsv', 'archive.tsv', 'prewarm.tsv')   # what the app takes of pso_offline.py's output folder
-EXE = 'nativenavi'   # the launcher's file name (Contents/MacOS/nativenavi)
+PSO_FILES = ('*.mtl4a', '*-prewarm-*.keys', 'prebuilt.tsv', 'rest_pairs.tsv', 'archive.tsv', 'prewarm.tsv')
+EXE = 'nativenavi'
 ICON_SIZES = (16, 32, 128, 256, 512)
-DETRITUS = ('.DS_Store',)   # Finder leftovers beside the AppleDouble "._name" files, see detritus() and strip_detritus()
+DETRITUS = ('.DS_Store',)
 
 
 def step(msg): print(f'step: {msg}', flush=True)
 
 
-def detritus(name):   # a volume without native extended attributes (exFAT, an external drive) keeps each file's attributes in a "._name" file beside it: not an input, and not something the bundle may carry
+def detritus(name):   # exFAT keeps extended attributes in a "._name" file beside each file: not an input, and the bundle may not carry it
     return name.startswith('._') or name in DETRITUS
 
 
@@ -56,8 +44,8 @@ def first_file(d):
     return None
 
 
-def can_clone(src, dst_dir):   # whether src (a file such as a RomFS image, or a folder's first file) can be cloned into dst_dir (the same APFS volume)
-    f = src if src.is_file() else first_file(src)   # os.walk of a file yields nothing
+def can_clone(src, dst_dir):
+    f = src if src.is_file() else first_file(src)
     if f is None: return False
     t = dst_dir / '.clone_test'
     try:
@@ -72,11 +60,11 @@ def tree_bytes(d):
     return sum((Path(r) / f).stat().st_size for r, _, fs in os.walk(d) for f in fs)
 
 
-def copy(srcs, dst, clone):   # cp -R of each source to dst (a new path for one folder, an existing folder for files); -c clones, -X keeps a copy's extended attributes out of the app (cp rejects -c -X together)
+def copy(srcs, dst, clone):   # -X keeps extended attributes out (cp rejects -c -X together)
     cmd = ['/bin/cp', '-R'] + (['-c'] if clone else ['-X'])
     pointer = ctypes.sizeof(ctypes.c_void_p)
     def arg_bytes(p): return len(os.fsencode(p)) + 1 + pointer
-    # exec's limit includes encoded strings, NULs and argv/envp pointers. Reserve 2 KiB for alignment and platform overhead (as POSIX xargs does).
+    # exec's limit counts the strings, their NULs and the pointers; 2 KiB more for alignment, as POSIX xargs reserves
     env_bytes = sum(arg_bytes(f'{k}={v}') for k, v in os.environ.items()) + pointer
     budget = os.sysconf('SC_ARG_MAX') - env_bytes - sum(arg_bytes(p) for p in cmd + [dst]) - pointer - 2048
     batch, used = [], 0
@@ -89,25 +77,24 @@ def copy(srcs, dst, clone):   # cp -R of each source to dst (a new path for one 
     if batch: run(cmd + batch + [dst])
 
 
-def min_os(host):   # the host's deployment target (LC_BUILD_VERSION minos): the launcher is built for the same and Info.plist says it
+def min_os(host):   # LC_BUILD_VERSION minos
     m = re.search(r'cmd LC_BUILD_VERSION.*?minos (\S+)', run(['otool', '-l', host]), re.S)
     return m.group(1) if m else '14.0'
 
 
-def swift_sources():   # the settings window, with its model and rows
+def swift_sources():
     return [HERE / n for n in ('Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift')]
 
 
-def build_launcher(out, minos, clang, swiftc, sdk):   # launcher.c's main, linked by swiftc with the settings window (no Swift main: -parse-as-library)
+def build_launcher(out, minos, clang, swiftc, sdk):   # no Swift main: -parse-as-library
     with tempfile.TemporaryDirectory(dir=out.parents[3]) as t:
-        objs = [Path(t) / 'launcher.o']
-        for obj, src in zip(objs, (HERE / 'launcher.c',)):
-            run([clang, '-isysroot', sdk, '-arch', 'arm64', f'-mmacosx-version-min={minos}', '-O2', '-Wall', '-I', HERE.parent / 'host', '-c', '-o', obj, src])
+        obj = Path(t) / 'launcher.o'
+        run([clang, '-isysroot', sdk, '-arch', 'arm64', f'-mmacosx-version-min={minos}', '-O2', '-Wall', '-I', HERE.parent / 'host', '-c', '-o', obj, HERE / 'launcher.c'])
         run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-swift-version', '5', '-parse-as-library', '-module-cache-path', Path(t) / 'module-cache',
-             '-o', out, *swift_sources(), *objs, '-framework', 'CoreFoundation', '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'AVFAudio', '-framework', 'CoreAudio'])
+             '-o', out, *swift_sources(), obj, '-framework', 'CoreFoundation', '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'AVFAudio', '-framework', 'CoreAudio'])
 
 
-def make_icns(jpg, out):   # the game's icon (256x256 JPEG) at every size an .icns holds
+def make_icns(jpg, out):
     with tempfile.TemporaryDirectory(dir=out.parent) as t:
         s = Path(t) / 'AppIcon.iconset'; s.mkdir()
         for n in ICON_SIZES:
@@ -116,7 +103,7 @@ def make_icns(jpg, out):   # the game's icon (256x256 JPEG) at every size an .ic
         run(['iconutil', '-c', 'icns', s, '-o', out])
 
 
-def settings_rules(listed):   # DMSettings: what the launcher accepts as each setting's saved choice (docs/frontends.md, Saved choices)
+def settings_rules(listed):
     rules = []
     for s in listed:
         if s['kind'] == 'range': rules.append({'env': s['env'], 'min': float(s['min']), 'max': float(s['max'])})
@@ -126,7 +113,7 @@ def settings_rules(listed):   # DMSettings: what the launcher accepts as each se
 
 
 def info_plist(a, minos, icon):
-    # LSSupportsGameMode off: macOS's Game Mode holds the GPU at its lowest clock while it is busy (docs/reference/frame-rate.md, macOS Game Mode holds the GPU at its lowest clock)
+    # LSSupportsGameMode off: a workaround (docs/reference/frame-rate.md, "macOS Game Mode holds the GPU at its lowest clock")
     p = {'CFBundleName': a.name, 'CFBundleDisplayName': a.name, 'CFBundleIdentifier': a.bundle_id or f'org.nativenavi.{a.title_id.lower()}',
          'CFBundleVersion': a.version or '1.0', 'CFBundleShortVersionString': a.version or '1.0', 'CFBundlePackageType': 'APPL', 'CFBundleExecutable': EXE,
          'CFBundleInfoDictionaryVersion': '6.0', 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
@@ -137,12 +124,12 @@ def info_plist(a, minos, icon):
         listed = json.loads(Path(a.settings).read_text(encoding='utf-8'))['settings']
         p['DMSettings'] = settings_rules(listed)
         lang = next((s['default'] for s in listed if s['env'] == 'DM_LANG'), None)
-        if lang: p['DMLanguage'] = lang   # the Game language row's default: --lang, or the game's first language when it lacks that one (settings.py), with or without the window
+        if lang: p['DMLanguage'] = lang
     return p
 
 
-def source_commit():   # DMCommit: the checkout that packed the app, short hash, +dirty with uncommitted changes to tracked files; outside a checkout, the commit a copy of the sources
-    repo = HERE.parent.parent   # names in .source-commit (the NativeNavi app's copy, scripts/build_gui.py), else None
+def source_commit():
+    repo = HERE.parent.parent
     try:
         head = subprocess.run(['git', '-C', repo, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
         dirty = subprocess.run(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'], capture_output=True, text=True, check=True).stdout.strip()
@@ -152,65 +139,50 @@ def source_commit():   # DMCommit: the checkout that packed the app, short hash,
     return head + ('+dirty' if dirty else '') if head else None
 
 
-def strip_detritus(app):   # the "._name" files a copy from or onto an exFAT volume leaves in the bundle: codesign reads each one as a code object and refuses the bundle ("code object is not signed at all")
+def strip_detritus(app):   # codesign reads each "._name" file as a code object and refuses the bundle
     for parent, _, files in os.walk(app):
         for n in files:
             if detritus(n):
                 try: (Path(parent) / n).unlink()
-                except OSError: pass   # a ._ file the volume maps to the attributes of the file it belongs to: gone with them
+                except OSError: pass   # a ._ file the volume maps to its file's attributes: gone with them
 
 
-def sign(app, identity, codesign, nested=()):   # the new data bundles and the inner host first, then the bundle (its resources and the launcher); no --options runtime (see the top)
-    strip_detritus(app)   # before codesign reads the bundle, so that a build folder or an output folder on exFAT is not a signing failure
-    def refused(e): return any(s in str(e) for s in ('detritus', '._', 'not signed at all'))   # Finder information or resource forks on copied files, "._name" files
-    def first(target):   # → None when signed, else why not
+def sign(app, identity, codesign, nested=()):   # no --options runtime (see the top)
+    strip_detritus(app)
+    def refused(e): return any(s in str(e) for s in ('detritus', '._', 'not signed at all'))
+    def first(target):
         try: run([codesign, '--force', '--sign', identity, target])
         except SystemExit as e: return e
-    # The new data bundles at once: codesign reads a bundle on one core, at about 180 MB/s, and each bundle is its own (Ocarina of Time's shader libraries and pipeline archive, the
-    # two a build after a chain change makes anew: 70 s one after the other, 38 s together, the same signatures). One it refuses is signed again below, alone, after the others
+    # at once: codesign reads a bundle on one core
     with concurrent.futures.ThreadPoolExecutor(max(1, len(nested))) as pool: failed = [(t, e) for t, e in zip(nested, pool.map(first, nested)) if e]
     for target, e in (*failed, (app / 'Contents/MacOS/dmhost', None), (app, None)):
         e = e or first(target)
         if e is None: continue
         if not refused(e): raise e
-        subprocess.run(['xattr', '-cr', str(app)], capture_output=True)   # Finder information or resource forks on copied files: codesign refuses them
+        subprocess.run(['xattr', '-cr', str(app)], capture_output=True)
         strip_detritus(app)
         run([codesign, '--force', '--sign', identity, target])
-    strip_detritus(app)   # codesign sets an attribute on what it signs, which is a "._name" file again on exFAT: the signature still verifies without it, and a later --force would refuse it
+    strip_detritus(app)   # on exFAT codesign's attribute is a "._name" file again: the signature verifies without it, and a later --force would refuse it
 
 
-# Data bundles: the game's large files, RomFS (24 GB for Ocarina of Time), shader libraries, pipeline archive and DLC, each in a code bundle of its own in Contents/PlugIns
-# (<name>.bundle: an Info.plist and the files in Contents/Resources, no executable), with a symbolic link at their usual place in Contents/Resources, so the launcher and the host read
-# the same paths. The app's signature seals a nested bundle by its code directory hash alone and does not read its files again, so a pack that changes only the host (the usual one)
-# signs in about a second instead of reading every byte of the game again: on a USB SSD codesign read 38 GB at about 80 MB/s, 7-8 minutes a pack (M1 Pro, Ocarina of Time, PR #2673).
-# A bundle of the app being replaced is cloned with its signature when the last pack made it from the same inputs and its files are as that pack left them (both recorded in
-# <out.app>.key): the app's seal holds the bundle by its code hash only, so a file changed in it since would go into the new app unseen (codesign --verify --deep finds it, by reading it
-# all). Otherwise it is filled and signed anew.
-# "As that pack left them" is each entry's mode, size and times. macOS moves the change time of the files of a bundle cloned from the app being replaced, a second to a minute after
-# the pack (seen on macOS 27.2, APFS, as Spotlight takes in the new app; not in a folder Spotlight skips), though not of those that are clones of the build folder's files (the RomFS
-# image, the pipeline archive). So a pack that reused a bundle left a record the next pack never matched, and every second pack signed all of the game again (Ocarina of Time, 36 GB:
-# 8 s, 220 s, 8 s, 220 s for four packs that changed one small file each). A file whose change time alone differs is therefore read and compared with the SHA-256 the last pack
-# recorded for it (seals): the one its bundle's signature holds (CodeResources, which codesign wrote from the bytes it read), and their own for the few small files that names none. Its bytes are
-# then the ones packed (the shader libraries' 6.7 GB: 3 s); a file with no recorded digest, or with other bytes, makes the bundle anew as before. The build folder's large files are
-# taken the same way (as_packed, the record's sources): the system moves their change times too
+# Data bundles: each large input in a code bundle of its own in Contents/PlugIns, linked into Contents/Resources: the app's seal takes a nested bundle's
+# code directory hash alone, so a pack that changes only the host signs in a second. A bundle is cloned from the replaced app only when <out.app>.key says
+# the same inputs made it and its files are as left (the seal does not read them). macOS moves change times of cloned files after the fact: a file whose
+# change time alone differs is compared with its recorded SHA-256. docs/reference/packing.md#every-second-build-signs-the-whole-mac-app-again
 DATA_FORMAT = 'NativeNavi data bundle 1'
-SEAL_READ = 1 << 20   # a data bundle's files that its signature does not name are read for their digest when the key is written, up to this size
-
-
+SEAL_READ = 1 << 20
 
 
 def data_bundle(contents, name): return contents / 'PlugIns' / f'{name}.bundle'
 
 
 def data_reused(old_app, previous, name, key, dst):
-    """Clone the bundle <name> of the app being replaced to dst when the last pack (previous: its <out.app>.key) made it from these inputs (key) and its files are as that pack left
-    them → True"""
     if not old_app or not isinstance(previous, dict) or not isinstance(previous.get('data'), dict) or previous['data'].get(name) != key or not isinstance(previous.get('app'), list): return False
     b = data_bundle(old_app / 'Contents', name); top = str(b.relative_to(old_app))
     want = {r[0]: r[1:] for r in previous['app'] if isinstance(r, list) and r and isinstance(r[0], str) and (r[0] == top or r[0].startswith(top + '/'))}
     try:
         have = {(top if r[0] == '.' else f'{top}/{r[0]}'): r[1:] for r in inventory(b)}
-        if not want or not as_recorded(want, have, old_app, previous.get('seals')): return False   # a file changed, added or removed since
+        if not want or not as_recorded(want, have, old_app, previous.get('seals')): return False
     except OSError: return False
     dst.parent.mkdir(parents=True, exist_ok=True)
     copy([b], dst, can_clone(b / 'Contents/Info.plist', dst.parent))
@@ -218,7 +190,6 @@ def data_reused(old_app, previous, name, key, dst):
 
 
 def data_shell(dst, name, bundle_id):
-    """An empty data bundle at dst, its files to go into dst/Contents/Resources"""
     (dst / 'Contents/Resources').mkdir(parents=True)
     (dst / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': f'{bundle_id}.data.{name.lower()}', 'CFBundleName': name, 'CFBundlePackageType': 'BNDL',
                                                              'CFBundleInfoDictionaryVersion': '6.0'}))
@@ -232,13 +203,13 @@ def digest(path):
 
 
 def file_row(p, by_stat=False):
-    """A selected file in the reuse keys: its mode, its link target, and its content's digest, or for a large file its size and times (a write changes its ctime, which nothing sets back)"""
+    """A large file by size and times: a write changes its ctime, which nothing sets back"""
     st = p.stat()
     return [str(p), st.st_mode, *([st.st_size, st.st_mtime_ns, st.st_ctime_ns] if by_stat else [digest(p)]), os.readlink(p) if p.is_symlink() else None]
 
 
 def inventory(root):
-    """Stat trees avoid reading multi-GB game data, and detect changes to executable modes in the app."""
+    """stat only, no multi-GB reads"""
     def walk_error(e): raise e
     paths = [root]
     for parent, dirs, files in (os.walk(root, onerror=walk_error) if root.is_dir() else []):
@@ -252,43 +223,35 @@ def inventory(root):
 
 
 def seals(app):
-    """{path in the app: the SHA-256 of its bytes} for the files of the app's data bundles, which a later pack compares a file with when only its change time moved (see Data bundles): the
-    digest its bundle's signature records for it (CodeResources files2, hash2: the SHA-256 codesign took of the bytes it sealed), and for a file the signature does not name its own,
-    read here, when it is no larger than SEAL_READ. A larger such file gets none, and is then reused only with its times as recorded"""
+    """The digest the bundle's signature records (CodeResources files2 hash2), else the file's own up to SEAL_READ; a larger one is reused only with its times as recorded"""
     out = {}
     plugins = app / 'Contents/PlugIns'
     for b in sorted(plugins.glob('*.bundle')) if plugins.is_dir() else []:
         try: signed = plistlib.loads((b / 'Contents/_CodeSignature/CodeResources').read_bytes()).get('files2', {})
-        except Exception: signed = {}   # not signed by codesign, or a list this cannot read: the small files' own digests only
+        except Exception: signed = {}
         for parent, _, files in os.walk(b):
             for n in files:
                 p = Path(parent) / n; st = p.lstat()
                 if not stat.S_ISREG(st.st_mode): continue
                 rule = signed.get(str(p.relative_to(b / 'Contents')))
-                if isinstance(rule, dict) and isinstance(rule.get('hash2'), bytes): out[str(p.relative_to(app))] = rule['hash2'].hex()   # no file is read for it: a RomFS in a folder is 100,000 files and more
-                elif st.st_size <= SEAL_READ: out[str(p.relative_to(app))] = digest(p)   # what the signature does not name: the bundle's Info.plist and the signature's own files
+                if isinstance(rule, dict) and isinstance(rule.get('hash2'), bytes): out[str(p.relative_to(app))] = rule['hash2'].hex()   # none is read
+                elif st.st_size <= SEAL_READ: out[str(p.relative_to(app))] = digest(p)   # the bundle's Info.plist and the signature's own files
     return out
 
 
 def as_recorded(want, have, root, sealed):
-    """Whether what is under root is as the last pack left it. want, have: {path under root: the rest of its inventory row}, recorded then and read now. An entry that differs is a
-    change, but for a file whose change time alone moved (macOS's doing for a cloned bundle's files, see Data bundles) and whose bytes still have the SHA-256 recorded for it then
-    (sealed: {path: digest}, None for a key from before it)"""
+    """A file whose change time alone moved still counts as left when its bytes have the recorded SHA-256"""
     if want.keys() != have.keys(): return False
     for path, row in have.items():
         was = want[path]
         if list(row) == list(was): continue
-        if not stat.S_ISREG(row[0]) or list(row[:3]) != list(was[:3]) or list(row[4:]) != list(was[4:]): return False   # anything but the change time
+        if not stat.S_ISREG(row[0]) or list(row[:3]) != list(was[:3]) or list(row[4:]) != list(was[4:]): return False
         if not isinstance(sealed, dict) or not sealed.get(path) or digest(Path(root) / path) != sealed[path]: return False
     return True
 
 
 def as_packed(row, record, moved):
-    """A large input's row for the keys (its path or '.', mode, size, modification time, change time, link): the row the last pack took (record: {'row', 'ctime', 'sha256'} from
-    <out.app>.key's sources) when the change time alone differs from it and the file's bytes are the recorded ones, else the row as it is. macOS moves the change time of the build
-    folder's large files too, minutes to hours after they were written (Ocarina of Time's 10.7 GB library image, 6 minutes after its build), and a pack keyed by it made the shader
-    libraries' bundle again, 50 s, in a build that changed nothing. A change time seen before (record's ctime) is taken without reading the file; a new one is read once. moved
-    gets the change time the file has now ({path: change time}), for the record"""
+    """The last pack's row when only the change time differs and the bytes are the recorded ones; a change time seen before is taken without reading the file"""
     was = record.get('row') if isinstance(record, dict) else None
     if not (isinstance(was, list) and len(was) == len(row) == 6 and was[:4] == row[:4] and was[5] == row[5] and was[4] != row[4]): return row
     if record.get('ctime') != row[4]:
@@ -299,24 +262,23 @@ def as_packed(row, record, moved):
     return was
 
 
-def is_chain_library(msl): return shader_lib.name_of(msl).startswith('b-')   # a library of the shader chain (b-<chain>), which goes into the app as one image; any other folder of libraries is copied as it is
+def is_chain_library(msl): return shader_lib.name_of(msl).startswith('b-')
 
 
 def msl_inputs(msl):
-    """The input files of the shader libraries, which the reuse key follows: the library's one file, or the folder's files that go in. [] when no library is among them"""
     if is_chain_library(msl) and str(shader_lib.view(msl)).endswith('.img'): return [Path(shader_lib.image_of(msl))] if any(n.endswith('.metallib') for n in shader_lib.app_files(msl)) else []
     files = sorted(p for pat in MSL_FILES for p in Path(msl).glob(pat) if p.is_file() and p.name != '_b_build.json' and not detritus(p.name))
     return files if any(p.suffix == '.metallib' for p in files) else []
 
 
 def copy_msl(msl, msls, dst, clone):
-    """The shader libraries to dst, msl/<their name> in the app: the shader chain's (b-<chain>) as the one file dst.img, of what the host reads. Writing it costs the space of a copy, not a clone, as it leaves out the Mac build's sources"""
+    """The chain's library goes as the one file dst.img, which costs a copy's space, not a clone's"""
     if is_chain_library(msl): shader_lib.subset(msl, f'{dst}.img'); return
     dst.mkdir(parents=True); copy(msls, dst, clone)
 
 
 def selected_inputs(a):
-    """Resolve once: these same lists supply both the reuse key and the copies."""
+    """Resolved once: the same lists make the reuse key and the copies"""
     for name in ('patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'practice'):
         p = getattr(a, name)
         if p and not (rfs.Path(p).is_dir() if name == 'romfs' else shader_lib.exists(p) if name == 'msl' else Path(p).is_dir()): raise SystemExit(f'no {name} directory at {p}')
@@ -356,15 +318,13 @@ def replace_app(tmp, out):
         if swap(os.fsencode(tmp), os.fsencode(out), 2):
             err = ctypes.get_errno()
             if err not in (errno.ENOTSUP, errno.EOPNOTSUPP): raise OSError(err, os.strerror(err), str(out))
-            swap_by_moves(tmp, out)   # a volume without RENAME_SWAP (Mac OS Extended, Journaled: [Errno 45])
+            swap_by_moves(tmp, out)   # Mac OS Extended has no RENAME_SWAP ([Errno 45])
     else:
         tmp.rename(out)
 
 
 def swap_by_moves(tmp, out):
-    """The state RENAME_SWAP leaves, made with plain renames in out's folder: the new app at out and the old one at tmp. The old app moves aside, the new one moves in, and the old one
-    takes tmp's place. A step that fails undoes the ones before it, so out is the old app again (or still) and tmp the new one. Unlike the swap this is not atomic: a process killed between
-    the first two renames leaves no app at out and the old one at <out>.old, a fixed name (as <out>.partial is) so that the next replacement clears what was left there."""
+    """RENAME_SWAP's result by plain renames, undone on failure. Not atomic: a kill between the first two renames leaves the old app at <out>.old, which the next replacement clears"""
     aside = out.with_name(out.name + '.old')
     shutil.rmtree(aside, ignore_errors=True)
     out.rename(aside)
@@ -380,7 +340,7 @@ def swap_by_moves(tmp, out):
         raise
 
 
-def write_key(key_file, value):   # whole or not at all
+def write_key(key_file, value):
     key_tmp = key_file.with_name(key_file.name + '.partial')
     try:
         key_tmp.write_text(json.dumps(value, sort_keys=True) + '\n')
@@ -396,14 +356,12 @@ def pack(a):
     try:
         previous = json.loads(key_file.read_text())
     except (OSError, ValueError): previous = None
-    try: left = None if previous is not None else json.loads(set_aside.read_text())   # the record of the last pack that finished, set aside by one that did not (aside)
+    try: left = None if previous is not None else json.loads(set_aside.read_text())
     except (OSError, ValueError): left = None
-    last = next((r['sources'] for r in (previous, left) if isinstance(r, dict) and isinstance(r.get('sources'), dict)), {})   # the large inputs as the last pack took them
+    last = next((r['sources'] for r in (previous, left) if isinstance(r, dict) and isinstance(r.get('sources'), dict)), {})
     moved = {}
     def aside():
-        """No failed attempt may leave a valid reuse key: the record goes aside, where only the data bundles are taken from it. A pack that stops before it replaces the app (while it
-        signs, for a game of Ocarina of Time's size: minutes) leaves the app the record describes, and the next pack cloned none of its bundles without one: all 36 GB signed again.
-        A bundle is taken from it as from the key, when its inputs are the same and its files are as recorded or have the recorded bytes (data_reused)"""
+        """No failed attempt may leave a valid reuse key: the record goes aside, where only its data bundles are taken from it"""
         with contextlib.suppress(OSError):
             if key_file.is_file(): os.replace(key_file, set_aside)
     try:
@@ -420,8 +378,8 @@ def pack(a):
         codesign = Path(codesign).resolve()
         minos = min_os(a.host)
         sources = [Path(__file__).resolve(), HERE / 'launcher.c', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py', HERE.parent / 'tools/nso_syms.py'] + swift_sources()
-        large = {*msls, *pso}   # the shader libraries and pipeline archives (13.5 GB for Ocarina of Time): by stat, as the RomFS trees below
-        def tree(p):   # a folder's entries; a RomFS image's one row as a large file's (as_packed)
+        large = {*msls, *pso}
+        def tree(p):
             rows = inventory(Path(p))
             return [['.', *as_packed([p, *rows[0][1:]], last.get(p), moved)[1:]]] if Path(p).is_file() and len(rows) == 1 else rows
         romfs_rows = tree(a.romfs)
@@ -435,7 +393,7 @@ def pack(a):
             now = inventory(out)
             rows = lambda inv: {r[0]: r[1:] for r in inv if isinstance(r, list) and r and isinstance(r[0], str)}
             if previous['app'] == now or (len(rows(previous['app'])) == len(previous['app']) and as_recorded(rows(previous['app']), rows(now), out, previous.get('seals'))):
-                if previous['app'] != now or any(last[k].get('ctime') != v for k, v in moved.items()):   # change times macOS moved (see Data bundles, as_packed), the bytes as packed: recorded, so that the next pack reads none of them again
+                if previous['app'] != now or any(last[k].get('ctime') != v for k, v in moved.items()):
                     with contextlib.suppress(OSError): write_key(key_file, dict(previous, app=now, sources={k: dict(v, ctime=moved[k]) if k in moved else v for k, v in last.items()}))
                 print(f'app: {out}, reused (inputs unchanged)', flush=True)
                 return
@@ -449,30 +407,30 @@ def pack(a):
     c = tmp / 'Contents'; mac, res = c / 'MacOS', c / 'Resources'; dm = res / 'dm'
     for d in (mac, dm / 'font'): d.mkdir(parents=True)
     romfs, msl, aoc = Path(a.romfs), Path(a.msl), Path(a.aoc) if a.aoc else None
-    # each source is probed on its own, as they may lie on different volumes; cp -c copies what it cannot clone, so a probe decides only the free-space check and the step line
+    # cp -c copies what it cannot clone: a probe decides only the free-space check and the step line
     trees, lists = {'romfs': romfs, 'aoc': aoc}, {'mods': mods, 'practice': practice, 'msl': msls, 'pso': pso}
     clone = {k: bool(d) and can_clone(d, res) for k, d in trees.items()} | {k: bool(ps) and can_clone(ps[0], res) for k, ps in lists.items()}
-    if is_chain_library(msl): clone['msl'] = False   # copy_msl writes it, which the free-space check below counts
+    if is_chain_library(msl): clone['msl'] = False
     need = sum(tree_bytes(d) for k, d in trees.items() if d and not clone[k]) + sum(p.stat().st_size for k, ps in lists.items() if not clone[k] for p in ps)
     if need:
         free = vol_space.free_bytes(res)
         if need + (1 << 30) > free: raise SystemExit(f'the app needs {need / 2**30:.1f} GB on the volume of {out.parent} (no APFS clones from the build there) and {free / 2**30:.1f} GB are free')
     step(f'launcher and host ({"clones" if clone["romfs"] else "copies"} of the game files)')
     build_launcher(mac / EXE, minos, clang, swiftc, sdk)
-    shutil.copy(a.host, mac / 'dmhost')   # data and mode, not the build's extended attributes (copy2 would carry them into the app)
+    shutil.copy(a.host, mac / 'dmhost')   # copy2 would carry the build's extended attributes into the app
     copy(mods, dm, clone['mods'])
     if practice: (dm / 'practice').mkdir(); copy(practice, dm / 'practice', clone['practice'])
     if tables: copy(tables, dm, False)
-    if pairs: shutil.copyfile(pairs, dm / 'pso_pairs.tsv')   # the split's copy, for a profile without the table
+    if pairs: shutil.copyfile(pairs, dm / 'pso_pairs.tsv')
     if fonts: copy(fonts, dm / 'font', False)
     if a.env_file: shutil.copyfile(a.env_file, dm / 'env.txt')
     if a.settings: shutil.copyfile(a.settings, dm / 'launcher.json')
     msl_dst = res / 'msl' / (a.msl_name or shader_lib.name_of(msl))
     old_app = out if out.is_dir() else None
-    took = {f[0]: f[1:] for f in inputs['files']}   # what the app's key took of each selected file
+    took = {f[0]: f[1:] for f in inputs['files']}
     common = [DATA_FORMAT, a.sign, str(codesign), digest(codesign), a.bundle_id or a.title_id]
-    data, fresh = {}, []   # each data bundle's key, for <out.app>.key; the bundles filled in this pack, signed below
-    def place(name, top, label, inputs, fill):   # one item's files: into its data bundle (made, or cloned from the old app), linked at Resources/<top>
+    data, fresh = {}, []
+    def place(name, top, label, inputs, fill):
         b = data_bundle(c, name); link = res / top
         data[name] = hashlib.sha256(json.dumps(common + [name, top, inputs], sort_keys=True).encode()).hexdigest()
         if data_reused(old_app, previous, name, data[name], b): step(f'{label} (reused, signed)')
@@ -480,14 +438,14 @@ def pack(a):
             step(label); data_shell(b, name, a.bundle_id or f'org.nativenavi.{a.title_id.lower()}'); (b / 'Contents/Resources' / top).parent.mkdir(parents=True, exist_ok=True)
             fill(b / 'Contents/Resources' / top); fresh.append(b)
         link.parent.mkdir(parents=True, exist_ok=True); link.symlink_to(os.path.relpath(b / 'Contents/Resources' / top, link.parent))
-    image = msls[0] if is_chain_library(msl) and len(msls) == 1 and msls[0].suffix == '.img' else None   # the shader chain's library as one file: the app's is another file, cut from it
-    read = {}   # its SHA-256, for the record (as_packed): read on a thread of its own while the app's file is written
-    def fill_msl(d):   # msl/<library>
+    image = msls[0] if is_chain_library(msl) and len(msls) == 1 and msls[0].suffix == '.img' else None
+    read = {}
+    def fill_msl(d):
         with concurrent.futures.ThreadPoolExecutor(1) as pool:
             whole = pool.submit(digest, image) if image else None
             d.mkdir(parents=True); copy_msl(msl, msls, d / msl_dst.name, clone['msl'])
             if whole: read[str(image)] = whole.result()
-    lib_code = [digest(Path(shader_lib.__file__)), digest(Path(rfs.__file__))]   # what writes a chain library's one file
+    lib_code = [digest(Path(shader_lib.__file__)), digest(Path(rfs.__file__))]
     place('ShaderLibraries', 'msl', 'shader libraries', [lib_code, msl_dst.name, [took[str(p)] for p in msls]], fill_msl)
     if aoc: place('AddOnContent', 'aoc', 'add-on content', inventory(aoc), lambda d: copy([aoc], d, clone['aoc']))
     if pso: place('PipelineArchive', 'pso', 'pipeline archive', [took[str(p)] for p in pso], lambda d: (d.mkdir(parents=True), copy(pso, d, clone['pso'])))
@@ -501,14 +459,12 @@ def pack(a):
         info['NSMicrophoneUsageDescription'] = f'{a.name} uses the microphone for in-game audio input.'
     commit = source_commit()
     if commit: info['DMCommit'] = commit
-    if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]   # the library chain the app carries
+    if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]
     (c / 'Info.plist').write_bytes(plistlib.dumps(info))
     (c / 'PkgInfo').write_text('APPL????')
-    step(f'signing ({"ad-hoc" if a.sign == "-" else a.sign})'); sign(tmp, a.sign, codesign, fresh)   # a new data bundle is read whole once; the app's signature then takes its hash
+    step(f'signing ({"ad-hoc" if a.sign == "-" else a.sign})'); sign(tmp, a.sign, codesign, fresh)
     had_old = out.exists()
     replace_app(tmp, out)
-    # The large inputs as the keys took them, each with the SHA-256 of its bytes where one is known (as_packed): the app's copy's for a clone (the RomFS image, the pipeline
-    # archive's files), the library image's read above, or kept from the last record when its bundle was cloned
     sealed, sources = seals(out), {}
     def note(path, row, sha):
         if sha: sources[str(path)] = {'row': row, 'ctime': moved.get(str(path), row[4]), 'sha256': sha}
@@ -522,7 +478,7 @@ def pack(a):
         else: out.rename(tmp)
         raise
     set_aside.unlink(missing_ok=True)
-    shutil.rmtree(tmp, ignore_errors=True)   # the old app after a successful swap
+    shutil.rmtree(tmp, ignore_errors=True)
     print(f'app: {out}', flush=True)
 
 

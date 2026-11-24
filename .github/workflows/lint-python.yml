@@ -1,8 +1,5 @@
-# Python lint and types over scripts/ and the tools under dm/: ruff (lint rules for bugs, never formatting) and pyright in basic mode, configured in pyproject.toml.
-# A ratchet: the findings the code had when this came in are in dm/tools/lint_python_baseline.tsv, so the job fails only on a new finding, and on a fixed one still
-# listed there (`python3 dm/tools/lint_python.py --update` shrinks it). On a pull request the baseline may not grow over the base branch's either.
-# ty (Astral's type checker, beta) runs beside it as advisory: its findings go to the job summary and never fail the build.
-# The tool versions are pinned in .github/requirements/lint.txt, the packages the tools import (which pyright resolves) in tools.txt; docs/development.md has the commands.
+# ruff (bug rules, no formatting) and pyright (basic) over scripts/ and dm/ tools (pyproject.toml), as a ratchet on dm/tools/lint_python_baseline.tsv: it fails on a new
+# finding, on a fixed one still listed (`dm/tools/lint_python.py --update`), and on a pull request whose baseline grew over its base's. ty runs beside it, advisory only.
 name: lint-python
 
 on:
@@ -24,7 +21,6 @@ defaults:
   run:
     shell: bash
 
-# Actions are pinned to commit SHAs (the tag in the comment), as in tests.yml.
 jobs:
   lint:
     name: ruff and pyright (ratchet)

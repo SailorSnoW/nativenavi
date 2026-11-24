@@ -1,4 +1,3 @@
-// The app's plumbing: its log, a tool run with its output read line by line (stopped with SIGTERM when the task that runs it is cancelled), a download with its progress, and SHA-256
 import CryptoKit
 import Foundation
 
@@ -8,7 +7,6 @@ struct ToolFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// ~/Library/Logs/NativeNavi/NativeNavi.log: every tool this app runs, with its output, and the build's messages. The previous session's log is kept as NativeNavi.prev.log
 final class Log: @unchecked Sendable {
     static let shared = Log()
     let url: URL
@@ -35,14 +33,13 @@ final class Log: @unchecked Sendable {
 
 enum Output: Sendable { case out, err }
 
-private final class Running: @unchecked Sendable {   // the process, for the cancellation handler
+private final class Running: @unchecked Sendable {
     let process: Process
     init(_ process: Process) { self.process = process }
     func stop() { if process.isRunning { process.terminate() } }
 }
 
-/// Runs a tool to its end and returns its exit status. Each line it writes goes to `line` on the main actor, in order for each stream. Cancelling the calling task sends the tool
-/// SIGTERM (the packing script stops its own tools then, and exits with 143); the call still waits for the tool to end
+/// Cancelling the calling task sends the tool SIGTERM, and the call still waits for it to end
 func runTool(_ exe: URL, _ args: [String], env: [String: String], cwd: URL? = nil,
              line: @escaping @MainActor @Sendable (Output, String) -> Void = { _, _ in }) async throws -> Int32 {
     let p = Process()
@@ -60,8 +57,7 @@ func runTool(_ exe: URL, _ args: [String], env: [String: String], cwd: URL? = ni
     Log.shared.write("$ " + ([exe.path] + args).map { $0.contains(" ") ? "'\($0)'" : $0 }.joined(separator: " "))
     try p.run()
     let running = Running(p)
-    // tasks of their own, not the caller's: a cancel ends the cancelled task's iteration of an AsyncStream, and after one the reads go on to the end (the tool is stopping and its
-    // last lines say why) and the exit status still comes
+    // own tasks: a cancel must not stop reading the stopping tool's last lines and exit status
     let readers = [Task { await pump(out.fileHandleForReading, .out, line) }, Task { await pump(err.fileHandleForReading, .err, line) }]
     let ended = Task { () -> Int32 in
         for await s in exit { return s }
@@ -77,8 +73,7 @@ func runTool(_ exe: URL, _ args: [String], env: [String: String], cwd: URL? = ni
     return status
 }
 
-/// What a pipe's reading end gets until every writer has closed it, a dispatch source for each handle (readabilityHandler). Not FileHandle.bytes: it reads every handle through one
-/// serial queue with a blocking read(), so while it waited on a quiet stderr the tool's stdout was not read, and the packing script blocked once that pipe was full (docs/gui.md)
+/// Not FileHandle.bytes, where a quiet stderr stalls stdout (docs/reference/packing.md#nativenavi-stays-on-installing-the-rust-compiler-while-the-game-builds)
 private func chunks(_ handle: FileHandle) -> AsyncStream<[UInt8]> {
     AsyncStream { c in
         handle.readabilityHandler = { h in
@@ -86,7 +81,7 @@ private func chunks(_ handle: FileHandle) -> AsyncStream<[UInt8]> {
             let n = read(h.fileDescriptor, &buf, buf.count)
             if n > 0 {
                 c.yield(Array(buf[..<n]))
-            } else if n == 0 || (errno != EINTR && errno != EAGAIN) {   // the end, or an error, which ends it too
+            } else if n == 0 || (errno != EINTR && errno != EAGAIN) {
                 h.readabilityHandler = nil
                 c.finish()
             }
@@ -98,7 +93,7 @@ private func pump(_ handle: FileHandle, _ kind: Output, _ line: @escaping @MainA
     var buffer = [UInt8]()
     for await chunk in chunks(handle) {
         for b in chunk {
-            if b == 0x0A || b == 0x0D {   // \r too: rustup and xcodebuild redraw their progress line with it
+            if b == 0x0A || b == 0x0D {   // rustup and xcodebuild redraw with \r
                 if !buffer.isEmpty {
                     let text = String(decoding: buffer, as: UTF8.self)
                     buffer.removeAll(keepingCapacity: true)
@@ -117,7 +112,6 @@ private func pump(_ handle: FileHandle, _ kind: Output, _ line: @escaping @MainA
     }
 }
 
-/// A tool's standard output, when it exits with 0
 func capture(_ exe: String, _ args: [String], env: [String: String]? = nil) async -> String? {
     let lines = LineBox()
     guard let status = try? await runTool(URL(filePath: exe), args, env: env ?? ProcessInfo.processInfo.environment, line: { kind, text in
@@ -132,7 +126,6 @@ private final class LineBox: @unchecked Sendable {   // written on the main acto
     var text: String { lines.joined(separator: "\n") }
 }
 
-/// One file downloaded to `dest`, with (written, expected) bytes reported as it comes; a cancel of the calling task stops it
 final class Download: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let dest: URL
     private let progress: @Sendable (Int64, Int64) -> Void
@@ -172,7 +165,8 @@ final class Download: NSObject, URLSessionDownloadDelegate, @unchecked Sendable 
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            result = .failure(ToolFailure("The download from \(downloadTask.originalRequest?.url?.host() ?? "the server") failed (HTTP \(http.statusCode)).")); return
+            result = .failure(ToolFailure("The download from \(downloadTask.originalRequest?.url?.host() ?? "the server") failed (HTTP \(http.statusCode))."))
+            return
         }
         do {   // the file is gone once this returns
             try? FileManager.default.removeItem(at: dest)

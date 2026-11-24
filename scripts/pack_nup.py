@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
-# A game in a NUP container (one .nup file: https://github.com/a55uka/nup, SPEC.md v1) → the extraction layout build_app.py builds from. build_app.py calls this for the
-# .nup file it is given, or the one in the folder it is given, and goes on with its other steps; run on its own, this script does only this step.
-# A NUP holds a game's packages: the base game, updates by version and DLC by title ID, each an exefs/ and romfs/ tree, its files stored raw or as one zstd
-# frame each, with a SHA-256 per file. Its files are not encrypted, so it needs no keys. It may carry control data in each package's meta block: the NACP and the icon. Its name,
-# publisher and display version records are labels the packer typed (Hyrule Warriors: Age of Imprisonment's says "HWAoI"), not the console's: without a NACP the name comes from the profile.
-# A container may hold no base game, in two forms that mean the same: no base record, with standalone_update on every update (SPEC §3.1.2), or a base record with no files (title ID 0), as packers
-# leave when an update holds the whole game (Pokemon Pokopia's v655360). The title ID is then the program ID of the code present, there is no version 0, and the selected update needs its own ExeFS
-# and RomFS, taken as the whole game. The flag does not promise that (the spec says such an update needs a matching base elsewhere), and nothing in a container can prove it, so the scripts say so
-# (NO_BASE). What was measured: the update RomFS of both NUPs at hand holds every path of its base (Hyrule Warriors: Age of Imprisonment, Yoshi and the Mysterious Book).
-# Writes, under the build folder (<folder of the .nup>/<title ID>_build unless --work-dir names another):
-#   extract/v<version>/ExeFS/   the version's code modules
-#   extract/v<version>/RomFS.img   its RomFS as one image (dm/tools/romfs_image.py), written straight from the container: the RomFS is never unpacked into loose files
-#   extract/v<version>/control.nacp, icon.jpg   the package's NACP and its icon, when it carries them (sips reads a PNG icon by its content)
-#   aoc/<index>.img   each DLC's RomFS (index = DLC title ID − the NACP's AddOnContentBaseId, else − base title ID − 0x1000), the host's DM_AOC_DIR
-# An update's RomFS is packed on its own, never laid over the base: the dumps NUPs are packed from hold the patched RomFS of an update; an update with no romfs/ uses the base's.
-# Every file read is checked against its SHA-256. A repeat run keeps code modules whose content is the same and an image made from the same container tree by the same packer,
-# or, after a packer update, an image whose bytes check against the container's hashes.
-# Needs the zstd module: compression.zstd (Python 3.14+) or backports.zstd, as the packing script (build_app.py).
+# A game in a NUP container (https://github.com/a55uka/nup, SPEC.md v1) → the extraction layout build_app.py builds from (it runs this step itself).
+# A container may hold no base game; the selected update is then taken as the whole game (NO_BASE; docs/reference/packing.md, "A NUP with complete standalone updates").
+# Writes under the build folder: extract/v<version>/ExeFS/, RomFS.img (straight from the container), control.nacp, icon.jpg; aoc/<index>.img per DLC (DM_AOC_DIR).
+# An update's RomFS is packed on its own, never laid over the base: a NUP's update holds the patched RomFS.
 # Usage: pack_nup.py <game.nup> [--version N] [--work-dir DIR]   (exit 1 on error)
 import argparse, hashlib, mmap, os, shutil, struct, sys
 from pathlib import Path
@@ -24,25 +10,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'dm/tools'))
 import romfs_image
 try: from compression import zstd
 except ImportError:
-    try: from backports import zstd   # pyright: ignore[reportMissingImports]  # an optional package, only Python before 3.14 needs it
+    try: from backports import zstd   # pyright: ignore[reportMissingImports]  # Python before 3.14
     except ImportError: zstd = None
 
 
 class Error(Exception): pass
 
 
-SUPER = struct.Struct('<4sHHQQ32sQQII16s32s')   # 0x80
-TOC = struct.Struct('<4sIQQQQQ')   # 0x30
-PKG = struct.Struct('<QIIIIBBHIQI20x')   # 0x40
-DIR = struct.Struct('<IIIIQ')   # 0x18
-FILE = struct.Struct('<IIQQQ32sBBH12x')   # 0x50
+SUPER = struct.Struct('<4sHHQQ32sQQII16s32s')
+TOC = struct.Struct('<4sIQQQQQ')
+PKG = struct.Struct('<QIIIIBBHIQI20x')
+DIR = struct.Struct('<IIIIQ')
+FILE = struct.Struct('<IIQQQ32sBBH12x')
 TLV = struct.Struct('<HHI')
 NO_DIR = 0xFFFFFFFF
 BASE, UPDATE, ADDON = 0, 1, 2
 KINDS = ('base', 'update', 'addon', 'addon_update', 'system')
-STANDALONE = 1   # package flags bit 0: an update in a container without a base
+STANDALONE = 1   # package flags bit 0
 T_NACP, T_ICON, T_LICONS = 2, 3, 10
-ARTIFACTS = romfs_image.ARTIFACTS   # dump-tool files a producer may have kept (SPEC §6.3): not game files
+ARTIFACTS = romfs_image.ARTIFACTS   # dump-tool files a producer may have kept (SPEC §6.3)
 NO_BASE = 'no base game in this NUP: its update is taken as the whole game (if the game then stops on missing files, the update holds only what changed: pack a NUP with the base game)'
 
 
@@ -52,9 +38,9 @@ class Package:
         self.title_id, self.root, self.exefs, self.romfs, self.version, self.kind, self.flags, r1, r2, self.meta_off, self.meta_size = rec
         if self.kind >= len(KINDS): raise Error(f'{nup.path}: package {index} of unknown kind {self.kind}')
         if r1 or r2 or self.flags & ~STANDALONE: raise Error(f'{nup.path}: package {index} has reserved fields or flags set')
-        self.name = f'{nup.path.name} ({KINDS[self.kind]}' + (f' {self.version}' if self.kind == UPDATE else f' {self.title_id:016X}' if self.kind == ADDON else '') + ')'   # what the scripts' messages call it
+        self.name = f'{nup.path.name} ({KINDS[self.kind]}' + (f' {self.version}' if self.kind == UPDATE else f' {self.title_id:016X}' if self.kind == ADDON else '') + ')'
 
-    def meta(self):   # {TLV type: payload}
+    def meta(self):
         out, b = {}, self.nup.mm[self.meta_off:self.meta_off + self.meta_size] if self.meta_size else b''
         p = 0
         while p + TLV.size <= len(b):
@@ -65,10 +51,10 @@ class Package:
 
 
 class Nup:
-    """A validated NUP (SPEC §6.1): the superblock, the TOC's SHA-256, every record's bounds. File content is checked against its SHA-256 as it is read"""
+    """Validated on open (SPEC §6.1); file content is checked against its SHA-256 as it is read"""
     def __init__(self, path):
         self.path = Path(path)
-        self.application, self.aoc_base = None, None   # scan's: the application, its add-on content base ID
+        self.application, self.aoc_base = None, None
         with open(self.path, 'rb') as f:   # the map keeps its own descriptor
             try: self.mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
             except ValueError: raise Error(f'{self.path}: empty file') from None
@@ -97,11 +83,11 @@ class Nup:
             return pool[off:off + n]
         p = TOC.size
         self.packages = [Package(self, i, PKG.unpack_from(toc, p + i * PKG.size)) for i in range(npkg)]; p += npkg * PKG.size
-        self.dirs = []   # (name, first child slot, child count)
+        self.dirs = []
         for _ in range(self.ndirs):
             o, n, first, count, _ = DIR.unpack_from(toc, p); p += DIR.size
             self.dirs.append((name(o, n), first, count))
-        self.files = []   # (name, size, sha256, extent offset, extent size, codec)
+        self.files = []
         for _ in range(nfiles):
             o, n, size, eoff, esz, sha, codec, cflags, _ = FILE.unpack_from(toc, p); p += FILE.size
             if codec not in (0, 1) or cflags: raise Error(f'{self.path}: file {name(o, n)!r} uses codec {codec}; this reads raw and zstd')
@@ -119,13 +105,13 @@ class Nup:
                 raise Error(f'{self.path}: package {k.index} out of bounds')
 
     def _acyclic(self):
-        """Refuses a folder that contains itself, at any depth: the bounds checks pass it, and every walk of the tree (tree_bytes, entries) would recurse or loop for ever"""
+        """The bounds checks pass a folder that contains itself, and every walk of the tree would loop for ever"""
         kids = [[s for s in self.slots[first:first + count] if s < self.ndirs] for _, first, count in self.dirs]
         state = bytearray(self.ndirs)   # 0 not seen, 1 on the current path, 2 done
         for top in range(self.ndirs):
             if state[top]: continue
             state[top], stack = 1, [(top, 0)]
-            while stack:   # depth first without recursion: a container's depth is not bounded by Python's recursion limit
+            while stack:   # a container's depth is not bounded by Python's recursion limit
                 d, i = stack[-1]
                 if i == len(kids[d]): state[d] = 2; stack.pop(); continue
                 stack[-1] = (d, i + 1); c = kids[d][i]
@@ -138,7 +124,7 @@ class Nup:
     def __enter__(self): return self
     def __exit__(self, *a): self.close()
 
-    def children(self, d):   # [(name, is dir, index into dirs or files)], sorted by name (bytes), artifacts left out
+    def children(self, d):
         _, first, count = self.dirs[d]
         out = []
         for s in self.slots[first:first + count]:
@@ -146,14 +132,13 @@ class Nup:
             elif self.files[s - self.ndirs][0] not in ARTIFACTS: out.append((self.files[s - self.ndirs][0], False, s - self.ndirs))
         return sorted(out)
 
-    def child(self, d, name):   # the index of a file in folder d, or None
+    def child(self, d, name):
         return next((i for n, isdir, i in self.children(d) if n == name and not isdir), None)
 
-    def tree_bytes(self, d):   # the uncompressed size of everything under folder d
+    def tree_bytes(self, d):
         return sum(self.files[i][1] if not isdir else self.tree_bytes(i) for _, isdir, i in self.children(d))
 
     def copy(self, i, out):
-        """File i's content to out (anything with write), streamed and checked against its size and SHA-256; returns its size"""
         name, size, sha, eoff, esz, codec = self.files[i]
         h, n, view = hashlib.sha256(), 0, memoryview(self.mm)
         def put(b):
@@ -180,8 +165,7 @@ class Nup:
         b = Buf(); self.copy(i, b); return bytes(b)
 
 
-
-def program_id(npdm, where):   # the ACI0 program ID of an NPDM
+def program_id(npdm, where):
     if npdm[:4] != b'META': raise Error(f'{where}: not an NPDM')
     off, size = struct.unpack_from('<II', npdm, 0x70)
     if npdm[off:off + 4] != b'ACI0' or size < 0x18: raise Error(f'{where}: no ACI0 section')
@@ -194,10 +178,10 @@ def is_nup(path):
     except OSError: return False
 
 
-NACP_AOC_BASE, NACP_SAVE_OWNER = 0x3070, 0x3078   # ApplicationControlProperty: AddOnContentBaseId, SaveDataOwnerId (the application's ID)
+NACP_AOC_BASE, NACP_SAVE_OWNER = 0x3070, 0x3078   # ApplicationControlProperty offsets
 
 
-def nacp_ids(k):   # (application ID, add-on content base ID) from the package's NACP; None for each it does not give
+def nacp_ids(k):
     b = k.meta().get(T_NACP, b'')
     if len(b) < NACP_SAVE_OWNER + 8: return None, None
     aoc, owner = struct.unpack_from('<QQ', b, NACP_AOC_BASE)
@@ -205,17 +189,13 @@ def nacp_ids(k):   # (application ID, add-on content base ID) from the package's
 
 
 def scan(n):
-    """What a NUP holds: (title ID, base package or None, {update version: package}, {DLC title ID: package}). The title ID is the program ID of the code present (its NPDM's).
-    Packages of several programs are refused: on a Switch one application can hold several (a Switch 2 Edition of a Switch 1 game, whose Switch 2 program mounts the other's RomFS by
-    program index, nn::fs::MountRom(name, 0, ...)), and the host runs one program and has no MountRom by index. Sets n.application (the NACP's SaveDataOwnerId, else the program ID
-    without its index, the low 12 bits) and n.aoc_base (a DLC's index is its title ID minus this: the NACP's AddOnContentBaseId, else the application's + 0x1000)"""
+    """Packages of several programs are refused: the host runs one program and has no nn::fs::MountRom by program index."""
     bases = [k for k in n.packages if k.kind == BASE]
     updates = [k for k in n.packages if k.kind == UPDATE]
     if not bases and (not updates or any(not k.flags & STANDALONE for k in updates)):
         raise Error(f'{n.path}: no base game: pack the base game and its update into one NUP, or use updates marked standalone_update with complete exefs/ and romfs/')
     real = [k for k in bases if n.tree_bytes(k.root)]   # a base record with no files is no base game
-    # With no base the game is identified from the code actually present; each selected version is checked by pack_version.
-    progs, loose = {}, []   # program ID: its packages, base first; base packages without code
+    progs, loose = {}, []
     for k in real + updates:
         i = n.child(k.exefs, b'main.npdm') if k.exefs != NO_DIR else None
         if i is None:
@@ -226,7 +206,7 @@ def scan(n):
     if len(progs) > 1: raise Error(f'{n.path}: packages of several programs (' + ', '.join(f'{pid:016X}' for pid in sorted(progs)) + '): one program with its updates is packed')
     (app, ks), = progs.items()
     if len(loose) > 1: raise Error(f'{n.path}: {len(loose)} base packages without exefs/main.npdm')
-    if loose: ks.insert(0, loose[0])   # the program's base, its code in the updates
+    if loose: ks.insert(0, loose[0])
     bases = [k for k in ks if k.kind == BASE]
     if len(bases) > 1: raise Error(f'{n.path}: {len(bases)} base packages of program {app:016X}')
     base, vers = bases[0] if bases else None, {}
@@ -248,14 +228,14 @@ def scan(n):
     return app, base, vers, dlc
 
 
-def romfs_bytes(n, k, base): return n.tree_bytes(romfs_of(k, base))   # the bytes of the image packing version k writes
+def romfs_bytes(n, k, base): return n.tree_bytes(romfs_of(k, base))
 
 
-def exefs(n, k, dst):   # the package's ExeFS into dst, kept as it is when every file there has the same content
+def exefs(n, k, dst):
     files = []
     for name, isdir, i in n.children(k.exefs):
         if isdir: continue
-        # NUP names are labels (§6.1). Validate them before using them as host paths.
+        # NUP names are labels (§6.1), not safe host paths
         filename = os.fsdecode(name)
         if filename in ('', '.', '..') or '\0' in filename or Path(filename).name != filename:
             raise Error(f'{n.path}: invalid ExeFS name {name!r}')
@@ -273,7 +253,7 @@ def exefs(n, k, dst):   # the package's ExeFS into dst, kept as it is when every
     shutil.rmtree(dst, ignore_errors=True); tmp.rename(dst)
 
 
-def entries(n, d):   # romfs_image.entries for a folder of the container: [name, file index, is dir, a, b], breadth-first
+def entries(n, d):
     ents, i = [[b'', d, True, 0, 0]], 0
     while i < len(ents):
         if ents[i][2]:
@@ -285,8 +265,7 @@ def entries(n, d):   # romfs_image.entries for a folder of the container: [name,
 
 
 def verified(n, ents, dst):
-    """The identity of the image at dst when it is, byte for byte, what write() makes of ents now (romfs_image.layout's header and index, and each file's bytes
-    with the container's SHA-256), and it stayed the same while being read; else None. Reads the image, not the container's file data: 21.6 s for Ocarina's 26.25 GB image."""
+    """Reads the image, not the container's file data; None unless it is byte for byte what write() makes of ents now"""
     ents = [e.copy() for e in ents]
     off = romfs_image.HEAD.size
     for e in ents:
@@ -300,7 +279,7 @@ def verified(n, ents, dst):
             f.seek(off)
             if f.read(len(idx)) != idx: return None
             f.seek(len(head))
-            for _, i, isdir, _, size in ents:   # the data in entry order, one pass forward
+            for _, i, isdir, _, size in ents:
                 if isdir: continue
                 h, left = hashlib.sha256(), size
                 while left:
@@ -314,13 +293,12 @@ def verified(n, ents, dst):
 
 
 def pack(n, d, img, say=print, step=lambda s: None):
-    """The RomFS folder d of the container → img. Returns how: 'kept' (the stamp says the container tree and the packers are the same), 'verified' (the stamp is
-    from another packer, but the image checks against the container's hashes: its stamp is renewed) or 'packed'. step(name): the step it is in, for a progress line"""
+    """Returns 'kept', 'verified' (another packer's stamp, but the bytes check against the container's hashes) or 'packed'"""
     img.parent.mkdir(parents=True, exist_ok=True)
     ents, dst = entries(n, d), os.fspath(img)
     digest = hashlib.sha256(Path(romfs_image.__file__).read_bytes() + Path(__file__).read_bytes() + n.toc_sha + struct.pack('<I', d)).hexdigest()   # the TOC hash covers every name and file hash
     if romfs_image.reusable(dst, digest): return 'kept'
-    if img.is_file():   # a packer update changes the digest, not the image: check its bytes before unpacking minutes of data again
+    if img.is_file():   # a packer update changes the digest, not the image: check its bytes before unpacking again
         step('checking the image'); say(f'checking {img} against {n.path.name}')
         if identity := verified(n, ents, dst):
             romfs_image.stamp(dst, digest, identity)
@@ -335,7 +313,7 @@ def pack(n, d, img, say=print, step=lambda s: None):
     return 'packed'
 
 
-def localized(payload):   # the localized icons record (TLV 0x000A) → {lowercase language tag: image bytes}
+def localized(payload):   # TLV 0x000A
     out, p = {}, 0
     while p < len(payload):
         ln = payload[p]; tag = payload[p + 1:p + 1 + ln].decode(errors='replace').lower(); p += 1 + ln
@@ -345,16 +323,16 @@ def localized(payload):   # the localized icons record (TLV 0x000A) → {lowerca
     return out
 
 
-def pick(tags, code):   # the record for a language code: the exact tag, then its primary subtag
+def pick(tags, code):
     code = code.lower()
     return tags.get(code) or tags.get(code.split('-')[0])
 
 
-def app_package(n):   # the record that holds application metadata when no base game is there (SPEC §5.1): a base record with no files, as packers attach it there, else the first package
+def app_package(n):   # SPEC §5.1: packers attach metadata to a base record with no files
     return next((k for k in n.packages if k.kind == BASE), n.packages[0])
 
 
-def control(k, out, fallback=None):   # the package's control data beside its ExeFS; what it lacks comes from fallback
+def control(k, out, fallback=None):
     meta = fallback.meta() if fallback is not None else {}
     meta.update(k.meta())
     nacp_bytes = meta.get(T_NACP)
@@ -365,14 +343,13 @@ def control(k, out, fallback=None):   # the package's control data beside its Ex
         else: (out / name).unlink(missing_ok=True)
 
 
-def romfs_of(k, base):   # the RomFS folder a version runs with: its own, or the base game's for an update without one
+def romfs_of(k, base):
     d = k.romfs if k.romfs != NO_DIR else base.romfs if base is not None else NO_DIR
     if d == NO_DIR: raise Error(f'{k.name}: no romfs/ in this package or the base game')
     return d
 
 
 def pack_version(n, k, base, app, out, say=print, step=lambda s: None):
-    """One version (the base package, or an update package) → out/ExeFS, out/RomFS.img and its control data; returns how pack() got the image"""
     if k.exefs == NO_DIR or n.child(k.exefs, b'main') is None or n.child(k.exefs, b'main.npdm') is None: raise Error(f'{k.name}: no exefs/main and exefs/main.npdm')
     if (pid := program_id(n.read(n.child(k.exefs, b'main.npdm')), f'{k.name} exefs/main.npdm')) != app: raise Error(f'{k.name}: program ID {pid:016X}, the base is {app:016X}')
     d = romfs_of(k, base)
@@ -383,7 +360,7 @@ def pack_version(n, k, base, app, out, say=print, step=lambda s: None):
     return how
 
 
-def pack_dlc(n, app, dlc, aoc, say=print):   # {DLC title ID: package} → aoc/<index>.img (index = title ID − the add-on content base ID scan found); images of DLC no longer in the container go
+def pack_dlc(n, app, dlc, aoc, say=print):
     first = n.aoc_base if n.aoc_base is not None else app + 0x1000
     want = {f'{tid - first}.img': k for tid, k in dlc.items()}
     if aoc.is_dir():
@@ -407,7 +384,7 @@ def main():
             k = vers[ver] if ver else base
             if k is None: raise Error(f'{path.name}: no base game (version 0); choose a standalone update version')
             if base is None: print(NO_BASE, flush=True)
-            work =(a.work_dir or path.parent / f'{app:016X}_build').resolve()
+            work = (a.work_dir or path.parent / f'{app:016X}_build').resolve()
             out = work / 'extract' / f'v{ver}'
             print(f'{app:016X} version {ver}: {k.name}', flush=True)
             say = lambda s: print(s, flush=True)

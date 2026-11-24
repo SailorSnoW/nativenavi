@@ -1,5 +1,4 @@
-// One launcher setting as a row (a menu, a slider with its percentage, a toggle), in the Mac app's settings window (Launcher.swift).
-// A row whose setting is fixed by an env file or by the launch environment is shown but disabled.
+// One setting of the settings window as a row; a setting fixed by an env file or the launch environment is shown disabled
 import SwiftUI
 
 extension LauncherModel {
@@ -19,7 +18,7 @@ struct SettingRow: View {
         Binding(get: { Double(m.values[s.env] ?? s.def) ?? s.max ?? 1 },
                 set: { m.values[s.env] = String(format: "%.2f", $0) })
     }
-    private var percentage: String { m.rangeLabel(s, rangeValue.wrappedValue) }
+    private var percentage: String { "\(Int((rangeValue.wrappedValue * 100).rounded())) %" }
 
     private var settingLabel: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -33,7 +32,7 @@ struct SettingRow: View {
             switch s.kind {
             case "choice":
                 Picker(selection: m.binding(s)) {
-                    ForEach(offeredOptions(s, current: m.values[s.env]), id: \.[0]) { Text($0[1]).tag($0[0]) }
+                    ForEach(s.options ?? [], id: \.[0]) { Text($0[1]).tag($0[0]) }
                 } label: {
                     settingLabel
                 }
