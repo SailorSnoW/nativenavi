@@ -1,23 +1,83 @@
 {
-  "fill" : {
-    "automatic-gradient" : "display-p3:0.16471,0.54902,0.36078,1.00000"
-  },
+  "fill-specializations" : [
+    {
+      "value" : {
+        "automatic-gradient" : "display-p3:0.06000,0.18000,0.38000,1.00000"
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "automatic-gradient" : "display-p3:0.02000,0.06000,0.15000,1.00000"
+      }
+    }
+  ],
   "groups" : [
     {
       "layers" : [
         {
-          "glass" : true,
-          "image-name" : "ocarina.svg",
-          "name" : "ocarina"
+          "image-name" : "body.svg",
+          "name" : "body",
+          "glass" : true
         }
       ],
       "shadow" : {
-        "kind" : "neutral",
+        "kind" : "layer-color",
         "opacity" : 0.5
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.4
+        "value" : 0.2
+      }
+    },
+    {
+      "layers" : [
+        {
+          "image-name" : "halo.svg",
+          "name" : "halo",
+          "glass" : false,
+          "blend-mode" : "plus-lighter"
+        }
+      ],
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0
+      }
+    },
+    {
+      "layers" : [
+        {
+          "image-name" : "wings.svg",
+          "name" : "wings",
+          "glass" : true,
+          "opacity" : 0.8
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.3
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.6
+      }
+    },
+    {
+      "layers" : [
+        {
+          "image-name" : "sparkles.svg",
+          "name" : "sparkles",
+          "glass" : false
+        },
+        {
+          "image-name" : "glow.svg",
+          "name" : "glow",
+          "glass" : false
+        }
+      ],
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0
       }
     }
   ],
