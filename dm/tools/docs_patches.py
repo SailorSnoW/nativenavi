@@ -2,7 +2,7 @@
 # Writes docs/agents/game-patches.md, the index of game-specific code: patches by build, build-keyed host rows, SDK cuts, translator rules keyed by a
 # shader's hash and profile switches, each with its binding; gaps first. Frame-step sites come from running each stub against a recording context.
 # Usage: docs_patches.py [--check]
-import importlib.util, re, subprocess, sys, pathlib, types
+import importlib.util, inspect, re, subprocess, sys, pathlib, types
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'dm/tools'))
@@ -80,6 +80,12 @@ SWITCH_BINDING = [
      'why': "right only where the handle comes from c2's tables: the translator could prove that per shader"}),
     ('enc_thread', '', {'what': 'Metal encoding on its own thread on the Mac', 'now': 'game', 'goal': 'host', 'purpose': 'frame rate',
      'why': f'a setting the game was tested with: {DEFAULT_SOON}'}),
+    ('replay_ahead', '', {'what': "a queue parked on the game's CPU event translated before the signal, its commits held until it", 'now': 'game', 'goal': 'host',
+     'purpose': 'frame rate', 'why': f'a setting the game was tested with: {DEFAULT_SOON}'}),
+    ('gpu_ts_hz', '', {'what': "raw timestamp reports at the counter rate the game converts them with", 'now': 'game', 'goal': 'game', 'purpose': 'runtime',
+     'why': "NVN2 reports nanoseconds; a game that turns raw reports into time with the console's 31.25 MHz counter rate needs that rate"}),
+    ('upscaler_sharpness', '', {'what': "a share of a bilinear picture blended into MetalFX's", 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
+     'why': "the look closest to the game's own upscaler, judged per game"}),
     ('present_snap', '', {'what': 'present snapshots', 'now': 'game', 'goal': 'host', 'purpose': 'rendering', 'why': f'a setting the game was tested with: {DEFAULT_SOON}'}),
     ('game_env', 'DOTNET_GCRegionRange=', {'what': ".NET's garbage-collector region range", 'now': 'game', 'goal': 'game', 'purpose': 'address space', 'why': "measured for the game's regions"}),
     ('present_interval', '', {'what': 'one frame per display tick', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'right only for games whose logic does not count frames'}),
@@ -184,9 +190,7 @@ def shader_rules():   # 64-hex literals in the C# tools
 
 
 def switches(gs):
-    src = (REPO / 'dm/games/game.py').read_text()
-    src = src[src.find('def header('):]
-    src = re.split(r'\n(?=\S)', src)[0]   # to the next top-level line
+    src = inspect.getsource(game.header) + '\n' + inspect.getsource(game.header_one)   # the keys the host's header takes
     defaults = {}
     for k, d in re.findall(r'g\.(?:get|words)\(\s*[\'"](\w+)[\'"]\s*,\s*[\'"]([^\'"]*)[\'"]\s*\)', src): defaults.setdefault(k, d)
     out = {}
