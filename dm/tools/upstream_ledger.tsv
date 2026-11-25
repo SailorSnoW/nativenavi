@@ -41,47 +41,182 @@ d294f3a585c5	2026-11-22	skip	-	rewriter: fix Pikmin 4 cutscene fade timing	anoth
 da242230e221	2026-11-22	ported	e73eda0	nvn/textures: partition packaged-texture and CPU-written tables by pool	per-pool packaged-texture and CPU-written tables: loads slower over a session (upstream on this game)
 f41613f7879e	2026-11-22	skip	-	packing/shaders: keep registered sources across RomFS files	registered-source selection across RomFS files: not in this fork's shader_split.py
 fa59a0a79086	2026-11-22	skip	-	gfx/nvn: resolve mismatched-size MSAA Downsample and add Time Stranger profile	MSAA downsample between sizes: the game has no multisampled pipelines (17,694 of 17,696 keys at 1 sample)
+00f98d5db0d1	2026-11-23	no-op	-	nvn/images: avoid relocking the registry for buffer writes	the sparse shadow writeback (post_shadow_wb) it unlocks around is not in this tree
+019a1f69cfac	2026-11-23	docs	8788845	game: Donkey Kong Bananza waits for translation on Layer 1400	Bananza's totals for the replay series cited as upstream's in the reference entries
 033793f0ba39	2026-11-23	skip	-	chain/vertex: share dm_vs_body_o with capture entry main0_gs (PR #3186)	the geometry stage's capture entry: no geometry shader
+0b09b66d7624	2026-11-23	partial	0173c6b	nvn/replay: tighten fb_view serial check, pso_get_ return type and docs	pso_get_ returns void *, fb_view keeps a view per serial; its doc-name fixes do not apply
 12c98ed06a9c	2026-11-23	skip	-	ci/tests: supply Xcode fixture capture-table paths	iOS tests
+15a672528777	2026-11-23	skip	-	host/settings: preserve the legacy 15-language list (PR #3235)	GetAvailableLanguageCodes is gone from hle_sdk16.c; main imports no nn::settings
 184847c51117	2026-11-23	skip	-	host/gates: grow the dispatch index during module preload (PR #3121)	the game has 182 gates, the table 8,192
 1a1d512475df	2026-11-23	skip	-	game: port BRAVELY DEFAULT II 1.0.0	another game (BRAVELY DEFAULT II)
+1ac47a87ba8b	2026-11-23	skip	-	host/loader: validate linked swforce table at build time (PR #2702)	optional build-time self-check of the force table; not taken this run
 1ed3e12a6c7b	2026-11-23	skip	-	chain/atomics: translate RED.ADD.F16x2, the half-pair atomic add (PR #3200)	RED.ADD.F16x2: none of the game's shaders use it
 24346dac37b8	2026-11-23	skip	-	games/01008CB0156BC000: target 60 fps in Trails into Reverie	another game (Trails into Reverie)
+2fc4e70ab898	2026-11-23	skip	-	chain/nvn: pool runtime-selected NVN2 storage images	the library has no runtime-selected image arrays (_i*_cb0) nor texture_buffer images
 36c09285632e	2026-11-23	ported	276d0bc	host/haptics: drive Switch Pro Controllers through their HD rumble report (PR #2607)	Pro Controller HD rumble report; untested on hardware here
+385079757d3a	2026-11-23	no-op	-	gfx/tests: update t_missing_src1 and test_dmsh_logic for recent blend and build changes	t_missing_src1 already asserts this fork's source-only fold; its test_dmsh_logic part needs cross_msl (ae5d8f51), not here
 388befdf6c21	2026-11-23	skip	-	ios/rotation: add Rotation setting (DM_ROTATION) to launcher and in-game menu	iOS rotation
 38a787a07aa1	2026-11-23	skip	-	host/save-sync: ask before sending over a missing cloud save (PR #3197)	iCloud save sync (removed)
 3a2a62f705ed	2026-11-23	ported	361cf68	gfx/nvn: clear relaxed draw-pass barrier state on NVN queue switch	a draw pass after another NVN queue's takes the full barrier (draw_barriers game, several queues here)
+3a7e53d3cb7c	2026-11-23	ported	202d2ba	nvn/replay: cache same-pass feedback views	same-pass feedback views from the view cache, VC_WAYS 8 (its test needs it)
 3c4e06aa2f6b	2026-11-23	skip	-	game: port Ultra Street Fighter II 1.1.1	another game (Street Fighter II)
 3cf75061ced4	2026-11-23	ported	129f584	gfx/dmsh: specialize the blend fix-up away when both blend words are 0 (PR #3176)	pipelines whose blend and rounding words are both 0 drop the guard (dm_blend_off); chain cfa56b0a15ed, the app must be rebuilt; no difference shown on the headless route
 3d186f2b834b	2026-11-23	ported	2b2dbc4	nvn/present: put a retried display link on probation	a retried display link silent past 4 refreshes goes back to the rescue at once; not exercised headless
 3dd1f7a65525	2026-11-23	ported	6776527	gfx/nvn: keep CPU_NO_ACCESS texture pools out of gmem_map and chunk from 256 MB	CPU_NO_ACCESS render-target pools out of gmem_map, chunks from 256 MB (265 MB less resident here)
+3e8f1ce578ab	2026-11-23	ported	e776c96	host/haptics: drive 8BitDo Ultimate 2 Wireless through HID report 0x05 (PR #2763)	8BitDo Ultimate 2 Wireless rumble through HID report 0x05; untested here
+3f37dd3dce5b	2026-11-23	skip	-	host/album: save nn::album::SaveScreenshot buffers as local PNGs	the game imports no nn::album
 3f852b8cb718	2026-11-23	skip	-	ci/coverage: install SPIRV-Tools for Vulkan tests	Vulkan CI
+4066c4021c4c	2026-11-23	skip	-	game/0400A3A01EE4C000: add 5 Pokopia Pokedex and world shaders to shader_seen.tsv (PR #3171)	another game (Pokopia shader_seen counts)
+40d4091eaaaa	2026-11-23	ported	2c160f7	mac/launcher: open Advanced settings with a button, not an empty DisclosureGroup (PR #3228)	the launcher's Advanced row is a button (an empty DisclosureGroup did not open on macOS 27.2); not click-tested
+410f0c9e2927	2026-11-23	ported	3c67e7b	gfx/tools: drop clock stamps from c1_full and cb_extent headers (PR #3172)	c1_full / cb_extent headers without a clock time, unchanged tables not rewritten; readers accept old stamped headers
+48781edc1bd8	2026-11-23	skip	-	nvn/chain: sparse misaligned shadows, bounded c[0] storage buffers, and Anvil shader split (PR #3126)	bounding every c[0] access costs GPU time for nothing; the game's pools are aliased whole, none sparse or misaligned (logs); geometry gone
+4add5fbb49b2	2026-11-23	ported	b95b3ee	gfx/nvn: adopt newly prebuilt p*.mtl4a archives before frame 0	prepare_prebuild waits for its last compiles (bounded) and opens the new p*.mtl4a before frame 0; t_pso_stall's adopt check is timing-dependent under load
+5205e2bb6d0f	2026-11-23	no-op	-	chain/build: narrow fu before concatenation in finish()	type-checker change on a line this dmsh_build.py writes otherwise
 54c602f25def	2026-11-23	skip	-	game: BRAVELY DEFAULT II defaults to 60 fps	another game (BRAVELY DEFAULT II)
 58272b4a1d27	2026-11-23	skip	-	ci/lint: fix FFT replay and matcher test typing	another game's lint fixes
+5ccb82adf8c6	2026-11-23	partial	8788845	nvn/replay: drop per-draw retain/release in the draw helpers	per-draw retain/release dropped (prog_get / pso_get plain pointers); geometry-stage sites not here
 5e098c8c2422	2026-11-23	skip	-	rewriter/fft: match job-pool wake-up stub across updates	another game (FINAL FANTASY TACTICS)
 5fc927d5ed2d	2026-11-23	skip	-	nvn/fstep: 40 fps in ticks of 1/120 s (Ocarina of Time)	a 40 fps mode on 120 Hz screens: below the game's 60, not a goal; its tick unit takes state +0x38, the measured frame time here
 610baa4dcde5	2026-11-23	skip	-	gfx/shaders: build mesh libraries for every shader variation's geometry pair (PR #3191)	geometry-shader variation pairs: the game has no geometry shaders and the geometry stage (dmsh_mesh.py) was removed
+62f65f70aac2	2026-11-23	ported	08b640e	host/audio: default Mac microphone gain to 1x and guard AUHAL render buffers	DM_MIC_GAIN 1 by default (Humming mode at +12 dB, found on this game), AUHAL buffers set again before each render
+63bfc86342ca	2026-11-23	skip	-	game: Mario + Rabbids Kingdom Battle defaults to 60 fps	another game (Mario + Rabbids Kingdom Battle)
+65b1523b768d	2026-11-23	partial	2c98142	rewriter/spin, host/fpslock: clear decode cache per head; discover Frostbite frame regulator (PR #3234)	the spin-wait search's decode cache kept per head: rewrite byte-identical, peak memory main 4,777 to 3,118 MB; the Frostbite host part not here
 65dfeb337877	2026-11-23	skip	-	rewriter/layout: preserve read-only jump table offsets	follows 17454fc3's relayout
+6724d64d4228	2026-11-23	ported	822a1ea	host/audio_input: select and unmute matched DualSense USB mic	a USB DualSense's own microphone selected and unmuted before capture; launcher label (USB); untested here
 6ef18a1fd706	2026-11-23	ported	672d70a	nvn/fstep: ignore pauses and window switches for hold steps and payback (PR #3174)	stalls and named pauses in the frame step; also skips the measured frame time across a pause
+7130d4db4623	2026-11-23	skip	-	host/oe: pick default language from control.nacp when DM_LANG is unset	the game's NUP has no control.nacp and the launcher always sets DM_LANG
+7153c4fe9f0a	2026-11-23	skip	-	game/0400A3A01EE4C000: add 14 later-session Pokopia shaders to shader_seen.tsv (PR #1892)	another game (Pokopia shader_seen counts)
+7d38c8e0a09b	2026-11-23	skip	-	host/loader: restore iOS-only alias cuts on Mac (PR #3218)	this tree has no ALIAS_CUTS; the Mac's alias region is 64 GiB, so the sdk node-area rule only gives back address space nobody lacks
 7ff0aef4e202	2026-11-23	ported	6835337	gfx/nvn: publish coherent presentation-time and display-link history snapshots (PR #2194)	presentation history behind a lock
+811091e72de1	2026-11-23	skip	-	packing/ue3: read wide chunks, small-window zlib, and control-first records (PR #2808)	UE3 reader (another engine)
+82cad791cd5d	2026-11-23	skip	-	host/fs: release cache storage mount names at Unmount (PR #3217)	the game mounts no cache storage (rom, save, temp, SD card with the practice tools)
+85b222bb8ddc	2026-11-23	skip	-	games/010099801C4FA000: add Peace Walker Master Collection profiles and render-thread sync fix	another game (Peace Walker); its fix is in its own patches.py
 8cc63cc9a917	2026-11-23	skip	-	packing/shaders: accept mutable NXSH input	NXSH input: other games' containers
 8d888054ff67	2026-11-23	ported	a33e9ce	host/nvn: freeze guest clock and park clock reads during prepare and archive open	guest clock frozen during the prepare step and archive open (a safeguard here)
+90edd532b3fd	2026-11-23	skip	-	ios/menu: accept localized labels for the in-game menu (PR #3057)	iOS
+90fc507da72f	2026-11-23	skip	-	ios/packing: use the selected Python via DM_PYTHON (PR #3219)	iOS packing (DM_PYTHON); the host Makefile's python3 runs inside nix develop
 9143b6ff6217	2026-11-23	partial	133c5dd,2c3835d,007feb3	nvn: keep shader-code pools out of gmem_map, pre-wire guest files, and pace late 30 fps frames (PR #1971)	(a) shader-code pools out of gmem_map (321 MB less resident here), (d) idle-GPU late frames and unpaced holds, the smoke route; not (b) guest files (removed), (c) screen shape (removed), (e) the 30 fps cap's 60 Hz link (a Mac window already runs it)
 977f5cab3a13	2026-11-23	skip	-	host/friends: hook blocked-user availability, no-Uid forms, and cut-object methods	nn::friends: main and subsdk0 reference none
+9ad1670b091b	2026-11-23	skip	-	game/010063100B2C2000: add Cytus α profile in handheld Normal mode (PR #2811)	another game (Cytus)
 9c2ad51218cc	2026-11-23	skip	-	ci/opengl: size uniform readback buffers for matrices	OpenGL CI
+a359f9e65354	2026-11-23	ported	63b3e28	nvn/replay: look up pool addresses by 64 KB region first	a 64 KB region table in the per-thread pool cache (about 4,800 pools here); not measured
 a3d58526bc7d	2026-11-23	ported	cc21624	gfx/nvn: verify kernel writability before claiming PG_NONE faults	dirty tracker declines a PG_NONE page the kernel holds read-only
+a694f17992cd	2026-11-23	no-op	-	host/memory: default Switch 2 to 128 GB Mac alias and pool limit (PR #3188)	the host already gives 64 GiB and the profile sets mem_map_limit on; the game maps at most +13.25 GB
+a7821cfe0940	2026-11-23	no-op	-	nvn/geometry: set the mesh argument table only for a lone mesh draw	geo_mesh_encode was removed; the game's own mesh draws (nvn_mesh.inc mtk_encode) set the table once a draw
 a95c91f4e0bd	2026-11-23	skip	-	game/digimon: select 60 fps in Time Stranger startup	another game (Digimon)
 acbb26c37bf6	2026-11-23	skip	-	chain/meshstage: spill task payloads past Metal's 16 KB through a device buffer (PR #2264)	task payloads past 16 KB: the game's largest is 3,200 bytes
 b2d41ac57593	2026-11-23	skip	-	host/audren: leave explicit CPU/manual renderers to the game (issue #3212)	the game asks device 0 mode 0, which the host drives
 b3d287fec5d0	2026-11-23	ported	3a5ed05	games/0400486024DEC000: support launcher Render scale (DM_RENDER_SCALE)	Render scale 0.5-1.0 at the user's request, below native only; RENDER_SCALE capability instead of ctx.render_scale
 b3e0d8c5275e	2026-11-23	skip	-	packing/uepak: use raw size for single-block Unreal pak entries	Unreal pak archives
+b78d7e8e575a	2026-11-23	ported	430be87	host/input: read unclaimed USB Xbox One (GIP) controllers on macOS (PR #2666)	unclaimed wired Xbox One (GIP) pads through IOUSBHost (DM_GIP_PADS); untested here
+b9a3364d5e30	2026-11-23	skip	-	host/nvn: guard edge-snapshot OOM and add crash/VA diagnostics	an iOS address-space exhaustion guard and diagnostics; on the Mac the edge-snapshot malloc does not fail (64 GiB alias, no VA ceiling)
+ba82ccb91dab	2026-11-23	skip	-	nvn, packing/shader_split: validate WriteTexels bounds and parse VFS2 archives (PR #2906)	VFS2 reader absent; WriteTexels bounds defensive only (no WriteTexels red line in the game's logs)
+bb576f18aba6	2026-11-23	skip	-	game: Mario + Rabbids Sparks of Hope defaults to 60 fps	another game (Mario + Rabbids Sparks of Hope)
+bd28b4c41fe1	2026-11-23	ported	077a759	tools/docs_patches: scan game.header_one profile switches	docs_patches reads header_one: the profile switch table lists the game's nine switches
+be3b8bf86e42	2026-11-23	ported	8b11171	host/mac: automatic passive HID stick fallback for Switch Pro Controllers	a Switch Pro-compatible pad's zero stick read from HID report 0x30 (DM_PRO_STICKS); untested here
+bf8d4aded1b2	2026-11-23	skip	-	host/friends: open the notification queue offline (PR #3224)	the game imports no nn::friends
 c12000da28ed	2026-11-23	ported	1f4201a	games/ocarina: scale dynamic-resolution threshold to target fps (PR #1954)	merged with eccf3e24: threshold = min(game x 60 / target, 5000 / target)
+c17a54984491	2026-11-23	skip	-	gfx/nvn: defer acquire pacing and present-ticket wait to nvnSyncWait	the game never changes its present interval; pacing at nvnSyncWait would block the one queue worker replay_ahead needs
+c1bd080aecff	2026-11-23	ported	aae6c66	nvn/replay: bind only the vertex streams the shader reads	only the vertex streams the shader reads are bound and laid out
+c22289c05322	2026-11-23	skip	-	packing/shader_split: unify Ubisoft Anvil and Scimitar forge readers (PR #3238)	Anvil / Scimitar forge readers (other engines)
+c25a8670a82f	2026-11-23	skip	-	chain/dual-source: move dual-source blending into main0_u and drop dual_want.tsv (PR #2736)	no dual-source output (index(1)) in the game's shaders and no dual_want.tsv; would enlarge every multi-output _bx
 c36551c390f5	2026-11-23	ported	b644990	host/front_mac: guard fullscreen mode switches against re-entry and bounces, and settle before display link	fullscreen mode switch re-entry guard, bounces, link waits for the screen; g_screen_id replaced by the NSScreen's number
+c58270fff4cd	2026-11-23	skip	-	tools/tests: type exec namespace in test_nso_match.py	types the exec namespace of 7d38c8e0's ALIAS_APPLIED test (not taken; no ALIAS_APPLIED here)
+cac1293b4510	2026-11-23	skip	-	host: load exlaunch mod code plugins (PR #3178)	sloperinaGZ's subsdk9 is not exlaunch (no unwind header, no marker); code_write.h serves the removed cheat engine; its svcGetSystemTick x0 fix has no caller in the game's modules
+cdd91f0af41e	2026-11-23	ported	63e8222	tools/regress: ignore Metal InstalledDir mount path in toolchain fingerprints (PR #3232)	toolchain fingerprints without metal --version's InstalledDir (a cryptex mount whose suffix changes at every boot here): no shader step after each reboot
 d08d7da62390	2026-11-23	ported	4df7cc9	gfx/nvn: trim on memory pressure and evict idle spares and uploaded textures	memory pressure trims (critical on the Mac), idle spares and uploads; iOS branches out; fixed: view cache entries taken by texture address, t_pkg_evict waited one submission too early
+d2939c1eb403	2026-11-23	deferred	-	packing/shaders: report post-compile phases through DMSH_PROGRESS (PR #2684)	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): the shader build reports the steps after the last shader through DMSH_PROGRESS; chain b1450d7b27fb
+d9a70339a0fd	2026-11-23	skip	-	chain/split: read the shaders of Monolith's DMPA model packages and NDSR packs (PR #3135)	DMPA and xbc1 readers absent; the game's agl_ndsr packs are read directly (shader_split ndsr_shaders)
 dbefe889cd1f	2026-11-23	skip	-	games/0400486024DEC000: update sead::PerspectiveProjection in place for Vert+ screen shape	builds on the screen-shape hooks of 47578ded (Vert+ for taller screens), which this tree does not have: the game keeps its 16:9 framing
 dc75d1fc8193	2026-11-23	no-op	-	host/hid: fix handle metadata and bring up Trails into Reverie	the game asks once, npad 0 FullKey (DM_RUMBLE_LOG): the keyboard keeps that style and the haptics sink is installed before the guest thread (front_mac.m); it never calls GetVibrationDeviceInfo
+de5b17e8a385	2026-11-23	skip	-	game: port Oceanhorn 1.0.1	another game (Oceanhorn)
+e22fe5751c55	2026-11-23	skip	-	game: record Baba Is You IPA and Mac verification	another game (Baba Is You)
 e3f2d21fd9c4	2026-11-23	ported	d267381,1fbafb0	chain/shader_lib: clean up partial outputs and stop cleanly on a full drive (PR #2610)	shader_lib / shader_cache cleanup, then dmsh_build.py's full-drive stop (chain dd154ebc7bd0)
+e49e4814568f	2026-11-23	ported	46a12eb	nvn/replay: walk only a shader's texture and buffer bindings per draw	per-shader texture and buffer binding lists for the per-draw checks; no IMGP kind here
 e531be818c03	2026-11-23	ported	533596c	tools/regress: run each revision's pso_offline.py in its own process (PR #3190)	regress.py runs each revision's pso_offline.py in its own process; the Vulkan test beside it left out
+e575e81226ba	2026-11-23	no-op	-	tools: document DM_NVN_SPARSE_COPY and fix pyright checks	DM_NVN_SPARSE_COPY, vshadow_map and test_frame_ratio_stub.py are not in this tree
+e8460ebc4982	2026-11-23	skip	-	tools/cheat_anchor: bound .bss by the module's end, not the loaded image	cheat tooling (removed)
+ee63b843db2b	2026-11-23	skip	-	packing/profiles: fix registered-update shader coverage and status; register Mario Kart World 1.8.0	registered-update coverage: the profile has one build row per version and no shader_covers
 ef393b7ead46	2026-11-23	partial	bfbc68e	games/pragmata: reserve a 40 GiB iOS alias region and note the entitlement on failure	the reserve error's size and errno only; the iOS alias region of another game not taken
+ef8b25d2c5a8	2026-11-23	deferred	-	nvn/vertex: supply default W=1.0 for absent attributes (PR #3237)	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): absent vertex attributes read (0, 0, 0, 1.0) as NVN gives them, in the descriptor (slot 30) and the pulling decoder; chain b1450d7b27fb
 f75a85aac739	2026-11-23	skip	-	opengl/shaders: promote desktop GLSL 1.10-1.30, honor layout(binding) and swizzle, and recover GL capture	OpenGL
 fbee62f11b37	2026-11-23	skip	-	ci/tests: account for Ocarina render-scale hooks	adjusts test_ocarina_screen_shape.py, which comes with 47578ded (not taken)
+002724b8e6ae	2026-11-24	skip	-	game: default Assassin's Creed III Remastered to 60 fps	another game (Assassin's Creed III)
+01439b0fe923	2026-11-24	ported	f67d13e	gfx/nvn: recover interrupted archive captures during offline packaging	the prebuild tool captures again what dropped flush periods lost (this Mac's pso_prebuild.log: 10 periods); still-missing keys logged red without exit 2, which would drop the whole prewarm bundle
+0293739df4d9	2026-11-24	skip	-	game: Guacamelee! 2 1.0.4 reaches its opening on Mac	another game (Guacamelee! 2)
+110868eec32c	2026-11-24	ported	7115a8c	nvn/queue: a wait on an in-flight write carries the writer's fence (PR #3276)	a wait released on an in-flight exact write carries the writer's fence to its queue (about 25 event waits a frame)
+12e0a17702ee	2026-11-24	skip	-	nvn/device: read older NVN minor versions from the SDK	NVN1 minor versions for SDK <= 10 (Switch 1 path removed); NVN2's come from the SDK already
+1cd57e6a122a	2026-11-24	skip	-	gfx/nvn: add opt-in DM_NVN_ANISO surface-sampler anisotropy floor	raises sampler anisotropy above what the game asks: not a faithful copy
+1f64cee742e2	2026-11-24	skip	-	game: port Story of Seasons: Friends of Mineral Town	another game (Story of Seasons)
+208b699c98ef	2026-11-24	skip	-	ci/lint: fix NVN table growth and test diagnostics	lint of code this tree lacks (reback, vshadow, t_nro); dm_realloc already stops on a failed allocation
+2398cf78a8be	2026-11-24	partial	0173c6b	gfx/tests: update pso_get callers and dual-source main0_u assertion	the four .m test edits (pso_get_ to pso_get); the test_dmsh_meshstage half needs c25a8670 (skipped)
+2c0682e77792	2026-11-24	skip	-	gfx/present: support DM_PICTURE_FIT=fill on Mac	fill crops the game's 16:9 picture (not a faithful copy); the switch was removed here on purpose
+2cc4cda2ba29	2026-11-24	skip	-	packing/nup: scope provisional romfs_marker to the packed program	no provisional profiles (survey, profile_guess) here
+2f0210dba97c	2026-11-24	no-op	-	chain/spirv: keep nested Else/If blocks for SPIR-V (PR #3253)	the bug needs XLATE_DEBUG=0; with the default 1 the comment nodes keep Else blocks from becoming singletons
+2fcf7e8cccaa	2026-11-24	skip	-	opengl/shaders: strip legacy precision statements after preprocessing (PR #3269)	OpenGL
+375129930d30	2026-11-24	no-op	-	host/hid: route JoyDual vibration handles to FullKey and Handheld pads	vib_valid here has another shape; the game rumbles on full pads (FullKey)
+39123f799aa3	2026-11-24	skip	-	games/0100633007D48000: offer 120 fps for Hollow Knight (PR #2478)	120 fps for another game (Hollow Knight)
+3b882993a455	2026-11-24	deferred	-	nvn/vertex: declare slot 30 stride 32 for absent attributes (PR #3258)	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): slot 30 stride 32 (metal-tt rejects offset 16 with stride 16)
+3bcf821365b3	2026-11-24	skip	-	gfx/tools: read MGFX v10 effects and raw-DEFLATE .zxnb assets (PR #2546)	MGFX / zxnb readers (another engine)
+3e3e18fd368a	2026-11-24	skip	-	games/010013C00E930000: offer 120 fps for Hollow Knight: Silksong (PR #2479)	120 fps for another game (Silksong)
+3f6b304dc317	2026-11-24	skip	-	docs/readme: link the prewarm lists discussion	a README link to an upstream discussion
+4015ce2c040a	2026-11-24	deferred	-	gfx/nvn: keep resolution families compressed with valid-geometry tracking	ported then left out: measured on the M2 Pro (castle town house, still) the submission 5.0 to 11.6 ms a frame (33 k to 91 k instructions a draw) for 0.4-1 ms of GPU; probably fam_set_valid's args_dirty_all at each owner change, not verified
+44c5500c209e	2026-11-24	skip	-	host/tests: supply the SDK probe in memory fixtures	test fixtures for a694f179 and cac1293b, not taken
+4561f442cf20	2026-11-24	no-op	-	host/nvn: borrow shader library file mappings on macOS	lib_from_file already borrows the image's and loose files' mappings (the copy of 8c94bd1e it reverts was never taken)
+48bc85368889	2026-11-24	skip	-	nvn/shaders: keep missing shader keys for the next partial build (PR #3288)	optional (missing keys for --seen-shaders through launcher and Application Support paths); not taken this run
+49aee45388d6	2026-11-24	skip	-	game: add It Takes Two 1.0.3 profile (PR #3101)	another game (It Takes Two)
+4f4d23a814dc	2026-11-24	ported	5fce1b3	gfx/nvn: read texture serials lock-free in passdump bind logging (PR #3245)	the passdump bind line reads texture serials through tid_ser
+549324dab293	2026-11-24	ported	597bc6e	host/input: read 8BitDo Ultimate 2 Wireless Bluetooth motion (#2997)	8BitDo Ultimate 2 Wireless motion over Bluetooth; untested here
+557f19547ba9	2026-11-24	ported	220bba2	host/threads: initialize yield and spin settings in svc_thread_main_init (PR #2031)	yield and spin settings read once at the first start: no first-use race on the 73 spin gates' path
+5e907fb8022a	2026-11-24	skip	-	packing/forge: read Scimitar v27 shader archives	Scimitar v27 reader (another engine)
+61e97458d286	2026-11-24	ported	ecda0c6	nvn/latch: gate on GPU deadline and exit on late GPU or skipped ticks	the late latch's entry accounts for GPU time and it is left on a late GPU end or a skipped tick (the 60 Hz link with snapshots off)
+67e671465961	2026-11-24	ported	7c84b7d	host/audren: clear renderer event on Update and remove catch-up queue (PR #3272)	Update clears the renderer event as Horizon does; the catch-up queue (a workaround) removed; game boot to music not yet run on this tree
+685d2aecf0ea	2026-11-24	deferred	-	gfx/nvn: Metal 4 mesh pipeline bases, mesh_pairs.tsv prebuild, and prefetch	mesh bases, mesh_pairs.tsv, prefetch: wanted for first-draw mesh stalls; its own chain change, the split hunk builds on 610baa4d (skipped), M2 mesh compiler check needed
+69b618b31605	2026-11-24	deferred	-	host/threads: enforce Horizon SetThreadActivity and GetThreadContext3 rules	Horizon correctness only; the game imports no SuspendThread / GetThreadContext and the reset does not pause threads
+73150dd93e3d	2026-11-24	deferred	-	chain/atomic: keep float atomic adds out of the constant program	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): float atomic adds through a noinline dm_atomic_add_f32 (M5 + macOS 26.0-26.6 compiler abort on 278f48371bcf0d58_b reproduced offline); chain b1450d7b27fb; not run on an M5
+7972b110e0c1	2026-11-24	skip	-	packing/extract: preserve literal RomFS archive paths	nx_extract removed
+7e7e55fde9b0	2026-11-24	skip	-	nvn/rt: retire stalled acquire threads to standard policy (PR #3285)	optional: the game has one acquire thread and the policy line shows none demoted; not taken this run
+7f015ff873d6	2026-11-24	ported	d8f075c	nvn/residency: release committed queue objects under g_res_commit_mu	res_commit releases its queue's objects before unlocking g_res_commit_mu: a recycled heap is back in the recycler before another commit returns
+8e0a772b390c	2026-11-24	deferred	-	host/mem: place thread stacks deterministically in the stack region	thread stack placement for Unity games' fragmented stack region; the game has no MapAliasStack abort, ~480 lines touching every MapMemory
+900e11ca2663	2026-11-24	skip	-	host/uemalloc: keep each thread's recently freed small blocks intact (PR #3265)	hle_uemalloc (Unreal allocator) removed
+973f2d73b8b7	2026-11-24	deferred	-	nvn/mtl: add opt-in bounded depth-write snapshot copies (DM_NVN_FB_DEPTH_RECT)	opt-in, no game named; the game's depth-snapshot readers are mostly full screen, so only after an A/B shows a gain
+9f0aa5475f54	2026-11-24	skip	-	nvn: resolve registered textures at pool slot zero (PR #3256)	NVN reserves the first 256 descriptors and nothing registers at slot 0; touches ~60 hot-path tid checks
+af9b70ea8e08	2026-11-24	skip	-	host/uemalloc: preserve Unreal allocator RTTI	hle_uemalloc (Unreal allocator) removed
+b63368763f5d	2026-11-24	ported	021df54,9c370ed	gfx/nvn: copy-on-write pool updates and cross-submission residency checks	pool scans write new textures and stand-ins into a copy of a live table (pool_snap_set), a table changed since an earlier submission no longer stands; t_pool_chunks expects the copy (upstream's check asserted the old in-place write)
+be172acd90a1	2026-11-24	no-op	-	nvn/sparse: track buffer-backed textures across run replacements	the game's only virtual pool is mapped whole at its first MapVirtual, then aliased: nvn_sparse_pool() is false (0 in a sparse pool)
+be38b7dadd21	2026-11-24	ported	45629f2	nvn/upscaler: retire evicted MetalFX scalers at their fence and evict LRU	MetalFX scalers the cache evicts leave behind their submissions, LRU; t_mfx_evict under the default profile
+c2badd9fc8a1	2026-11-24	skip	-	game: Assassin's Creed III Remastered reaches its Mac opening	another game (Assassin's Creed III); link edits only
+c56ec4d7e411	2026-11-24	skip	-	host/memstat: add DM_MEMSTAT_WALK=<N> to throttle region walks	optional diagnostics (DM_MEMSTAT is off by default); not taken this run
+c7e74a1f56b8	2026-11-24	partial	8126aee,876f37a	nvn/replay: cache view type and pixel format on treg_t, add bench.py submit metrics	view type and pixel format cached on treg_t, bench.py's per-draw submission medians; the family lines of 4015ce2c left out with it
+ca4ffed4017e	2026-11-24	skip	-	packing: read Unity shaders in CRI CPK archives	Unity CRI CPK reader (another engine)
+d18b4bc57f36	2026-11-24	skip	-	ios/tests: define DM_GAME_MEM_ALIAS in DuoHarness fixture	iOS
+d58f8a7954a7	2026-11-24	skip	-	packing/uepak: read shared v8 shaders and port Oceanhorn 2	Unreal pak reader (another engine)
+dcba0ba10b16	2026-11-24	skip	-	game: Captain Tsubasa 2 World Fighters on Mac	another game (Captain Tsubasa 2); uemalloc and NSP docs
+df20cc25251c	2026-11-24	skip	-	packing/shader_split: parse DrinkBox SHADERS containers (PR #2810)	DrinkBox SHADERS reader (another engine)
+e148dca98e28	2026-11-24	ported	b12bf1f	host/audio: choose surround from the Mac device's speaker layout (PR #3264)	surround only when the device's speaker layout maps 5.0/5.1 (ocarina notes on a 22-output MOTU, found on this game)
+e41e8a967805	2026-11-24	skip	-	game: port Mortal Kombat 11	another game (Mortal Kombat 11)
+ed1cf496c644	2026-11-24	ported	97c4b95	packing/shaders: keep partial builds in the shared cache directory	build_shaders makes shader/cache before a partial build (it was opened as an SQLite file)
+f3cbbd726d65	2026-11-24	skip	-	game: Shredder's Revenge 1.0.9 runs offline	hle_ro.c (nn::ro) was removed
+f5c5a82305dd	2026-11-24	skip	-	host/web: end an offline HTML page that calls window.close() (PR #3262)	the web applet was removed
+f708540f7b59	2026-11-24	skip	-	packing/mac-app: keep existing app icon on in-place rebuild (PR #3148)	optional: the game's NUP has no icon and the GUI passes none; not taken this run
+f856c78d578f	2026-11-24	deferred	-	chain/tools: include vendored Ryujinx sources in xlate_source_sha	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): xlate_source_sha covers the vendored Ryujinx sources; dmsh_xlate rebuilt, lock updated; chain b1450d7b27fb
+fb0a0d3b5cad	2026-11-24	skip	-	gl/sync: treat a GLsync as a name, not a pointer to read (PR #3282)	OpenGL
+fd4d11342bb5	2026-11-24	skip	-	docs: refresh translator line links in the patch index	a regenerated page
+fe138ad5c9a4	2026-11-24	skip	-	game: Oceanhorn 2 defaults to 60 fps	another game (Oceanhorn 2)
+ffb06d603bd9	2026-11-24	skip	-	nvn/textures: stage native-texture movie frames linearly for GPU blit	nvn_host_write_texture and nn::movie native textures removed (aa21e95); the game's AV1 frames go through nn::codec
+2746806f791f	2026-11-25	skip	-	packing/profile: type decoder archive scan results	decoder archive scan types (Oodle), not here
+288803ae3907	2026-11-25	skip	-	packing/regions: make address region verdicts target-aware for Mac-only builds	no address-region step here
+4be2de4a465d	2026-11-25	skip	-	chain/split: share the zlib header check across archive readers	zlib check shared across other engines' readers
+4fdfd4793182	2026-11-25	ported	eb1c552,fca7773	gfx/nvn: raise fence event from post_complete on unsignaled feedback (PR #1409)	post_complete raises the fence event: a recovered GPU error no longer leaves a fast-wake SyncWait waiting up to an hour
+551228c9bbee	2026-11-25	skip	-	gfx/nvn, tools: honor acquire sync deadlines, fix movie texture handoff/aliases, zxnb reader table, nx_extract literal opens, and provisional marker reuse	(a) acquire deadlines build on c17a5498 (b) movie handoff on ffb06d60 (c) a chain bump for XNB (d) nx_extract (e) provisional profiles: none here
+5dfc86ae80c5	2026-11-25	skip	-	game: port Apollo Justice: Ace Attorney Trilogy to Mac	another game (Apollo Justice)
+953e892709fe	2026-11-25	skip	-	nvn/tests: check movie readback buffer allocation	fixes ffb06d60's test, not taken
+9b2ee6c7cab8	2026-11-25	skip	-	tools/packing: discover decoder-backed archives in DLC for Oodle host (PR #1403)	Oodle / DLC archives: the game has neither
+9e889a86225f	2026-11-25	skip	-	game: Captain Tsubasa 2 World Fighters defaults to 60 fps	another game (Captain Tsubasa 2)
+a0d1b2f6902a	2026-11-25	ported	021df54	nvn/tests: check pool-residency kernel lookup	its t_pool_cow_residency lookup fix, folded into b6336876's port
+ba15f55de0b2	2026-11-25	skip	-	game: port XCOM 2 Collection to the Mac	another game (XCOM 2), its reader and nx_extract
+bb593d1ceb01	2026-11-25	partial	23e8098	host/vi: use pacer vsync grid for missing frame-history timestamps (#2339)	the g_gpu ring's frame+1 tag and release ordering; ListFrameHistory is gone here
+bd3fc7791c50	2026-11-25	skip	-	game: BioShock Remastered plays on the Mac + shadercache.nx reader (PR #3247)	another game (BioShock) and its shadercache.nx reader
+c07a3cc5b616	2026-11-25	skip	-	chain/split: report invalid PACx LZ4 chunks	PACx reader (another engine)
+d83c32ec0c55	2026-11-25	skip	-	opengl/shaders: add missing es profile on #version 310/320 (#3292)	OpenGL
+fb3ca11af9d2	2026-11-25	ported	03a9ea0	nvn/present: filter minified presents with a separable tent kernel	a minified present (window or drawable smaller than 2560x1440) through a separable tent filter
