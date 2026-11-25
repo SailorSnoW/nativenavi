@@ -150,10 +150,11 @@ static int arch_keys_old(NSString *path) {
     ssize_t n = read(fd, m, sizeof m); close(fd);
     return n == (ssize_t)sizeof m && !memcmp(m, "DMPSOIX1", 8);
 }
-// g_arch_ix: key → the newest file naming it, filled in pso4_init and read only after (no lock). g_arch_ixf: files with a complete index, reached only through it.
-// g_arch_run: every plain run file, in g_compact_files' order. g_arch_asks: for the tests.
+// g_arch_ix: key → the newest file naming it, filled before the first frame (pso4_init, then arch_adopt_prebuilt) and read only after (no lock). g_arch_ixf: files with a
+// complete index, reached only through it. g_arch_run: every plain run file, in g_compact_files' order. g_arch_opened: the device's files opened this run. g_arch_asks: for the tests.
 static nvn_hmap g_arch_ix = {.klen = sizeof(uint64_t)};
 static NSArray<id<MTL4Archive>> *g_arch_ixf, *g_arch_run;
+static NSMutableSet<NSString *> *g_arch_opened;
 static _Atomic uint64_t g_arch_asks;
 // Opened files with how many pipelines each gave: arch_sweep moves out those none came from once every wanted pipeline was asked (a chain or library change leaves old keys unreachable).
 @interface ArchUse : NSObject { @public NSString *path; __weak id<MTL4Archive> a; int pf, gone; uint64_t hits, keys; } @end
@@ -208,7 +209,8 @@ static _Atomic uint64_t g_pb_built, g_pb_archived, g_pb_reused, g_pb_spec, g_pb_
 static _Atomic uint64_t g_pt_hit_n, g_pt_hit_ns, g_pt_miss_n, g_pt_miss_ns, g_pt_spec_ns, g_pt_comp_ns, g_pt_pred_n, g_pt_pred_ns, g_pp_done_n;
 typedef struct { const void *vf, *ff; uint32_t samples, a2c, rast, topo, amp, off; uint32_t va[31][3], vl[31][3]; } pbase_key;   // what a base depends on: pso_desc's descriptor less the colour attachments; off: without the border corrections
 static nvn_hmap g_pbase = {.klen = sizeof(pbase_key)};
-// Bases the archives lack: nothing adds to the opened archives in a run, so a miss holds for the process and later calls skip the search.
+// Bases the archives lack: after the prepare step nothing adds to the opened archives in a run (arch_adopt_prebuilt clears this before the first frame), so a miss holds
+// for the process and later calls skip the search.
 static nvn_hmap g_pbase_miss = {.klen = sizeof(pbase_key)};
 // Only callers for the same base wait on this group. compiled: its owner asked the compiler; looked: left once the owner looked in the archives; found: set before it.
 @interface PbaseBuild : NSObject { @public dispatch_group_t done, looked; id<MTLRenderPipelineState> ps, found; NSError *error; int compiled; } @end
@@ -845,6 +847,7 @@ static void pso4_init_once(void) {
             } });
             NSMutableArray<id<MTL4Archive>> *ixf = [NSMutableArray array], *run = [NSMutableArray array]; int nopen = 0, np = 0, nidx = 0; unsigned long nkeys = 0;
             NSMutableArray<ArchUse *> *use = [NSMutableArray array];
+            g_arch_opened = [NSMutableSet set];
             for (NSUInteger i = 0; i < nn; i++) {
                 NSString *n = names[i], *p = [g_arch_dir stringByAppendingPathComponent:n]; int pf = [n hasPrefix:@"p"];
                 g_arch_seq = MAX(g_arch_seq, [n substringFromIndex:pf].intValue + 1);
@@ -856,6 +859,7 @@ static void pso4_init_once(void) {
                     continue;
                 }
                 id<MTL4Archive> a = opened[i]; NSArray *ix = ixs[i] != NSNull.null ? ixs[i] : nil;
+                [g_arch_opened addObject:p];
                 ArchUse *u = [ArchUse new]; u->path = p; u->a = a; u->pf = pf; objc_setAssociatedObject(a, &g_arch_use_tag, u, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [use addObject:u];
                 if (ix) u->keys = [ix[0] length] / sizeof(uint64_t);
                 bytes += [[NSFileManager.defaultManager attributesOfItemAtPath:p error:nil] fileSize];
