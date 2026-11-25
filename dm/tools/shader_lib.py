@@ -60,12 +60,13 @@ def _names(folder):
     return out
 
 
-def write(files, dst):
+def write(files, dst, on_progress=None):
     """files: {name: path, bytes, or a function called only when its file is written, so no library is held in memory whole}.
-    Written by way of dst.part, removed on failure so a full drive gets its space back: an image is whole or absent"""
+    Written by way of dst.part, removed on failure so a full drive gets its space back: an image is whole or absent.
+    on_progress(files written, files, bytes written): at the start and after each file"""
     part = dst + '.part'
     try:
-        _write_part(files, part)
+        _write_part(files, part, on_progress)
         os.replace(part, dst)
     except BaseException:
         try: os.unlink(part)
@@ -73,9 +74,10 @@ def write(files, dst):
         raise
 
 
-def _write_part(files, part):
+def _write_part(files, part, on_progress=None):
     names = sorted((n.encode() for n in files))
     ents, off = [], romfs.HEAD.size
+    if on_progress: on_progress(0, len(names), 0)
     # called one after the other, the sources held a library's write to the cache file's read speed
     readers = concurrent.futures.ThreadPoolExecutor(READERS) if any(callable(v) for v in files.values()) else None
     ahead, todo = collections.deque(), iter(names)
@@ -106,6 +108,7 @@ def _write_part(files, part):
                         n += len(b)
             ents.append((name, off, n))
             off += n
+            if on_progress: on_progress(len(ents), len(names), off)
         out.seek(off)
         pool, idx = bytearray(), bytearray(romfs.ENT.pack(1, len(names), 0, 0, 0, 0))
         for name, a, b in ents:

@@ -97,11 +97,19 @@ FLOAT_ADD = re.compile(r'(?m)^(?P<ind> *)bool (?P<again>_\d+);\n(?P=ind)do\n(?P=
                        r'(?P=ind)    \} while \(!atomic_compare_exchange_weak_explicit\(\(device atomic_uint\*\)&(?P<addr2>[^\n]*?), &(?P=seen), as_type<uint>\((?P=sum)\), '
                        r'memory_order_relaxed, memory_order_relaxed\) && (?P=seen) == (?P=want)\);\n'
                        r'(?P=ind)    uint (?P<found>_\d+) = (?P=seen);\n(?P=ind)    (?P=again) = int\((?P=found)\) != as_type<int>\((?P=old)\);\n(?P=ind)\} while \((?P=again)\);\n')
+# The add through a noinline leaf: inline on a dispatch-uniform address, Apple's AGX3 compiler (AIR-NT 32023.922; M5 and M5 Pro, macOS 26.0-26.6) hoists
+# @llvm.agx3.disable.smashing.float into agc.main.constant_program and MTLCompilerService aborts (docs/reference/shaders.md#uniform-float-atomic-adds-crash-apples-agx3-compiler)
+FLOAT_ADD_HELPER = ('#ifndef DM_ATOMIC_ADD_F32\n#define DM_ATOMIC_ADD_F32\n'
+                    'static __attribute__((noinline)) void dm_atomic_add_f32(device atomic_float* p, float v) { atomic_fetch_add_explicit(p, v, memory_order_relaxed); }\n#endif\n')
 def float_add_msl(msl):
     if 'atomic_compare_exchange_weak_explicit' not in msl: return msl
-    return FLOAT_ADD.sub(lambda m: m.group(0) if m.group('addr') != m.group('addr2') else
-                         f"{m.group('ind')}atomic_fetch_add_explicit((device atomic_float*)&{m.group('addr')}, {m.group('val') or m.group('valp')}, memory_order_relaxed);\n"
-                         f"{m.group('ind')}bool {m.group('again')} = false;\n", msl)
+    out = FLOAT_ADD.sub(lambda m: m.group(0) if m.group('addr') != m.group('addr2') else
+                        f"{m.group('ind')}dm_atomic_add_f32((device atomic_float*)&{m.group('addr')}, {m.group('val') or m.group('valp')});\n"
+                        f"{m.group('ind')}bool {m.group('again')} = false;\n", msl)
+    if out == msl or '#define DM_ATOMIC_ADD_F32' in out: return out
+    head = re.search(r'^using namespace metal;\n', out, re.M)
+    if not head: raise ValueError('float_add_msl: no "using namespace metal;" to put dm_atomic_add_f32 after')
+    return out[:head.end()] + FLOAT_ADD_HELPER + out[head.end():]
 
 # spvMulExtended is optnone, so every product stays an unfolded call; scalar operands get overloads that take the 64-bit product's halves, vectors keep the template
 # (docs/reference/shaders.md#extended-products-behind-spirv-crosss-optnone-helper)

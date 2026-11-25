@@ -1,7 +1,9 @@
 """build_app.py's shader step (build_shaders): the Mac libraries with their reuse key, never reused without the outputs' stamp (inputs.tsv, which the one chain version's
 c1_full.tsv / cb_extent.tsv name); the libraries of other chain versions and the unused cache entries go after a build that succeeded; the run command's environment file.
 No game files or Xcode needed (temporary files only in a temporary folder)."""
+import contextlib
 import importlib.util
+import io
 from pathlib import Path
 import shutil
 import sys
@@ -248,6 +250,24 @@ class Nvn(Base):
         self.assertEqual(watch(), {'step': 'compiling', 'done': 7, 'total': 10, 'unit': 'shaders', 'note': '4 not cached'})
         p.write_text('{"step": "comp')   # half written: no progress this time, not an error
         self.assertIsNone(watch())
+
+    def test_shader_watch_follows_the_steps_after_the_compile(self):   # the library image and the two tables, as dmsh_build.py writes them
+        p = self.tmp / 'progress.json'; watch = nsp.ShaderWatch(p)
+        p.write_text('{"step": "compiling", "done": 42847, "total": 42847, "cached": 42847, "misses": 0}')
+        self.assertEqual(watch(), {'step': 'compiling', 'done': 42847, 'total': 42847, 'unit': 'shaders', 'note': ''})
+        p.write_text('{"step": "writing the library image", "done": 0, "total": 100, "unit": "files", "bytes": 0}')
+        self.assertEqual(watch(), {'step': 'writing the library image', 'done': 0, 'total': 100, 'unit': 'files'})
+        p.write_text('{"step": "writing the library image", "done": 50, "total": 100, "unit": "files", "bytes": 2097152}')
+        self.assertEqual(watch(), {'step': 'writing the library image', 'done': 50, 'total': 100, 'unit': 'files', 'note': '2.0 MB'})
+        for step in ('c1 guard', 'uniform read extents'):
+            p.write_text(f'{{"step": "{step}"}}')
+            self.assertEqual(watch(), {'step': step})
+        with contextlib.redirect_stdout(io.StringIO()):
+            prog = nsp.Progress('off'); prog.plan(1); prog.stage('Mac shaders')
+            for payload in ('{"step": "writing the library image", "done": 50, "total": 100, "unit": "files", "bytes": 2097152}', '{"step": "c1 guard"}'):
+                p.write_text(payload); prog.set(**watch())
+            self.assertEqual((prog.cur.step, prog.cur.done, prog.cur.total, prog.cur.unit, prog.cur.note), ('c1 guard', None, None, '', ''))   # no count left from the image
+            prog.close()
 
 
 class EnvFile(Base):

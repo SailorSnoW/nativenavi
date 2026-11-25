@@ -2,6 +2,7 @@
 Exercise the builder's real key/restore functions without game files or Xcode.
 """
 import ast
+import collections
 import concurrent.futures as cf
 import contextlib
 import errno
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 from typing import Any
 import unittest
@@ -462,6 +464,42 @@ class MetalPrefill(unittest.TestCase):
         with self.assertRaises(ValueError): self.cache.compile_split('mac', str(msl), [str(a), str(b)], lambda lib: (lib,))   # fewer pieces than libraries
         self.assertEqual(sorted(p.name for p in self.root.glob('a.metallib*')), [])
         self.assertFalse(b.exists()); self.assertEqual(self.cache.stats['mac', 'compiled'], 0)
+
+
+class BuildProgress(unittest.TestCase):
+    """dmsh_build.py's DMSH_PROGRESS through ShaderWatch: a step's counts at most every half second, a new step or a forced count at once"""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.tree = ast.parse((TOOLS / 'dmsh_build.py').read_text())
+
+    def load_progress(self, path):
+        start = next(i for i, n in enumerate(self.tree.body) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == '_prog' for t in n.targets))
+        end = next(i for i, n in enumerate(self.tree.body) if i > start and isinstance(n, ast.FunctionDef) and n.name == 'progress') + 1
+        ns: dict[str, Any] = dict(os=os, json=json, time=time, threading=threading, PROGRESS=str(path))
+        exec(compile(ast.Module(body=self.tree.body[start:end], type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), ns)
+        return ns
+
+    def test_a_step_is_throttled_and_a_new_step_or_forced_count_is_not(self):
+        prog = self.root / 'progress.json'; ns = self.load_progress(prog); now = [100.0]
+        ns['time'] = types.SimpleNamespace(time=lambda: now[0])
+        ns['progress']('compiling', 1, 10, cached=10, misses=0)
+        self.assertEqual(json.loads(prog.read_text())['done'], 1)
+        now[0] = 100.1
+        ns['progress']('compiling', 2, 10, cached=10, misses=0)
+        self.assertEqual(json.loads(prog.read_text())['done'], 1)
+        ns['progress']('compiling', 10, 10, force=True, cached=10, misses=0)
+        self.assertEqual(json.loads(prog.read_text())['done'], 10)
+        ns['progress']('c1 guard')
+        self.assertEqual(json.loads(prog.read_text()), {'step': 'c1 guard'})
+
+    def test_the_last_shader_flushes_its_count(self):   # the line stood at 42,811 of 42,848 through the image and the tables
+        prog = self.root / 'progress.json'; ns = self.load_progress(prog); watch = nsp.ShaderWatch(prog)
+        fn = next(n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == 'finished')
+        ns.update(DONE=collections.Counter(), keys=['a', 'b'], cache_hits={'a', 'b'}, NMISS=0)
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), ns)
+        ns['finished'](); ns['finished']()
+        self.assertEqual(watch(), {'step': 'compiling', 'done': 2, 'total': 2, 'unit': 'shaders', 'note': ''})
 
 
 if __name__ == '__main__':

@@ -1112,10 +1112,15 @@ class ShaderWatch:
     def __call__(self):
         try: p = json.loads(self.path.read_text())
         except (OSError, ValueError): return None
-        cached, misses = p.get('cached', 0), p.get('misses')
-        if p.get('step') == 'cache check':
-            return {'step': 'cache check', 'done': p['done'], 'total': p['total'], 'unit': 'shaders', 'note': f'{cached:,} cached'}
-        return {'step': 'compiling', 'done': p.get('done', 0), 'total': p.get('total', 0), 'unit': 'shaders', 'note': f'{misses:,} not cached' if misses else ''}
+        step, cached, misses = p.get('step') or 'compiling', p.get('cached', 0), p.get('misses')
+        if step == 'cache check':
+            return {'step': step, 'done': p['done'], 'total': p['total'], 'unit': 'shaders', 'note': f'{cached:,} cached'}
+        if step == 'compiling':
+            return {'step': step, 'done': p.get('done', 0), 'total': p.get('total', 0), 'unit': 'shaders', 'note': f'{misses:,} not cached' if misses else ''}
+        out = {'step': step, **{k: p[k] for k in ('done', 'total') if k in p}}   # the library image (files, bytes written), the c1 guard and uniform read extent tables
+        if p.get('unit'): out['unit'] = p['unit']
+        if p.get('bytes'): out['note'] = amount(p['bytes'], 'B')
+        return out
 
 
 def spirv_cross(repo, env=None):

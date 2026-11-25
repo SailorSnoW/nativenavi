@@ -4,6 +4,7 @@
 # Usage: dmsh_chain.py                 print V (default options)
 #       dmsh_chain.py --header        rewrite dm/gfx/nvn/dmsh_chain.h (after changing a file of FILES; commit it with the change)
 #       dmsh_chain.py --inputs        print the digest of the game profile's inputs
+#       dmsh_chain.py --xlate-source-sha  print the digest of the translator's sources, the vendored Ryujinx ones included (native_tools.sh stamps it into dmsh_xlate)
 # Environment: XLATE_DEBUG / XLATE_REDUCED (default 1 / 1), DMSH_SCONST (default fp); other options give another V, which the host does not load
 from typing import Any
 import os, sys, ast, hashlib
@@ -101,8 +102,21 @@ def write_stamp(lib, game_id, digest):
     with open(tmp, 'w') as f: f.write(f'# the game and the profile inputs this library was built from (dm/gfx/tools/dmsh_chain.py inputs)\ngame\t{game_id}\ninputs\t{digest}\n')
     os.replace(tmp, os.path.join(lib, STAMP))
 
-def xlate_source_sha():   # as dmsh_xlate --source-sha: Program.cs then the csproj
-    return hashlib.sha256(b''.join(open(os.path.join(HERE, 'dmsh_xlate', f), 'rb').read() for f in ('Program.cs', 'dmsh_xlate.csproj'))).hexdigest()[:16]
+XLATE_RYU_SUFFIXES = ('.cs', '.csproj', '.glsl', '.props')
+def xlate_source_files(gfx=GFX):
+    """What dmsh_xlate is compiled from: Program.cs, its csproj and dm/third_party/ryujinx's sources (not bin/, obj/ or hidden files), sorted by their path under dm/"""
+    dm = os.path.dirname(gfx)
+    files = [os.path.join(gfx, 'tools/dmsh_xlate', f) for f in ('Program.cs', 'dmsh_xlate.csproj')]
+    for root, dirs, names in os.walk(os.path.join(dm, 'third_party/ryujinx')):
+        dirs[:] = sorted(d for d in dirs if d not in ('bin', 'obj') and not d.startswith('.'))
+        files += [os.path.join(root, n) for n in sorted(names) if not n.startswith('.') and n.endswith(XLATE_RYU_SUFFIXES)]
+    return sorted(files, key=lambda p: os.path.relpath(p, dm).replace(os.sep, '/'))
+
+def xlate_source_sha(gfx=GFX):   # dmsh_xlate --source-sha prints what native_tools.sh stamped into it: an edit under third_party/ryujinx without a rebuild no longer passes
+    dm, h = os.path.dirname(gfx), hashlib.sha256()
+    for p in xlate_source_files(gfx):
+        with open(p, 'rb') as f: h.update(os.path.relpath(p, dm).replace(os.sep, '/').encode() + b'\0' + f.read() + b'\0')
+    return h.hexdigest()[:16]
 
 def header_text(v):
     return (f'// Generated file (dm/gfx/tools/dmsh_chain.py --header): the B shader library translation chain version this source tree expects (default options), one for every game;\n'
@@ -115,5 +129,6 @@ if __name__ == '__main__':
         open(HEADER, 'w').write(header_text(version()))
         print(version())
     elif a == ['--inputs']: print(inputs(load_game()))
+    elif a == ['--xlate-source-sha']: print(xlate_source_sha())
     elif not a: print(version())
-    else: sys.exit('usage: dmsh_chain.py [--header | --inputs]')
+    else: sys.exit('usage: dmsh_chain.py [--header | --inputs | --xlate-source-sha]')

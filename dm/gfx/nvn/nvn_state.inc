@@ -159,6 +159,12 @@ static unsigned vs_streams(const nvn_refl *rf) {
     }
     return m;
 }
+// Slot 30: zeros at offset 0, and at 16 an absent attribute's (0, 0, 0, 1.0) in register bits, as NVN gives it (ZERO_ATTR)
+static id<MTLBuffer> vertex_constants(void) {
+    static id<MTLBuffer> b;
+    if (!b) { b = [g_dev newBufferWithLength:64 options:MTLResourceStorageModeShared]; res_add(b); ((uint32_t *)b.contents)[7] = 0x3f800000; }
+    return b;
+}
 // A slot with an address in no pool would keep an earlier draw's buffer, so the caller skips the draw; address 0 reads the zero buffer (ZERO_ATTR).
 static int bind_vbufs(id<MTL4RenderCommandEncoder> en, const nvn_refl *rf) {
     // apart from the table cache, which vconv_bind may overwrite
@@ -190,13 +196,8 @@ static int bind_vbufs(id<MTL4RenderCommandEncoder> en, const nvn_refl *rf) {
         }
         enc_r_vbuf(en, VB_SLOT(s), gpu);
     }
-    static id<MTLBuffer> zero;
     static uint64_t zero_gpu;
-    if (!zero) {
-        zero = [g_dev newBufferWithLength:64 options:MTLResourceStorageModeShared];
-        res_add(zero);
-        zero_gpu = zero.gpuAddress;
-    }
+    if (!zero_gpu) zero_gpu = vertex_constants().gpuAddress;
     enc_r_vbuf(en, 30, zero_gpu);
     return bad;
 }
@@ -219,12 +220,13 @@ static void pull_layout_fill(pull_layout *Lp, const nvn_refl *rf) {
     }
     for (int a = 0; a < 32 && a < S.nattr; a++) {
         va_st v = S.attr[a];
-        if (!v.fmt || v.stream >= 16) continue;
-        if (!L.s[v.stream].base) {
-            if (S.vbuf[v.stream].address && (want >> v.stream & 1)) RED_ONCE(159, "vertex stream %d's buffer %#llx is in no memory pool; its attributes read zeros", v.stream, (unsigned long long)S.vbuf[v.stream].address);
-            continue;
+        if (!v.fmt) continue;   // absent: dm_fetch gives (0, 0, 0, 1.0); a stream without a buffer keeps its word and reads zeros
+        if (v.stream < 16) {
+            if (!(want >> v.stream & 1)) continue;
+            if (!L.s[v.stream].base && S.vbuf[v.stream].address) RED_ONCE(159, "vertex stream %d's buffer %#llx is in no memory pool; its attributes read zeros", v.stream, (unsigned long long)S.vbuf[v.stream].address);
+            v.offset += lo[v.stream];
         }
-        v.offset += lo[v.stream]; memcpy(&L.attr[a], &v, 4);
+        memcpy(&L.attr[a], &v, 4);
     }
     *Lp = L;
 }
