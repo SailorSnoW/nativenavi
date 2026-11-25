@@ -118,6 +118,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Fix:** `prune_shaders` reads names and times from the entry table and sizes only for what it removes. `pso_offline.py` keeps a key of what a run reads by name and time (`run.key` in its work folder: the library image's place, inode, size, modification and change times, the lists, the compiler, the options and the tools' code) with the state of its outputs, and a run with the same key and outputs returns before it reads a library; a library in a folder, or any difference, goes through `archive_key` as before. The inode and change time also catch [changed shader bytes whose modification time was preserved](#a-changed-shader-library-reuses-an-old-pipeline-archive).
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game) v131072 on an M3 Max: 1:45 to 0:10, three builds in a row, the app `reused (inputs unchanged)`; the first build with the new tools took 1:10.
 
+### A full shader build that changed no shader gives the app new tables
+
+- **Symptom:** after a full shader build that restored every shader, the app step packs `c1_full.tsv` and `cb_extent.tsv` again though their rows are the same.
+- **Cause:** `c1_guard.py` and `cb_extent.py` wrote the clock time after the chain and inputs on the tables' first line, and rewrote both tables at every full build.
+- **Fix:** the header is `# chain b-<V> inputs <digest>` alone, and `c1_guard.py` `write_table` leaves a table holding the same bytes as it is, modification time included. The host (`nvn_shader.inc` `table_head_ok`) and `build_app.py` `chain_tables` take the header exact or followed by a space, so tables written before, with a time, still match until the next full build writes them once without it (upstream nxnative 410f0c9e).
+- **Found on:** in nxnative (PR #3172).
+- **Check:** `test_nsp_chain.py` (`test_unchanged_tables_keep_their_bytes_and_carry_no_time`, `test_current_kept` with and without a time), `t_shmap_warm` (both tables taken with the new header; `table_head_ok`).
+
 ### After a chain change the steps behind the last shader take three minutes
 
 - **Symptom:** a build after a chain change that left the MSL as it was (`Metal cache: mac 55482 reused, 0 compiled`) spends about a minute in `writing the library image` and a minute and a half in the c1 and uniform extent tables, and its app step half a minute in `shader libraries` (Ocarina of Time, 42,848 shaders: 0:56, 1:26 and 0:25 on an M3 Max).
@@ -161,6 +169,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Cause:** the stamp beside an image (`RomFS.img.inputs.json`) held `st_dev` in the image's identity, and macOS numbers a volume when it mounts it. Across one reboot the Data volume went from 16777234 to 16777232 while inode, size and both times stayed, so `reusable()` refused every game's image at once.
 - **Fix:** `file_identity` leaves `st_dev` out, as the app packer's record already did. Inode, size, modification and change times still catch an image replaced or written over. An old stamp still misses the fast check, so the [NUP packer verifies the existing image](#an-old-nup-cache-stamp-makes-the-build-unpack-again) before repacking.
 - **Found on:** Ocarina of Time (Switch 2, `0400486024DEC000`, packed from a NUP; PR #1299); the stamps of Star Fox and Mario Kart World show the same two numbers. `dm/tools/tests/test_romfs_image.py` remounts an image under another device number.
+
+### A reboot runs the shader step again
+
+- **Symptom:** the first build after restarting the Mac runs `Mac shaders` again (a cache check of every shader, the library image written again) though nothing changed.
+- **Cause:** the step's reuse key hashes the output of `xcrun -sdk macosx metal --version`, whose last line, `InstalledDir:`, names the mount of the Metal toolchain; since Xcode 26 that is a cryptex whose folder takes a new random suffix at each boot (on this Mac `…/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.cFLtuZ/…`). `regress.py`'s chain keys hashed it too.
+- **Fix:** `build_app.py` `fingerprint` (its `cmd` items) and `regress.py` `toolchain_fp` drop `InstalledDir:` lines, as `dmsh_mtlcache.compiler_id` did already; the version, target and SDK build lines still count (upstream nxnative cdd91f0a).
+- **Found on:** in nxnative, on its NSP script; the line is in this Mac's output (Xcode 27.2).
+- **Check:** `test_shader_toolchain_cache.py` (`test_metal_remount_preserves_reuse`), `test_regress.py` (`test_toolchain_fingerprint_survives_a_remount`).
 
 ### An old NUP cache stamp makes the build unpack again
 
@@ -229,6 +245,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Fix:** `dm/tools/shader_cache.py`: when `Store._open` gets `SQLITE_READONLY_DBMOVED` while it sets the file up, it opens the file again once and finishes, so that SQLite notes the inode the file now keeps. It costs nothing where the error does not come. A file that moves again fails as before. The page size, incremental vacuum and WAL stay as they were. The error's code needs Python 3.11 or newer; an older one fails as before.
 - **Checked:** `test_shader_cache.py` (`Renumbered`) gets SQLite's real error by putting a copy of the file in its place after its first write: the store opens the file twice and keeps its settings through 200 writes, and fails as before when the file moves again; with `DM_EXFAT_DIR` naming a folder on an exFAT volume, the tests also run there. On the reporter's drive, an earlier form of the fix (a new file always opened again after its header) held 500 entries, then 1,200 more from three processes at once ([PR #2435](https://github.com/seedds/nxnative/pull/2435)).
 - **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), its first Mac app build from a NUP onto an exFAT drive ([GitHub issue #2434](https://github.com/seedds/nxnative/issues/2434)). Applies to every game.
+
+### A full build after a partial one stops with NotADirectoryError
+
+- **Symptom:** in a new build folder, a `--seen-shaders` build works, then the next full build stops in the shader step with `NotADirectoryError: … shader/cache/b-<chain>.img`.
+- **Cause:** the partial build passes `DMSH_CAS=<build>/shader/cache`, and `dmsh_build.py` opens a path that is not a folder as one compile cache file: with no folder there yet, `shader/cache` became a SQLite file, where the full build makes its library folder.
+- **Fix:** `build_shaders` makes `shader/cache` before either build; a cache file left at that path is closed (its WAL folded in), moved aside and put back inside the folder as `cas.db`, the older generation the next builds read its compiles from (upstream nxnative ed1cf496).
+- **Found on:** Mortal Kombat 11, in nxnative.
+- **Check:** `test_nsp_mac_app.py` (`SeenShaders`: the folder exists when the partial build runs; a full build over a cache file finds its compile in the folder).
 
 ### Shader libraries take a file per shader variant
 

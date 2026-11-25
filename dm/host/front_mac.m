@@ -16,6 +16,7 @@
 #include "pad_jc1_mac.h"
 #include "pad_apple.h"
 #include "pad_hid_mac.h"
+#include "pad_gip_mac.h"
 #include "pad_switch2_apple.h"
 static int s2pad_player(s2_pad *d);
 static void s2pad_read(s2_pad *d);
@@ -311,6 +312,15 @@ static const char *pad_name(GCController *c);
 static void pads_motion_changed(GCController *gone);
 // read from their HID reports instead (pad_hid_mac.h, pad_jc1_mac.h)
 static int pad_gc_unread(GCController *c) { return hidpad_gc_unread(c) || jc1_gc_unread(c); }
+// The Switch Pro stick fallback (motion_pro_mac.h): a stick counts as live in GameController when its mapped or its unmapped axis moves
+static GCController *g_pro_gc, *g_pro_gc_prev, *g_pro_gc_gone;
+static int pro_gc_stick_nonzero(GCController *c, int right) {
+    GCExtendedGamepad *g = c.extendedGamepad;
+    GCControllerDirectionPad *d = right ? g.rightThumbstick : g.leftThumbstick;
+    if (d.xAxis.value != 0.f || d.yAxis.value != 0.f) return 1;
+    id<GCDirectionPadElement> u = c.input.unmappedInput.dpads[right ? GCInputRightThumbstick : GCInputLeftThumbstick];
+    return u && (u.xAxis.value != 0.f || u.yAxis.value != 0.f);
+}
 static void pad_read(GCExtendedGamepad *g) {
     if (!g_input_on) return;
     hq_poll();
@@ -338,7 +348,12 @@ static void pad_read(GCExtendedGamepad *g) {
     if (cp_poll()) return;
     if (m) merge_rumble_to(NULL);
     dm_haptics_apple_controller(p, g.controller);
-    pad_set(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));
+    int32_t st[4] = {pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value)};
+    if ([g.controller.productCategory isEqualToString:@"Switch Pro Controller"] && !pad_gc_unread(g.controller)) {
+        int nz[2] = {pro_gc_stick_nonzero(g.controller, 0), pro_gc_stick_nonzero(g.controller, 1)};
+        dm_pro_sticks(p, nz, st);
+    }
+    pad_set(p, m, st[0], st[1], st[2], st[3]);
 }
 // Without the claim macOS takes Home and Capture as system gestures (Home opens the Games app)
 static void pad_keep_system_buttons(GCController *c) {
@@ -351,17 +366,36 @@ static void npad_name(int p, char *out, size_t cap) {
     if (id == 0x20) snprintf(out, cap, "handheld");
     else snprintf(out, cap, "%u", id);
 }
+// The raw HID motion and the Pro stick fallback follow the controllers (gone: one just removed, still listed), each model counted on its own
+static int pro_gc_player(GCController *c) { return g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)c); }
+static int pro_gc_sticks(int player, int nz[2]) {
+    GCController *c = g_pro_gc;
+    if (!c || !c.extendedGamepad || pad_gc_unread(c) || pro_gc_player(c) != player) return 0;
+    nz[0] = pro_gc_stick_nonzero(c, 0); nz[1] = pro_gc_stick_nonzero(c, 1);
+    return 1;
+}
+static void pro_stick_changed(int player) {
+    GCController *c = g_pro_gc;
+    if (!c || pro_gc_player(c) != player) c = g_pro_gc_prev;
+    if (!c || c == g_pro_gc_gone || !c.extendedGamepad || pad_gc_unread(c) || pro_gc_player(c) != player) return;
+    if (![GCController.controllers containsObject:c]) return;
+    pad_read(c.extendedGamepad);
+}
 static void pads_motion_changed(GCController *gone) {
     int count[PRO_MODELS] = {0}, player[PRO_MODELS];
     for (int m = 0; m < PRO_MODELS; m++) player[m] = -1;
+    GCController *pro = nil;
     for (GCController *c in GCController.controllers) {
-        int m = c != gone && c.extendedGamepad ? pro_model_of_category(c.productCategory.UTF8String) : -1;
+        int m = c != gone && c.extendedGamepad && !pad_gc_unread(c) ? pro_model_of_controller(c.productCategory.UTF8String, c.vendorName.UTF8String) : -1;
         if (m >= 0) {
             count[m]++;
-            player[m] = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)c);
+            player[m] = pro_gc_player(c);
+            if (m == PRO_MODEL_PRO) pro = c;
         }
     }
+    g_pro_gc_prev = g_pro_gc; g_pro_gc = count[PRO_MODEL_PRO] == 1 ? pro : nil; g_pro_gc_gone = gone;
     dm_motion_pro_players(count, player);
+    g_pro_gc_prev = nil; g_pro_gc_gone = nil;
 }
 static void pro_devices_changed(void) { pads_motion_changed(nil); }
 // DM_PAD_PRESS_TO_JOIN=1: a controller becomes the lowest free player at its first button; not with DM_PAD_MERGE
@@ -378,7 +412,7 @@ static int pad_join(const void *owner, const char *name) {
     return p;
 }
 static int merge_pads_left(GCController *gone) {
-    if (g_hidpads || g_jc1_pads || dm_switch2_pads()) return 1;
+    if (g_hidpads || g_gippads || g_jc1_pads || dm_switch2_pads()) return 1;
     for (GCController *c in GCController.controllers) if (c.extendedGamepad && c != gone) return 1;
     return 0;
 }
@@ -401,7 +435,7 @@ static void pads_changed(GCController *gone) {
         }
         if (gone) dm_motion_detach(gone, 0);
         if (!any) {
-            if (!g_hidpads && !g_jc1_pads && !dm_switch2_pads()) dm_pad_set(0, 0, 0, 0, 0);
+            if (!g_hidpads && !g_gippads && !g_jc1_pads && !dm_switch2_pads()) dm_pad_set(0, 0, 0, 0, 0);
             dm_haptics_apple_controller(0, nil);
         }
         pads_motion_changed(gone);
@@ -479,6 +513,10 @@ static void pads_release(void) {
         int p = pad_slot_of(&g_slots, d);
         if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0);
     }
+    for (gip_pad *d = g_gippads; d; d = d->next) {
+        int p = pad_slot_of(&g_slots, d);
+        if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    }
     for (s2_pad *d = dm_switch2_pads(); d; d = d->next) pad_release_with_joys(s2pad_player(d));
     for (jc1_pad *d = g_jc1_pads; d; d = d->next) pad_release_with_joys(jc1pad_player(d));
 }
@@ -495,6 +533,7 @@ static void pads_reread(void) {
         for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p].extendedGamepad) pad_read(g_held[p].extendedGamepad);
     }
     for (hid_pad *d = g_hidpads; d; d = d->next) hidpad_read(d);
+    for (gip_pad *d = g_gippads; d; d = d->next) gippad_read(d);
     for (s2_pad *d = dm_switch2_pads(); d; d = d->next) s2pad_read(d);
     for (jc1_pad *d = g_jc1_pads; d; d = d->next) jc1pad_read(d);
 }
@@ -596,6 +635,49 @@ static void hidpad_detach(hid_pad *d) {   // d is already off g_hidpads
     char nb[16];
     npad_name(p, nb, sizeof nb);
     LOG("controller '%s' (HID) disconnected: player %d (npad %s) is free", d->name, p + 1, nb);
+    dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    dm_pad_players(pad_slot_mask(&g_slots));
+    cp_poll();
+}
+// Xbox One pads over USB with no macOS driver (pad_gip_mac.h): a player from its connection, as a GameController controller, or at its first
+// press with DM_PAD_PRESS_TO_JOIN; its Xbox button is Home (hq_buttons)
+static void gippad_read(gip_pad *d) {
+    if (!g_input_on) return;
+    hq_poll();
+    if (hq_blocks_input(g_hq.phase)) return;
+    int p = g_merge ? 0 : pad_slot_of(&g_slots, d);
+    if (p < 0 && (!g_press_to_join || !d->st.buttons || (p = pad_join(d, d->name)) < 0)) return;
+    if (cp_poll()) return;
+    pad_set(p, d->st.buttons, d->st.s[0], d->st.s[1], d->st.s[2], d->st.s[3]);
+}
+static void gippad_attach(gip_pad *d) {
+    if (g_press_to_join && !g_merge) {
+        LOG("controller '%s' (USB) connected: press a button to play (DM_PAD_PRESS_TO_JOIN)", d->name);
+        cp_poll();
+        return;
+    }
+    int p = g_merge ? 0 : pad_slot_take(&g_slots, d, d->name);
+    if (p < 0) {
+        LOG("controller '%s' (USB) connected: all %d players are taken, not used", d->name, DM_PLAYERS);
+        return;
+    }
+    char nb[16];
+    npad_name(p, nb, sizeof nb);
+    LOG("controller '%s' (USB) connected: player %d (npad %s)", d->name, p + 1, nb);
+    if (!g_merge) dm_pad_players(pad_slot_mask(&g_slots));
+    cp_poll();
+}
+static void gippad_detach(gip_pad *d) {   // d is already off g_gippads
+    if (g_merge) {
+        LOG("controller '%s' (USB) disconnected", d->name);
+        if (!merge_pads_left(nil)) dm_pad_set(0, 0, 0, 0, 0);
+        return;
+    }
+    int p = pad_slot_free(&g_slots, d);
+    if (p < 0) { cp_poll(); return; }   // one that had not joined: one fewer waiting
+    char nb[16];
+    npad_name(p, nb, sizeof nb);
+    LOG("controller '%s' (USB) disconnected: player %d (npad %s) is free", d->name, p + 1, nb);
     dm_pad_set_player(p, 0, 0, 0, 0, 0);
     dm_pad_players(pad_slot_mask(&g_slots));
     cp_poll();
@@ -766,6 +848,11 @@ static void hq_buttons(int *home, int *a, int *b, GCController **holder) {
         if (jc1_pad_home(d)) *home = 1;
         jc1_pad_ab(d, a, b);
     }
+    for (gip_pad *d = g_gippads; d; d = d->next) {
+        *home |= d->st.guide;
+        *a |= !!(d->st.buttons & DM_BTN_A);
+        *b |= !!(d->st.buttons & DM_BTN_B);
+    }
 }
 static void hq_fade(NSView *v, int in) {
     if (!v) return;
@@ -863,6 +950,10 @@ static void cp_buttons(int *a, int *b) {
     }
     for (s2_pad *d = dm_switch2_pads(); d; d = d->next) s2_pad_ab(&d->st, a, b);
     for (jc1_pad *d = g_jc1_pads; d; d = d->next) jc1_pad_ab(d, a, b);
+    for (gip_pad *d = g_gippads; d; d = d->next) {
+        *a |= !!(d->st.buttons & DM_BTN_A);
+        *b |= !!(d->st.buttons & DM_BTN_B);
+    }
 }
 static int cp_waiting(void) {
     if (g_merge) return 0;
@@ -870,6 +961,7 @@ static int cp_waiting(void) {
     for (GCController *c in GCController.controllers) if (c.extendedGamepad && !pad_gc_unread(c) && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) n++;
     for (jc1_pad *d = g_jc1_pads; d; d = d->next) if (pad_slot_of(&g_slots, d) < 0) n++;
     for (hid_pad *d = g_hidpads; d; d = d->next) if (pad_slot_of(&g_slots, d) < 0) n++;
+    for (gip_pad *d = g_gippads; d; d = d->next) if (pad_slot_of(&g_slots, d) < 0) n++;
     for (s2_pad *d = dm_switch2_pads(); d; d = d->next) if (pad_slot_of(&g_slots, d) < 0) n++;
     return n;
 }
@@ -942,9 +1034,10 @@ static void pads_start(void) {
     hq_start();
     pads_changed(nil);
     hq_log_setting();
-    dm_motion_pro_start(pro_devices_changed);
+    dm_motion_pro_start(pro_devices_changed, pro_gc_sticks, pro_stick_changed);
     dm_jc1_start(g_merge);
     hidpad_start();
+    gippad_start();
     static const dm_switch2_front s2front = {s2pad_attach, s2pad_detach, s2pad_read, s2pad_player, s2pad_blocked};
     dm_switch2_start(&s2front);
 }

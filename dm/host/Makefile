@@ -17,7 +17,7 @@ ifeq ($(filter -j%,$(MAKEFLAGS)),)
 MAKEFLAGS += -j$(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 endif
 # hle_*.c by wildcard, so that adding one does not touch this line
-SRC=main.c loader.c hle.c crash.c probe.c thread.c memstat.m haptics_apple.m audio_input.c audio_input_mac.m pad_switch2_apple.m $(sort $(wildcard hle_*.c)) front_mac.m entry.S
+SRC=main.c loader.c hle.c crash.c probe.c thread.c memstat.m haptics_apple.m audio_input.c audio_input_mac.m audio_input_dualsense_mac.m dualsense_mic_mac.c pad_switch2_apple.m $(sort $(wildcard hle_*.c)) front_mac.m entry.S
 # NVN, nn::vi and the Metal layer (dm/gfx, nvn and tex; not tests/ or metal/)
 GFX=$(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m))
 # dav1d, the AV1 decoder where VideoToolbox has none (hle_movie_av1.c). Its *_tmpl.c files are built through the per-bit-depth wrappers in config/tmpl, and the assembly
@@ -65,7 +65,7 @@ FORCE:
 # clang's one-step compile and link would) and its dSYM made from the objects. -MMD -MP: each object depends on the headers its source read. The generated headers are
 # order-only prerequisites: the dependency files name them for the sources that read them
 HOST_CFLAGS = $(CFLAGS) -I../gfx/nvn/include -I$(dir $(MSL_H)) -I$(dir $(GAME_H)) -I$(DAV1D)/include -fobjc-arc
-HOST_FRAMEWORKS = -framework Cocoa -framework UserNotifications -framework QuartzCore -framework Metal -framework MetalFX -framework GameController -framework CoreBluetooth -framework IOBluetooth -framework CoreHaptics -framework IOKit -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework CoreFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework ImageIO -framework UniformTypeIdentifiers
+HOST_FRAMEWORKS = -framework Cocoa -framework UserNotifications -framework QuartzCore -framework Metal -framework MetalFX -framework GameController -framework CoreBluetooth -framework IOBluetooth -framework CoreHaptics -framework IOKit -framework IOUSBHost -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework CoreFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework ImageIO -framework UniformTypeIdentifiers
 HOST_SRC = $(SRC) $(GFX)
 ifneq ($(filter ../%,$(filter-out ../gfx/%,$(HOST_SRC))),)
 $(error host sources outside dm/host and dm/gfx need an object rule: $(filter ../%,$(filter-out ../gfx/%,$(HOST_SRC))))

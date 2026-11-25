@@ -4,6 +4,14 @@ Guest threads, their synchronization and how the host schedules them. Each entry
 
 ## Thread creation and cores
 
+### Concurrent first use of scheduler settings
+
+- **Symptom:** TSan reports races when guest threads first yield, sleep briefly or enter a rewritten spin wait together; a thread could see `DM_YIELD_BACKOFF`'s default cap before its own value was parsed.
+- **Cause:** `hle_thread.c` parsed `DM_YIELD_BACKOFF`, `DM_YIELD_CLOCK`, `DM_SPIN` and `DM_SPIN_POLL` lazily on unlocked hot paths (`backoff_init`, `thr_yield`, `dm_spin_wait`), and `backoff_init` stored the default cap before reading the string.
+- **Fix:** `yield_spin_init` reads the four once in `thread_once` (the first `svc_thread_main_init`), before any other guest thread exists; the statics hold the defaults, and the hot paths read them with no init branch.
+- **Check:** `make -C dm/host/tests scheduler-config-tsan`: eight workers through `yield_backoff_cap`, `yield_backoff_ns`, `thr_yield` and `dm_spin_wait` at once, for the default, custom, off and empty settings.
+- **Found on:** a code audit upstream (upstream nxnative `557f1954`, PR #2031); no game failure is known. Ocarina of Time reaches `dm_spin_wait` through 73 spin gates (66 in `main`, 7 in `sdk`).
+
 ### Publishing a new thread's scheduler fields
 
 - **Symptom:** TSan reports `thread_main` writing `host_work` while `thr_runnable` reads it during a same-core yield (`t_notify_sched`, issue #411).

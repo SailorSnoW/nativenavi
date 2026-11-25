@@ -630,7 +630,8 @@ def fingerprint(*items, env=None):
         elif kind in ('tree', 'stat'):
             for rel, st in files_under(v): h.update(f'{rel}\0{st.st_size}\0{st.st_mtime_ns if kind == "stat" else ""}\n'.encode())
         elif kind == 'cmd':
-            try: r = subprocess.run(v, env=env, capture_output=True, text=True, timeout=120); h.update((r.stdout + r.stderr).encode())
+            try:   # metal --version ends with InstalledDir:, the toolchain's mount, renamed at each boot (dmsh_mtlcache.compiler_id strips it too)
+                r = subprocess.run(v, env=env, capture_output=True, text=True, timeout=120); h.update(re.sub(r'(?m)^InstalledDir:.*\n?', '', r.stdout + r.stderr).encode())
             except (OSError, subprocess.TimeoutExpired): h.update(b'missing')
         else: h.update(repr(v).encode())
     return h.hexdigest()
@@ -954,7 +955,7 @@ def chain_tables(py, repo, sh, env, logs, g, chain):
         p = g.table(name)
         try: head = p.read_text(errors='replace').partition('\n')[0]
         except OSError: head = ''
-        if head.startswith(want + ' '): continue
+        if head == want or head.startswith(want + ' '): continue   # older tables carry a time after it
         PROG.set(step=step)
         run([py, repo / 'dm/gfx/tools' / tool, lib, p], logs / f'{tool[:-3]}.log', env=dict(env, DMSH_TABLE_MEMO=str(sh / 'cache')))
         say(f'{name} ' + (f'named {" ".join(head.split()[2:5])}' if head.startswith('# chain ') else 'names no library' if head else 'missing') + f': made for {want[2:]} ({p})')
@@ -1189,7 +1190,12 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key, seen=None):
     log = logs / 'dmsh_build.log'
     PROG.stage('Mac shaders')
     chain = chain_of(repo)
-    out = sh / 'partial' if seen else sh / 'cache'
+    cache, misplaced = sh / 'cache', sh / 'partial-cache.db'
+    if cache.is_file():   # a partial build on a fresh folder opened the path as its database (DMSH_CAS)
+        shader_cache.Store(cache, say).close(); cache.rename(misplaced)   # its WAL folded in before the move
+    cache.mkdir(parents=True, exist_ok=True)
+    if misplaced.is_file(): misplaced.rename(cache / shader_cache.LEGACY)   # an older generation the next builds read
+    out = sh / 'partial' if seen else cache
     libs, kf = out / f'b-{chain}', out / 'key' if seen else sh / f'mac-b-{chain}.key'
     pso_pairs = g.table('pso_pairs.tsv')
     if not pso_pairs.is_file(): pso_pairs = sh / 'pso_pairs.tsv'
@@ -1205,7 +1211,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key, seen=None):
     if seen: rmtree(out)   # its keys are in partial-keys.txt
     benv = dict(env, XLATE=str(xlate))
     if ALLOW_OTHER_METAL: benv['DM_ALLOW_OTHER_METAL'] = '1'
-    if seen: benv['DMSH_CAS'] = str(sh / 'cache')
+    if seen: benv['DMSH_CAS'] = str(cache)
     benv['DMSH_TABLE_MEMO'] = str(sh / 'cache')
     prog = sh / 'progress.json'; rmtree(prog); benv['DMSH_PROGRESS'] = str(prog)
     try: PROG.watch(ShaderWatch(prog))

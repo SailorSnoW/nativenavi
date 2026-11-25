@@ -7,7 +7,9 @@ static int bootprof(void) { static int v = -1; if (v < 0) v = getenv("DM_BOOTPRO
 static uint64_t g_bp_lib_n, g_bp_lib_ns, g_bp_pso_n, g_bp_pso_ns, g_bp_up_bytes, g_bp_first_present;
 static uint64_t g_up_total_ns;
 #define GRING 1024
-static struct { _Atomic uint64_t frame, ns, t0, t1; _Atomic int pending; } g_gpu[GRING];   // t0 / t1: earliest GPUStart / latest GPUEnd (mach absolute time, ns)
+// frame: the frame + 1 (0 = an empty slot, apart from frame 0); t0 / t1: earliest GPUStart / latest GPUEnd (mach absolute time, ns). A slot a new frame claims is cleared
+// with frame 0 and published with pending 1 last, so no reader sees it claimed with nothing pending.
+static struct { _Atomic uint64_t frame, ns, t0, t1; _Atomic int pending; } g_gpu[GRING];
 // DM_NVN_UB: alternating phases in one process, so the power / frequency drift cancels; each phase discards its first 45 frames.
 static int g_ub_n = -1, g_ub_N = 180;
 static _Atomic int g_ub_cur = -1;
@@ -217,38 +219,46 @@ void mtl_set_frame(uint64_t f) {
     gpu_capture_frame(f);
 }
 static void gpu_tag_begin(uint64_t f) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f) {
-        atomic_store(&g_gpu[k].frame, f);
-        atomic_store(&g_gpu[k].ns, 0);
-        atomic_store(&g_gpu[k].pending, 0);
-        atomic_store(&g_gpu[k].t0, UINT64_MAX);
-        atomic_store(&g_gpu[k].t1, 0);
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_relaxed) != tag) {
+        atomic_store_explicit(&g_gpu[k].frame, 0, memory_order_release);
+        atomic_store_explicit(&g_gpu[k].ns, 0, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].t0, UINT64_MAX, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].t1, 0, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].pending, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].frame, tag, memory_order_release);
+        return;
     }
-    atomic_fetch_add(&g_gpu[k].pending, 1);
+    atomic_fetch_add_explicit(&g_gpu[k].pending, 1, memory_order_acq_rel);
 }
 static void gpu_tag_done(uint64_t f, double g0, double g1) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f) return;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return;
     double d = g1 - g0;
     if (d > 0 && g0 > 0) {   // a command buffer can complete with no start time (0)
-        atomic_fetch_add(&g_gpu[k].ns, (uint64_t)(d * 1e9));
+        atomic_fetch_add_explicit(&g_gpu[k].ns, (uint64_t)(d * 1e9), memory_order_relaxed);
         uint64_t s0 = (uint64_t)(g0 * 1e9), s1 = (uint64_t)(g1 * 1e9), v;
-        for (v = atomic_load(&g_gpu[k].t0); s0 < v && !atomic_compare_exchange_weak(&g_gpu[k].t0, &v, s0);) {}
-        for (v = atomic_load(&g_gpu[k].t1); s1 > v && !atomic_compare_exchange_weak(&g_gpu[k].t1, &v, s1);) {}
+        for (v = atomic_load_explicit(&g_gpu[k].t0, memory_order_relaxed); s0 < v && !atomic_compare_exchange_weak_explicit(&g_gpu[k].t0, &v, s0, memory_order_relaxed, memory_order_relaxed);) {}
+        for (v = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed); s1 > v && !atomic_compare_exchange_weak_explicit(&g_gpu[k].t1, &v, s1, memory_order_relaxed, memory_order_relaxed);) {}
     }
-    atomic_fetch_sub(&g_gpu[k].pending, 1);
+    atomic_fetch_sub_explicit(&g_gpu[k].pending, 1, memory_order_release);
 }
 double mtl_gpu_ms(uint64_t f) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending)) return -1;
-    return atomic_load(&g_gpu[k].ns) / 1e6;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    if (atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire)) return -1;
+    uint64_t ns = atomic_load_explicit(&g_gpu[k].ns, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;   // claimed by a later frame meanwhile
+    return ns / 1e6;
 }
 int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending)) return 0;
-    *t0 = atomic_load(&g_gpu[k].t0); *t1 = atomic_load(&g_gpu[k].t1);
-    return *t1 >= *t0 && *t1;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return 0;
+    if (atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire)) return 0;
+    uint64_t s0 = atomic_load_explicit(&g_gpu[k].t0, memory_order_relaxed), s1 = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return 0;
+    *t0 = s0; *t1 = s1;
+    return s1 >= s0 && s1;
 }
 static void rp_flush_at(const char *fn, int line);
 #define rp_flush() rp_flush_at(__func__, __LINE__)
@@ -329,6 +339,14 @@ static void post_run(post_rec *r, uint64_t c0, uint64_t c1) {
     }
 }
 // Records complete in submission order; delayed callbacks carry their fence, never a recyclable slot.
+// A command buffer that failed (a fault, a hang, a victim, access revoked) completes without its signal of g_ev: the fast-wake waits on it would wait out their timeout
+static void fence_ev_raise(uint64_t f) {
+    if (!g_ev || g_ev.signaledValue >= f) return;
+    static os_unfair_lock lk = OS_UNFAIR_LOCK_INIT;   // never lowered
+    os_unfair_lock_lock(&lk);
+    if (g_ev && g_ev.signaledValue < f) g_ev.signaledValue = f;
+    os_unfair_lock_unlock(&lk);
+}
 static void post_complete(uint64_t fence, uint64_t c0, uint64_t c1) {
     uint64_t now = guest_ns();
     for (uint64_t f = g_done + 1; f <= fence; f++) {
@@ -344,10 +362,12 @@ static void post_complete(uint64_t fence, uint64_t c0, uint64_t c1) {
     }
     pthread_mutex_lock(&g_mu);
     if (fence > g_done) g_done = fence;
+    uint64_t done = g_done;
     uint32_t *scr = atomic_load(&g_mesh_scr);
-    if (scr) __atomic_store_n(scr + DMSH_MESH_SCRATCH_DONE, (uint32_t)g_done, __ATOMIC_RELAXED);
+    if (scr) __atomic_store_n(scr + DMSH_MESH_SCRATCH_DONE, (uint32_t)done, __ATOMIC_RELAXED);
     pthread_cond_broadcast(&g_cv);
     pthread_mutex_unlock(&g_mu);
+    fence_ev_raise(done);
     nvn_queue_gpu_progress();
 }
 static uint64_t g_sub_ready;
@@ -431,7 +451,6 @@ uint64_t mtl_sub_commit(void) {
         cbs_feedback(cbs, cb.error, where);
         gpu_lost_check(lost_test ? gpu_lost_test_error() : cb.error, "submission");
         post_complete(fence, c0, c1);
-        if (atomic_load(&g_gpu_lost)) gpu_lost_release();   // the GPU signals none of these fences
         defer_drain(); defer_idle_commit();
     }];
     void arena_commit(uint64_t fence); arena_commit(fence);
@@ -508,6 +527,7 @@ static int fast_wake(void) {
     return v;
 }
 static void post_early(uint64_t fence) {
+    if (atomic_load_explicit(&g_done, memory_order_acquire) >= fence) return;
     post_complete(fence, 0, 0);
 }
 static int mtl_wait_at_(uint64_t fence, uint64_t timeout_ns, int site);
@@ -528,12 +548,17 @@ static int mtl_wait_at_(uint64_t fence, uint64_t timeout_ns, int site) {
         if (ms > 3600000ull) ms = 3600000ull;
         if ([g_ev waitUntilSignaledValue:fence timeoutMS:ms]) post_early(fence);
         int ok = g_done >= fence;
-        if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
-        if (ok || timeout_ns < 1000000ull) return ok;
-        // The event and feedback waits share one budget; a timeout must not buy another full wait.
+        if (ok || timeout_ns < 1000000ull) {
+            if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
+            return ok;
+        }
+        // The event and feedback waits share one budget; a timeout must not buy another full wait. The ledger counts the wait once, where it returns.
         if (timeout_ns != UINT64_MAX) {
             uint64_t used = ws_t0() - w0;
-            if (used >= timeout_ns) return 0;
+            if (used >= timeout_ns) {
+                if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
+                return 0;
+            }
             timeout_ns -= used;
         }
     }

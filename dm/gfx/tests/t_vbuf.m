@@ -164,7 +164,7 @@ int main(void) { @autoreleasepool {
     mtl_sub_begin(); copies = g_vbuf_copies; vbuf_prepare(&rf, &dw, NULL);
     EXPECT("bytes the draw reads past the bound size", 36, g_vbuf_need[0]);
     en = encoder_prepared(tail); bind_vbufs(en, NULL); capture(en, out, 22);
-    pull_layout L; pull_layout_fill(&L);
+    pull_layout L; pull_layout_fill(&L, NULL);
     EXPECT("pulling layout reads the padded copy", g_vt_addr[VB_SLOT(0)] & ~3ull, L.s[0].base);
     enc_r_end(en); finish();
     EXPECT("padded stream copied once", 1, g_vbuf_copies - copies);
@@ -198,18 +198,54 @@ int main(void) { @autoreleasepool {
     for (int i = 0; i < 4; i++) EXPECT("the read empty stream reads zero", 0, ((const uint32_t *)out.contents)[24 * 4 + i]);
     S.vbuf[0] = (NVNbufferRange){(uint64_t)tri, 8};
     S.nattr = 0; S.stream[0].stride = 0; vbuf_prepare(NULL, NULL, NULL);
-    // A stream at an address in no memory pool: reported when the vertex shader reads it (the draw is skipped), not when only a stale stream holds it; the others are still bound
+    // A stream at an address in no memory pool: reported when the vertex shader reads it (the draw is skipped), not when only a stale stream holds it; the other streams the
+    // shader reads are still bound
     {
         static uint32_t outside[16];   // never added as a pool
-        S.nattr = 1; S.attr[0] = (va_st){.fmt = 1, .offset = 0, .stream = 5}; S.vbuf[5] = (NVNbufferRange){(uint64_t)outside, sizeof outside};
+        S.nattr = 2; S.attr[0] = (va_st){.fmt = 1, .offset = 0, .stream = 5}; S.vbuf[5] = (NVNbufferRange){(uint64_t)outside, sizeof outside};
+        S.attr[1] = (va_st){.fmt = 0x0a, .offset = 0, .stream = 0}; rf.nv = 2; rf.v[1].nvn = 1;   // a second input, from stream 0
         mtl_sub_begin(); en = encoder_prepared(tail);
+        g_vt_valid &= ~(1u << VB_SLOT(0));
         EXPECT("a read stream in no pool is reported", 5, bind_vbufs(en, &rf));
-        EXPECT("the other streams are still bound", 1, g_vt_addr[VB_SLOT(0)] != 0);
+        EXPECT("the other streams the shader reads are still bound", 1, (g_vt_valid >> VB_SLOT(0) & 1) && g_vt_addr[VB_SLOT(0)] != 0);
+        rf.nv = 1; S.nattr = 1;
         S.attr[0].stream = 0;
         EXPECT("an unread stream in no pool is not", (uint64_t)-1, (uint64_t)bind_vbufs(en, &rf));
         EXPECT("without the shader's inputs nothing is reported", (uint64_t)-1, (uint64_t)bind_vbufs(en, NULL));
         enc_r_end(en); finish();
-        S.vbuf[5] = (NVNbufferRange){0, 0}; S.attr[0] = (va_st){0}; S.nattr = 0;
+        S.vbuf[5] = (NVNbufferRange){0, 0}; S.attr[0] = S.attr[1] = (va_st){0}; S.nattr = 0;
+    }
+    // Only the streams the vertex shader's inputs read are looked up, bound (bind_vbufs) and laid out (pull_layout_fill); with no shader given, every bound stream
+    {
+        NVNbufferRange keep[16]; memcpy(keep, S.vbuf, sizeof keep); memset(S.vbuf, 0, sizeof S.vbuf);
+        uint32_t *read = mem + 256, *stale = mem + 512;   // both in the pool, 4-byte aligned
+        S.nattr = 2; S.attr[0] = (va_st){.fmt = 0x0a, .offset = 0, .stream = 0}; S.attr[1] = (va_st){.fmt = 0x0a, .offset = 0, .stream = 3};   // attribute 1 is no input of the shader
+        S.stream[0].stride = 4; S.stream[3].stride = 4;
+        S.vbuf[0] = (NVNbufferRange){(uint64_t)read, 16}; S.vbuf[3] = (NVNbufferRange){(uint64_t)stale, 16};
+        p_draw one = {.prim = 4, .first = 0, .count = 3, .instances = 1};
+        uint64_t read_gpu = 0, stale_gpu = 0, o_; void *b_; mtl_gpu_addr((uint64_t)read, 16, &b_, &o_, &read_gpu); mtl_gpu_addr((uint64_t)stale, 16, &b_, &o_, &stale_gpu);
+        mtl_sub_begin(); vbuf_prepare(&rf, &one, NULL); en = encoder_prepared(tail);
+        g_vt_valid &= ~((1u << VB_SLOT(0)) | (1u << VB_SLOT(3))); g_vt_addr[VB_SLOT(3)] = 0;
+        uint64_t seen = g_vbuf_resolve + g_vbuf_reuse, red = g_red_once[159];
+        EXPECT("the draw's streams are bound", (uint64_t)-1, (uint64_t)bind_vbufs(en, &rf));
+        EXPECT("the stream the shader reads is bound", 1, (g_vt_valid >> VB_SLOT(0) & 1) && g_vt_addr[VB_SLOT(0)] == read_gpu);
+        EXPECT("a bound stream the shader does not read is not bound", 0, g_vt_valid >> VB_SLOT(3) & 1);
+        EXPECT("its table slot is left alone", 0, g_vt_addr[VB_SLOT(3)]);
+        EXPECT("only the read stream is looked up", 1, g_vbuf_resolve + g_vbuf_reuse - seen);
+        pull_layout L2; pull_layout_fill(&L2, &rf);
+        EXPECT("the pulling layout holds the stream the shader reads", read_gpu, L2.s[0].base);
+        EXPECT("and not the one it does not read", 0, L2.s[3].base);
+        EXPECT("whose attribute has no state word (it is never fetched)", 0, L2.attr[1]);
+        EXPECT("the attribute the shader reads keeps its state word", 1, L2.attr[0] != 0);
+        EXPECT("an unread stream left out of the layout is not reported as in no pool", red, g_red_once[159]);
+        seen = g_vbuf_resolve + g_vbuf_reuse;
+        EXPECT("with no shader given nothing is reported", (uint64_t)-1, (uint64_t)bind_vbufs(en, NULL));
+        EXPECT("and every bound stream is bound", 1, (g_vt_valid >> VB_SLOT(3) & 1) && g_vt_addr[VB_SLOT(3)] == stale_gpu && g_vt_addr[VB_SLOT(0)] == read_gpu);
+        EXPECT("each of them looked up", 2, g_vbuf_resolve + g_vbuf_reuse - seen);
+        pull_layout_fill(&L2, NULL);
+        EXPECT("with no shader given the layout holds every bound stream", 1, L2.s[0].base == read_gpu && L2.s[3].base == stale_gpu && L2.attr[1] != 0);
+        enc_r_end(en); finish();
+        memcpy(S.vbuf, keep, sizeof keep); S.attr[0] = S.attr[1] = (va_st){0}; S.nattr = 0; S.stream[0].stride = 0; S.stream[3].stride = 0; vbuf_prepare(NULL, NULL, NULL);
     }
     // CPU-only binding microbenchmark, after GPU validation; reports overhead, not game frame time.
     for (int mode = 0; mode < 2; mode++) {

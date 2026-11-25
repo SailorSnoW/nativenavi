@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Checks the host's multichannel output on a loopback device: t_audio_live.c (make -C dm/host/tests GAME=<id> audio-live) plays tones through
-AudioOut and captures the device's input (DM_AUDIO_CAPTURE).
+AudioOut and captures the device's input (DM_AUDIO_CAPTURE). Six channels need a device with a 5.1 speaker layout (BlackHole 16ch set to 5.1
+under Configure Speakers in Audio MIDI Setup); a device without one gets the stereo downmix.
 
 Usage: audio_channel_check.py [--device "BlackHole 16ch"] [--stereo] [--seconds 4]
 Exit status 0 when every check passes, 1 when one fails, 2 when the probe is missing or the capture is unusable.

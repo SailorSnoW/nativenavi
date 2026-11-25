@@ -63,6 +63,7 @@ run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_motion $(B)/t_heap_size $(
 	$(B)/t_jc1
 	TMPDIR="$(abspath $(B))" $(B)/t_hid
 	$(B)/t_pad_hid
+	$(B)/t_pad_gip
 	$(B)/t_pad_hid_mac
 	$(B)/t_pad_pro
 	$(B)/t_switch2
@@ -176,6 +177,12 @@ $(B)/t_audio_input: t_audio_input.c ../audio_input.c ../audio_input.h | $(B)
 audio-input: $(B)/t_audio_input
 	$(B)/t_audio_input
 run: audio-input
+$(B)/t_dualsense_mic: t_dualsense_mic.c ../dualsense_mic_mac.c ../dualsense_mic.h | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -I.. -o $@ t_dualsense_mic.c ../dualsense_mic_mac.c
+.PHONY: dualsense-mic
+dualsense-mic: $(B)/t_dualsense_mic
+	$(B)/t_dualsense_mic
+run: dualsense-mic
 run: $(B)/t_bigstack
 $(B)/t_bigstack: t_bigstack.c ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_bigstack.c ../hle_bigstack.c
@@ -242,7 +249,7 @@ $(B)/t_motion_pro: t_motion_pro.c ../motion_pro.h | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -fsanitize=address,undefined -o $@ t_motion_pro.c
 $(B)/t_pad_hid_mac: t_pad_hid_mac.m ../pad_hid_mac.h ../pad_hid.h ../pad_pro.h ../pad_jc1.h ../hle_haptics.h ../motion_pro.h ../dm_input.h | $(B)
 	$(CLANG) -O1 -g -fobjc-arc -Wall -Werror -Wno-unused-function -fsanitize=address,undefined -I.. -o $@ t_pad_hid_mac.m -framework Foundation -framework GameController -framework IOKit
-$(B)/t_motion_pro_mac: t_motion_pro_mac.m ../motion_pro_mac.h ../motion_pro.h ../dm_input.h | $(B)
+$(B)/t_motion_pro_mac: t_motion_pro_mac.m ../motion_pro_mac.h ../motion_pro.h ../pad_pro.h ../dm_input.h | $(B)
 	$(CLANG) -O1 -g -fobjc-arc -Wall -Werror -Wno-unused-function -fsanitize=address,undefined -I.. -o $@ t_motion_pro_mac.m -framework Foundation -framework GameController -framework IOKit
 $(B)/t_hid: t_hid.c ../hle_hid.c ../motion_fusion.h ../hle_haptics.c ../hle_haptics.h ../pad_slots.h ../dm_input.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_hid.c ../hle_haptics.c ../hle_bigstack.c
@@ -270,6 +277,18 @@ $(B)/t_pollwait: t_pollwait.c t_condvar_stub.c ../hle_thread.c ../dm.h $(GAME_H)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_pollwait.c t_condvar_stub.c
 $(B)/t_clockwait: t_clockwait.c t_condvar_stub.c ../hle_thread.c ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_clockwait.c t_condvar_stub.c
+$(B)/t_scheduler_config: t_scheduler_config.c t_condvar_stub.c ../hle_thread.c ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_scheduler_config.c t_condvar_stub.c
+.PHONY: scheduler-config scheduler-config-tsan
+scheduler-config: $(B)/t_scheduler_config
+	$(B)/t_scheduler_config default
+	$(B)/t_scheduler_config custom
+	$(B)/t_scheduler_config off
+	$(B)/t_scheduler_config empty
+scheduler-config-tsan:
+	$(MAKE) B=$(B)/scheduler-tsan SAN="$(TSAN_FLAGS)" scheduler-config
+run: scheduler-config
+tsan-threads-run: scheduler-config
 $(B)/t_preempt: t_preempt.c t_condvar_stub.c ../hle_thread.c ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_preempt.c t_condvar_stub.c
 # the pause tests supply module_of (the stub's reports no guest code) through DM_TEST_MODULE_OF
@@ -386,6 +405,9 @@ tsan-threads-run: $(addprefix $(B)/,$(TSAN_T))
 	DM_QOS_MAP=1 $(B)/t_notify_sched --all-peers
 $(B)/t_pad_hid: t_pad_hid.c ../pad_hid.h ../dm_input.h | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -fsanitize=address,undefined -I.. -o $@ t_pad_hid.c
+run: $(B)/t_pad_gip
+$(B)/t_pad_gip: t_pad_gip.c ../pad_gip.h ../pad_hid.h ../dm_input.h | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -fsanitize=address,undefined -I.. -o $@ t_pad_gip.c
 run: $(B)/t_pad_pro
 $(B)/t_pad_pro: t_pad_pro.c ../pad_pro.h ../dm_input.h | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -fsanitize=address,undefined -I.. -o $@ t_pad_pro.c

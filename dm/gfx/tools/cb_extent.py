@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 # cb_extent.py <dmsh_b version dir> <output tsv>: `<key>\t<reg>:<bytes> ... s<reg> ...`: the cbuf slots whose reads all stay in their first <bytes>
 # (a multiple of 16), and the storage slots the shader never writes. A slot left out may be read anywhere, or is written.
-import datetime
 import json
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from c1_guard import Interval, definitions_of, known, memo_answer, memo_map, memo_reflection, outputs, read_bytes, text_of   # noqa: E402
+from c1_guard import Interval, definitions_of, known, memo_answer, memo_map, memo_reflection, outputs, read_bytes, text_of, write_table   # noqa: E402
 import dmsh_abi as abi   # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'tools'))
 import shader_lib   # noqa: E402
@@ -96,12 +95,7 @@ def main():
     paths = [os.path.join(version_dir, n) for n in outputs(version_dir, "json") if n.endswith("_b.json")]
     rows = [r for r in memo_map("cb_extent", memo_row, paths) if r]
     slots, ro = sum(r.count(":") for r in rows), sum(len(re.findall(r"\bs\d+", r.split("\t", 1)[1])) for r in rows)
-    os.makedirs(os.path.dirname(output), exist_ok=True)
-    with open(output, "w", encoding="utf-8", newline="") as stream:
-        stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-        stream.write(f"{shader_lib.table_head(lib)} {stamp}\n")
-        stream.write("# shader key, then reg:bytes for each uniform slot whose reads stay inside its first bytes, and s<reg> for each storage slot it never writes (cb_extent.py)\n")
-        for line in rows: stream.write(line + "\n")
+    write_table(lib, output, ["# shader key, then reg:bytes for each uniform slot whose reads stay inside its first bytes, and s<reg> for each storage slot it never writes (cb_extent.py)", *rows])
     print(f"bounded uniform reads: {slots} slots; storage slots never written: {ro}; {len(rows)} shaders")
 
 

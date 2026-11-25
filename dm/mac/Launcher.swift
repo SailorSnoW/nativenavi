@@ -28,7 +28,17 @@ struct LauncherView: View {
             Form {
                 settingSections(basic: true)
                 Section {
-                    DisclosureGroup("Advanced settings", isExpanded: $advanced) {}
+                    // a button: the sections it opens are outside it, and an empty DisclosureGroup in a grouped Form opens on its chevron alone (on macOS 27.2 not at all)
+                    Button { advanced.toggle() } label: {
+                        HStack {
+                            Image(systemName: "chevron.right").rotationEffect(.degrees(advanced ? 90 : 0)).foregroundStyle(.secondary).accessibilityHidden(true)
+                            Text("Advanced settings")
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityValue(advanced ? "Expanded" : "Collapsed")
                 }
                 if advanced {
                     settingSections(basic: false)
@@ -117,7 +127,7 @@ private enum MicrophoneInputDevices {
         return ids.compactMap { device in
             guard hasInput(device), let uid = string(device, selector: kAudioDevicePropertyDeviceUID),
                   let name = string(device, selector: kAudioObjectPropertyName), !uid.isEmpty else { return nil }
-            return MicrophoneInputDevice(uid: uid, name: name)
+            return MicrophoneInputDevice(uid: uid, name: dualSenseOverUSB(device) ? "\(name) (USB)" : name)
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
@@ -133,6 +143,23 @@ private enum MicrophoneInputDevices {
         guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, data) == noErr else { return false }
         let buffers = UnsafeMutableAudioBufferListPointer(data.assumingMemoryBound(to: AudioBufferList.self))
         return buffers.contains { $0.mNumberChannels > 0 }
+    }
+
+    // A DualSense or DualSense Edge on USB: CoreAudio exposes its USB VID:PID at the end of ModelUID ("<name>:054C:0CE6" / ":0DF2").
+    private static func dualSenseOverUSB(_ device: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport) == noErr,
+              transport == kAudioDeviceTransportTypeUSB,
+              let model = string(device, selector: kAudioDevicePropertyModelUID) else { return false }
+        let parts = model.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 3,
+              let vid = UInt32(parts[parts.count - 2], radix: 16),
+              let pid = UInt32(parts[parts.count - 1], radix: 16) else { return false }
+        return vid == 0x054C && (pid == 0x0CE6 || pid == 0x0DF2)
     }
 
     private static func string(_ device: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {

@@ -73,7 +73,7 @@ void dm_audio_suspend(int on);
 typedef struct { void *next; void *ptr; uint64_t cap, size, offset; } aout_buf;   // next, data, buffer_size, data_size, data_offset
 _Static_assert(sizeof(aout_buf) == 40 && offsetof(aout_buf, ptr) == 0x08 && offsetof(aout_buf, cap) == 0x10 && offsetof(aout_buf, size) == 0x18 && offsetof(aout_buf, offset) == 0x20,
                "nn::audio::AudioOutBuffer layout");
-int dm_audio_output_channels(void);   // 6 when the device takes six channels, else 2
+int dm_audio_output_channels(void);   // 6 when the device's speaker layout maps 5.0 / 5.1 onto its outputs, else 2
 int dm_audio_route(void);
 // L R C LFE Ls Rs, then the stereo fold (made before clamping / resampling).
 enum { DM_AUDIO_SINK_CHANNELS = 8 };

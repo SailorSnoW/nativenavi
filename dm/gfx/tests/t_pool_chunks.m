@@ -127,7 +127,7 @@ int main(void) { @autoreleasepool {
         pool_gpu(0, MTLTextureType2D, 0, 0, &tb2);
         const uint64_t *e2 = (const uint64_t *)((const uint8_t *)tb2.contents + DMSH_POOL_HEAD);
         CHECK("a read texture goes in, past the budget", g_treg[301].view && e2[301] == g_treg[301].view_rid && e2[301] != dummy);
-        CHECK("and into the table a draw already encoded reads", e[301] != dummy && e[301] != was && !g_treg[301].stand);
+        CHECK("the table a draw already encoded reads is not written under it: a copy takes the texture", (tb2 == tb || e[301] == was) && !g_treg[301].stand);   // its buffer may come back as tb2 once that submission completed
         CHECK("an unread one is still not made", UNREAD(e2, 302));
         CHECK("a read render target no pass wrote stays the dummy", e2[303] == dummy);
         os_unfair_lock_unlock(&g_rmu); finish();

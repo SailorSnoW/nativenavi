@@ -86,6 +86,20 @@ def means(sel):
             'sub_cpu_mean': mean('@sub_cpu_ms'), 'passes': mean('@passes'), 'draws': mean('@draws')}
 
 
+def submit_metrics(sel):
+    """The submission's medians a frame and a draw (@draws, @sub_cpu_ms, @sub_instr): a change of a few percent of the replay's cost shows per draw when draw counts differ"""
+    draws = [r['@draws'] for r in sel if r.get('@draws', 0) > 0]
+    sub_cpu = [r['@sub_cpu_ms'] for r in sel if r.get('@sub_cpu_ms', -1) >= 0]
+    sub_minstr = [r['@sub_instr'] / 1e6 for r in sel if r.get('@sub_instr', 0) > 0]
+    us_draw = [r['@sub_cpu_ms'] * 1000.0 / r['@draws'] for r in sel if r.get('@draws', 0) > 0 and r.get('@sub_cpu_ms', -1) >= 0]
+    kinstr_draw = [r['@sub_instr'] / r['@draws'] / 1e3 for r in sel if r.get('@draws', 0) > 0 and r.get('@sub_instr', 0) > 0]
+    out = {}
+    for k, xs, digits in (('draws_p50', draws, 0), ('sub_cpu_p50', sub_cpu, 2), ('sub_us_draw', us_draw, 2), ('sub_minstr_p50', sub_minstr, 2), ('sub_kinstr_draw', kinstr_draw, 2)):
+        v = pct(xs, 50)
+        if v is not None: out[k] = int(round(v)) if digits == 0 else round(v, digits)
+    return out
+
+
 def last_frame(tsv):
     try:
         with open(tsv, 'rb') as fh:
@@ -161,7 +175,7 @@ def run_one(a, gid, build, var, route, out, lock):
             secs = (sel[-1]['@t_s'] - sel[0]['@t_s'] + sel[-1].get('@frame_ms', 0) / 1000) if len(sel) > 1 else 0
             if len(sel) < route['secs']: print(f'  [RED] the run stopped before the window\'s end: {len(sel)} of {route["secs"]:g} frames (see {out / "log.txt"})', flush=True)
         s = summary(*frames(out / 'frames.tsv', route['from'], route['from'] + route['secs'], by_frame), secs, budget)
-        s.update(means(sel))
+        s.update(means(sel)); s.update(submit_metrics(sel))
     log_text = (out / 'log.txt').read_text(errors='replace')
     m = re.findall(r'frame step: game time [\d.]+ s in [\d.]+ s \(([\d.]+) of real time\)', log_text)
     if m: s['game_speed'] = float(m[-1])
@@ -249,9 +263,13 @@ def main():
         for label, var in variants.items():
             d = out / f'{label}-{i + 1}'
             s = run_one(a, gid, build, var, route, d, lock); results[label].append(s)
-            print(f'  {label} run {i + 1}: ' + (f'{s["fps"]} fps, frame p50 {s["frame_p50"]} / p99 {s["frame_p99"]} / max {s["frame_max"]} ms, GPU p50 {s["gpu_p50"]} / mean {s.get("gpu_mean")} ms, span p50 {s.get("span_p50")} ms' if s.get('frames') else f'no frames (see {d / "log.txt"})'), flush=True)
+            sub_note = f', submission {s["sub_cpu_p50"]} ms ({s["sub_us_draw"]} us a draw)' if s.get('sub_us_draw') is not None else ''
+            print(f'  {label} run {i + 1}: ' + (f'{s["fps"]} fps, frame p50 {s["frame_p50"]} / p99 {s["frame_p99"]} / max {s["frame_max"]} ms, GPU p50 {s["gpu_p50"]} / mean {s.get("gpu_mean")} ms, span p50 {s.get("span_p50")} ms{sub_note}' if s.get('frames') else f'no frames (see {d / "log.txt"})'), flush=True)
     keys = ['fps', 'frame_p50', 'frame_p95', 'frame_p99', 'frame_max', 'frame_mean', 'shown_p99', 'shown_max', 'dropped', 'over_budget', 'gpu_p50', 'gpu_p95', 'gpu_mean', 'span_p50',
-            'sub_cpu_mean', 'passes', 'draws', 'game_speed', 'red_lines']
+            'sub_cpu_mean', 'passes', 'draws']
+    sub_keys = ['draws_p50', 'sub_cpu_p50', 'sub_us_draw', 'sub_minstr_p50', 'sub_kinstr_draw']
+    if any(r.get(k) is not None for rs_ in results.values() for r in rs_ for k in sub_keys): keys += sub_keys
+    keys += ['game_speed', 'red_lines']
     md = (f'{gid}, route `{a.route}` ({route["about"]}), window {route["secs"]:g} {unit}, fps target {a.fps or "profile"}; '
           f'medians over runs (range); times in ms; over_budget = frames longer than 1.5 frame times\n\n' + table(results, keys) + '\n')
     (out / 'results.md').write_text(md)

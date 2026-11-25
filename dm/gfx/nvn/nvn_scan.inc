@@ -146,7 +146,7 @@ static int state_op(uint32_t op, const void *a) {
             if (passdump()) for (int k = 0; k < b->n; k++) {
                 int tid = (int)(b->h[k] & 0xfffff);
                 if (tid) PD("T %llu bind st%d slot%d tid=%d sid=%d ser=%llu%s", g_stat_pass + 1, b->stage, b->first + k, tid, (int)(b->h[k] >> 20),
-                            tid < g_ntreg ? g_treg[tid].t.serial : 0ull, b->defer ? " deferred" : "");
+                            tid_ser(tid), b->defer ? " deferred" : "");   // g_tser: the game thread reallocates g_treg under g_rmu, which this read does not take
             }
             if (resource_range_fits(b->stage, b->first, b->n, NTEX) && memcmp(&S.tex[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.tex[b->stage][b->first], b->h, 8 * b->n); args_dirty(b->stage); }
             break; }
@@ -560,9 +560,6 @@ static int draw_samples_rt(NvProg *pr) {   // 1: the draw may read an attachment
     return 0;
 }
 #undef DSR
-// lock-free copy beside the registration (g_tser): per-draw readers take no g_rmu
-static inline uint64_t tid_ser(int tid) { return tid > 0 && tid < (1 << 20) ? atomic_load_explicit(&g_tser[tid], memory_order_relaxed) : 0; }
-static uint64_t h_ser(uint64_t h) { return tid_ser((int)(h & 0xfffff)); }
 static void rt_sub(const p_set_rt *r, int k, uint64_t *ser, int *lv, int *sl) {   // k: 0–7 colour, 8 depth
     const tex_t *t = k == 8 ? r->depth : r->color[k]; const view_t *v = k == 8 ? &r->dview : &r->cview[k]; int hv = k == 8 ? r->has_dview : r->has_cview[k];
     *ser = t ? t->serial : 0; *lv = hv && v->set_levels ? v->base_level : 0; *sl = hv && v->set_layers ? v->min_layer : 0;

@@ -268,6 +268,39 @@ static int device_out_channels(AudioDeviceID d, char *name, size_t namesz) {
     if (AudioObjectGetPropertyData(d, &pa, 0, NULL, &sz, &f)) return 0;
     return (int)f.mChannelsPerFrame;
 }
+// Surround only when Core Audio maps MPEG_5_1_A's L R C Ls Rs (the LFE is optional: 5.0) onto the device's first `channels` outputs through its
+// preferred speaker layout (Configure Speakers in Audio MIDI Setup; an HDMI sink's own): an audio interface's many outputs are discrete
+static int device_has_surround(AudioDeviceID d, int channels) {
+    if (d == kAudioObjectUnknown || channels < 5) return 0;
+    AudioObjectPropertyAddress pa = {kAudioDevicePropertyPreferredChannelLayout, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain};
+    const UInt32 head = (UInt32)offsetof(AudioChannelLayout, mChannelDescriptions);
+    UInt32 sz = 0;
+    if (AudioObjectGetPropertyDataSize(d, &pa, 0, NULL, &sz) || sz < head) return 0;
+    AudioChannelLayout *l = malloc(sz);
+    if (!l) return 0;
+    int surround = 0;
+    if (!AudioObjectGetPropertyData(d, &pa, 0, NULL, &sz, l) && sz >= head &&
+        (l->mChannelLayoutTag != kAudioChannelLayoutTag_UseChannelDescriptions ||
+         l->mNumberChannelDescriptions <= (sz - head) / sizeof(AudioChannelDescription))) {
+        AudioChannelLayout in = {.mChannelLayoutTag = kAudioChannelLayoutTag_MPEG_5_1_A};
+        const AudioChannelLayout *pair[2] = {&in, l};
+        UInt32 msz = 0;
+        if (!AudioFormatGetPropertyInfo(kAudioFormatProperty_ChannelMap, sizeof pair, pair, &msz) && msz >= sizeof(SInt32)) {
+            SInt32 *map = malloc(msz);
+            if (map && !AudioFormatGetProperty(kAudioFormatProperty_ChannelMap, sizeof pair, pair, &msz, map)) {
+                UInt32 count = msz / (UInt32)sizeof *map;
+                if (count > (UInt32)channels) count = (UInt32)channels;
+                unsigned routed = 0;
+                for (UInt32 i = 0; i < count; i++)
+                    if (map[i] >= 0 && map[i] < 6) routed |= 1u << (unsigned)map[i];
+                surround = (routed & 0x37u) == 0x37u;   // bits 0 L, 1 R, 2 C, 4 Ls, 5 Rs; 3 (LFE) optional
+            }
+            free(map);
+        }
+    }
+    free(l);
+    return surround;
+}
 static _Atomic int g_route;
 static pthread_mutex_t g_route_mu = PTHREAD_MUTEX_INITIALIZER;
 static void route_notify(void *unused) { (void)unused; dm_audio_device_changed(); }
@@ -285,19 +318,23 @@ int dm_audio_output_channels(void) {
     int device_changed = 0;
     static pthread_once_t listener = PTHREAD_ONCE_INIT; pthread_once(&listener, route_listen);
     AudioDeviceID device = out_device();
-    AudioObjectPropertyAddress pa = {kAudioDevicePropertyStreamFormat, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain};
     if (device != g_route_device) {
-        if (g_route_device) AudioObjectRemovePropertyListener(g_route_device, &pa, route_device_changed, NULL);
-        if (device) {
-            OSStatus st = AudioObjectAddPropertyListener(device, &pa, route_device_changed, NULL);
-            if (st) LOG("[RED] audio: cannot listen for output channels (status %d)", (int)st);
+        static const AudioObjectPropertySelector watched[] = {kAudioDevicePropertyStreamFormat, kAudioDevicePropertyPreferredChannelLayout};
+        for (size_t i = 0; i < sizeof watched / sizeof *watched; i++) {
+            AudioObjectPropertyAddress pa = {watched[i], kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain};
+            if (g_route_device) AudioObjectRemovePropertyListener(g_route_device, &pa, route_device_changed, NULL);
+            if (device) {
+                OSStatus st = AudioObjectAddPropertyListener(device, &pa, route_device_changed, NULL);
+                if (st && !(i && st == kAudioHardwareUnknownPropertyError))
+                    LOG("[RED] audio: cannot listen for output %s (status %d)", i ? "speaker layout" : "channels", (int)st);
+            }
         }
         device_changed = g_route_device != 0; g_route_device = device;
     }
     char name[256]; int n = device_out_channels(device, name, sizeof name);
-    int ch = n >= 6 ? 6 : 2;
+    int ch = device_has_surround(device, n) ? 6 : 2;
     int old = atomic_exchange(&g_route, ch);
-    if (ch != old || device_changed) LOG("audio output route: \"%s\" has %d channels, the host plays %s", name, n, ch == 6 ? "six (5.1)" : "stereo");
+    if (ch != old || device_changed) LOG("audio output route: \"%s\" has %d channels, the host plays %s", name, n, ch == 6 ? "six (5.1)" : n >= 5 ? "stereo (no 5.1 speaker layout: Audio MIDI Setup, Configure Speakers)" : "stereo");
     // Signaling a kernel event takes the guest scheduler lock: off the AudioUnit / registry locks, after the cache is published
     if (old && (old != ch || device_changed)) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), NULL, route_notify);
     pthread_mutex_unlock(&g_route_mu);

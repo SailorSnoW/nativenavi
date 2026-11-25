@@ -250,6 +250,13 @@ check_t_tex_fit_root: t_tex_fit_root
 	MTL_DEBUG_LAYER=1 ./t_tex_fit_root
 t_addr_known: t_addr_known.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_addr_known.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+t_pool_region: t_pool_region.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pool_region.m $(MTL_T_SRC) $(FW)
+t_binding_lists: t_binding_lists.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_binding_lists.m $(MTL_T_SRC) $(FW)
+t_treg_meta: t_treg_meta.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_treg_meta.m $(MTL_T_SRC) $(FW)
+check_t_treg_meta: RUN_ENV = MTL_DEBUG_LAYER=1
 t_gpu_only_addr: t_gpu_only_addr.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_gpu_only_addr.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 t_pool_chunks: t_pool_chunks.m $(MTL_T_DEP)
@@ -268,6 +275,13 @@ check_t_pool_notes: RUN_ENV = MTL_DEBUG_LAYER=1
 t_pool_replay: t_pool_replay.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pool_replay.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 check_t_pool_replay: RUN_ENV = MTL_DEBUG_LAYER=1
+# Pool tables written into a copy, a stale table past POOL_SUB_MS, res_check on placed textures (t_pool_cow_residency.m)
+t_pool_cow_residency: t_pool_cow_residency.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pool_cow_residency.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+.PHONY: check_t_pool_cow_residency
+check_t_pool_cow_residency: t_pool_cow_residency
+	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=0 ./t_pool_cow_residency
+	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 ./t_pool_cow_residency
 t_htab_update: t_htab_update.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_htab_update.m $(MTL_T_SRC) $(FW)
 check_t_htab_update: RUN_ENV = MTL_DEBUG_LAYER=1
@@ -477,6 +491,8 @@ t_pso_archive: t_pso_archive.m $(MTL_T_DEP) ../../host/hle_lifecycle.c
 .PHONY: check_t_pso_archive
 check_t_pso_archive: t_pso_archive
 	MTL_DEBUG_LAYER=1 ./t_pso_archive
+	MTL_DEBUG_LAYER=1 ./t_pso_archive --adopt-prebuilt
+	MTL_DEBUG_LAYER=1 ./t_pso_archive --bundle-recovery
 	MTL_DEBUG_LAYER=1 python3 test_pso_archive.py "$(CURDIR)/t_pso_archive"
 t_pso_bundle: t_pso_bundle.m ../tools/pso_offline.py $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_bundle.m $(MTL_T_SRC) $(FW)
@@ -681,6 +697,13 @@ check_t_storage_pair: t_storage_pair
 	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_storage_pair
 	DM_NVN_RT_RECYCLE=0 MTL_DEBUG_LAYER=1 ./t_storage_pair
 	DM_NVN_STORAGE_ALIAS=0 MTL_DEBUG_LAYER=1 ./t_storage_pair
+# The upscaler's MetalFX scalers evicted least recently used, and retired behind their submissions
+t_mfx_evict: t_mfx_evict.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_mfx_evict.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_mfx_evict
+check_t_mfx_evict: t_mfx_evict
+	DM_NVN_ENC_THREAD=0 ./t_mfx_evict
+	DM_NVN_ENC_THREAD=1 ./t_mfx_evict
 # A game's upscaler drawn by MetalFX (any profile; the profile's upscaler shaders, from its shader map, when it has some); with and without the switch, and on the encoding thread
 t_upscaler_mfx: t_upscaler_mfx.m t_mfx_passes.h $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upscaler_mfx.m $(MTL_T_SRC) $(FW)

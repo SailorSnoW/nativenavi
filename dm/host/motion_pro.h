@@ -58,3 +58,22 @@ static inline int ds4_motion_decode(pro_motion *s, const uint8_t *r, size_t len,
     out[0] = (pro_motion_sample){{-v[3] * g, v[5] * g, -v[4] * g}, {v[0] * rad, -v[2] * rad, v[1] * rad}, now};
     return 1;
 }
+// 8BitDo Ultimate 2 Wireless (2DC8:6012) over Bluetooth (no GCMotion): firmware 1.03+'s 34-byte report 0x01, six int16 from byte 15, accel then gyro;
+// 4096 counts/G, 2000 deg/s per 32767 (SDL's SDL_hidapi_8bitdo.c). Raw axes as the Pro Controller's. Firmware 1.02's 12-byte reports carry no sensor.
+static inline int abitdo_motion_decode(pro_motion *s, const uint8_t *r, size_t len, uint64_t now, pro_motion_sample out[3]) {
+    if (len < 34 || r[0] != 0x01) return 0;
+    if (s->seen && (now < s->received || now - s->received > PRO_MOTION_STALE_NS)) *s = (pro_motion){0};
+    int16_t v[6];
+    int data = 0;
+    for (int i = 0; i < 6; i++) {
+        v[i] = (int16_t)((uint16_t)r[15 + 2 * i] | (uint16_t)r[16 + 2 * i] << 8);
+        data |= v[i] != 0;
+    }
+    s->seen = 1;
+    s->received = now;
+    if (!s->live && !data) return 0;   // empty stream: no motion source
+    s->live = 1;
+    const float g = 1.f / 4096.f, rad = 2000.f / 32767.f * (float)M_PI / 180.f;
+    out[0] = (pro_motion_sample){{v[1] * g, -v[0] * g, -v[2] * g}, {-v[4] * rad, v[3] * rad, v[5] * rad}, now};
+    return 1;
+}

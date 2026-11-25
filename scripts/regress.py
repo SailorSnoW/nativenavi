@@ -283,7 +283,7 @@ def toolchain_fp():
     out = []
     for cmd in (['xcrun', '-sdk', 'macosx', 'metal', '--version'], ['xcrun', '-sdk', 'macosx', '--show-sdk-build-version']):
         r = sh(cmd); out.append(r.stdout + r.stderr)
-    return hashlib.sha256('\0'.join(out).encode()).hexdigest()
+    return hashlib.sha256('\0'.join(re.sub(r'(?m)^InstalledDir:.*\n?', '', o) for o in out).encode()).hexdigest()   # the mount InstalledDir names changes at each boot
 
 
 def chain_key(tree, g, tools):

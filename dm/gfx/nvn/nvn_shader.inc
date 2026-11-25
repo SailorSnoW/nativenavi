@@ -47,6 +47,12 @@ static void shmap_load(void) {
         warm_start();
     }
 }
+// c1_full.tsv / cb_extent.tsv header: "# chain b-<V> inputs <digest>", or that and a space (older tables, with the time they were made)
+static BOOL table_head_ok(NSString *head, NSString *want) {
+    if (!head) return NO;
+    NSString *h = [head hasSuffix:@"\r"] ? [head substringToIndex:head.length - 1] : head;
+    return [h isEqualToString:want] || [h hasPrefix:[want stringByAppendingString:@" "]];
+}
 static void shmap_read(void) {
     if (g_shmap) return;
     const char *e = getenv("DM_NVN_SHMAP");
@@ -85,8 +91,8 @@ static void shmap_read(void) {
     NSString *cp = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"c1_full.tsv"];
     NSString *ct = cp ? [NSString stringWithContentsOfFile:cp encoding:NSUTF8StringEncoding error:nil] : nil;
     NSString *head = ct ? [[ct componentsSeparatedByString:@"\n"] firstObject] : nil;
-    NSString *want = [NSString stringWithFormat:@"# chain b-%s inputs %@ ", DMSH_CHAIN, st_inputs ?: @"-"];   // a library without a stamp matches no table
-    if (!head || ![head hasPrefix:want]) {
+    NSString *want = [NSString stringWithFormat:@"# chain b-%s inputs %@", DMSH_CHAIN, st_inputs ?: @"-"];   // a library without a stamp matches no table
+    if (!table_head_ok(head, want)) {
         MLOG("[RED] c1_full.tsv is stale or missing (its header must name this library's chain and inputs; a full dmsh_build.py run makes it); every c1 gets its own 64 KiB");
     } else {
         g_c1_full_valid = 1; g_c1_full = [NSMutableSet set];
@@ -97,7 +103,7 @@ static void shmap_read(void) {
         NSString *xp = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"cb_extent.tsv"];
         NSString *xt = [NSString stringWithContentsOfFile:xp encoding:NSUTF8StringEncoding error:nil];
         NSString *xh = xt ? [[xt componentsSeparatedByString:@"\n"] firstObject] : nil;
-        if (!xh || ![xh hasPrefix:want]) MLOG("cb_extent.tsv is stale or missing: uniform reads are taken to reach the whole binding");
+        if (!table_head_ok(xh, want)) MLOG("cb_extent.tsv is stale or missing: uniform reads are taken to reach the whole binding");
         else {
             NSMutableDictionary *d = [NSMutableDictionary dictionary];
             for (NSString *line in [xt componentsSeparatedByString:@"\n"]) {
@@ -128,6 +134,7 @@ static void shmap_read(void) {
     uint8_t up_mfx;   // 0 not decided, 1 drawn by MetalFX when DM_UPSCALER=metalfx, 2 not one or one its colour keeps
     uint8_t up_color;
     uint8_t up_chain;   // 0 not looked up, 1 one of the upscaler chain, 2 not one
+    uint8_t tex_n, tex_idx[NVN_REFL_MAXB], buf_n, buf_idx[NVN_REFL_MAXB]; int lists_nb;   // sh_lists_make; lists_nb: the rf.nb they were made for + 1, 0 not made
     uint64_t cbs_seen; uint32_t cbs_runs;
     uint8_t ab_cbuf_only;   // 1: its only uniform-buffer reads are plain CBUF slots, so a block can be patched; 0 not decided, 2 not
     // Borrowed from its arena (a strong reference would pin retired arenas) and reused only within render pass ab_pass: another pass's arena may have been reclaimed.
@@ -589,18 +596,21 @@ static NvShader *shader_get(NSString *pc, int stage) {
     return o;
 }
 static void up_mfx_read_color(NvShader *cs, const NVNshaderData *sd);
-static NvProg *prog_get(const prog_t *cp) {   // the submit thread only
+// A plain pointer (the serial table and lpr hold the object): a function returning an object hands it over retained and autoreleased, two runtime calls at each
+// of the calls a draw makes (docs/reference/frame-rate.md, "Retain and release in every draw's helpers").
+#define prog_get(cp) ((__bridge NvProg *)prog_get_ref(cp))
+static void *prog_get_ref(const prog_t *cp) {   // the submit thread only
     prog_t *p = (prog_t *)cp;
-    if (!p) return nil;
+    if (!p) return NULL;
     static const prog_t *lp;
     static uint64_t lser, lgen;
     static NvProg *lpr;
     uint64_t gen = g_ser_gen;
-    if (p == lp && p->serial == lser && gen == lgen && lpr) return lpr;
+    if (p == lp && p->serial == lser && gen == lgen && lpr) return (__bridge void *)lpr;
     __unsafe_unretained NvProg *have = p->serial ? serial_get(p->serial) : nil;
     if (have) {
         lp = p; lser = p->serial; lgen = gen; lpr = have;
-        return have;
+        return (__bridge void *)have;
     }
     shmap_load();
     NvProg *o = [NvProg new];
@@ -638,11 +648,11 @@ static NvProg *prog_get(const prog_t *cp) {   // the submit thread only
         else MLOG("[RED] shader %s (%s) failed to load: build the shaders with dm/gfx/tools/dmsh_build.py first", k.UTF8String, stage.UTF8String);
         if (sh && st == 5) up_mfx_read_color(sh, &p->sd[i]);
     }
-    if (p->serial) serial_put(p->serial, o);
-    return o;
+    if (p->serial) { serial_put(p->serial, o); return (__bridge void *)o; }
+    return (void *)CFAutorelease(CFBridgingRetain(o));   // no serial: alive until the caller's pool drains, as a returned object was
 }
 void mtl_prog_snapshot(prog_t *copy,const prog_t *source) {
-    prog_get(source); *copy=*source;
+    (void)prog_get(source); *copy=*source;
     if(!source->serial) MDIE("cannot retain a program without an initialization serial");
     own_prog_pin(source->serial);
 }

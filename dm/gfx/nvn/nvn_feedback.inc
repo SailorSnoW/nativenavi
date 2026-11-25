@@ -175,9 +175,35 @@ static int fb_tile_ready(NvShader *vs, NvShader *fs, id<MTLFunction> fn, const u
     });
     return 0;
 }
+// A shader's bindings that name a texture or an image, and those ubd_conflict_sh looks at, as indices into rf.b in its order: the per-draw checks (fb_depth_rule,
+// fb_prepare, ubd_conflict_*) walk these instead of every binding (docs/reference/frame-rate.md, "Per-draw checks walked every reflected binding"). Made once a
+// shader under the lock; lists_nb is stored last with release and read with acquire, so a thread that sees it also sees both lists.
+static os_unfair_lock g_sh_lists_lock = OS_UNFAIR_LOCK_INIT;
+static __attribute__((noinline)) void sh_lists_make(NvShader *sh) {
+    os_unfair_lock_lock(&g_sh_lists_lock);
+    if (__atomic_load_n(&sh->lists_nb, __ATOMIC_ACQUIRE) == sh->rf.nb + 1) { os_unfair_lock_unlock(&g_sh_lists_lock); return; }
+    int n = 0, m = 0;
+    for (int i = 0; i < sh->rf.nb && i < NVN_REFL_MAXB; i++) {
+        switch (sh->rf.b[i].kind) {   // every kind ubd_conflict_textures, fb_prepare and fb_depth_rule act on (t_binding_lists)
+            case NVN_RB_TEX: case NVN_RB_TBUF: case NVN_RB_TEXU: case NVN_RB_TBUFU: case NVN_RB_IMG: case NVN_RB_IMGU:
+            case NVN_RB_TEXD: case NVN_RB_TEXA: case NVN_RB_TEXP: case NVN_RB_TEXH: sh->tex_idx[n++] = (uint8_t)i; break;
+            default: break;
+        }
+        switch (sh->rf.b[i].kind) {   // what ubd_conflict_sh looks at beside the textures
+            case NVN_RB_CBUF: case NVN_RB_SBUFP: case NVN_RB_UBOP: case NVN_RB_GMEM:
+            case NVN_RB_TEXU: case NVN_RB_SAMPU: case NVN_RB_SBUFU: case NVN_RB_IMGU: case NVN_RB_TBUFU: sh->buf_idx[m++] = (uint8_t)i; break;
+            default: break;
+        }
+    }
+    sh->tex_n = (uint8_t)n; sh->buf_n = (uint8_t)m; __atomic_store_n(&sh->lists_nb, sh->rf.nb + 1, __ATOMIC_RELEASE);
+    os_unfair_lock_unlock(&g_sh_lists_lock);
+}
+static inline void sh_lists(NvShader *sh) { if (__builtin_expect(__atomic_load_n(&sh->lists_nb, __ATOMIC_ACQUIRE) != sh->rf.nb + 1, 0)) sh_lists_make(sh); }
+static inline int sh_tex_list(NvShader *sh, const uint8_t **l) { sh_lists(sh); *l = sh->tex_idx; return sh->tex_n; }
+static inline int sh_buf_list(NvShader *sh, const uint8_t **l) { sh_lists(sh); *l = sh->buf_idx; return sh->buf_n; }
 // texture slots (bit per slot 0-255) read from the tile; 0 = none (then g_fb_tfn and the rest are not this draw's)
 static int fb_tile_plan(NvProg *pr, uint32_t wm, uint64_t tile[4]) {
-    NvShader *vs = pr->sh[0], *fs = pr->sh[1]; memset(tile, 0, 4 * sizeof *tile);
+    __unsafe_unretained NvShader *vs = pr->sh[0], *fs = pr->sh[1]; memset(tile, 0, 4 * sizeof *tile);
     if (g_fb_mode != 1 || !vs || !(fs->rf.fc_proj | fs->rf.fc_fpos) || !fs->rf.color_known || !fs->rf.nfo || !fb_tile_on()) return 0;
     fb_pinfo pi; int learn = 0;
     if (g_enc) { fb_pinfo_now(&pi); if (g_sm_pass) return 0; }
@@ -257,9 +283,9 @@ static int fb_reach(const NvShader *fs, unsigned reg, int sid, int n, int *lo, i
 void mtl_fb_stats(uint64_t *snaps, uint64_t *reused, uint64_t *tile, uint64_t *wait) { *snaps = g_fb_count; *reused = g_fb_reuse; *tile = g_fb_tile_draws; *wait = g_fb_tile_wait; }
 static uint32_t fb_depth_planes(int tid, uint64_t ser) {
     os_unfair_lock_lock(&g_rmu);
-    void *view = NULL;
-    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].t.serial == ser) tex_fast_rid(tid, &view);
-    MTLPixelFormat format = view ? ((__bridge id<MTLTexture>)view).pixelFormat : MTLPixelFormatInvalid;
+    void *view = NULL; uint32_t vpf = (uint32_t)MTLPixelFormatInvalid;
+    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].t.serial == ser) tex_fast_rid_meta(tid, &view, NULL, &vpf);
+    MTLPixelFormat format = view ? (MTLPixelFormat)vpf : MTLPixelFormatInvalid;
     os_unfair_lock_unlock(&g_rmu);
     switch (format) {
         case MTLPixelFormatDepth16Unorm: case MTLPixelFormatDepth32Float: case MTLPixelFormatDepth32Float_Stencil8: return FB_DS_DEPTH;
@@ -339,8 +365,9 @@ static void fb_depth_rule(NvShader *fs, uint32_t dsw) {
     uint64_t dser = R.rt.depth->serial; int slot[4], stid[4], ns = 0;
     uint32_t direct = fs->rf.bindless ? fb_texu_reads(fs, dser, R.rt.n > 0) : 0;
     uint32_t slot_planes[4];
-    for (int i = 0; i < fs->rf.nb; i++) {
-        const nvn_rbind *b = &fs->rf.b[i];
+    const uint8_t *texs; int ntexs = sh_tex_list(fs, &texs);
+    for (int ti = 0; ti < ntexs; ti++) {
+        int i = texs[ti]; const nvn_rbind *b = &fs->rf.b[i];
         int image = b->kind == NVN_RB_IMG && !b->rw && !b->atom && b->reg < 32;
         if (!image && (b->kind != NVN_RB_TEX || b->reg >= NTEX)) continue;
         int tid = (int)((image ? bound_img(1, b->reg) : bound_tex(1, b->reg)) & 0xfffff);
@@ -364,11 +391,23 @@ static void fb_depth_rule(NvShader *fs, uint32_t dsw) {
     }
     g_fb_dread |= direct;
 }
+// The view of levels l0 + nl, slices s0 + ns of base in t's format, type and swizzle that a draw sampling its own attachment gets, kept in base's view cache
+// (pad[0] = 1 keeps it apart from a registration's own views) while tid still holds serial ser: a mip-chain pass made one at every such draw.
+static id<MTLTexture> fb_view(int tid, uint64_t ser, id<MTLTexture> base, id<MTLTexture> t, NSUInteger l0, NSUInteger nl, NSUInteger s0, NSUInteger ns) {
+    MTLTextureSwizzleChannels sw = t.swizzle;
+    vc_key k; memset(&k, 0, sizeof k); k.pf = (uint32_t)t.pixelFormat; k.tt = (uint8_t)t.textureType; k.l0 = (uint32_t)l0; k.nl = (uint32_t)nl; k.s0 = (uint32_t)s0; k.ns = (uint32_t)ns;
+    k.sw[0] = (uint8_t)sw.red; k.sw[1] = (uint8_t)sw.green; k.sw[2] = (uint8_t)sw.blue; k.sw[3] = (uint8_t)sw.alpha; k.pad[0] = 1;
+    os_unfair_lock_lock(&g_rmu); id<MTLTexture> v = vc_get(base, &k); os_unfair_lock_unlock(&g_rmu);
+    if (v) return v;
+    v = [base newTextureViewWithPixelFormat:t.pixelFormat textureType:t.textureType levels:NSMakeRange(l0, nl) slices:NSMakeRange(s0, ns) swizzle:sw];
+    if (v) { os_unfair_lock_lock(&g_rmu); if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && !g_treg[tid].gone && g_treg[tid].t.serial == ser) vc_put(base, g_treg[tid].t.pool, &k, v); os_unfair_lock_unlock(&g_rmu); }
+    return v;
+}
 static void fb_prepare(NvProg *pr) {
     g_draw_seq++; g_fb_n = 0;
     if (g_fb_rebind) { args_dirty_all(); g_fb_rebind = 0; }   // the previous draw had a substituted binding: re-encode with the originals
     if (!pr || (!R.rt.n && !R.rt.depth) || !fb_mode()) return;
-    NvShader *fs = pr->sh[1];
+    __unsafe_unretained NvShader *fs = pr->sh[1];
     fb_pass_sync();
     uint32_t dsw = 0;
     if (R.rt.depth) {
@@ -388,8 +427,9 @@ static void fb_prepare(NvProg *pr) {
         if (pool || fs->rf.dyn) g_fb_dread |= FB_DS_BOTH;
     }
     uint64_t tile[4]; int ntile = fb_tile_plan(pr, wm, tile);
-    for (int i = 0; i < fs->rf.nb && g_fb_n < 4; i++) {
-        const nvn_rbind *b = &fs->rf.b[i];
+    const uint8_t *texs; int ntexs = sh_tex_list(fs, &texs);
+    for (int ti = 0; ti < ntexs && g_fb_n < 4; ti++) {
+        const nvn_rbind *b = &fs->rf.b[texs[ti]];
         int image = b->kind == NVN_RB_IMG && !b->rw && !b->atom && b->reg < 32;
         // A TEXU handle has no slot, so it never reads the tile, and no level is pinned for it. Arrays and tables of handles are not taken.
         int texu = b->kind == NVN_RB_TEXU && !b->n;
@@ -425,7 +465,7 @@ static void fb_prepare(NvProg *pr) {
             int known = !image && !texu && fb_reach(fs, b->reg, (int)(handle >> 20), n, &lo, &hs, &hi);
             if (g_fb_mode == 1 && !((wm | g_fb_wmask) >> k & 1)) { g_fb_rmask |= 1u << k; continue; }
             if (n != 1 && known && lo == hs && lo != a) {
-                id<MTLTexture> use = [base newTextureViewWithPixelFormat:t.pixelFormat textureType:t.textureType levels:NSMakeRange(tl + (NSUInteger)lo, 1) slices:NSMakeRange(ts, tn) swizzle:t.swizzle];
+                id<MTLTexture> use = fb_view(tid, ser, base, t, tl + (NSUInteger)lo, 1, ts, tn);
                 if (!use) { RED_ONCE(143, "same-pass feedback sampling: cannot make the view of level %lu that the sampler pins (format %lu); left as is", (unsigned long)(tl + (NSUInteger)lo), (unsigned long)t.pixelFormat); continue; }
                 fb_substitute(t, use);
                 static int once; if (!once++) MLOG("same-pass feedback sampling: shader %s renders level %d of a view of levels %lu+%lu; its sampler pins level %lu, which it samples alone", fs->key, lv, (unsigned long)tl, (unsigned long)t.mipmapLevelCount, (unsigned long)(tl + (NSUInteger)lo));
@@ -433,7 +473,7 @@ static void fb_prepare(NvProg *pr) {
             }
             if (known && lo > a) continue;
             if (a > 0 && (!known || lo < a)) {
-                id<MTLTexture> use = [base newTextureViewWithPixelFormat:t.pixelFormat textureType:t.textureType levels:NSMakeRange(tl, (NSUInteger)a) slices:NSMakeRange(ts, tn) swizzle:t.swizzle];
+                id<MTLTexture> use = fb_view(tid, ser, base, t, tl, (NSUInteger)a, ts, tn);
                 if (!use) { RED_ONCE(82, "same-pass feedback sampling: cannot make the view of levels %lu+%d below the attachment (format %lu); left as is", (unsigned long)tl, a, (unsigned long)t.pixelFormat); continue; }
                 fb_substitute(t, use);
                 static int once; if (!once++) MLOG("same-pass feedback sampling: shader %s renders level %d of a view of levels %lu+%lu; it samples a view of the levels below (mip-chain pass)", fs->key, lv, (unsigned long)tl, (unsigned long)t.mipmapLevelCount);

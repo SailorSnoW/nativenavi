@@ -150,23 +150,27 @@ void mtl_init(void) {
 // No-copy buffers of finalized pools (weak references, under g_mu), for the memory report.
 static NSHashTable *g_dead_pools;
 // Per-thread address → pool cache, valid while g_pool_gen is unchanged, holding only resident pools: a lookup takes no g_mu.
-// A table direct-mapped by 4 KB page, then the last PC_RECENT pools found.
+// The last pool found, a table direct-mapped by 64 KB region (w), one by 4 KB page (e), then the last PC_RECENT pools found. The region table finds a large
+// pool from any page of a region already seen (docs/reference/frame-rate.md, "Pool lookups by page missed with thousands of pools").
 enum { PC_BITS = 10, PC_RECENT = 8 };
 static _Atomic uint64_t g_pool_gen = 1;
 typedef struct { uintptr_t lo, hi, base; __unsafe_unretained id<MTLBuffer> buf; uint64_t gpu; uintptr_t end; int reach; } pc_ent;
-static __thread struct { uint64_t gen; unsigned next; pc_ent last, r[PC_RECENT], e[1u << PC_BITS]; } t_pc;
+static __thread struct { uint64_t gen; unsigned next; pc_ent last, r[PC_RECENT], e[1u << PC_BITS], w[1u << PC_BITS]; } t_pc;
 static inline unsigned pc_slot(uint64_t addr) { return (unsigned)(((addr >> 12) * 0x9E3779B97F4A7C15ull) >> (64 - PC_BITS)); }
+static inline unsigned pc_slot_w(uint64_t addr) { return (unsigned)(((addr >> 16) * 0x9E3779B97F4A7C15ull) >> (64 - PC_BITS)); }
 // a lookup of unknown length (1) may read on to its pool's end, so a short chunk does not answer it
 static inline int pc_holds(const pc_ent *c, uint64_t addr, uint64_t len) { return len > 1 ? addr + len <= c->end : c->reach != REACH_SHORT; }
 static inline const pc_ent *pc_get(uint64_t addr, uint64_t len) {
     if (t_pc.gen != atomic_load_explicit(&g_pool_gen, memory_order_acquire)) return NULL;
     const pc_ent *l = &t_pc.last;
     if (addr >= l->lo && addr < l->hi && pc_holds(l, addr, len)) return l;
+    pc_ent *w = &t_pc.w[pc_slot_w(addr)];
+    if (addr >= w->lo && addr < w->hi && pc_holds(w, addr, len)) { t_pc.last = *w; return w; }
     pc_ent *c = &t_pc.e[pc_slot(addr)];
     if (addr >= c->lo && addr < c->hi && pc_holds(c, addr, len)) { t_pc.last = *c; return c; }
     for (unsigned k = 0; k < PC_RECENT; k++) {
         const pc_ent *x = &t_pc.r[k];
-        if (addr >= x->lo && addr < x->hi && pc_holds(x, addr, len)) { *c = *x; t_pc.last = *x; return c; }
+        if (addr >= x->lo && addr < x->hi && pc_holds(x, addr, len)) { *c = *x; *w = *x; t_pc.last = *x; return c; }
     }
     return NULL;
 }
@@ -176,10 +180,11 @@ static void pc_put(int i, uint64_t addr) {   // caller holds g_mu, pool i is res
         memset(&t_pc.last, 0, sizeof t_pc.last);
         memset(t_pc.r, 0, sizeof t_pc.r);
         memset(t_pc.e, 0, sizeof t_pc.e);
+        memset(t_pc.w, 0, sizeof t_pc.w);
         t_pc.gen = gen;
     }
     pc_ent c = {g_pools[i].lo, g_pools[i].hi, g_pools[i].base, g_pools[i].buf, g_pools[i].gpu, g_pools[i].end, g_pools[i].reach};
-    t_pc.e[pc_slot(addr)] = c; t_pc.r[t_pc.next++ % PC_RECENT] = c; t_pc.last = c;
+    t_pc.e[pc_slot(addr)] = c; t_pc.w[pc_slot_w(addr)] = c; t_pc.r[t_pc.next++ % PC_RECENT] = c; t_pc.last = c;
 }
 static _Atomic uint64_t g_reg_gen = 1;
 // The changes behind g_reg_gen, by generation, so a pool table (pool_gpu) can take just those IDs again; an overwritten note makes it rebuild whole.

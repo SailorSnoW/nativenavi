@@ -33,8 +33,9 @@ static double tick_at(double target) {   // one display-link callback, g_gap aft
     last = CACurrentMediaTime();
     static unsigned n; if (g_layers.count < 8) { CAMetalLayer *nl = offscreen_layer(); [g_q4 addResidencySet:nl.residencySet]; [g_layers addObject:nl]; }   // the queue takes at most 32 residency sets
     CAMetalLayer *l = g_layers[n++ % g_layers.count];
-    FakeLinkUpdate *u = [FakeLinkUpdate new]; double t0 = CACurrentMediaTime();
-    u.drawable = [l nextDrawable]; u.targetTimestamp = t0 + ROOM; u.targetPresentationTimestamp = target > 0 ? target : t0 + 0.050;
+    FakeLinkUpdate *u = [FakeLinkUpdate new];
+    u.drawable = [l nextDrawable]; double t0 = CACurrentMediaTime();
+    u.targetTimestamp = t0 + ROOM; u.targetPresentationTimestamp = target > 0 ? target : t0 + 0.050;
     [g_delegate metalDisplayLink:(CAMetalDisplayLink *)(id)u needsUpdate:(CAMetalDisplayLinkUpdate *)u];
     return CACurrentMediaTime() - t0;
 }
@@ -172,6 +173,67 @@ int main(void) { @autoreleasepool {
     }
     snprintf(name, sizeof name, "a 2-tick acquire probes within %d woken callbacks (took %d), no waits in between (%d)", LINK_LATCH_PROBE, n, waited_early);
     CHECK(name, g_link_latched == latched0 + 1 && n <= LINK_LATCH_PROBE && waited_early == 0 && g_link_latch_misses == 0 && g_link_dropped == 0);
+
+    // 6. early presents whose GPU work ends past room - tick / 8 never drain into the latch
+    g_gap = 1. / 60; g_link_drain = (nvn_link_drain){0}; g_link_latch_health = (nvn_link_latch_health){0}; atomic_store(&g_link_drain_req, 0); g_link_latch_misses = 0;
+    present_enqueue(&g_tex, 1. / 60, NULL, NULL);   // one standing frame
+    uint64_t entries_gpu0 = g_link_drain.entries;
+    for (int i = 0; i < need + 20; i++) {
+        uint64_t f = 500 + (uint64_t)i;
+        atomic_store(&g_cur_frame, f);
+        frame_start(1, 500); waiting(0);
+        double t_wake = CACurrentMediaTime();
+        tick(); frame_done();
+        // frame f's GPU work ends 15.5 ms after its wake: past the 14.4 ms limit of 16.5 ms of room
+        gpu_tag_begin(f);
+        gpu_tag_done(f, t_wake + 0.005, t_wake + 0.0155);
+    }
+    atomic_store(&g_cur_frame, 0);
+    CHECK("early CPU presents whose GPU runs past room - tick/8 do not drain into the latch", g_link_drain.entries == entries_gpu0 && !atomic_load(&g_link_drain_req) && queued() == 1);
+
+    // 7. a latched present's GPU work ending after targetTimestamp (real Metal 4 feedback) leaves the latch at once, a frame stands again, the drain backs off
+    while (queued()) tick();
+    g_link_drain = (nvn_link_drain){0}; g_link_drain.in = 1; g_link_drain.held = 0; g_link_drain.stand = 0;
+    g_link_latch_health = (nvn_link_latch_health){0}; g_link_latch_misses = 0;
+    pthread_mutex_lock(&g_link_mu); g_link_started_tick = g_link_tick_n; pthread_mutex_unlock(&g_link_mu);
+    id<MTLSharedEvent> gate = [g_dev newSharedEvent];
+    [g_q4 waitForEvent:gate value:1];   // the latched present held on the queue past ROOM
+    uint64_t late_gpu0 = atomic_load(&g_link_latch_late_gpu), exits0 = g_link_latch_exits, latched_lg0 = g_link_latched;
+    frame_start(1, 500); waiting(0); tick(); frame_done();
+    CHECK("latched present queued while GPU is held", g_link_latched == latched_lg0 + 1 && queued() == 0);
+    usleep(22000);   // past update.targetTimestamp (16.5 ms)
+    gate.signaledValue = 1;
+    for (int i = 0; i < 200 && atomic_load(&g_link_latch_late_gpu) == late_gpu0; i++) usleep(1000);
+    CHECK("Metal 4 feedback detects GPUEndTime > update.targetTimestamp", atomic_load(&g_link_latch_late_gpu) == late_gpu0 + 1);
+    frame_start(1, 500); waiting(0); tick(); frame_done();
+    CHECK("late GPU forces immediate latch exit and restores a standing frame", g_link_latch_exits == exits0 + 1 && g_link_latch_misses == LINK_LATCH_GIVE_UP && queued() == 1);
+    frame_start(1, 500); waiting(0); tick(); frame_done();
+    CHECK("standing frame after late-GPU exit backs off the drain into the latch", g_link_drain.back == 1 && !g_link_drain.in && queued() == 1);
+
+    // 8. a skipped callback right after a drain into the latch leaves it too, with no late GPU work
+    while (queued()) tick();
+    g_link_drain = (nvn_link_drain){0}; g_link_drain.in = 1; g_link_drain.held = 0; g_link_drain.stand = 0;
+    g_link_latch_health = (nvn_link_latch_health){0}; g_link_latch_misses = 0;
+    pthread_mutex_lock(&g_link_mu); g_link_started_tick = g_link_tick_n; pthread_mutex_unlock(&g_link_mu);
+    exits0 = g_link_latch_exits;
+    frame_start(1, 500); waiting(0); tick(); frame_done();   // latched cleanly
+    usleep(35000);   // a skipped 60 Hz tick
+    frame_start(1, 500); waiting(0); tick(); frame_done();
+    CHECK("skipped tick right after a drain into the latch forces immediate exit", g_link_latch_exits == exits0 + 1 && g_link_latch_misses == LINK_LATCH_GIVE_UP && queued() == 1);
+    frame_start(1, 500); waiting(0); tick(); frame_done();
+    CHECK("standing frame after skipped-tick exit backs off the drain", g_link_drain.back == 1 && !g_link_drain.in && queued() == 1);
+    while (queued()) tick();
+
+    // 9. the GPU ring: frame 0 apart from an untouched slot, nothing while a command buffer of it runs, then its time and latest end
+    { uint64_t t0 = 0, t1 = 0;
+      CHECK("an untouched slot holds no frame 0", mtl_gpu_ms(0) < 0 && !mtl_gpu_span(0, &t0, &t1) && link_gpu_lead(0, 0, 1, 0, 0) < 0);
+      gpu_tag_begin(0); gpu_tag_begin(0);
+      CHECK("a frame with command buffers running reports no GPU time", mtl_gpu_ms(0) < 0 && !mtl_gpu_span(0, &t0, &t1));
+      gpu_tag_done(0, 10.0, 10.004);
+      CHECK("nor with one of them left", mtl_gpu_ms(0) < 0);
+      gpu_tag_done(0, 10.002, 10.009);
+      double ms = mtl_gpu_ms(0);
+      CHECK("then its GPU time and its latest end", ms > 10.99 && ms < 11.01 && mtl_gpu_span(0, &t0, &t1) && t1 == (uint64_t)(10.009 * 1e9) && t0 == (uint64_t)(10.0 * 1e9)); }
 
     hold_case(2, 120, 60, 2, "60 fps on a 120 Hz link takes the queued frame on the second tick");
     hold_case(2, 144, 60, 3, "60 fps on a virtual 120 Hz link holds through an uneven first tick");

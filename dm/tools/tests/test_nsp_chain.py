@@ -81,16 +81,23 @@ class Tables(Base):
         self.ran = []
         cm = mock.patch.object(nsp, 'run', lambda cmd, log, env=None: self.ran.append(Path(cmd[1]).name)); cm.__enter__(); self.addCleanup(cm.__exit__, None, None, None)
 
-    def tables(self, c1, cb):   # each a header line's "b-<chain> inputs <digest>" part (or any text), None for a missing table
+    def tables(self, c1, cb, suffix=''):   # each a header line's "b-<chain> inputs <digest>" part (or any text), None for a missing table
         for n, head in (('c1_full.tsv', c1), ('cb_extent.tsv', cb)):
-            if head: (self.tmp / n).write_text(f'# chain {head} 2026-10-23T00:00:00+00:00\n')
+            if head: (self.tmp / n).write_text(f'# chain {head}{suffix}\n')
         return nsp.chain_tables(sys.executable, REPO, self.sh, {}, self.tmp / 'logs', self.g, self.CHAIN)
 
     def current(self): return f'b-{self.CHAIN} inputs {self.INPUTS}'
 
-    def test_current_kept(self):
-        self.assertTrue(self.tables(self.current(), self.current()))
-        self.assertEqual(self.ran, []); self.assertEqual(self.said, [])
+    def test_current_kept(self):   # older tables carry the time they were made after the inputs
+        for suffix in ('', ' 2026-10-23T00:00:00+00:00'):
+            with self.subTest(suffix=suffix):
+                self.ran.clear(); self.said.clear()
+                self.assertTrue(self.tables(self.current(), self.current(), suffix=suffix))
+                self.assertEqual(self.ran, []); self.assertEqual(self.said, [])
+
+    def test_longer_inputs_made_again(self):
+        self.assertTrue(self.tables(self.current() + '0', self.current()))
+        self.assertEqual(self.ran, ['c1_guard.py'])
 
     def test_other_inputs_made_again(self):   # the profile's tables changed and a full build stamped the library again
         self.assertTrue(self.tables(self.current(), f'b-{self.CHAIN} inputs bbbbbbbbbbbb'))
@@ -228,6 +235,26 @@ class TableTools(unittest.TestCase):
         self.assertEqual(text.count('#define DMSH_KIND_CBUF "cbuf"'), 1)
         header.write_text(text.replace('#define DMSH_KIND_CBUF "cbuf"', '#define DMSH_KIND_CBUF "cbuf_renamed"'))   # the reflection's "cbuf" is no longer a uniform buffer
         self.assertEqual(rows(), [])
+
+    def test_unchanged_tables_keep_their_bytes_and_carry_no_time(self):   # a full build that changes no shader changes no packed table
+        lib = Path(tempfile.mkdtemp()) / 'b-0123456789ab'; lib.mkdir(); self.addCleanup(shutil.rmtree, lib.parent)
+        (lib / 'inputs.tsv').write_text('game\tfixture\ninputs\taaaaaaaaaaaa\n')
+        key = '00112233aabbccdd'
+        (lib / f'{key}_b.metal').write_text('fragment float4 main0(constant cb& fp_c1) { int _5 = in.v; return (fp_c1)._m0[_5]; }\n')
+        (lib / f'{key}_b.json').write_text(json.dumps({'bindings': [{'kind': 'cbuf', 'reg': 0, 'msl_name': 'fp_c1'}]}))
+        for tool, table in (('c1_guard.py', 'c1_full.tsv'), ('cb_extent.py', 'cb_extent.tsv')):
+            with self.subTest(tool=tool):
+                path = lib.parent / table
+                def run(tool=tool, path=path):
+                    r = subprocess.run([sys.executable, REPO / 'dm/gfx/tools' / tool, lib, path], capture_output=True, text=True)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                run(); made = path.read_bytes()
+                self.assertEqual(made.splitlines()[0], b'# chain b-0123456789ab inputs aaaaaaaaaaaa')
+                os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+                run(); self.assertEqual(path.read_bytes(), made); self.assertEqual(path.stat().st_mtime_ns, 1_000_000_000)
+                path.write_bytes(made.replace(b'aaaaaaaaaaaa\n', b'aaaaaaaaaaaa 2026-11-01T21:36:26+00:00\n', 1)); run(); self.assertEqual(path.read_bytes(), made)   # an older header: written once without the time
+                path.write_bytes(made + b'stale row\n'); run(); self.assertEqual(path.read_bytes(), made)
+                path.write_bytes(made.replace(b'aaaaaaaaaaaa', b'bbbbbbbbbbbb', 1)); run(); self.assertEqual(path.read_bytes(), made)
 
 
 class TableDifference(unittest.TestCase):   # the row the build error names when a split table differs from the profile's

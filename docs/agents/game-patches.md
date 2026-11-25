@@ -25,6 +25,12 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 | Now → goal | Patch | Purpose | Status | Evidence | Games | Where | Why |
 |---|---|---|---|---|---|---|---|
+| `game` → `host` | a queue parked on the game's CPU event translated before the signal, its commits held until it | frame rate | gap | judgement | 1 | `replay_ahead`: [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | a setting the game was tested with: a default for every game after `regress.py check` on the games |
+| `game` → `host` | CPU-written textures uploaded after a flush | rendering | gap | judgement | 1 | `tex_flush_upload`: [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | unified memory semantics; off by default because a flushed range could cover an image a shader writes: tracking GPU writes would make it safe for every game |
+| `game` → `host` | CPU-written textures uploaded without a flush | rendering | gap | judgement | 1 | `tex_dirty_upload`: [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | as tex_flush_upload, for pools the CPU writes without a flush |
+| `game` → `host` | draw passes ordered by the game's own barriers | frame rate | gap | judgement | 1 | `draw_barriers`: [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | what NVN specifies: a default for every game after `regress.py check` on the games |
+| `game` → `host` | MapPhysicalMemory limited to the application pool | memory | gap | judgement | 1 | `mem_map_limit`: [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | Horizon's limit; off by default because Ace Attorney Investigations Collection maps a little more than its profile's 1 GB pool, which is the thing to fix |
+| `game` → `host` | Metal encoding on its own thread on the Mac | frame rate | gap | judgement | 1 | `enc_thread`: [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | a setting the game was tested with: a default for every game after `regress.py check` on the games |
 
 ## Summary
 
@@ -73,3 +79,12 @@ Profile keys (`game.tsv`) whose value changes what the host does, set away from 
 
 | Key and value | Games | Binding | Why |
 |---|---|---|---|
+| `draw_barriers game` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game` → `host`, gap | what NVN specifies: a default for every game after `regress.py check` on the games |
+| `enc_thread on` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game` → `host`, gap | a setting the game was tested with: a default for every game after `regress.py check` on the games |
+| `fps_target 60` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game`, at goal | a choice per game |
+| `gpu_ts_hz 31250000` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game`, at goal | NVN2 reports nanoseconds; a game that turns raw reports into time with the console's 31.25 MHz counter rate needs that rate |
+| `mem_map_limit on` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game` → `host`, gap | Horizon's limit; off by default because Ace Attorney Investigations Collection maps a little more than its profile's 1 GB pool, which is the thing to fix |
+| `replay_ahead on` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game` → `host`, gap | a setting the game was tested with: a default for every game after `regress.py check` on the games |
+| `tex_dirty_upload on` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game` → `host`, gap | as tex_flush_upload, for pools the CPU writes without a flush |
+| `tex_flush_upload on` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game` → `host`, gap | unified memory semantics; off by default because a flushed range could cover an image a shader writes: tracking GPU writes would make it safe for every game |
+| `upscaler_sharpness 0.7` | [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) | `game`, at goal | the look closest to the game's own upscaler, judged per game |

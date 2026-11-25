@@ -362,6 +362,15 @@ class StageCache(unittest.TestCase):
         self.assertNotEqual(before, self.key(env, version='override Metal'))
         self.assertNotEqual(before, self.key(env, sdk='different SDK build'))
 
+    def test_metal_remount_preserves_reuse(self):   # InstalledDir: names the toolchain's mount, renamed at each boot
+        def version(suffix, ver='32023.922'):
+            return (f'Apple metal version {ver} (metalfe-{ver}.4)\nTarget: air64-apple-darwin27.2.0\nThread model: posix\n'
+                    f'InstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.{suffix}/Metal.xctoolchain/usr/metal/current/bin\n')
+        env = dict(os.environ)
+        first = self.key(env, version=version('em8TI5'))
+        self.assertEqual(first, self.key(env, version=version('Xq3ZpA')))
+        self.assertNotEqual(first, self.key(env, version=version('em8TI5', '32023.950')))
+
 
 class MetalPrefill(unittest.TestCase):
     def setUp(self):

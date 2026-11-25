@@ -175,8 +175,12 @@ static uint64_t g_link_empty;   // Under g_pq_mu: ticks that found no new frame 
 static nvn_link_drain g_link_drain;   // display-link callback thread only
 static _Atomic int g_link_drain_req;
 static _Atomic uint64_t g_link_blocked_ns, g_link_drain_ns, g_link_drained;
-// Late latch (nvn_link_latch.h): g_link_waiter, under g_link_mu, the tick an acquire blocks for (0 = none); g_link_waiter_end: it ends a drain into the latch
-static uint64_t g_link_waiter, g_link_latched, g_link_latch_out;
+// Late latch (nvn_link_latch.h): g_link_waiter, under g_link_mu, the tick an acquire blocks for (0 = none); g_link_waiter_end: it ends a drain into the latch;
+// g_link_latch_exits: left for late GPU work or a skipped tick; g_link_latch_late_gpu: latched presents whose GPU work ended after targetTimestamp (feedback handler)
+static uint64_t g_link_waiter, g_link_latched, g_link_latch_out, g_link_latch_exits;
+static _Atomic uint64_t g_link_latch_late_gpu;
+static nvn_link_latch_health g_link_latch_health;   // display-link callback thread only
+static double g_present_gpu_s;   // under g_pq_mu: the present command buffer's GPU time, smoothed (seconds)
 static unsigned g_link_latch_misses;
 static int g_link_waiter_end;
 // display-link callback thread only: the previous frame's hold (0 = none) and the ticks it kept empty
@@ -285,17 +289,10 @@ static _Atomic int g_last_commit_error;
 static _Atomic int g_up_pending;
 
 // macOS revokes GPU access after GPU errors a process caused: every command buffer then fails with AccessRevoked without running and no fence is signalled. The first stops the
-// game, and the CPU raises each SyncWait's event to fences whose feedback came back. A hang or fault alone is not enough: the GPU recovers from those
+// game (post_complete raises the fences' event from the CPU, as for any error). A hang or fault alone is not enough: the GPU recovers from those
 static _Atomic int g_gpu_lost;
 void front_gpu_lost(void);
 __attribute__((weak)) void front_gpu_lost(void) { MDIE("GPU access revoked: macOS runs none of this process's GPU work any more"); }
-static void gpu_lost_release(void) {
-    static os_unfair_lock lk = OS_UNFAIR_LOCK_INIT;   // signaledValue is never lowered
-    os_unfair_lock_lock(&lk);
-    uint64_t f = atomic_load(&g_done);
-    if (g_ev && g_ev.signaledValue < f) g_ev.signaledValue = f;
-    os_unfair_lock_unlock(&lk);
-}
 // Metal 4 reports a commit's error as MTL4CommandQueueErrorTimeout with the command buffer's error underneath; only this domain counts (a victim's IOGPU error has code 5 too)
 static int gpu_err_has(NSError *e, NSInteger code, int depth) {
     if (!e || depth > 3) return 0;
@@ -307,7 +304,6 @@ static void gpu_lost_check(NSError *e, const char *where) {
     if (!e || atomic_load(&g_gpu_lost) || !gpu_err_has(e, MTL4CommandQueueErrorAccessRevoked, 0) || atomic_exchange(&g_gpu_lost, 1)) return;
     MLOG("[RED] GPU access revoked: the %s command buffer was ignored (fences back %llu of %llu); macOS runs none of this process's GPU work any more, so the game stops", where,
          (unsigned long long)atomic_load(&g_done), (unsigned long long)atomic_load(&g_fence));
-    gpu_lost_release();
     front_gpu_lost();
 }
 // DM_TEST_GPU_LOST=n: from submission n, feedback imitates a revoked run and the fence signal is left out (the work still runs)
@@ -735,17 +731,17 @@ static int g_res_check_on;
 // and the submission that last bound each, for defer_drain: an object retired before its binding's fence would fault or read a reused resource ID
 static NSMapTable *g_res_last_use;
 static uint64_t g_res_late;
+static int g_res_missing;
 static void res_use_note(id o, const char *what) {
     if (!g_res_last_use) g_res_last_use = [NSMapTable weakToStrongObjectsMapTable];
     [g_res_last_use setObject:@[@(g_fence + 1), @(what)] forKey:o];
 }
 static void res_check(id r, const char *what, int reg) {
-    static int nbad;
     if (!g_res_check_on || !r) return;
     pthread_mutex_lock(&g_res_mu);
     res_use_note(r, what);
     pthread_mutex_unlock(&g_res_mu);
-    if (nbad >= 40) return;
+    if (g_res_missing >= 40) return;
     int is_tex = [r conformsToProtocol:@protocol(MTLTexture)], is_buf = [r conformsToProtocol:@protocol(MTLBuffer)];
     if (!is_tex && !is_buf) return;
     id<MTLResource> a = r;
@@ -763,16 +759,19 @@ static void res_check(id r, const char *what, int reg) {
         res_use_note(a, what);
         pthread_mutex_unlock(&g_res_mu);
     }
+    // a placement heap's textures are in the set one by one (the heap stays while a removed one waits to be drained); an automatic heap's are not
     pthread_mutex_lock(&g_res_mu);
-    int ok = [g_res_objects containsObject:a.heap ? (id)a.heap : a];
+    id<MTLHeap> h = a.heap;
+    int ok = h ? [g_res_objects containsObject:h] && (h.type != MTLHeapTypePlacement || [g_res_objects containsObject:a]) : [g_res_objects containsObject:a];
     pthread_mutex_unlock(&g_res_mu);
     if (!ok) {
-        nbad++;
+        g_res_missing++;
         id<MTLTexture> t = is_tex ? (id<MTLTexture>)r : nil;
-        MLOG("[RED] missing residency #%d: %s slot %d %s %p (parent chain %d deep) allocated %lu B storage mode %lu%s", nbad, what, reg, is_tex ? "texture" : "buffer", (__bridge void *)a, hops, (unsigned long)a.allocatedSize, (unsigned long)a.storageMode,
+        MLOG("[RED] missing residency #%d: %s slot %d %s %p (parent chain %d deep) allocated %lu B storage mode %lu%s", g_res_missing, what, reg, is_tex ? "texture" : "buffer", (__bridge void *)a, hops, (unsigned long)a.allocatedSize, (unsigned long)a.storageMode,
              t ? [NSString stringWithFormat:@" format %lu %lux%lu type %lu usage %#lx", (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.textureType, (unsigned long)t.usage].UTF8String : ""); }
 }
-// Commits every change made before the call, one another thread's commit took included (it holds g_res_commit_mu until done); a removed allocation lives until it left the set
+// Commits every change made before the call, one another thread's commit took included (it holds g_res_commit_mu until done and its removals are released); a removed
+// allocation lives until it left the set
 static void res_commit(void) { @autoreleasepool {
     pthread_mutex_lock(&g_res_commit_mu);
     pthread_mutex_lock(&g_res_mu);
@@ -794,9 +793,10 @@ static void res_commit(void) { @autoreleasepool {
         g_rs_commit_ns += dt;
         pthread_mutex_unlock(&g_res_mu);
     }
-    pthread_mutex_unlock(&g_res_commit_mu);
-    for (size_t i = 0; i < n; i++) CFRelease(q[i].o);
+    // released before the unlock, outside g_res_mu: a heap a removed texture held is back in the recycler before another thread's res_commit returns
+    @autoreleasepool { for (size_t i = 0; i < n; i++) CFRelease(q[i].o); }
     free(q);
+    pthread_mutex_unlock(&g_res_commit_mu);
 } }
 static int res_pending(void) {
     pthread_mutex_lock(&g_res_mu);

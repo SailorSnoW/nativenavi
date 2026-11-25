@@ -59,6 +59,7 @@ static dispatch_queue_t g_arch_q; static _Atomic int g_arch_new, g_arch_new_vd, 
 // A flush period: its own compiler and serializer, written once every compile in it has returned and never used again. Workaround: a compile under way across a serializer's
 // write crashes in Metal (docs/reference/rendering.md, A pipeline compile crashes while an archive period is written). A compile that never returns holds only its own period's file.
 static _Atomic uint64_t g_arch_deaths;   // every unwritten period predating a compiler-service death is untrusted, including ones already handed over
+static _Atomic uint64_t g_arch_discarded;   // periods arch_write_file did not write (a compiler death, an unresolved plain compile, a failed write or index)
 @interface ArchEpoch : NSObject { @public id<MTL4Compiler> comp; id<MTL4PipelineDataSetSerializer> ser; dispatch_group_t busy; _Atomic int active, n, vd, cs, ms, failed, crashed; int compacting; uint64_t deaths;
     NSMutableData *keys; os_unfair_lock klock; _Atomic int unkeyed; } @end
 // vd, cs, ms: bases with a vertex layout, compute, mesh; crashed: the compiler service died under it; deaths: service deaths at creation (older periods are rejected);
@@ -149,10 +150,11 @@ static int arch_keys_old(NSString *path) {
     ssize_t n = read(fd, m, sizeof m); close(fd);
     return n == (ssize_t)sizeof m && !memcmp(m, "DMPSOIX1", 8);
 }
-// g_arch_ix: key → the newest file naming it, filled in pso4_init and read only after (no lock). g_arch_ixf: files with a complete index, reached only through it.
-// g_arch_run: every plain run file, in g_compact_files' order. g_arch_asks: for the tests.
+// g_arch_ix: key → the newest file naming it, filled before the first frame (pso4_init, then arch_adopt_prebuilt) and read only after (no lock). g_arch_ixf: files with a
+// complete index, reached only through it. g_arch_run: every plain run file, in g_compact_files' order. g_arch_opened: the device's files opened this run. g_arch_asks: for the tests.
 static nvn_hmap g_arch_ix = {.klen = sizeof(uint64_t)};
 static NSArray<id<MTL4Archive>> *g_arch_ixf, *g_arch_run;
+static NSMutableSet<NSString *> *g_arch_opened;
 static _Atomic uint64_t g_arch_asks;
 // Opened files with how many pipelines each gave: arch_sweep moves out those none came from once every wanted pipeline was asked (a chain or library change leaves old keys unreachable).
 @interface ArchUse : NSObject { @public NSString *path; __weak id<MTL4Archive> a; int pf, gone; uint64_t hits, keys; } @end
@@ -207,7 +209,8 @@ static _Atomic uint64_t g_pb_built, g_pb_archived, g_pb_reused, g_pb_spec, g_pb_
 static _Atomic uint64_t g_pt_hit_n, g_pt_hit_ns, g_pt_miss_n, g_pt_miss_ns, g_pt_spec_ns, g_pt_comp_ns, g_pt_pred_n, g_pt_pred_ns, g_pp_done_n;
 typedef struct { const void *vf, *ff; uint32_t samples, a2c, rast, topo, amp, off; uint32_t va[31][3], vl[31][3]; } pbase_key;   // what a base depends on: pso_desc's descriptor less the colour attachments; off: without the border corrections
 static nvn_hmap g_pbase = {.klen = sizeof(pbase_key)};
-// Bases the archives lack: nothing adds to the opened archives in a run, so a miss holds for the process and later calls skip the search.
+// Bases the archives lack: after the prepare step nothing adds to the opened archives in a run (arch_adopt_prebuilt clears this before the first frame), so a miss holds
+// for the process and later calls skip the search.
 static nvn_hmap g_pbase_miss = {.klen = sizeof(pbase_key)};
 // Only callers for the same base wait on this group. compiled: its owner asked the compiler; looked: left once the owner looked in the archives; found: set before it.
 @interface PbaseBuild : NSObject { @public dispatch_group_t done, looked; id<MTLRenderPipelineState> ps, found; NSError *error; int compiled; } @end
@@ -650,17 +653,95 @@ static void fn_gave_up(const char *what) {
         MLOG("pipeline archive: a %s capture waited %d ms for another of the same shader function: built without the archive (Metal crashes on two at once, fn_claim); "
              "the prebuild tool's last line counts them", what, g_fn_wait_ms);
 }
+// The prebuild tool's capture ledger (g_pre_tool or g_pre_out; nothing in play): each pipeline it asked for, its descriptor kept until its period is written, so the
+// captures a dropped period lost are made again in new periods (arch_pkg_recover). A pipeline Metal refuses outright (not a compiler death) is not tried again.
+enum { ARCH_PKG_PENDING, ARCH_PKG_WRITTEN, ARCH_PKG_LOST_BUILDABLE, ARCH_PKG_LOST_UNCONFIRMED, ARCH_PKG_REJECTED };
+@interface ArchPkgItem : NSObject { @public uint64_t key; MTL4PipelineDescriptor *desc; int vd, compute, state, retries; NSString *reason; } @end
+@implementation ArchPkgItem @end
+static os_unfair_lock g_pkg_lock = OS_UNFAIR_LOCK_INIT;
+static NSMutableDictionary<NSNumber *, ArchPkgItem *> *g_pkg_items;
+static _Atomic int g_pkg_unkeyed_lost;
+static int g_arch_pkg_max_retries = 3;
+static int g_pkg_last_requested, g_pkg_last_published, g_pkg_last_recovered, g_pkg_last_missing_lost, g_pkg_last_missing_died, g_pkg_last_rejected, g_pkg_last_rounds;
+static int arch_pkg_on(void) { return g_pre_tool || g_pre_out != nil; }
+static void arch_pkg_reset(void) {
+    os_unfair_lock_lock(&g_pkg_lock); g_pkg_items = nil; os_unfair_lock_unlock(&g_pkg_lock);
+    atomic_store(&g_pkg_unkeyed_lost, 0);
+    g_pkg_last_requested = g_pkg_last_published = g_pkg_last_recovered = g_pkg_last_missing_lost = g_pkg_last_missing_died = g_pkg_last_rejected = g_pkg_last_rounds = 0;
+}
+static ArchPkgItem *arch_pkg_item(uint64_t k) {   // under g_pkg_lock
+    if (!g_pkg_items) g_pkg_items = [NSMutableDictionary dictionary];
+    ArchPkgItem *it = g_pkg_items[@(k)];
+    if (!it) { it = [ArchPkgItem new]; it->key = k; g_pkg_items[@(k)] = it; }
+    return it;
+}
+static void arch_pkg_note_entered(MTL4PipelineDescriptor *d, int vd, int compute) {
+    uint64_t k = arch_key(d);
+    if (!k) return;
+    MTL4PipelineDescriptor *copy = [d copy];
+    os_unfair_lock_lock(&g_pkg_lock);
+    ArchPkgItem *it = arch_pkg_item(k);
+    if (it->state != ARCH_PKG_WRITTEN) {
+        it->state = ARCH_PKG_PENDING; it->vd = vd; it->compute = compute;
+        if (!it->desc) it->desc = copy;
+    }
+    os_unfair_lock_unlock(&g_pkg_lock);
+}
+// not captured: built plainly (lost, buildable), lost to a compiler death (unconfirmed), or refused by both compilers (rejected). ce: the capture's error, pe the plain one's
+static void arch_pkg_note_fallback(MTL4PipelineDescriptor *d, int vd, int compute, int built, NSError *ce, NSError *pe) {
+    uint64_t k = arch_key(d);
+    int state = built ? ARCH_PKG_LOST_BUILDABLE : err_compiler_died(pe) ? ARCH_PKG_LOST_UNCONFIRMED : pe ? ARCH_PKG_REJECTED : err_compiler_died(ce) ? ARCH_PKG_LOST_UNCONFIRMED : ARCH_PKG_REJECTED;
+    if (!k) { if (state != ARCH_PKG_REJECTED) atomic_fetch_add(&g_pkg_unkeyed_lost, 1); return; }
+    MTL4PipelineDescriptor *copy = state == ARCH_PKG_REJECTED ? nil : [d copy];
+    NSString *why = pe.localizedDescription ?: ce.localizedDescription;
+    os_unfair_lock_lock(&g_pkg_lock);
+    ArchPkgItem *it = arch_pkg_item(k);
+    if (it->state != ARCH_PKG_WRITTEN) {
+        it->state = state; it->vd = vd; it->compute = compute;
+        if (state == ARCH_PKG_REJECTED) it->desc = nil;
+        else if (!it->desc) it->desc = copy;
+        if (why) it->reason = why;
+    }
+    os_unfair_lock_unlock(&g_pkg_lock);
+}
+static void arch_pkg_period_done(ArchEpoch *ep, int ok) {
+    if (!arch_pkg_on()) return;
+    if (!ok && atomic_load(&ep->unkeyed)) atomic_fetch_add(&g_pkg_unkeyed_lost, 1);
+    NSData *keys = ep->keys;
+    if (!keys.length) return;
+    const uint64_t *kv = keys.bytes; NSUInteger nk = keys.length / sizeof(uint64_t);
+    os_unfair_lock_lock(&g_pkg_lock);
+    for (NSUInteger i = 0; i < nk; i++) {
+        ArchPkgItem *it = g_pkg_items[@(kv[i])];
+        if (!it || it->state == ARCH_PKG_WRITTEN) continue;
+        if (ok) { it->state = ARCH_PKG_WRITTEN; it->desc = nil; }
+        else it->state = ARCH_PKG_LOST_BUILDABLE;
+    }
+    os_unfair_lock_unlock(&g_pkg_lock);
+}
+static id<MTLRenderPipelineState> arch_plain_rps(MTL4PipelineDescriptor *d, NSError **e, int vd, NSError *ce) {
+    NSError *pe = nil; id<MTLRenderPipelineState> ps = plain_rps(d, &pe);
+    if (e && pe) *e = pe;
+    if (arch_pkg_on()) arch_pkg_note_fallback(d, vd, 0, ps != nil, ce, pe);
+    return ps;
+}
+static id<MTLComputePipelineState> arch_plain_cps(MTL4ComputePipelineDescriptor *d, NSError **e, NSError *ce) {
+    NSError *pe = nil; id<MTLComputePipelineState> ps = plain_cps(d, &pe);
+    if (e && pe) *e = pe;
+    if (arch_pkg_on()) arch_pkg_note_fallback(d, 0, 1, ps != nil, ce, pe);
+    return ps;
+}
 // A captured compile in the current period (vd: a base with a vertex layout). No task options: a captured base never imports archive entries. A refused capture is built
 // plainly (arch_cap_failed). busy (the prebuild): a capture that could not claim its functions is not built (*busy = 1, nil).
 static id<MTLRenderPipelineState> arch_capture_try(MTL4PipelineDescriptor *d, NSError **e, int vd, int *captured, int wait_ms, int *busy) {
     if (captured) *captured = 0;
     if (busy) *busy = 0;
-    if (!arch_capturing()) return plain_rps(d, e);
+    if (!arch_capturing()) return arch_plain_rps(d, e, vd, nil);
     uint64_t fk[3]; int fn = fn_ids(d, fk);
     if (!fn_claim(fk, fn, wait_ms)) {
         if (busy) { *busy = 1; return nil; }
         fn_gave_up("render");
-        return plain_rps(d, e);
+        return arch_plain_rps(d, e, vd, nil);
     }
     ser_compile_begin(); ArchEpoch *ep = ep_enter(); NSError *ce = nil;
     id<MTLRenderPipelineState> ps = [ep->comp newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:&ce];
@@ -668,33 +749,35 @@ static id<MTLRenderPipelineState> arch_capture_try(MTL4PipelineDescriptor *d, NS
     if (!ps && err_compiler_died(ce)) { atomic_store(&ep->crashed, 1); arch_died(ce); }
     fn_release(fk, fn);
     int full = 0;
-    if (ps) { ep_key(ep, d); atomic_fetch_add(&g_arch_new, 1); if (vd) { atomic_fetch_add(&ep->vd, 1); atomic_fetch_add(&g_arch_new_vd, 1); }
+    if (ps) { ep_key(ep, d); if (arch_pkg_on()) arch_pkg_note_entered(d, vd, 0);
+              atomic_fetch_add(&g_arch_new, 1); if (vd) { atomic_fetch_add(&ep->vd, 1); atomic_fetch_add(&g_arch_new_vd, 1); }
               if ([d isKindOfClass:MTL4MeshRenderPipelineDescriptor.class]) atomic_fetch_add(&ep->ms, 1);
               full = atomic_fetch_add(&ep->n, 1) + 1 == g_arch_period_max; }
     ep_leave(ep); ser_compile_end();
     if (ps) { if (captured) *captured = 1; if (full) arch_flush_from(ep); return ps; }
-    ps = plain_rps(d, e);
+    ps = arch_plain_rps(d, e, vd, ce);
     if (ps && !atomic_load(&ep->crashed)) arch_cap_failed(ep, ce, "render"); else if (!ps && e && !*e) *e = ce;
     return ps;
 }
 static id<MTLRenderPipelineState> arch_capture(MTL4PipelineDescriptor *d, NSError **e, int vd, int *captured) { return arch_capture_try(d, e, vd, captured, g_fn_wait_ms, NULL); }
 static id<MTLComputePipelineState> arch_capture_cs(MTL4ComputePipelineDescriptor *d, NSError **e, int *captured) {
     if (captured) *captured = 0;
-    if (!arch_capturing()) return plain_cps(d, e);
+    if (!arch_capturing()) return arch_plain_cps(d, e, nil);
     uint64_t fk[3]; int fn = fn_ids(d, fk);
     if (!fn_claim(fk, fn, g_fn_wait_ms)) {
         fn_gave_up("compute");
-        return plain_cps(d, e);
+        return arch_plain_cps(d, e, nil);
     }
     ser_compile_begin(); ArchEpoch *ep = ep_enter(); NSError *ce = nil;
     id<MTLComputePipelineState> ps = [ep->comp newComputePipelineStateWithDescriptor:d compilerTaskOptions:nil error:&ce];
     if (!ps && err_compiler_died(ce)) { atomic_store(&ep->crashed, 1); arch_died(ce); }
     fn_release(fk, fn);
     int full = 0;
-    if (ps) { ep_key(ep, d); atomic_fetch_add(&g_arch_new, 1); atomic_fetch_add(&ep->cs, 1); full = atomic_fetch_add(&ep->n, 1) + 1 == g_arch_period_max; }
+    if (ps) { ep_key(ep, d); if (arch_pkg_on()) arch_pkg_note_entered(d, 0, 1);
+              atomic_fetch_add(&g_arch_new, 1); atomic_fetch_add(&ep->cs, 1); full = atomic_fetch_add(&ep->n, 1) + 1 == g_arch_period_max; }
     ep_leave(ep); ser_compile_end();
     if (ps) { if (captured) *captured = 1; if (full) arch_flush_from(ep); return ps; }
-    ps = plain_cps(d, e);
+    ps = arch_plain_cps(d, e, ce);
     if (ps && !atomic_load(&ep->crashed)) arch_cap_failed(ep, ce, "compute"); else if (!ps && e && !*e) *e = ce;
     return ps;
 }
@@ -764,6 +847,7 @@ static void pso4_init_once(void) {
             } });
             NSMutableArray<id<MTL4Archive>> *ixf = [NSMutableArray array], *run = [NSMutableArray array]; int nopen = 0, np = 0, nidx = 0; unsigned long nkeys = 0;
             NSMutableArray<ArchUse *> *use = [NSMutableArray array];
+            g_arch_opened = [NSMutableSet set];
             for (NSUInteger i = 0; i < nn; i++) {
                 NSString *n = names[i], *p = [g_arch_dir stringByAppendingPathComponent:n]; int pf = [n hasPrefix:@"p"];
                 g_arch_seq = MAX(g_arch_seq, [n substringFromIndex:pf].intValue + 1);
@@ -775,6 +859,7 @@ static void pso4_init_once(void) {
                     continue;
                 }
                 id<MTL4Archive> a = opened[i]; NSArray *ix = ixs[i] != NSNull.null ? ixs[i] : nil;
+                [g_arch_opened addObject:p];
                 ArchUse *u = [ArchUse new]; u->path = p; u->a = a; u->pf = pf; objc_setAssociatedObject(a, &g_arch_use_tag, u, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [use addObject:u];
                 if (ix) u->keys = [ix[0] length] / sizeof(uint64_t);
                 bytes += [[NSFileManager.defaultManager attributesOfItemAtPath:p error:nil] fileSize];
@@ -885,6 +970,8 @@ static void arch_write_file(ArchEpoch *ep) {
     int crashed = atomic_load(&ep->crashed) || ep->deaths != atomic_load(&g_arch_deaths);
     if (crashed || plain) {
         ser_end();
+        atomic_fetch_add(&g_arch_discarded, 1);
+        arch_pkg_period_done(ep, 0);
         atomic_fetch_sub(&g_arch_new, n); atomic_fetch_sub(&g_arch_new_vd, vd);
         if (ep->compacting) g_compact_bad = 1;
         if (crashed) MLOG("[RED] pipeline archive: a flush period the compiler service died in is not written (%d pipelines: %d bases, %d compute, %d task / mesh); they are captured again at a later start",
@@ -905,6 +992,8 @@ static void arch_write_file(ArchEpoch *ep) {
     NSString *kp = arch_keys_path(path); int keyed = ok && arch_keys_write(kp, ep->keys, !atomic_load(&ep->unkeyed));
     ok = ok && !rename(tmp.fileSystemRepresentation, path.fileSystemRepresentation);
     if (!ok && keyed) unlink(kp.fileSystemRepresentation);
+    if (!ok || !keyed) atomic_fetch_add(&g_arch_discarded, 1);
+    arch_pkg_period_done(ep, ok && keyed);
     if (!ok) { MLOG("[RED] pipeline archive: writing %s failed%s%s", path.UTF8String, e ? ": " : "", e ? e.localizedDescription.UTF8String : ""); unlink(tmp.fileSystemRepresentation); if (ep->compacting) g_compact_bad = 1; }
     else {
         MLOG("pipeline archive: %d new pipeline bases%s%s written to %s (%.1f MB, %.0f ms; compiles held back by the writes so far: %llu, %.0f ms in all)", n - cs - ms,
@@ -925,7 +1014,11 @@ static int arch_warm_flush_due(void) {
 static void arch_hand_over(ArchEpoch *only, int any_time) {
     int warm_due = 0;
     if (!g_arch_cap || (!only && !any_time && atomic_load(&g_warm_running) && !(warm_due = arch_warm_flush_due()))) return;
-    os_unfair_lock_lock(&g_ep_lock); int any = (!only || g_ep == only) && (atomic_load(&g_ep->n) || atomic_load(&g_ep->active) || atomic_load(&g_ep->crashed)); os_unfair_lock_unlock(&g_ep_lock);
+    // a period older than a compiler death is handed over though empty: a new one has a live compiler
+    os_unfair_lock_lock(&g_ep_lock);
+    int stale = atomic_load(&g_ep->crashed) || g_ep->deaths != atomic_load(&g_arch_deaths);
+    int any = (!only || g_ep == only) && (atomic_load(&g_ep->n) || atomic_load(&g_ep->active) || stale);
+    os_unfair_lock_unlock(&g_ep_lock);
     // nothing captured or under way: the period goes on. A compaction due to close closes all the same (left open, the next start would compact again).
     if (!any) {
         if (!only && g_compact_enabled && atomic_load(&g_compacted) && !atomic_load(&g_warm_running) && !atomic_load(&g_compact_harvests) && !atomic_exchange(&g_compact_closed, 1))
@@ -935,7 +1028,7 @@ static void arch_hand_over(ArchEpoch *only, int any_time) {
     ArchEpoch *ne = ep_new();
     if (!ne) { MLOG("[RED] pipeline archive: Metal made no compiler for a new flush period: the captures go on into the current one"); return; }
     os_unfair_lock_lock(&g_ep_lock);
-    ArchEpoch *old = g_ep; any = (!only || old == only) && (atomic_load(&old->n) || atomic_load(&old->active) || atomic_load(&old->crashed));
+    ArchEpoch *old = g_ep; any = (!only || old == only) && (atomic_load(&old->n) || atomic_load(&old->active) || atomic_load(&old->crashed) || old->deaths != atomic_load(&g_arch_deaths));
     if (any) {
         g_ep = ne; atomic_store(&g_ep_t0, bp_now());
         if (warm_due) atomic_fetch_add(&g_warm_flushes, 1);
@@ -968,6 +1061,55 @@ void mtl_arch_save(int wait_ms, int ending) {
 }
 static void arch_at_exit(void) { mtl_warm_stop(); mtl_arch_save(MTL_QUIT_ARCH_MS, 1); }
 static void arch_flush_wait(void) { arch_harvest_wait(DISPATCH_TIME_FOREVER); arch_flush(); if (g_arch_pending) dispatch_group_wait(g_arch_pending, DISPATCH_TIME_FOREVER); }
+// The prebuild tool: captures again what dropped periods lost, once the writes are done (never on g_arch_q), up to g_arch_pkg_max_retries rounds. The pipelines known to
+// build go first, in batches; each lost to a compiler death then gets a period of its own, so one that kills the compiler every time loses no other. Returns the
+// pipelines still not captured (those Metal refuses aside).
+static int arch_pkg_retry(ArchPkgItem *it, int want) {
+    MTL4PipelineDescriptor *d = nil; int vd = 0, compute = 0;
+    os_unfair_lock_lock(&g_pkg_lock);
+    if (it->state == want && it->desc && it->retries < g_arch_pkg_max_retries) { it->retries++; it->state = ARCH_PKG_PENDING; d = it->desc; vd = it->vd; compute = it->compute; }
+    os_unfair_lock_unlock(&g_pkg_lock);
+    if (!d) return 0;
+    @autoreleasepool {
+        NSError *e = nil; int cap = 0;
+        if (compute) (void)arch_capture_cs((MTL4ComputePipelineDescriptor *)d, &e, &cap);
+        else (void)arch_capture_try(d, &e, vd, &cap, g_fn_wait_ms, NULL);
+    }
+    return 1;
+}
+static int arch_pkg_recover(void) {
+    if (!arch_pkg_on()) return 0;
+    arch_flush_wait();
+    int rounds = 0;
+    while (arch_capturing()) {
+        NSMutableArray<ArchPkgItem *> *buildable = [NSMutableArray array], *unconfirmed = [NSMutableArray array];
+        os_unfair_lock_lock(&g_pkg_lock);
+        for (ArchPkgItem *it in g_pkg_items.allValues) {
+            if (!it->desc || it->retries >= g_arch_pkg_max_retries) continue;
+            if (it->state == ARCH_PKG_LOST_BUILDABLE) [buildable addObject:it];
+            else if (it->state == ARCH_PKG_LOST_UNCONFIRMED) [unconfirmed addObject:it];
+        }
+        os_unfair_lock_unlock(&g_pkg_lock);
+        if (!buildable.count && !unconfirmed.count) break;
+        rounds++;
+        MLOG("pipeline prebuild: capturing again what dropped periods lost, round %d of %d (%lu known to build, %lu lost to a compiler death)",
+             rounds, g_arch_pkg_max_retries, (unsigned long)buildable.count, (unsigned long)unconfirmed.count);
+        if (buildable.count) {
+            for (ArchPkgItem *it in buildable) { if (!arch_capturing()) break; arch_pkg_retry(it, ARCH_PKG_LOST_BUILDABLE); }
+            arch_flush_wait();
+        }
+        for (ArchPkgItem *it in unconfirmed) {
+            if (!arch_capturing()) break;
+            if (arch_pkg_retry(it, ARCH_PKG_LOST_UNCONFIRMED)) arch_flush_wait();
+        }
+    }
+    g_pkg_last_rounds += rounds;
+    int missing = atomic_load(&g_pkg_unkeyed_lost);
+    os_unfair_lock_lock(&g_pkg_lock);
+    for (ArchPkgItem *it in g_pkg_items.allValues) if (it->state != ARCH_PKG_WRITTEN && it->state != ARCH_PKG_REJECTED) missing++;
+    os_unfair_lock_unlock(&g_pkg_lock);
+    return missing;
+}
 static void arch_note_new(void) {
     if (!g_arch_q || atomic_exchange(&g_arch_sched, 1)) return;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * (int64_t)NSEC_PER_SEC), g_arch_q, ^{ atomic_store(&g_arch_sched, 0); arch_flush();

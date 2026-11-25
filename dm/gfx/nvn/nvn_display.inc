@@ -82,6 +82,7 @@ static void sort_doubles(double *a, int n) {
 static void present_gpu_note(double s, int fx) {
     static double v[2][600]; static int n[2];
     if (!(s > 0 && s < 1)) return;
+    g_present_gpu_s = g_present_gpu_s > 0 ? g_present_gpu_s * 0.75 + s * 0.25 : s;
     v[fx][n[fx]++] = s * 1e3;
     if (n[fx] < 600) return;
     double *a = v[fx];
@@ -90,7 +91,8 @@ static void present_gpu_note(double s, int fx) {
     n[fx] = 0;
 }
 static double g_link_it_tin;   // only the display-link thread uses it
-static int present_now(const tex_t *t, double period, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
+// latch_ts: the targetTimestamp of a present the latch took, by when its GPU work must end (0 = not latched)
+static int present_now(const tex_t *t, double period, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts, double latch_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
     g_present_n++;
     if (bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
@@ -186,6 +188,7 @@ static int present_now(const tex_t *t, double period, uint64_t ticket, const int
     MTL4CommitOptions *o = [MTL4CommitOptions new];
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
         if (f.error) { MLOG("[RED] display command buffer error: %s", f.error.description.UTF8String); gpu_lost_check(f.error, "display"); }
+        if (latch_ts > 0 && f.GPUEndTime > latch_ts) atomic_fetch_add(&g_link_latch_late_gpu, 1);
         pthread_mutex_lock(&g_pq_mu);
         if (ticket > g_pq_done) g_pq_done = ticket;
         if (ticket > g_present_alloc_done[alloc_i]) g_present_alloc_done[alloc_i] = ticket;
@@ -276,11 +279,27 @@ static int link_latch_on(void) {
     }
     return g_link_latch_on;
 }
+// Seconds from the wake (wk_cb) to the end of the frame's GPU work and present pass had the latch taken it there; -1 without the frame's GPU times. The ring's GPU times
+// are CACurrentMediaTime nanoseconds; work still running counts as ending now (cb).
+static double link_gpu_lead(uint64_t frame, double t_in, double cb, double wk_cb, double pres_gpu) {
+    if (wk_cb < 0) return -1;
+    unsigned k = frame % GRING; uint64_t tag = frame + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    int pend = atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire);
+    uint64_t t1 = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    double end;
+    if (pend) end = cb;
+    else if (t1) end = t1 / 1e9;
+    else return -1;
+    if (t_in > end) end = t_in;
+    return end + pres_gpu - wk_cb;
+}
 // On the display-link thread, once per frame (seconds). Not with present snapshots, which run the game a frame ahead on purpose, nor on the 120 Hz link.
-static void link_drain_note(double cb, double age, int dropped, double lead, double room) {
+static void link_drain_note(double cb, double age, int dropped, double lead, double gpu_lead, double room) {
     if (!link_drain_on()) return;
     int rate = mtl_link_rate(), ok = !dropped && rate != 120 && !mtl_snap_on();
-    int k = nvn_link_drain_next(&g_link_drain, cb, age, 1.0 / rate, atomic_load(&g_link_blocked_ns) / 1e9, ok, lead, room);
+    int k = nvn_link_drain_next(&g_link_drain, cb, age, 1.0 / rate, atomic_load(&g_link_blocked_ns) / 1e9, ok, lead, gpu_lead, room);
     if (k) atomic_store(&g_link_drain_req, k);
     if (k & LINK_DRAIN_LATCH) g_link_latch_misses = 0;
 }
@@ -316,7 +335,8 @@ static void pq_drop(uint64_t first, uint64_t last) {
     const double tick_period = vp > 0 ? vp : 1.0 / rate;
     static double cb_prev, gap_max;
     static int nticks;
-    if (cb_prev > 0 && cb - cb_prev > gap_max) gap_max = cb - cb_prev;
+    const double cb_gap = cb_prev > 0 ? cb - cb_prev : 0;
+    if (cb_gap > gap_max) gap_max = cb_gap;
     cb_prev = cb; nticks++;
     pthread_mutex_lock(&g_link_mu);
     __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
@@ -336,6 +356,20 @@ static void pq_drop(uint64_t first, uint64_t last) {
     const double room = latch ? update.targetTimestamp - cb : 0;
     static uint64_t woken_n;
     if (woke) woken_n++;
+    // a latched present whose GPU work ended late, or a skipped tick after one: leave the latch for this tick (nvn_link_latch_check)
+    static uint64_t seen_late_gpu;
+    int force_exit = 0;
+    if (latch) {
+        uint64_t lg = atomic_load(&g_link_latch_late_gpu);
+        int gpu_missed = lg != seen_late_gpu;
+        seen_late_gpu = lg;
+        int fresh = g_link_drain.in && g_link_drain.held < LINK_LATCH_GIVE_UP;
+        force_exit = nvn_link_latch_check(&g_link_latch_health, cb_gap, tick_period, gpu_missed, fresh);
+        if (force_exit) { g_link_latch_misses = LINK_LATCH_GIVE_UP; g_link_latch_exits++; }
+    } else {
+        seen_late_gpu = atomic_load(&g_link_latch_late_gpu);
+        g_link_latch_health = (nvn_link_latch_health){0};
+    }
     if (latch) {
         static double rmin = 1e9, rsum;
         static int rn;
@@ -343,23 +377,24 @@ static void pq_drop(uint64_t first, uint64_t last) {
         if (r < rmin) rmin = r;
         rsum += r;
         if (++rn == 300) {
-            MLOG("display link: from the callback to its targetTimestamp over 300 ticks: min %.2f ms, mean %.2f ms (late latch: %llu presents taken, %llu timeouts, entered by %llu drains, the next needs %.0f s of early frames)", rmin * 1e3, rsum / rn * 1e3, (unsigned long long)g_link_latched, (unsigned long long)g_link_latch_out, (unsigned long long)g_link_drain.entries, LINK_DRAIN_SECS * (double)(1u << g_link_drain.back));
+            MLOG("display link: from the callback to its targetTimestamp over 300 ticks: min %.2f ms, mean %.2f ms (late latch: %llu presents taken, %llu timeouts, %llu exits (%llu late GPU), entered by %llu drains, the next needs %.0f s of early frames)", rmin * 1e3, rsum / rn * 1e3, (unsigned long long)g_link_latched, (unsigned long long)g_link_latch_out, (unsigned long long)g_link_latch_exits, (unsigned long long)atomic_load(&g_link_latch_late_gpu), (unsigned long long)g_link_drain.entries, LINK_DRAIN_SECS * (double)(1u << g_link_drain.back));
             rmin = 1e9; rsum = 0; rn = 0;
         }
     }
     // the last two callbacks that woke an acquire and their room, so each frame taken is timed from the wake before it
     static double wk_cb[2] = {-1, -1}, wk_room[2];
     if (woke && latch) { wk_cb[1] = wk_cb[0]; wk_room[1] = wk_room[0]; wk_cb[0] = cb; wk_room[0] = room; }
-    if (woke && !hold && g_pq_read == g_pq_in && latch) {
+    int latched_now = 0;
+    if (!force_exit && woke && !hold && g_pq_read == g_pq_in && latch) {
         double w = nvn_link_latch_wait(cb, cb + room, tick_period, g_link_latch_misses, woken_n, drain_end);
         if (w > 0) {
             const uint64_t in0 = g_pq_in; struct timespec ts = link_deadline((uint64_t)(w * 1e9));
             while (g_pq_in == in0) if (pthread_cond_timedwait(&g_pq_cv, &g_pq_mu, &ts) == ETIMEDOUT) break;
-            if (g_pq_in > in0) { g_link_latched++; g_link_latch_misses = 0; } else { g_link_latch_out++; g_link_latch_misses++; }
+            if (g_pq_in > in0) { g_link_latched++; g_link_latch_misses = 0; latched_now = 1; } else { g_link_latch_out++; g_link_latch_misses++; }
         }
     }
-    if (g_pq_read == g_pq_in) { g_link_empty++; pthread_mutex_unlock(&g_pq_mu); return; }
-    if (hold) { g_link_held++; pthread_mutex_unlock(&g_pq_mu); return; }
+    if (g_pq_read == g_pq_in) { g_link_latch_health.prev = 0; g_link_empty++; pthread_mutex_unlock(&g_pq_mu); return; }
+    if (hold) { g_link_latch_health.prev = 0; g_link_held++; pthread_mutex_unlock(&g_pq_mu); return; }
     uint64_t first = g_pq_read + 1, ticket = g_pq_in;
     // In order, one frame per tick and at most one behind the newest: taking the newest drops a frame whenever two land in the same refresh.
     static int fifo = -1;
@@ -370,6 +405,7 @@ static void pq_drop(uint64_t first, uint64_t last) {
     }
     if (fifo && ticket > first) ticket = ticket - first >= 2 ? g_pq_in - 1 : first;
     pq_item it = g_pq[(ticket - 1) % PQ]; g_link_it_tin = it.t_in;
+    const double pres_gpu = g_present_gpu_s;
     g_pq_read = ticket;
     if (ticket > first) pq_drop(first, ticket - 1);
     if (ticket > 1 && g_pq_done < ticket - 1) g_pq_done = ticket - 1;
@@ -382,11 +418,13 @@ static void pq_drop(uint64_t first, uint64_t last) {
     // The drain (nvn_link_drain.h): the next acquire waits the ticks the queued frames have to spare, so the queue runs empty without a repeated or dropped frame.
     {
         const int k = !latch || hold_ticks >= 2 ? -1 : it.t_in >= wk_cb[0] ? 0 : it.t_in >= wk_cb[1] ? 1 : -1;
-        link_drain_note(cb, cb - it.t_in, ticket > first, k < 0 || wk_cb[k] < 0 ? -1 : it.t_in - wk_cb[k], k < 0 ? 0 : wk_room[k]);
+        const double gl = k < 0 ? -1 : link_gpu_lead(it.frame, it.t_in, cb, wk_cb[k], pres_gpu);
+        link_drain_note(cb, cb - it.t_in, ticket > first, k < 0 || wk_cb[k] < 0 ? -1 : it.t_in - wk_cb[k], gl, k < 0 ? 0 : wk_room[k]);
     }
     int submitted;
     snap_commit_wait(it.snap_v); sub_commit_wait(it.sub_v);
-    @autoreleasepool { submitted = present_now(&it.t, it.period, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); mtl_tex_unpin(it.t.serial); }
+    @autoreleasepool { submitted = present_now(&it.t, it.period, ticket, it.crop, update.drawable, update.targetPresentationTimestamp, latched_now ? update.targetTimestamp : 0); mtl_tex_unpin(it.t.serial); }
+    g_link_latch_health.prev = submitted && latched_now;
     g_link_hold_until = submitted && hold_ticks >= 2 ? tick_time + hold_ticks * tick_period : 0;
     if (!submitted) {
         pthread_mutex_lock(&g_pq_mu);
@@ -582,7 +620,7 @@ static void *present_main(void *arg) {
         pthread_mutex_unlock(&g_pq_mu);
         int submitted;
         snap_commit_wait(it.snap_v); sub_commit_wait(it.sub_v);
-        @autoreleasepool { submitted = present_now(&it.t, it.period, ticket, it.crop, nil, 0); mtl_tex_unpin(it.t.serial); }
+        @autoreleasepool { submitted = present_now(&it.t, it.period, ticket, it.crop, nil, 0, 0); mtl_tex_unpin(it.t.serial); }
         pthread_mutex_lock(&g_pq_mu); g_classic_busy = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
         if (!submitted) {
             pthread_mutex_lock(&g_pq_mu);
@@ -914,23 +952,23 @@ static struct timespec link_deadline(uint64_t ns) {
     if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
     return ts;
 }
+static uint64_t g_link_started_tick;   // under g_link_mu: the tick the last wait ended on (only the game's present thread waits)
 int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns) {
     if (!mtl_link_active()) return 0;
-    static uint64_t started_tick;   // only the game's present thread calls this
     const uint64_t step = ticks < 1 ? 1 : (uint64_t)ticks;
     // a wait that finds its tick already passed is a game that fell behind since: no drain
     const int req = atomic_exchange(&g_link_drain_req, 0), drain = req & (LINK_DRAIN_LATCH - 1), into_latch = !!(req & LINK_DRAIN_LATCH);
     pthread_mutex_lock(&g_link_mu);
-    if (g_link_tick_n >= started_tick + step) {
-        started_tick = g_link_tick_n;
+    if (g_link_tick_n >= g_link_started_tick + step) {
+        g_link_started_tick = g_link_tick_n;
         pthread_mutex_unlock(&g_link_mu);
         atomic_store(&g_link_blocked_ns, 0);
         return 1;
     }
     uint64_t w0 = now_ns();
     struct timespec ts = link_deadline(timeout_ns);
-    g_link_waiter = drain > 0 ? 0 : started_tick + step;
-    while (g_link_tick_n < started_tick + step)
+    g_link_waiter = drain > 0 ? 0 : g_link_started_tick + step;
+    while (g_link_tick_n < g_link_started_tick + step)
         if (pthread_cond_timedwait(&g_link_cv, &g_link_mu, &ts) == ETIMEDOUT) {
             g_link_waiter = 0;
             pthread_mutex_unlock(&g_link_mu);
@@ -948,7 +986,7 @@ int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns) {
         g_link_waiter = 0; g_link_waiter_end = 0;
         drained = now_ns() - w1;
     }
-    started_tick = g_link_tick_n;
+    g_link_started_tick = g_link_tick_n;
     pthread_mutex_unlock(&g_link_mu);
     if (drain > 0) {
         atomic_fetch_add(&g_link_drain_ns, drained);

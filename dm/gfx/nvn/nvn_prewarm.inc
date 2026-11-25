@@ -1,7 +1,8 @@
 // The pairs' prebuild, the draw's pipeline lookup (pso_get), slice-merged pipelines, the prewarm lists, the prepare step, the prebuild tool, depth-stencil states.
 // Prebuild (DM_PSO_PREBUILD): each shader_pairs.tsv pair's base as a hybrid draw makes it (pulling entry, no vertex descriptor, colour state open) into the pipeline archive,
 // which matches libraries by content. Once per chain version, depth mode and pair list (prebuilt.tsv), and again when a library file it lacked arrives.
-static _Atomic int g_pre_running; static _Atomic int g_pre_next, g_pre_done, g_pre_built, g_pre_archived, g_pre_skipped, g_pre_failed;
+static _Atomic int g_pre_running, g_pre_flushing; static _Atomic int g_pre_next, g_pre_done, g_pre_built, g_pre_archived, g_pre_skipped, g_pre_failed;
+static int g_pre_tail_ms = 10000;   // prepare_prebuild's wait for the last compiles once every pair is handed out (the tests shorten it)
 // Pairs whose base failed under this system build and stamp (prebuild_failed.tsv) are left to the draws: Metal can retry a failing compile for half an hour, at every start.
 // g_pre_known: those lines by pair ("vertex<TAB>pixel"); g_pre_fails: this run's new lines
 static NSDictionary<NSString *, NSString *> *g_pre_known; static NSMutableArray<NSString *> *g_pre_fails; static os_unfair_lock g_pre_fail_lock = OS_UNFAIR_LOCK_INIT;
@@ -213,9 +214,9 @@ static int pso_prebuild(int threads, int wait, dispatch_qos_class_t qos) {
     // done, unless its failures were found on another system build
     if (pre_stamp_done([NSString stringWithContentsOfFile:stamp encoding:NSUTF8StringEncoding error:nil], want) && !other) { g_pre_running = 0; return -1; }
     g_pre_nolib = 0; g_pre_nolib_file = nil;
-    int n = (int)pairs.count; uint64_t t0 = bp_now(); int done0 = g_pre_done;
+    int n = (int)pairs.count; uint64_t t0 = bp_now(); int done0 = g_pre_done; uint64_t disc0 = atomic_load(&g_arch_discarded);
     MLOG("pipeline prebuild: %d shader pairs of %s%s%s, %d workers (%s)", n, pp.UTF8String, txt2 ? " and " : "", txt2 ? pp2.UTF8String : "", threads, wait ? "tool" : prepare_on() ? "prepare step, before the first frame" : "background");
-    atomic_store(&g_pre_next, 0); g_pre_later_n = 0; g_pre_deferred = 0;
+    atomic_store(&g_pre_next, 0); atomic_store(&g_pre_flushing, 0); g_pre_later_n = 0; g_pre_deferred = 0;
     NSArray<NSNumber *> *ord = pre_order(pairs);
     void (^pre_done)(void) = ^{
         int d = ++g_pre_done;
@@ -240,12 +241,16 @@ static int pso_prebuild(int threads, int wait, dispatch_qos_class_t qos) {
         while (pre_later_take(&l, 1)) one(l.p);
     });
     dispatch_block_t done = ^{
+        atomic_store(&g_pre_flushing, 1);
         arch_flush_wait();
+        int missing = arch_pkg_on() ? arch_pkg_recover() : 0;
+        int intact = arch_pkg_on() ? !missing && !atomic_load(&g_arch_cap_off) : atomic_load(&g_arch_discarded) == disc0 && !atomic_load(&g_arch_cap_off);
         NSMutableArray<NSString *> *fails = [NSMutableArray arrayWithArray:g_pre_known.allValues]; [fails addObjectsFromArray:g_pre_fails];
         if (fails.count) [[NSString stringWithFormat:@"# pipeline prebuild: pairs whose base failed to build on this system build, left to the draws until it or the stamp changes (nvn_mtl.m, pre_fail_load)\n%@%@\n",
                             pre_fail_head(want), [fails componentsJoinedByString:@"\n"]] writeToFile:failp atomically:YES encoding:NSUTF8StringEncoding error:nil];
         else unlink(failp.fileSystemRepresentation);
-        if (atomic_load(&g_pre_next) >= n && !g_pre_later_n) [pre_device_stamp(want) writeToFile:stamp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        // no stamp after a dropped period either: the next start builds what it lost
+        if (atomic_load(&g_pre_next) >= n && !g_pre_later_n && intact) [pre_device_stamp(want) writeToFile:stamp atomically:YES encoding:NSUTF8StringEncoding error:nil];
         MLOG("pipeline prebuild done: %d pairs, %d bases built, %d already archived, %d left to the draws, %d failed, %.1f s; %d times a pair was put back while another capture had one of its shader functions (fn_claim)",
              n, (int)g_pre_built, (int)g_pre_archived, (int)g_pre_skipped, (int)g_pre_failed, (bp_now() - t0) / 1e9, (int)g_pre_deferred);
         if (g_pre_done - done0 == n && !atomic_load(&g_warm_stop)) { atomic_store(&g_sweep_pairs, 1); arch_sweep(); }
@@ -253,6 +258,7 @@ static int pso_prebuild(int threads, int wait, dispatch_qos_class_t qos) {
         if (fails.count) MLOG("pipeline prebuild: %lu pairs whose base failed are left to the draws (%s; %d of them failed on an earlier start of this system build, not built again); another system build tries them again",
                               (unsigned long)fails.count, failp.UTF8String, (int)g_pre_known_n);
         g_pre_running = 0;
+        atomic_store(&g_pre_flushing, 0);
     };
     if (wait) { dispatch_group_wait(g, DISPATCH_TIME_FOREVER); done(); }
     else dispatch_group_notify(g, dispatch_get_global_queue(qos, 0), done);
@@ -265,7 +271,7 @@ static void pso_prebuild_bg(void) {
     int pc = 0; size_t sz = sizeof pc; if (sysctlbyname("hw.perflevel0.physicalcpu", &pc, &sz, NULL, 0) || pc <= 1) pc = 4;
     pso_prebuild(pc > 4 ? pc / 2 : 2, 0, QOS_CLASS_UTILITY);
 }
-static id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRenderPassDescriptor *unused);
+static void *pso_get_(NvProg *pr, MTLRenderPassDescriptor *unused);
 static id<MTLFunction> ms_fs_override(NvShader *fs);
 static int pf_int_kind(MTLPixelFormat f);
 // A refused pipeline whose integer attachment meets a float-translated output: print the facts row for shader_facts_manual.tsv until fs_uint knows that shape.
@@ -278,7 +284,9 @@ static const char *pso_fout_hint(NvShader *fs, const uint32_t cfmt[8], char *b, 
     if (o < (int)n) snprintf(b + o, n - o, "}}");
     return b;
 }
-static id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRenderPassDescriptor *unused) { AP_B; __unsafe_unretained id<MTLRenderPipelineState> r = pso_get_(pr, unused); AP_E(2); return r; }
+// as prog_get: a plain pointer (the pipeline tables hold every pipeline pso_get_ returns)
+static void *pso_get_ref(NvProg *pr, MTLRenderPassDescriptor *unused) { AP_B; void *r = pso_get_(pr, unused); AP_E(2); return r; }
+#define pso_get(pr, unused) ((__bridge id<MTLRenderPipelineState>)pso_get_ref(pr, unused))
 // Slice-merged (AMP_MARK) and face-split (FSP_MARK) pipelines are built in the background; until then the draw gets nil and a pass of its own. A failed build is not retried.
 enum { SM_AMP_MAX = 128 };
 static struct { pso_key k; id<MTLRenderPipelineState> ps; int done; } g_sm_amp[SM_AMP_MAX]; static int g_sm_amp_n; static os_unfair_lock g_sm_amp_lock = OS_UNFAIR_LOCK_INIT;
@@ -296,37 +304,37 @@ static id<MTLRenderPipelineState> sm_amp_get(const pso_key *k, NvShader *vs, NvS
         os_unfair_lock_lock(&g_sm_amp_lock); g_sm_amp[i].ps = ps; g_sm_amp[i].done = 1; os_unfair_lock_unlock(&g_sm_amp_lock); });
     return nil;
 }
-static id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRenderPassDescriptor *unused) {
+static void *pso_get_(NvProg *pr, MTLRenderPassDescriptor *unused) {
     (void)unused;
     g_pso_pull = 0;   // set only where a pulling pipeline is returned: a stale 1 would bind the layout block for a cached pipeline
     __unsafe_unretained NvShader *vs = pr->sh[0], *fs = pr->sh[1];
-    if (!vs) { RED_ONCE(13, "program has no vertex shader (or it is not mapped)"); return nil; }
+    if (!vs) { RED_ONCE(13, "program has no vertex shader (or it is not mapped)"); return NULL; }
     pso_key k; pso_key_fill(&k, vs, fs, g_pass.cfmt, g_pass.dfmt, g_pass.sfmt, g_pass.samples, g_pso_lmap != NULL);
     if (S.rast_discard) {
         k.fsfn = DISCARD_MARK;
-        id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
-        if (cached) return cached;
-        if (hm_get_id(&g_pso_fail, &k)) return nil;
+        __unsafe_unretained id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
+        if (cached) return (__bridge void *)cached;
+        if (hm_get_id(&g_pso_fail, &k)) return NULL;
         NSError *error = nil;
         id<MTLRenderPipelineState> ps = pso_build(pso_desc(&k, vs, nil, nil, 0), pso_off(&k, nil, 0), &error);
         if (ps) hm_put_id(&g_pso, &k, ps);
         else { MLOG("[RED] rasterizer-discard pipeline (vertex %s): %s", vs->key, error.localizedDescription.UTF8String); hm_put_id(&g_pso_fail, &k, NSNull.null); }
-        return ps;
+        return (__bridge void *)ps;
     }
     if (g_pso_lmap) { memcpy(k.lmap, g_pso_lmap, 8); k.fsfn = (__bridge void *)g_pso_fsfn; }
     id<MTLFunction> ms_fn = ms_fs_override(fs); if (ms_fn) k.fsfn = (__bridge void *)ms_fn;
-    if (g_pso_amp) { if (k.fsfn || g_pso_lmap) return nil; k.fsfn = AMP_MARK; return sm_amp_get(&k, vs, fs); }
+    if (g_pso_amp) { if (k.fsfn || g_pso_lmap) return NULL; k.fsfn = AMP_MARK; return (__bridge void *)sm_amp_get(&k, vs, fs); }
     // A layout Metal's vertex fetch cannot read draws with the pulling pipeline. DM_PSO_PULL_ALL=1 (diagnostic): every draw with one ready uses it.
     { static int all = -1; if (all < 0) { const char *ev = getenv("DM_PSO_PULL_ALL"); all = ev && !strcmp(ev, "1"); if (all) MLOG("DM_PSO_PULL_ALL=1: every draw with a pulling pipeline draws with it (diagnostic)"); }
       if (!g_pso_lmap && !ms_fn) {
           __unsafe_unretained id<MTLRenderPipelineState> h = pull_conversion(vs, &k) ? pull_pso(&k, vs, fs) : all && hybrid_on() ? hybrid_get(&k, vs, fs) : nil;
-          if (h) { g_pso_pull = 1; return h; }
+          if (h) { g_pso_pull = 1; return (__bridge void *)h; }
       } }
     __unsafe_unretained id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
     PD("J pipeline source=draw pass=%llu key=%016llx cache=%d vs=%s fs=%s depth=%u stencil=%u samples=%u", g_pass.serial,
        (unsigned long long)nvn_hm_hash(&k, sizeof k), cached != nil, vs->key, fs ? fs->key : "-", k.dfmt, k.sfmt, k.samples);
-    if (cached) return cached;
-    if (hm_get_id(&g_pso_fail, &k)) return nil;
+    if (cached) return (__bridge void *)cached;
+    if (hm_get_id(&g_pso_fail, &k)) return NULL;
     id<MTLRenderPipelineState> ps = nil; int took = 0;
     NSError *e = nil; uint64_t bt = bp_now(), pred0 = g_pt_pred_ns;
     g_pso_pull = 0; int why = g_pso_lmap ? 1 : ms_fn ? 2 : 0;
@@ -344,7 +352,7 @@ static id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRenderPassDescriptor *
                     demand_record(&k, vs, fs);
                     g_pso_pull = 1; g_hy_ns += bp_now() - bt;
                     if (pso_predict_due(st == 0)) { uint64_t t0 = bp_now(); pso_predict_rest(); g_bp_pso_ns += bp_now() - t0; }
-                    return h;
+                    return (__bridge void *)h;
                 }
             }
         }
@@ -362,7 +370,7 @@ static id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRenderPassDescriptor *
     }
     g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
     if (!ps) { char hint[200]; MLOG("[RED] failed to create render pipeline (vertex %s fragment %s): %s%s", vs->key, fs ? fs->key : "-", e.localizedDescription.UTF8String, pso_fout_hint(fs, g_pass.cfmt, hint, sizeof hint));
-               hm_put_id(&g_pso_fail, &k, NSNull.null); return nil; }
+               hm_put_id(&g_pso_fail, &k, NSNull.null); return NULL; }
     if (!ms_fn) { pso_skey sk; char shex[sizeof sk * 2 + 1]; pso_skey_from(&k, vs, fs, g_pso_lmap != NULL, g_pso_lmap ? &g_pso_fz : NULL, &sk); pso_skey_hex(&sk, shex);
         pso_record("R\t%s\n", shex);
         pso_user_record("R\t%s\n", shex); }
@@ -373,7 +381,7 @@ static id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRenderPassDescriptor *
         uint64_t scan_t0 = bp_now(); pso_predict_rest();
         g_bp_pso_ns += bp_now() - scan_t0;
     }
-    return ps;
+    return (__bridge void *)ps;
 }
 static NSString *warm_key(const char *s, size_t n) {
     size_t z = strnlen(s, n);
@@ -622,8 +630,79 @@ static void warm_prepare(NSArray<WarmTask *> *tasks, long lines) {
          lines, (unsigned long long)g_warm_shaders, (unsigned long long)g_warm_rps, (unsigned long long)g_warm_cps, (bp_now() - t0) / 1e9, workers, shown ? "shown" : "not shown",
          (unsigned long long)(g_pb_built - built0), (unsigned long long)(g_pb_archived - arch0), again, (unsigned long long)(g_pb_reused - reused0), (unsigned long long)(g_pb_spec - spec0));
 }
-// The pairs' bases before the first frame: built while playing, the compiler would share the power budget. Waits until every pair is handed out, so a compile that never returns
-// does not hold the start.
+// The p files the prepare step's prebuild wrote, opened before the first frame (no draw and no prebuild worker runs, so arch_lookup stays without a lock), within
+// arch_admit's address-space reserve; oldest first, so a newer file's key wins. Out of g_arch_use: arch_sweep does not move them out before play has asked for them.
+static void arch_adopt_prebuilt(void) {
+    if (!g_arch_dir || !g_comp4 || g_pre_tool) return;
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (NSString *n in [NSFileManager.defaultManager contentsOfDirectoryAtPath:g_arch_dir error:nil])
+        if ([n hasPrefix:@"p"] && [n hasSuffix:@".mtl4a"] && ![g_arch_opened containsObject:[g_arch_dir stringByAppendingPathComponent:n]]) [names addObject:n];
+    if (!names.count) return;
+    [names sortUsingComparator:^NSComparisonResult(NSString *x, NSString *y) {
+        int a = [x substringFromIndex:1].intValue, b = [y substringFromIndex:1].intValue;
+        return a < b ? NSOrderedAscending : a > b ? NSOrderedDescending : NSOrderedSame;
+    }];
+    uint64_t bytes = 0, pg = (uint64_t)getpagesize(); unsigned files = 0;
+    for (NSString *n in names) {
+        uint64_t sz = arch_file_size([g_arch_dir stringByAppendingPathComponent:n], NULL);
+        if (!sz) continue;
+        if (sz > UINT64_MAX - (pg - 1)) return;
+        sz = (sz + pg - 1) / pg * pg;
+        if (sz > UINT64_MAX - bytes) return;
+        bytes += sz; files++;
+    }
+    if (!files) return;
+    uint64_t free_va = 0, largest = 0; const uint64_t reserve = 2ull << 30;
+    int have_vm = arch_vm_room(&free_va, &largest);
+    if (!have_vm || bytes > largest || reserve > largest - bytes) {
+        if (!have_vm) MLOG("pipeline archive %s: %u newly prebuilt files (%.1f MiB) not opened this run (address-space bounds unavailable): the next start takes them",
+                           g_arch_dir.UTF8String, files, bytes / 1048576.0);
+        else MLOG("pipeline archive %s: %u newly prebuilt files (%.1f MiB) not opened this run (largest address-space gap %.1f MiB, runtime reserve %.1f MiB): the next start takes them",
+                  g_arch_dir.UTF8String, files, bytes / 1048576.0, largest / 1048576.0, reserve / 1048576.0);
+        return;
+    }
+    uint64_t t0 = bp_now();
+    NSUInteger nn = names.count;
+    NSMutableArray *opened = [NSMutableArray arrayWithCapacity:nn], *ixs = [NSMutableArray arrayWithCapacity:nn], *why = [NSMutableArray arrayWithCapacity:nn];
+    for (NSUInteger i = 0; i < nn; i++) { [opened addObject:NSNull.null]; [ixs addObject:NSNull.null]; [why addObject:NSNull.null]; }
+    arch_open_begin();
+    dispatch_apply(nn, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t i) { @autoreleasepool {
+        NSString *p = [g_arch_dir stringByAppendingPathComponent:names[i]]; NSError *ae = nil; int complete = 0;
+        id<MTL4Archive> a = arch_open(p, &ae);
+        NSData *keys = a ? arch_keys_read(arch_keys_path(p), &complete) : nil;
+        @synchronized (opened) {
+            if (a) opened[i] = a;
+            if (keys) ixs[i] = @[keys, @(complete)];
+            if (ae) why[i] = ae.localizedDescription ?: @"";
+        }
+    } });
+    arch_open_end();
+    NSMutableArray<id<MTL4Archive>> *ixf = [NSMutableArray arrayWithArray:g_arch_ixf ?: @[]], *archp = [NSMutableArray arrayWithArray:g_arch4p ?: @[]];
+    int nopen = 0, nidx = 0; unsigned long nkeys = 0; unsigned long long open_bytes = 0;
+    if (!g_arch_opened) g_arch_opened = [NSMutableSet set];
+    for (NSUInteger i = 0; i < nn; i++) {
+        NSString *p = [g_arch_dir stringByAppendingPathComponent:names[i]];
+        if (opened[i] == NSNull.null) {
+            MLOG("[RED] pipeline archive: newly prebuilt file %s not usable (%s)", p.UTF8String, why[i] != NSNull.null ? [why[i] UTF8String] : "not a pipeline archive");
+            continue;
+        }
+        id<MTL4Archive> a = opened[i]; NSArray *ix = ixs[i] != NSNull.null ? ixs[i] : nil;
+        [g_arch_opened addObject:p];
+        open_bytes += [[NSFileManager.defaultManager attributesOfItemAtPath:p error:nil] fileSize];
+        nopen++; nidx += ix != nil;
+        if (!ix) { [archp insertObject:a atIndex:0]; continue; }
+        NSData *keys = ix[0]; const uint64_t *kv = keys.bytes; NSUInteger nk = keys.length / sizeof(uint64_t);
+        for (NSUInteger j = 0; j < nk; j++) if (!nvn_hm_put(&g_arch_ix, &kv[j], (__bridge void *)a)) nkeys++;
+        if ([ix[1] intValue]) [ixf addObject:a]; else [archp insertObject:a atIndex:0];
+    }
+    if (!nopen) return;
+    g_arch_ixf = ixf; g_arch4p = archp;
+    os_unfair_lock_lock(&g_pbase_lock); nvn_hm_clear(&g_pbase_miss, hm_rel); os_unfair_lock_unlock(&g_pbase_lock);
+    MLOG("pipeline archive %s: %d newly prebuilt files (%d with an index of %lu pipelines), %.1f MB, opened in %.1f ms",
+         g_arch_dir.UTF8String, nopen, nidx, nkeys, open_bytes / 1048576.0, (bp_now() - t0) / 1e6);
+}
+// The pairs' bases before the first frame: built while playing, the compiler would share the power budget. Waits until every pair is handed out, then for the last compiles
+// and the write, so arch_adopt_prebuilt opens the files before the first frame; a compile that never returns holds the start only g_pre_tail_ms.
 static void prepare_prebuild(void) {
     const char *e = getenv("DM_PSO_PREBUILD"); if (e && !strcmp(e, "0")) return;
     if (!hybrid_on()) return;
@@ -633,13 +712,22 @@ static void prepare_prebuild(void) {
     // a pair put back counts as not yet built
     for (;;) {
         pthread_mutex_lock(&g_fn_mu); int later = g_pre_later_n; pthread_mutex_unlock(&g_fn_mu);
-        if (!atomic_load(&g_pre_running) || (atomic_load(&g_pre_next) >= n && !later)) break;
+        if (!atomic_load(&g_pre_running) || atomic_load(&g_warm_stop) || (atomic_load(&g_pre_next) >= n && !later)) break;
+        usleep(50000);
+        if (!shown && bp_now() - t0 >= 500000000ull) shown = 1;
+        if (shown) front_progress("Preparing pipelines", g_pre_done, n);
+    }
+    // the last compiles, for at most g_pre_tail_ms; once every worker has returned (g_pre_flushing), the write
+    uint64_t tail0 = bp_now();
+    while (atomic_load(&g_pre_running) && !atomic_load(&g_warm_stop)) {
+        if (!atomic_load(&g_pre_flushing) && bp_now() - tail0 >= (uint64_t)g_pre_tail_ms * NSEC_PER_MSEC) break;
         usleep(50000);
         if (!shown && bp_now() - t0 >= 500000000ull) shown = 1;
         if (shown) front_progress("Preparing pipelines", g_pre_done, n);
     }
     int left = atomic_load(&g_pre_running) ? n - (int)g_pre_done : 0;
     if (left > 0) MLOG("pipeline prepare: every shader pair handed out after %.1f s; %d compiles still under way finish in the background", (bp_now() - t0) / 1e9, left);
+    if (!atomic_load(&g_pre_running) && !atomic_load(&g_warm_stop)) arch_adopt_prebuilt();
     if (shown) front_progress(NULL, n, n);
 }
 // DM_PSO_MANIFEST=<file> alone, else the profile's pso_manifest.tsv and this device's pso_user.tsv; none for DM_PSO_MANIFEST=off
@@ -679,24 +767,58 @@ static long pre_warm_lists(NSArray<NSString *> *paths, int threads) {
          (unsigned long long)g_warm_cps, (unsigned long long)g_warm_mps, (int)atomic_load(&g_pre_warm_failed));
     return lines;
 }
-// DM_PSO_PREBUILD_OUT: the work folder's files as <GPU>-prewarm-<NN>.mtl4a with .keys and .mtl4-json, and prewarm.tsv (pso_bundle_open_prewarm). Returns 1, 2 when incomplete.
+// DM_PSO_PREBUILD_OUT: what dropped periods lost captured again (arch_pkg_recover), then the work folder's files as <GPU>-prewarm-<NN>.mtl4a with .keys and .mtl4-json, and
+// prewarm.tsv (pso_bundle_open_prewarm); the keys published are checked against those asked for. Returns 1, 2 when the files are not usable (a pipeline still missing is
+// only reported: without the files the packing script would drop them all).
 static int pre_bundle_out(NSString *out, long lines) {
+    if (arch_pkg_on()) (void)arch_pkg_recover();
     NSFileManager *fm = NSFileManager.defaultManager; NSString *pre = prewarm_prefix(g_dev.architecture.name);
     NSArray<NSString *> *staged = [[[fm contentsOfDirectoryAtPath:g_arch_dir error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self ENDSWITH '.mtl4a'"]] sortedArrayUsingSelector:@selector(compare:)];
     [fm createDirectoryAtPath:out withIntermediateDirectories:YES attributes:nil error:nil];
     for (NSString *old in [fm contentsOfDirectoryAtPath:out error:nil]) if ([old hasPrefix:pre] || [old hasPrefix:@"prewarm-"] || [old isEqualToString:@"prewarm.tsv"]) [fm removeItemAtPath:[out stringByAppendingPathComponent:old] error:nil];
     int k = 0, bad = 0; unsigned long long bytes = 0;
+    NSMutableSet<NSNumber *> *pub_keys = [NSMutableSet set];
     BOOL (^put)(NSString *, NSString *) = ^BOOL(NSString *src, NSString *dst) { return [fm linkItemAtPath:src toPath:dst error:nil] || [fm copyItemAtPath:src toPath:dst error:nil]; };
     for (NSString *name in staged) {
         NSString *src = [g_arch_dir stringByAppendingPathComponent:name];
         if (!arch_file_ok(src)) { bad++; MLOG("[RED] pipeline prebuild: %s is not a pipeline archive, left out", src.UTF8String); continue; }
         NSString *dst = [out stringByAppendingPathComponent:[NSString stringWithFormat:@"%@%02d.mtl4a", pre, k]];
         if (!put(src, dst)) { bad++; MLOG("[RED] pipeline prebuild: cannot put %s in %s", name.UTF8String, out.UTF8String); continue; }
-        NSString *ksrc = arch_keys_path(src);
-        if ([fm fileExistsAtPath:ksrc] && !put(ksrc, arch_keys_path(dst))) MLOG("[RED] pipeline prebuild: cannot put the index of %s in %s", name.UTF8String, out.UTF8String);
+        NSString *ksrc = arch_keys_path(src), *kdst = arch_keys_path(dst);
+        if ([fm fileExistsAtPath:ksrc]) {
+            if (!put(ksrc, kdst)) MLOG("[RED] pipeline prebuild: cannot put the index of %s in %s", name.UTF8String, out.UTF8String);
+            else {
+                int complete = 0; NSData *kd = arch_keys_read(kdst, &complete);
+                const uint64_t *kv = kd.bytes; NSUInteger nk = kd.length / sizeof(uint64_t);
+                for (NSUInteger i = 0; i < nk; i++) [pub_keys addObject:@(kv[i])];
+            }
+        }
         NSString *js = [src.stringByDeletingPathExtension stringByAppendingPathExtension:@"mtl4-json"];
         if (js && [fm fileExistsAtPath:js]) put(js, [out stringByAppendingPathComponent:[NSString stringWithFormat:@"prewarm-%02d.mtl4-json", k]]);
         bytes += [[fm attributesOfItemAtPath:dst error:nil] fileSize]; k++;
+    }
+    int requested = 0, published = 0, recovered = 0, rejected = 0, missing_lost = atomic_load(&g_pkg_unkeyed_lost), missing_died = 0;
+    NSMutableArray<NSNumber *> *missing_keys = [NSMutableArray array];
+    os_unfair_lock_lock(&g_pkg_lock);
+    for (ArchPkgItem *it in g_pkg_items.allValues) {
+        requested++;
+        if ([pub_keys containsObject:@(it->key)]) { published++; if (it->retries > 0) recovered++; }
+        else if (it->state == ARCH_PKG_REJECTED) rejected++;
+        else { if (it->state == ARCH_PKG_LOST_UNCONFIRMED) missing_died++; else missing_lost++; [missing_keys addObject:@(it->key)]; }
+    }
+    os_unfair_lock_unlock(&g_pkg_lock);
+    g_pkg_last_requested = requested; g_pkg_last_published = published; g_pkg_last_recovered = recovered;
+    g_pkg_last_missing_lost = missing_lost; g_pkg_last_missing_died = missing_died; g_pkg_last_rejected = rejected;
+    int missing = missing_lost + missing_died;
+    if (recovered) MLOG("pipeline prebuild: %d captures that dropped periods lost were made again in new periods (%d rounds)", recovered, g_pkg_last_rounds);
+    if (rejected) MLOG("pipeline prebuild: %d pipelines Metal refuses to build, not tried again (no compiler death)", rejected);
+    if (missing) {
+        [missing_keys sortUsingSelector:@selector(compare:)];
+        NSMutableArray<NSString *> *sample = [NSMutableArray array];
+        for (NSUInteger i = 0; i < MIN(missing_keys.count, (NSUInteger)8); i++) [sample addObject:[NSString stringWithFormat:@"%016llx", (unsigned long long)missing_keys[i].unsignedLongLongValue]];
+        MLOG("[RED] pipeline prebuild: %d pipelines asked for are still missing from %s after up to %d tries (%d lost with dropped periods, %d to repeated compiler deaths%s%s); "
+             "the app takes the rest, and its first start builds these", missing, out.UTF8String, g_arch_pkg_max_retries, missing_lost, missing_died, sample.count ? "; keys: " : "",
+             sample.count ? [sample componentsJoinedByString:@", "].UTF8String : "");
     }
     NSString *stamp = [NSString stringWithFormat:@"chain\t%s\ndepth\t%s\nlines\t%ld\nfiles\t%d\n%@", DMSH_CHAIN, atomic_load(&g_depth_zero) ? "near=0" : "near=-w", lines, k, arch_os_build()];
     if (k) [stamp writeToFile:[out stringByAppendingPathComponent:@"prewarm.tsv"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -709,7 +831,7 @@ static int pre_bundle_out(NSString *out, long lines) {
 // The depth mode comes as DM_PSO_PREBUILD_DEPTH=zero; DM_PSO_PREBUILD_OUT=<folder> writes the bundle form. Returns 0 not asked for, 1 done, 2 failed.
 int mtl_pso_prebuild_tool(void) {
     const char *e = getenv("DM_PSO_PREBUILD"); if (!e || strcmp(e, "tool")) return 0;
-    g_pre_tool = 1;
+    g_pre_tool = 1; arch_pkg_reset();
     const char *w = getenv("DM_PSO_PREBUILD_WARM"), *m = getenv("DM_PSO_MANIFEST"), *oc = getenv("DM_PSO_PREBUILD_OUT"), *ac = getenv("DM_PSO_ARCHIVE");
     int warm = !(w && !strcmp(w, "0")); char *manifest = m ? strdup(m) : NULL;
     if (oc && *oc) {
@@ -727,7 +849,10 @@ int mtl_pso_prebuild_tool(void) {
     else if (lists) MLOG("pipeline prebuild: no Metal 4 compiler or no archive to capture into: the prewarm lists are left to the first start");
     MLOG("pipeline prebuild: %d captures found another of the same shader function under way (fn_claim); %d of them waited %d ms in vain and were built without the archive",
          (int)atomic_load(&g_fn_waits), (int)atomic_load(&g_fn_plain), g_fn_wait_ms);
-    if (!g_pre_out) return 1;
+    if (!g_pre_out) {
+        if (g_comp4 && g_arch_cap) (void)arch_pkg_recover();
+        return 1;
+    }
     if (!g_comp4 || !g_arch_cap) { MLOG("[RED] pipeline prebuild: no Metal 4 compiler or pipeline serializer: nothing for the app"); return 2; }
     return pre_bundle_out(g_pre_out, lines);
 }
