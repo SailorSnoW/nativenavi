@@ -633,6 +633,14 @@ Games read this count as a position in their own command memory and size their h
 - **Budget regression:** the `--cpu` path also uses a synthetic event, clock and condition-wait deadline to exercise the actual `mtl_wait_at` function without a Metal device. Run with `DM_NVN_FAST_WAKE=0/1` and `DM_NVN_WAITS=0/1`; no gameplay or FPS improvement is inferred from these timeout cases.
 - **Found on:** The Legend of Zelda: Breath of the Wild: it reads 5 timestamp reports a frame right after the wait (its interval controller and dynamic resolution), which is why the waiter makes them itself. Wake after the GPU end 0.29 → 0.08 ms on an M2 Max, 0.147 ms on an iPhone 17 Pro Max.
 
+### A failed command buffer completes without signalling its fence
+
+- **Symptom:** the game stops after a GPU error it recovers from (a page fault, a hang or timeout, an innocent victim's discard): a thread waits in `waitUntilSignaledValue:timeoutMS:` on the shared event although the fence's feedback has come back (`g_done >= fence`).
+- **Cause:** such a command buffer completes through its feedback handler without running its signal of `g_ev`. `post_complete` advanced `g_done` and woke `g_cv`, but a fast-wake SyncWait (`mtl_wait_at`) waits on `g_ev`, for up to an hour with the game's infinite timeout; the CPU raised `g_ev` only once GPU access was revoked (`gpu_lost_release`).
+- **Fix:** `post_complete` raises `g_ev` to `g_done` (`fence_ev_raise`, never lowering it), for recoverable errors and revoked access alike; on a normal frame the GPU's signal is already there and nothing is written. `post_early` returns at once for a fence already done, and the wait ledger counts a fast wait once.
+- **Found on:** The Legend of Zelda: Ocarina of Time, in nxnative (upstream `4fdfd479`, [PR #1409](https://github.com/seedds/nxnative/pull/1409)). The recovered GPU hangs reported on M1 and M2 Macs ([Native GPU hang regression reports](../../dm/games/0400486024DEC000/README.md#native-gpu-hang-regression-reports-open)) are errors of this kind; not reproduced here.
+- **Check:** `make -C dm/gfx/tests perf-order-cpu` (feedback without the GPU's signal wakes an infinite `mtl_wait_at` at once, with no fallback to `g_cv`); `check_t_gpu_lost`, a recoverable unsignalled submission, a normal one after it and revoked ones on a real Metal 4 queue.
+
 ### The post-completion ring is smaller than the submissions in flight
 
 - **Symptom:** `[nvn-mtl] FATAL post ring: the writes of fence <N> never ran` at a submission's commit (`mtl_sub_commit`), with the new fence exactly the ring's size past `<N>`, in a game that makes many submissions a frame.

@@ -329,6 +329,14 @@ static void post_run(post_rec *r, uint64_t c0, uint64_t c1) {
     }
 }
 // Records complete in submission order; delayed callbacks carry their fence, never a recyclable slot.
+// A command buffer that failed (a fault, a hang, a victim, access revoked) completes without its signal of g_ev: the fast-wake waits on it would wait out their timeout
+static void fence_ev_raise(uint64_t f) {
+    if (!g_ev || g_ev.signaledValue >= f) return;
+    static os_unfair_lock lk = OS_UNFAIR_LOCK_INIT;   // never lowered
+    os_unfair_lock_lock(&lk);
+    if (g_ev && g_ev.signaledValue < f) g_ev.signaledValue = f;
+    os_unfair_lock_unlock(&lk);
+}
 static void post_complete(uint64_t fence, uint64_t c0, uint64_t c1) {
     uint64_t now = guest_ns();
     for (uint64_t f = g_done + 1; f <= fence; f++) {
@@ -344,10 +352,12 @@ static void post_complete(uint64_t fence, uint64_t c0, uint64_t c1) {
     }
     pthread_mutex_lock(&g_mu);
     if (fence > g_done) g_done = fence;
+    uint64_t done = g_done;
     uint32_t *scr = atomic_load(&g_mesh_scr);
-    if (scr) __atomic_store_n(scr + DMSH_MESH_SCRATCH_DONE, (uint32_t)g_done, __ATOMIC_RELAXED);
+    if (scr) __atomic_store_n(scr + DMSH_MESH_SCRATCH_DONE, (uint32_t)done, __ATOMIC_RELAXED);
     pthread_cond_broadcast(&g_cv);
     pthread_mutex_unlock(&g_mu);
+    fence_ev_raise(done);
     nvn_queue_gpu_progress();
 }
 static uint64_t g_sub_ready;
@@ -431,7 +441,6 @@ uint64_t mtl_sub_commit(void) {
         cbs_feedback(cbs, cb.error, where);
         gpu_lost_check(lost_test ? gpu_lost_test_error() : cb.error, "submission");
         post_complete(fence, c0, c1);
-        if (atomic_load(&g_gpu_lost)) gpu_lost_release();   // the GPU signals none of these fences
         defer_drain(); defer_idle_commit();
     }];
     void arena_commit(uint64_t fence); arena_commit(fence);
@@ -508,6 +517,7 @@ static int fast_wake(void) {
     return v;
 }
 static void post_early(uint64_t fence) {
+    if (atomic_load_explicit(&g_done, memory_order_acquire) >= fence) return;
     post_complete(fence, 0, 0);
 }
 static int mtl_wait_at_(uint64_t fence, uint64_t timeout_ns, int site);
@@ -528,12 +538,17 @@ static int mtl_wait_at_(uint64_t fence, uint64_t timeout_ns, int site) {
         if (ms > 3600000ull) ms = 3600000ull;
         if ([g_ev waitUntilSignaledValue:fence timeoutMS:ms]) post_early(fence);
         int ok = g_done >= fence;
-        if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
-        if (ok || timeout_ns < 1000000ull) return ok;
-        // The event and feedback waits share one budget; a timeout must not buy another full wait.
+        if (ok || timeout_ns < 1000000ull) {
+            if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
+            return ok;
+        }
+        // The event and feedback waits share one budget; a timeout must not buy another full wait. The ledger counts the wait once, where it returns.
         if (timeout_ns != UINT64_MAX) {
             uint64_t used = ws_t0() - w0;
-            if (used >= timeout_ns) return 0;
+            if (used >= timeout_ns) {
+                if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
+                return 0;
+            }
             timeout_ns -= used;
         }
     }

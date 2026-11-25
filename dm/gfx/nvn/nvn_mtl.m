@@ -285,17 +285,10 @@ static _Atomic int g_last_commit_error;
 static _Atomic int g_up_pending;
 
 // macOS revokes GPU access after GPU errors a process caused: every command buffer then fails with AccessRevoked without running and no fence is signalled. The first stops the
-// game, and the CPU raises each SyncWait's event to fences whose feedback came back. A hang or fault alone is not enough: the GPU recovers from those
+// game (post_complete raises the fences' event from the CPU, as for any error). A hang or fault alone is not enough: the GPU recovers from those
 static _Atomic int g_gpu_lost;
 void front_gpu_lost(void);
 __attribute__((weak)) void front_gpu_lost(void) { MDIE("GPU access revoked: macOS runs none of this process's GPU work any more"); }
-static void gpu_lost_release(void) {
-    static os_unfair_lock lk = OS_UNFAIR_LOCK_INIT;   // signaledValue is never lowered
-    os_unfair_lock_lock(&lk);
-    uint64_t f = atomic_load(&g_done);
-    if (g_ev && g_ev.signaledValue < f) g_ev.signaledValue = f;
-    os_unfair_lock_unlock(&lk);
-}
 // Metal 4 reports a commit's error as MTL4CommandQueueErrorTimeout with the command buffer's error underneath; only this domain counts (a victim's IOGPU error has code 5 too)
 static int gpu_err_has(NSError *e, NSInteger code, int depth) {
     if (!e || depth > 3) return 0;
@@ -307,7 +300,6 @@ static void gpu_lost_check(NSError *e, const char *where) {
     if (!e || atomic_load(&g_gpu_lost) || !gpu_err_has(e, MTL4CommandQueueErrorAccessRevoked, 0) || atomic_exchange(&g_gpu_lost, 1)) return;
     MLOG("[RED] GPU access revoked: the %s command buffer was ignored (fences back %llu of %llu); macOS runs none of this process's GPU work any more, so the game stops", where,
          (unsigned long long)atomic_load(&g_done), (unsigned long long)atomic_load(&g_fence));
-    gpu_lost_release();
     front_gpu_lost();
 }
 // DM_TEST_GPU_LOST=n: from submission n, feedback imitates a revoked run and the fence signal is left out (the work still runs)
