@@ -18,7 +18,8 @@ Never commit or attach game files or anything extracted from the game: RomFS, co
 
 ## A change
 
-- **One change per commit.** Each commit message opens with `area/component: summary` and says what changed and why, in plain English sentences, as the history does: the symptom, the cause, the fix, and what was measured or checked ([Commit messages](docs/agents/06-dev-loop.md#7-commit-messages)).
+- **One change per commit.** Each commit message follows Conventional Commits, `type(scope): summary`, never with a `game` or `oot` scope, and stays short: a body of a line or two only when the summary does not say why ([Commit messages](docs/agents/06-dev-loop.md#7-commit-messages)).
+- **Comments.** Only where the code needs a clear, precise explanation (a why it cannot show); never one per step, never a paraphrase of the code.
 - **Front ends.** A change a front end has to act on takes a `Front-ends:` line in the commit message, unless git already shows it ([Front ends](docs/frontends.md)). A change that makes the host read saves or other kept data differently also carries the old form forward.
 - **Where findings go.** A fact about the game goes in its note ([dm/games/0400486024DEC000/README.md](dm/games/0400486024DEC000/README.md)). A mechanism of the host or the tools gets an entry in `docs/reference/<subsystem>.md` (Symptom, Cause, Fix, Found on), followed by `python3 dm/tools/docs_symptoms.py`.
 - **The shader chain.** After changing one of its tools, run `python3 dm/gfx/tools/dmsh_chain.py --header` and commit `dm/gfx/nvn/dmsh_chain.h` with the change. The game's shaders are then all rebuilt, so say what you checked in game.

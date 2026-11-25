@@ -53,7 +53,7 @@ The route is `dm/games/<id>/smoke.tsv`: a fixed save, the presses that load it (
 
 A smoke run also compares the observed depth mode with the profile's `depth_mode`, even without an archive in quick mode, and detects a bundled archive rejected for a stamp mismatch. See [archive/profile depth mismatches](../reference/shaders.md#offline-pipeline-archive-and-profile-depth-disagree). Missing runtime observations remain unknown.
 
-Reading the report (`report.md` beside `report.json` in `<root>/reports/<date-time>-<command>/`, or `--out`): `PASS` and `CHANGED` (MSL or numbers moved, nothing worse) exit 0; `NEW-FAIL` (a shader, the interface check, a crash, a hang or the frame that worked in the baseline fails, or a shader [lost more without failing](../reference/shaders.md#losses-a-shader-build-reports)) and `REGRESSION` (new `[RED]` lines, a screenshot, frame time, memory or prepare time beyond the tolerances) exit 1; `ERROR` (the harness could not check the game) exits 2. Failures the baseline has too are listed as known and do not fail the check. Changed MSL is expected after a chain change: say in the commit message why it changed. A screenshot difference may be a fix: look at the run's screenshots before calling it either. The report holds only numbers, hashes, shader keys and normalized `[RED]` texts.
+Reading the report (`report.md` beside `report.json` in `<root>/reports/<date-time>-<command>/`, or `--out`): `PASS` and `CHANGED` (MSL or numbers moved, nothing worse) exit 0; `NEW-FAIL` (a shader, the interface check, a crash, a hang or the frame that worked in the baseline fails, or a shader [lost more without failing](../reference/shaders.md#losses-a-shader-build-reports)) and `REGRESSION` (new `[RED]` lines, a screenshot, frame time, memory or prepare time beyond the tolerances) exit 1; `ERROR` (the harness could not check the game) exits 2. Failures the baseline has too are listed as known and do not fail the check. Changed MSL is expected after a chain change: say in your report why it changed. A screenshot difference may be a fix: look at the run's screenshots before calling it either. The report holds only numbers, hashes, shader keys and normalized `[RED]` texts.
 
 ## 5. Continuous integration
 
@@ -80,20 +80,21 @@ This fork has no remote and no pull requests yet: a change is one local commit p
   - `dmsh_chain.py --header` after a chain change;
   - `python3 scripts/regress.py check` (`--quick` while iterating, the full run before the commit), and a run of the game.
 
-  Say in the commit message what was run and what was not, with a word on every `CHANGED`, `NEW-FAIL` or `REGRESSION` of the report; a path this Mac cannot exercise is named as untested. After a change to C or Objective-C in `dm/host` or `dm/gfx`, `dm/tools/lint_c.py compdb` and `tidy` with LLVM's release run what the `lint-c` workflow runs: no new finding (fix it, or `// NOLINT(<check>)` with a reason on a false positive), and `tidy --update` after fixing one ([Continuous integration](../development.md#continuous-integration)).
+  Report to the user what was run and what was not, with a word on every `CHANGED`, `NEW-FAIL` or `REGRESSION` of the report; a path this Mac cannot exercise is named as untested. After a change to C or Objective-C in `dm/host` or `dm/gfx`, `dm/tools/lint_c.py compdb` and `tidy` with LLVM's release run what the `lint-c` workflow runs: no new finding (fix it, or `// NOLINT(<check>)` with a reason on a false positive), and `tidy --update` after fixing one ([Continuous integration](../development.md#continuous-integration)).
 
 ## 7. Commit messages
 
-A commit is read as one line in `git log --oneline`, so that line says where the change lands and what it does, in the form most systems projects use (Linux, Git, Go, QEMU, Wine), and the full account goes below it:
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/). Most are one line; the few that need more take a line or two below it:
 
 ```
-host/nvn: no pipeline for a dispatch the host draws itself
+fix(nvn): skip the pipeline of a dispatch the host replaces
 
-(the symptom, the cause, the change, what was checked and what was not)
+Development builds stalled compiling the NDVE movie kernels.
 ```
 
-- **The first line** is `area/component: summary` (the component is optional), at most 72 characters, without a full stop; the summary starts lowercase unless its first word is a name.
-- **The area** is where the change lands, that is where the cause was fixed. Take the names the history already uses (`git log --oneline`: `host`, `host/nvn`, `host/movie`, `gfx/tools`, `tools`, `tools/rewriter`, `games/oot`). The tests, reference entries and regenerated files that go with a change do not count, and a commit that holds two independent changes is two commits.
-- **The component** comes from the code, never from a list: the service's file in the host (`hle_movie.c`: `host/movie`), the tool (`tools/rewriter`). When unsure, use what `git log --no-merges -- <files>` already shows.
-- **No kind prefix** (`fix:`, `feat:`, `ADD:`): the summary's verb says what kind of change it is, and the body says whether it fixes the cause or works around it.
-- **The body**, after a blank line, is as long as it needs. Lines of their own at the end: `Front-ends:` for a change a front end has to act on ([Following main](../frontends.md#following-main)), then `Co-authored-by:`.
+- **The first line** is `type(scope): summary`, at most 72 characters, without a full stop: the summary is imperative and starts lowercase unless its first word is a name.
+- **The type** is one of `feat`, `fix`, `perf`, `refactor`, `docs` (the game's note and code comments too), `test`, `build`, `ci`, `chore`. A `!` before the colon marks a break a front end must act on.
+- **The scope** is optional and names where the change lands, as `git log --oneline` already does: `host`, `nvn`, `shaders`, `audio`, `input`, `movie`, `svc`, `rewriter`, `pack`, `tools`, `bench`, `regress`, `gui`, `launcher`, `profile`, `upstream`, `nix`. Never `game` or `oot`: everything here is Ocarina of Time. A commit that holds two independent changes is two commits.
+- **The body**, after a blank line, is optional: one or two lines on why, when the summary does not say it. What was run goes in the report to the user and measurements in the game's note, not in the message.
+- **Trailers** close it, each on its own line: `Upstream: nxnative <sha>[, <sha>]` for a port, `Front-ends:` for a change a front end has to act on ([Following main](../frontends.md#following-main)), then the human authors' `Co-authored-by:`. No LLM co-author and no session link.
+- **A merge** keeps git's own `Merge branch '<name>'` line.

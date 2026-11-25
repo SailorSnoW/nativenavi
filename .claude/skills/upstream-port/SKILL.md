@@ -94,12 +94,11 @@ worktree:
 3. Regenerate what tools write: `docs_symptoms.py` after a `docs/reference` change, `docs_patches.py` after a `patches.py` change, `dmsh_chain.py --header` after a chain change. After a `patches.py` change, also rewrite the modules and check that the sites matched.
 4. Check the commit: the host build and the tests of what it touches (its own tests, and those of its subsystem). The full graphics suite is long: run it with `make -k -j8 -C dm/gfx/tests run` at the end, not per commit. See [references/porting.md](references/porting.md) for the checks by area and the traps.
 5. Commit it on its own, with the message format of `docs/agents/06-dev-loop.md` §7:
-   - `area/component: summary`;
-   - a first paragraph that opens with `From upstream nxnative <sha> (seedds/nxnative PR #…)`;
-   - what it fixes and where it was found;
-   - what changed from upstream and why;
-   - `Checked:` with what ran, and what did not;
-   - upstream's `Co-authored-by` lines kept, then the session's attribution line.
+   - `type(scope): summary` (Conventional Commits);
+   - a body of a line or two only when the summary does not say why;
+   - the trailers `Upstream: nxnative <sha>`, then upstream's `Co-authored-by` lines; no LLM co-author or session line.
+
+   What ran and what did not goes in the report to the user; measurements go in the game's note.
 6. `upstream_sync.py record <sha> <verdict> --local <commit>[,<commit>] --why "<one line>"`. Record the skips and no-ops of the triage too, so that the next run does not list them again.
 
 Group chain changes: each one retranslates about 42,850 shaders. A chain change
@@ -132,7 +131,7 @@ provenance.
 
 ## 5. Merge and report
 
-- In the worktree: `git switch -c merge-main main`, then `git merge --no-ff port/upstream-<date>`. Resolve the conflicts with what main got meanwhile (another session's work: keep both sides' intent, and fix the tests one side broke for the other). Regenerate the indexes, build, and run the tests the conflicts touched and a game run.
+- In the worktree: `git switch -c merge-main main`, then `git merge --no-ff -m "Merge branch 'port/upstream-<date>'" port/upstream-<date>`. Resolve the conflicts with what main got meanwhile (another session's work: keep both sides' intent, and fix the tests one side broke for the other). Regenerate the indexes, build, and run the tests the conflicts touched and a game run.
 - Fast-forward main from the main checkout (`git merge --ff-only merge-main`), and only when its tree is clean. Otherwise ask the user.
 - Delete the worktree and the temporary branch. Delete the port branch when the user agrees. Commit `dm/tools/upstream_ledger.tsv` (with the merge or on its own).
 - Report to the user:

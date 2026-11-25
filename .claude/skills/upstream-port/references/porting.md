@@ -18,8 +18,8 @@ and no cargo). A pipeline such as `nix develop -c bash -c '…; python3 -m
 unittest x | tail -1'` exits with tail's status, so an `&& git commit` after it
 commits a failing tree. Read the test output before committing. When
 uncommitted work of a later port is in the tree, check the committed state
-with `git stash`, run the tests, then `git stash pop`, before you say in a
-message that the tests passed.
+with `git stash`, run the tests, then `git stash pop`, before you report
+that the tests passed.
 
 ## A headless run of the game
 
@@ -48,13 +48,13 @@ the game before the rebuild, build a test host with the previous
 `dmsh_chain.h` (`git show <previous>:dm/gfx/nvn/dmsh_chain.h`), copy it, and
 put the new header back. This holds only when the chain change leaves the
 translation as it was, a change to `dmsh_build.py`'s publishing for instance.
-Say so in the message.
+Say so in the report.
 
 ## Traps met so far
 
 - **The fork's own code under the merge.** The perf branch changed code upstream changed too: the wide GPU writes kept as intervals, the texture view cache by Metal texture, the replay-ahead holds (`hold_op`) around commits. Merge both intents and say which constants you kept.
 - **Tests that pass upstream fail here.** `t_pkg_evict` waited one submission too few for a release the fork's deferred drain (a serial queue: `defer_settle`) gives later. `t_nvn`'s settle cases never moved the stub's step count, which main's frame advance (`nvn_fheld_judged`) reads. Find why before changing a test, and change the test only where it was wrong.
-- **Upstream's own bugs.** `pkg_evict_idle` dropped view-cache entries by serial from a map keyed by Metal texture. Fix it and say so in the message.
+- **Upstream's own bugs.** `pkg_evict_idle` dropped view-cache entries by serial from a map keyed by Metal texture. Fix it and say so in one line of the message.
 - **Upstream code for other platforms.** Remove `TARGET_OS_IPHONE` branches, iOS defaults (trimming at warn), `os_proc_available_memory` and other games' links. Keep the provenance ("in nxnative, on an iPhone 17").
 - **Commits that need code this tree lacks.** Port the part that stands alone, and record the rest as `partial` or `deferred` with what it needs (a gap commit, a removed subsystem).
 - **A finding on another device.** Find the mechanism on the Mac's path before porting a fix for it, and measure it here when you can (the residency set, the GPU time per frame). Write which figures are upstream's and which are this Mac's.
