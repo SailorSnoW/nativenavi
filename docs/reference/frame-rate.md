@@ -963,3 +963,10 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
   - frame time unchanged (frame p50 33.2 ms, the game's 30 fps step), no red lines, the pictures right; GPU p50 16.65 → 15.65 ms, measured while another session ran a game on the same Mac, so not counted;
   - the submit thread standing on the deck (85–105 s, per-frame instructions fitted against draws a frame, at 2,180 draws): 73.93 → 73.06 M instructions a frame (−1.2 %), CPU p50 9.40 → 9.18 ms.
   - PR #2542's own run before PR #2482 (M4 Pro): 84,748 → 1,948 views made by frame 4,200.
+
+### Same-pass feedback views made at every draw
+
+- **Symptom:** `newTextureViewWithPixelFormat` under `fb_prepare` in the replay thread's samples, every frame.
+- **Cause:** a draw sampling its own attachment through a level or slice range got a new view at every draw, retired after the submission. A mip-chain pass does so at every level of every frame.
+- **Fix:** `fb_view` (`nvn_feedback.inc`) makes the same view and keeps it in the texture's [view cache](rendering.md#texture-views-cached-by-texture-and-view-parameters), its key marked (`pad[0] = 1`) so it never matches a registration's own view. The cache keeps 8 views per texture (`VC_WAYS`, 4 before), so a chain's per-level views do not evict the registrations'. These views live until the texture is released, as the cache's others do. `t_view_reuse` checks the same view found again, a view per level, never a registration's view, and nothing kept for an ID that is not registered.
+- **Found on:** Donkey Kong Bananza (upstream nxnative `3a7e53d3`): its bloom and environment chains, about 1 % of the replay thread in view creation (a Metal System Trace's time profile, M5 Pro). Not measured on Ocarina of Time, whose player's log counts 45–437 views made a frame against about 140 reused in some late-session windows (the `texture views by Metal texture` line); whether 8 ways change that is open.

@@ -113,7 +113,7 @@ static void treg_finish_submission(void) {
 // and per-frame re-initialized targets reach the same texture again. Entries exist only while the owner holds the texture and go at the first commit after it lets go
 // (vc_commit: the owner runs under g_smu, which cannot take g_rmu). Under g_rmu.
 typedef struct { uint32_t pf, l0, nl, s0, ns; uint8_t tt, sw[4], pad[3]; } vc_key;
-enum { VC_WAYS = 4, VC_MAX = 16384 };
+enum { VC_WAYS = 8, VC_MAX = 16384 };   // 8: a mip chain's per-level feedback views (fb_view) beside the registrations' own; with 4 they took turns
 typedef struct { const void *pool; unsigned next; vc_key k[VC_WAYS]; void *view[VC_WAYS];
                  void *rows; uint64_t rows_rid, rows_n; } vc_set;
 static nvn_hmap g_vc = {.klen = 8};
