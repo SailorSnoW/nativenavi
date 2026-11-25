@@ -74,11 +74,17 @@ static void sdk_close(void *obj, void *state) {
     assert(((uint8_t *)obj)[SDK_WORK - 1] == 0x5a);   // storage is alive through SDK teardown
     closes++;
 }
+static int sdk_updates, event_clears;
+static void *last_cleared_ev;
+static Result sdk_update(void *sys, void *o, size_t on, void *p, size_t pn, const void *in, size_t inn) {
+    (void)sys; (void)o; (void)on; (void)p; (void)pn; (void)in; (void)inn; sdk_updates++; return RES_OK;
+}
 void *guest_sym(const char *name) {
     if (!strcmp(name, hle_force_h_ar_WorkSize.name)) return sdk_size;
     if (!strcmp(name, hle_force_h_ar_Open.name)) return sdk_open_ev;
     if (!strcmp(name, hle_force_h_ar_Open0.name)) return sdk_open;
     if (!strcmp(name, hle_force_h_ar_Close.name)) return sdk_close;
+    if (!strcmp(name, hle_force_h_ars_Update.name)) return sdk_update;
     if (!strcmp(name, "_ZN2nn5audio29ExecuteAudioRendererRenderingENS0_19AudioRendererHandleE")) return sdk_close;   // an SDK with the renderer in the process (from SDK 3); never called here
     if (!strcmp(name, "_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE")) return sdk_destroy_event;
     if (!strcmp(name, "_ZN2nn2os30GetReadableHandleOfSystemEventEPKNS0_15SystemEventTypeE")) return sdk_readable;
@@ -115,6 +121,7 @@ void hle_bind_system_event(void *ev, int ac) {
     assert(ev == sdk_event && ac == 1 && event_destroys == 2 * event_binds + 1);   // after the open destroys the SDK's local event (each earlier Close destroyed one more)
     event_binds++;
 }
+void hle_clear_system_event(void *ev) { event_clears++; last_cleared_ev = ev; }
 uint32_t hle_dup_readable_handle(uint32_t h) { assert(h == 0x1002); return 0x1003; }
 
 int main(void) {
@@ -166,11 +173,16 @@ int main(void) {
             assert((uint8_t *)sdk_event >= (uint8_t *)g_rev && (uint8_t *)sdk_event < (uint8_t *)(g_rev + 4));
             assert(g_ar[0].handle[1] == (event_in_handle ? sdk_event : (uint8_t *)sdk_work + 0x80));
             memset(event, 0xee, sizeof event);   // the game may reuse its object at once (on its stack, for one): nothing refers to it
-        }
+            assert(g_ar[0].ev == sdk_event && g_ar[0].ev_kernel);   // Update clears the renderer's kernel event, which the game's copy reads
+        } else assert(!g_ar[0].ev);
+        uint8_t sys = 0; int u = sdk_updates, cl = event_clears;
+        assert(h_ars_Update(&sys, NULL, 0, NULL, 0, NULL, 0) == RES_OK && sdk_updates == u + 1 && g_ar[0].sys == &sys);
+        assert(event_clears == cl + !!route && (!route || last_cleared_ev == sdk_event));
         int d = event_destroys;
         h_ar_Close(handle[0], handle[1]);
         assert(!backing && !map_key && allocations == frees && closes == c + 1 && joins == starts);
         assert(event_destroys == d + !!route && !rev_find(handle[0]));   // Close destroys the renderer's event and frees its slot
+        assert(!g_ar[0].ev && !g_ar[0].ev_kernel);
     }
     event_in_handle = nested = 0;
     assert(event_destroys == 6 && event_binds == 3 && attaches == 3);   // each event open replaces the SDK's local event once, attaches the game's, and Close destroys it
