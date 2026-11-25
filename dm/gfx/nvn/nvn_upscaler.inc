@@ -1,10 +1,11 @@
 // The game's own upscaler (agl's NDSR network) or its chain, drawn by MetalFX's spatial scaler with DM_UPSCALER=metalfx (docs/reference/rendering.md, A game's own upscaler drawn by MetalFX).
 // Push constants c[24]: input then output rectangle, origin x, y and last texel relative to it (inclusive). What the checks refuse runs the game's shader.
 // key: input w, h, output w, h, sRGB input, colour format, output format; read: what the game's image is drawn from (out, or its sRGB view)
-typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out, read; NSUInteger key[7]; int refused; } up_mfx_scaler;
+// used: the last lookup that found it, for least-recently-used eviction
+typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out, read; NSUInteger key[7]; uint64_t used; int refused; } up_mfx_scaler;
 enum { UP_MFX_SCALERS = 8 };   // dynamic resolution moves the input; a refused format keeps its slot
 static up_mfx_scaler g_up_mfx[UP_MFX_SCALERS];
-static int g_up_mfx_next;
+static uint64_t g_up_mfx_use;
 static uint64_t g_up_mfx_n, g_up_mfx_kept, g_up_mfx_straight[2];
 static int up_mfx_on(void) {
     static int v = -1;
@@ -92,12 +93,18 @@ static int up_mfx_wanted(NvShader *cs) {
 // NULL when MetalFX made none (remembered)
 static up_mfx_scaler *up_mfx_scaler_for(NSUInteger iw, NSUInteger ih, NSUInteger ow, NSUInteger oh, int srgb, MTLPixelFormat cf, MTLPixelFormat of) {
     NSUInteger key[7] = {iw, ih, ow, oh, (NSUInteger)srgb, (NSUInteger)cf, (NSUInteger)of};
-    for (int i = 0; i < UP_MFX_SCALERS; i++) if (!memcmp(g_up_mfx[i].key, key, sizeof key)) return g_up_mfx[i].refused ? NULL : &g_up_mfx[i];
-    up_mfx_scaler *e = &g_up_mfx[g_up_mfx_next++ % UP_MFX_SCALERS];
+    up_mfx_scaler *e = NULL;
+    for (int i = 0; i < UP_MFX_SCALERS; i++) {
+        if (!memcmp(g_up_mfx[i].key, key, sizeof key)) { g_up_mfx[i].used = ++g_up_mfx_use; return g_up_mfx[i].refused ? NULL : &g_up_mfx[i]; }
+        if (!e || g_up_mfx[i].used < e->used) e = &g_up_mfx[i];
+    }
+    // a recorded, held or running submission may still use the slot's scaler: its textures leave the set and it goes once those have completed (a Metal 4 command buffer
+    // does not retain the scaler)
     if (e->read && e->read != e->out) defer_obj_unref(e->read);
-    if (e->in) { res_remove(e->in); defer_obj_release(e->in); }   // a recorded scale still holds them
-    if (e->out) { res_remove(e->out); defer_obj_release(e->out); }
-    *e = (up_mfx_scaler){.key = {iw, ih, ow, oh, (NSUInteger)srgb, (NSUInteger)cf, (NSUInteger)of}, .refused = 1};
+    if (e->in) defer_obj_release(e->in);
+    if (e->out) defer_obj_release(e->out);
+    if (e->sc) defer_obj_release(e->sc);
+    *e = (up_mfx_scaler){.key = {iw, ih, ow, oh, (NSUInteger)srgb, (NSUInteger)cf, (NSUInteger)of}, .used = ++g_up_mfx_use, .refused = 1};
     NSError *err = nil; uint64_t t0 = now_ns();
     if (!g_fx_comp) g_fx_comp = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&err];
     MTLFXSpatialScalerDescriptor *d = [MTLFXSpatialScalerDescriptor new];
