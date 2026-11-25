@@ -772,7 +772,8 @@ static void res_check(id r, const char *what, int reg) {
         MLOG("[RED] missing residency #%d: %s slot %d %s %p (parent chain %d deep) allocated %lu B storage mode %lu%s", nbad, what, reg, is_tex ? "texture" : "buffer", (__bridge void *)a, hops, (unsigned long)a.allocatedSize, (unsigned long)a.storageMode,
              t ? [NSString stringWithFormat:@" format %lu %lux%lu type %lu usage %#lx", (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.textureType, (unsigned long)t.usage].UTF8String : ""); }
 }
-// Commits every change made before the call, one another thread's commit took included (it holds g_res_commit_mu until done); a removed allocation lives until it left the set
+// Commits every change made before the call, one another thread's commit took included (it holds g_res_commit_mu until done and its removals are released); a removed
+// allocation lives until it left the set
 static void res_commit(void) { @autoreleasepool {
     pthread_mutex_lock(&g_res_commit_mu);
     pthread_mutex_lock(&g_res_mu);
@@ -794,9 +795,10 @@ static void res_commit(void) { @autoreleasepool {
         g_rs_commit_ns += dt;
         pthread_mutex_unlock(&g_res_mu);
     }
-    pthread_mutex_unlock(&g_res_commit_mu);
-    for (size_t i = 0; i < n; i++) CFRelease(q[i].o);
+    // released before the unlock, outside g_res_mu: a heap a removed texture held is back in the recycler before another thread's res_commit returns
+    @autoreleasepool { for (size_t i = 0; i < n; i++) CFRelease(q[i].o); }
     free(q);
+    pthread_mutex_unlock(&g_res_commit_mu);
 } }
 static int res_pending(void) {
     pthread_mutex_lock(&g_res_mu);
