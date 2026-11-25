@@ -6,6 +6,7 @@ import hashlib
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parents[3]
@@ -73,6 +74,23 @@ class NativeTools(unittest.TestCase):
             with self.subTest(exe=exe.name):
                 got = subprocess.run([str(exe), '--source-sha'], capture_output=True, text=True, timeout=60).stdout.strip()
                 self.assertEqual(got, sha, f'{exe.name} was not built from its in-repo sources: rebuild it with dm/tools/native_tools.sh {exe.name}')
+
+    def test_xlate_source_sha_covers_the_vendored_ryujinx_sources(self):   # an edit there without a rebuild passed tool_lock.py
+        files = {Path(p).relative_to(REPO / 'dm').as_posix() for p in dmsh_chain.xlate_source_files()}
+        for f in ('gfx/tools/dmsh_xlate/Program.cs', 'gfx/tools/dmsh_xlate/dmsh_xlate.csproj', 'third_party/ryujinx/Directory.Build.props',
+                  'third_party/ryujinx/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/SpirvGenerator.cs', 'third_party/ryujinx/src/Ryujinx.Graphics.Shader/Translation/ResourceManager.cs'):
+            self.assertIn(f, files)
+        with tempfile.TemporaryDirectory() as tmp:
+            dm = Path(tmp) / 'dm'; gfx = dm / 'gfx'; (gfx / 'tools/dmsh_xlate').mkdir(parents=True)
+            (gfx / 'tools/dmsh_xlate/Program.cs').write_text('// a\n'); (gfx / 'tools/dmsh_xlate/dmsh_xlate.csproj').write_text('<Project />\n')
+            ryu = dm / 'third_party/ryujinx/src/Ryujinx.Graphics.Shader'; ryu.mkdir(parents=True)
+            spv = ryu / 'SpirvGenerator.cs'; spv.write_text('class SpirvGenerator {}\n')
+            base = dmsh_chain.xlate_source_sha(str(gfx))
+            (dm / 'third_party/ryujinx/README.md').write_text('not compiled\n')
+            for d in ('obj', 'bin', '.git'): (ryu / d).mkdir(); (ryu / d / 'out.cs').write_text('build output\n')
+            self.assertEqual(dmsh_chain.xlate_source_sha(str(gfx)), base)
+            spv.write_text('class SpirvGenerator { /* edited */ }\n')
+            self.assertNotEqual(dmsh_chain.xlate_source_sha(str(gfx)), base)
 
 
 if __name__ == '__main__': unittest.main()

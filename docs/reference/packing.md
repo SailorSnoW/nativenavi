@@ -80,6 +80,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Fix:** the translator is now native and needs no runtime ([native tools](#building-needed-net-and-finding-its-runtime-kept-failing)); the checks below stay, for a translator that does not start. The packing script checks the environment before unpacking anything: `check_native_python` stops under Rosetta (`sysctl.proc_translated`), and `check_prereqs` starts the translator once with `--source-sha` and stops with its first message line (`check_translator`). `tool_lock.py` records `--source-sha`'s failure instead of its empty stdout (`xlate_embedded`: `does not run (<first message line>)`), so `dmsh_build.py` run directly and `--update-lock` stop with the same message as the packing script, without the lock and rebuild lines. The tool checks used to be in `dmsh_chain.py`, which is part of the chain version and of every shader's cache key, so that fix rebuilt every library; they now live in `tool_lock.py`, outside both, and a change to them rebuilds nothing.
 - **Found on:** NX2Apple builds ([LNPANDY/NX2Apple#31](https://github.com/LNPANDY/NX2Apple/issues/31), item 3; [PR #477](https://github.com/seedds/nxnative/pull/477), [PR #487](https://github.com/seedds/nxnative/pull/487)); reproduced with `arch -x86_64`. Applies to every game.
 
+### A translator built from older Ryujinx sources passed the tool check
+
+- **Symptom:** none at the time: after an edit under `dm/third_party/ryujinx` without rebuilding `dmsh_xlate`, `tool_lock.py` and `test_native_tools.py` passed, and the shaders were translated by the old code.
+- **Cause:** the translator's source digest (`dmsh_xlate --source-sha`, `dmsh_chain.xlate_source_sha`) covered `Program.cs` and its csproj alone; the vendored translator it links, where most of the chain's lowering is, was not in it, and `dmsh_chain.FILES` names only some of its files.
+- **Fix:** `xlate_source_sha` hashes `Program.cs`, the csproj and every `.cs`, `.csproj`, `.glsl` and `.props` file under `dm/third_party/ryujinx` (not `bin/`, `obj/` or hidden files), each with its path; `native_tools.sh` passes it to the build (`-p:XlateSourceSha`, `dmsh_chain.py --xlate-source-sha`), which compiles it into the translator instead of embedding the two files (upstream nxnative f856c78d).
+- **Found on:** in nxnative (noted in its PR #3253).
+- **Check:** `test_native_tools.py` (`test_xlate_source_sha_covers_the_vendored_ryujinx_sources`, `test_built_from_the_sources_beside_them`), `tool_lock.py --check-tools`.
+
 ### The split shader tables differ from a game profile's
 
 - **Symptom:** the shader split stops with `the split shader tables differ from game profile <id>'s`, on the game version the profile registers.

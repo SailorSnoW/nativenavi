@@ -14,7 +14,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-static class SwshXlate
+static partial class SwshXlate
 {
     // NVN's c[2] handle tables: byte offsets, 8 bytes a slot
     const int TexBase = 0x20, ImgBase = 0x120, ImgSlots = 8, SepTexBase = 0x168, SepTexSlot0 = 128, SampBase = 0x568;
@@ -202,12 +202,9 @@ static class SwshXlate
 
     static int Main(string[] args)
     {
-        if (args.Length == 1 && args[0] == "--source-sha")   // first 16 digits of the sha256 of the embedded Program.cs + csproj (as dmsh_chain.py)
+        if (args.Length == 1 && args[0] == "--source-sha")   // the digest of its sources, stamped at build time (dmsh_chain.py --xlate-source-sha, native_tools.sh)
         {
-            var asm = typeof(SwshXlate).Assembly;
-            var ms = new MemoryStream();
-            foreach (var n in new[] { "src0", "src1" }) asm.GetManifestResourceStream(n).CopyTo(ms);
-            Console.WriteLine(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(ms.ToArray()))[..16].ToLowerInvariant());
+            Console.WriteLine(SourceSha);
             return 0;
         }
         var jobs = JsonNode.Parse(File.ReadAllText(args[0])).AsArray();
