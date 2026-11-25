@@ -735,17 +735,17 @@ static int g_res_check_on;
 // and the submission that last bound each, for defer_drain: an object retired before its binding's fence would fault or read a reused resource ID
 static NSMapTable *g_res_last_use;
 static uint64_t g_res_late;
+static int g_res_missing;
 static void res_use_note(id o, const char *what) {
     if (!g_res_last_use) g_res_last_use = [NSMapTable weakToStrongObjectsMapTable];
     [g_res_last_use setObject:@[@(g_fence + 1), @(what)] forKey:o];
 }
 static void res_check(id r, const char *what, int reg) {
-    static int nbad;
     if (!g_res_check_on || !r) return;
     pthread_mutex_lock(&g_res_mu);
     res_use_note(r, what);
     pthread_mutex_unlock(&g_res_mu);
-    if (nbad >= 40) return;
+    if (g_res_missing >= 40) return;
     int is_tex = [r conformsToProtocol:@protocol(MTLTexture)], is_buf = [r conformsToProtocol:@protocol(MTLBuffer)];
     if (!is_tex && !is_buf) return;
     id<MTLResource> a = r;
@@ -763,13 +763,15 @@ static void res_check(id r, const char *what, int reg) {
         res_use_note(a, what);
         pthread_mutex_unlock(&g_res_mu);
     }
+    // a placement heap's textures are in the set one by one (the heap stays while a removed one waits to be drained); an automatic heap's are not
     pthread_mutex_lock(&g_res_mu);
-    int ok = [g_res_objects containsObject:a.heap ? (id)a.heap : a];
+    id<MTLHeap> h = a.heap;
+    int ok = h ? [g_res_objects containsObject:h] && (h.type != MTLHeapTypePlacement || [g_res_objects containsObject:a]) : [g_res_objects containsObject:a];
     pthread_mutex_unlock(&g_res_mu);
     if (!ok) {
-        nbad++;
+        g_res_missing++;
         id<MTLTexture> t = is_tex ? (id<MTLTexture>)r : nil;
-        MLOG("[RED] missing residency #%d: %s slot %d %s %p (parent chain %d deep) allocated %lu B storage mode %lu%s", nbad, what, reg, is_tex ? "texture" : "buffer", (__bridge void *)a, hops, (unsigned long)a.allocatedSize, (unsigned long)a.storageMode,
+        MLOG("[RED] missing residency #%d: %s slot %d %s %p (parent chain %d deep) allocated %lu B storage mode %lu%s", g_res_missing, what, reg, is_tex ? "texture" : "buffer", (__bridge void *)a, hops, (unsigned long)a.allocatedSize, (unsigned long)a.storageMode,
              t ? [NSString stringWithFormat:@" format %lu %lux%lu type %lu usage %#lx", (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.textureType, (unsigned long)t.usage].UTF8String : ""); }
 }
 // Commits every change made before the call, one another thread's commit took included (it holds g_res_commit_mu until done and its removals are released); a removed

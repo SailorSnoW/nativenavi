@@ -340,6 +340,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [Live pool tables written while the GPU reads them](../../../docs/reference/nvn-objects.md#live-pool-tables-written-while-the-gpu-reads-them): a possible cause of the GPU address faults in play ([GitHub issue #1810](https://github.com/seedds/nxnative/issues/1810)), found upstream by reading the code; the scans' writes into the live tables and a table standing past `POOL_SUB_MS` reach the pool tables this game patches all the time. No fault was provoked here; open whether it was the cause.
 - [Textures of two 32-bit formats over the same storage](../../../docs/reference/rendering.md#textures-of-two-32-bit-formats-over-the-same-storage): 1.0.0's 3D picture black under the HUD at the dynamic resolution's floor, its upscaler's RGB9E5 output written through an `R32UI` image ([Dynamic resolution](#dynamic-resolution)). Resolved.
 - [A derived profile's prewarm list names another version's shaders](../../../docs/reference/packing.md#a-derived-profiles-prewarm-list-names-another-versions-shaders): 1.0.0 prepared about 14,000 lines where 1.1.1 prepares 61,000, and compiled its material archive's pipelines while playing ([Shaders](#shaders)). Current: the effect sets' rows.
 - [The practice tools' check failed on the game's own red lines](../../../docs/reference/packing.md#the-practice-tools-check-failed-on-the-games-own-red-lines): 1.0.0's app had no practice tools. Resolved.
