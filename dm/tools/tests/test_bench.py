@@ -43,6 +43,21 @@ class Bench(unittest.TestCase):
             self.assertEqual(m['gpu_mean'], 18.0); self.assertEqual(m['span_p50'], 19.0); self.assertEqual(m['passes'], 100.5); self.assertIsNone(m['sub_cpu_mean'])
             self.assertEqual(bench.last_frame(f), 300); self.assertEqual(bench.last_frame(Path(d) / 'none.tsv'), -1)
 
+    def test_submit_metrics(self):   # the submission's medians a frame and a draw
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / 'frames.tsv'
+            rows = ['# kind: nvn-per-frame', 'frame\tname\tvalue']
+            for i in range(10):
+                draws = 1000 if i < 5 else 2000
+                cpu = 2.0 if i < 5 else 6.0   # 2.0 us a draw, then 3.0
+                instr = 20_000_000 if i < 5 else 60_000_000   # 20k instructions a draw, then 30k
+                rows += [f'{i}\t@t_s\t{10.0 + i * 0.1:.3f}', f'{i}\t@draws\t{draws}', f'{i}\t@sub_cpu_ms\t{cpu}', f'{i}\t@sub_instr\t{instr}']
+            f.write_text('\n'.join(rows) + '\n')
+            m = bench.submit_metrics(bench.window_rows(f, 10.5, 11.0))   # frames 5 to 9
+            self.assertEqual(m['draws_p50'], 2000); self.assertEqual(m['sub_cpu_p50'], 6.0); self.assertEqual(m['sub_us_draw'], 3.0)
+            self.assertEqual(m['sub_minstr_p50'], 60.0); self.assertEqual(m['sub_kinstr_draw'], 30.0)
+            self.assertEqual(bench.submit_metrics(bench.window_rows(f, 20.0, 21.0)), {})
+
     def test_recording_route(self):   # a route whose keys are a recording beside bench.tsv, its window in frames and its own switches
         with tempfile.TemporaryDirectory() as d:
             gid = '0100000000000000'; prof = Path(d) / 'dm/games' / gid; prof.mkdir(parents=True); (prof / 'walk.keys').write_text('f10:A~f2,\n')
