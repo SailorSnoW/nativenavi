@@ -919,6 +919,15 @@ The replay of NVN on Metal (`dm/gfx/nvn/nvn_mtl.m`). Each entry: symptom, cause,
 - **Check:** `t_present_crop`: a 5:4 crop fills a 16:9 canvas and keeps bars on a 16:10 one on the classic and Metal 4 presents.
 - **Found on:** Super Mario Galaxy 2 ([issue #949](https://github.com/seedds/nxnative/issues/949)).
 
+### A picture shown smaller than it is drawn: stair-stepped edges from the present's single tap
+
+- **Symptom:** a game whose output is larger than the rectangle it is shown in (a 2560x1440 docked output on a 1080p screen, or in a window smaller than it) has stair-stepped, uneven edges that crawl as they move, more than its own frame shows at full size.
+- **Cause:** the present pass took one bilinear sample of the swapchain texture per pixel of the drawable (`present.metal`). Shown smaller, a pixel covers more than one texel, and one tap weighs the texels by where the pixel's centre falls: at 2560 → 1920 a texel counts fully in one pixel and a quarter in the next, and past 2:1 texels are skipped. One-texel stripes at 3:2 came out as columns of 64 and 191 instead of an even grey.
+- **Fix:** general, `fs` in `dm/gfx/msl/present.metal` (a host shader, not part of the chain). At its size or larger the picture takes one bilinear tap, as before (MetalFX's upscale is drawn 1:1). Smaller, each minified axis is filtered over the pixel's footprint by a radius-1 tent stretched by `min(step, 3)` (texels per pixel from `dfdx` / `dfdy` of the texture coordinate), a non-minified axis by one tap; two texels of the tent go in one bilinear fetch at their weighted centroid, held in registers and kept within the crop's first and last texel centres: at most 4 fetches a pixel up to 2:1, 9 up to 3:1. Found upstream (nxnative `fb3ca11a`), which replaced an earlier Catmull-Rom filter of its own.
+- **Cost:** upstream's measurement, a pass alone on an Apple M6: 2560x1440 at 1:1 unchanged (0.046 ms); 2560x1440 → 1920x1080 0.137–0.293 ms against 0.027–0.072 ms for one tap; → 1280x720 0.061–0.083 against 0.013–0.016 ms. Not measured here.
+- **Check:** `check_t_present_crop` (four modes): within 1 of 255 of a CPU model that weighs every texel, at 3:2 (stripes, spread at most 30 against one tap's 127), 4:3, 2:1, 5:1 (capped at 3:1), one axis minified, cropped (nothing from outside the crop), the Metal 4 present and the lower-left origin; 1:1 byte for byte.
+- **Found on:** Nintendo Switch Sports Resort in nxnative, its docked 2560x1440 output in fullscreen on a 2560x1080 screen and in a 1280x720 window (PR #2492). This game's output is 2560x1440 docked: a 1080p screen, a window under 1280x720 points on a Retina screen, or a drawable a little short of it (the player's log has 2560x1407) shows it minified.
+
 ### Setting the same targets again continues the pass
 
 - **Symptom:** one-draw passes on one target, hundreds of times a frame, with the same attachments each time (a `DM_NVN_GPUPROF` frame: `load` and `store` of the whole target in every line); a low frame rate that follows the target's size.
