@@ -725,6 +725,13 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Fix:** only the streams the vertex shader's inputs read (`vs_streams`) are bound or laid out. The pipeline's vertex descriptor is built from the same inputs (`pso_desc`), so it names no other stream. With no vertex shader (a unit test) every bound stream still is. Unread streams still count in `ubd_conflict` and `vbuf_prepare`, and their vertex-table slots keep what they held, which no pipeline of the draw reads. `t_vbuf` checks the bound, looked-up and laid-out streams with and without a shader.
 - **Found on:** Donkey Kong Bananza (upstream nxnative `c1bd080a`): 14 of the 16 slots held an address at every draw; about 9 % of the replay thread on Layer 1400 (a Metal System Trace's time profile, M5 Pro). Ocarina of Time walks about 7 streams a draw (the player's log: 1,474 lookups and 15,154 reuses a frame at 2,376 draws), while its vertex shaders read 2.7 inputs on average; not measured here.
 
+### Full argument encodes messaged each texture's type and pixel format
+
+- **Symptom:** the replay thread sending `textureType` and `pixelFormat` Objective-C messages on every texture slot during full argument encodes, pool table walks, handle tables, image bindings and depth-plane checks.
+- **Cause:** a registration (`treg_t`) kept its resolved view (`view`) and resource ID (`view_rid`), but `encode_args_full`, `img_binding`, `pool_entry`, `htab_gpu` and `fb_depth_planes` still asked the view its type and format at every slot, though neither ever changes for an `MTLTexture`.
+- **Fix:** `treg_t` keeps `view_tt` and `view_pf` beside `view_rid` where `rp->view` is set (`tex_by_id`, `nvn_descpool.inc`) and clears them wherever it is dropped; `tex_fast_rid_meta` returns them with the view, and the slots that replace the view (a feedback snapshot, `tbuf_rows_binding`, `tex_fit`) take the replacement's. `t_treg_meta` checks base textures, views of another target and format, stencil-mode views through `fb_depth_planes`, buffer textures, an ID registered again and a view dropped and made again.
+- **Found on:** Mario Kart World (upstream nxnative `c7e74a1f`, issue #2605): on an Apple M6, its title scene (about 1,960 draws and 1,515 full encodes a frame) in alternating runs, submit CPU a draw −2.24 % and −3.18 % (2.325 → 2.273 and 2.319 → 2.245 µs), instructions a draw −0.83 % and −0.66 %. Ocarina of Time's pixel shaders read 8.6 textures on average; not measured here.
+
 ### Address to memory pool lookups by binary search
 
 - **Symptom:** the submit thread's CPU samples dominated by `mtl_addr` / `mtl_gpu_addr` (vertex buffers in `draw`, uniform buffers in `encode_args`).

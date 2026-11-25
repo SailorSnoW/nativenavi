@@ -1,6 +1,6 @@
 // The descriptor pool: texture and sampler IDs to objects, views by ID, texture buffers, the IDs shaders read through pools, slot types, and the argument block arenas.
 // Registration snapshots the whole texture object (NVN: the descriptor is written into the pool); view: the ID's MTLTexture (CFBridgingRetain) and the generations it was taken at.
-typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty, view_stamp; const void *view_span; int view_pkg;   // view_pkg: CPU-written; only those depend on guest writes
+typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty, view_stamp; const void *view_span; int view_pkg; uint32_t view_pf; uint8_t view_tt;   // view_pkg: CPU-written; only those depend on guest writes. view_pf / view_tt: view's pixel format and type, which never change
                  void *palt[4], *palt_of[4]; uint64_t palt_rid[4];   // palt[k]: the view a pool table of layered type k holds (pool_fit), apart from alt so binds and tables do not take turns
                  void *alt, *alt_of; uint64_t alt_rid; uint8_t alt_type;   // alt: the view for a shader's other declared type (tex_fit)
                  void *im, *im_of; uint64_t im_rid;
@@ -71,7 +71,7 @@ static void treg_drop_im(treg_t *r) {
     r->im_rid = 0;
 }
 static void treg_drop_views(treg_t *r) {
-    if (r->view) { defer_obj_unref((__bridge id)r->view); CFRelease(r->view); r->view = NULL; r->view_id = r->view_rid = 0; }
+    if (r->view) { defer_obj_unref((__bridge id)r->view); CFRelease(r->view); r->view = NULL; r->view_id = r->view_rid = 0; r->view_pf = 0; r->view_tt = 0; }
     if (r->alt) { defer_obj_unref((__bridge id)r->alt); CFRelease(r->alt); r->alt = r->alt_of = NULL; r->alt_rid = 0; }
     for (int k = 0; k < 4; k++) if (r->palt[k]) { defer_obj_unref((__bridge id)r->palt[k]); CFRelease(r->palt[k]); r->palt[k] = r->palt_of[k] = NULL; r->palt_rid[k] = 0; }
     treg_drop_im(r);
@@ -472,7 +472,7 @@ static void *tex_by_id_ref(int tid) {
         id<MTLTexture> cur = treg_tex(rp);
         // cur nil (no texture now) must not match a parentless cached base: its released resource ID would reach the tables (docs/reference/rendering.md, "A texture ID with no texture kept its cached view")
         if (cur && (cur == v || v.parentTexture == cur)) { rp->view_ser = sg; rp->view_dirty = dg; treg_pkg_stamp(rp, cur); return rp->view; }
-        defer_obj_unref(v); CFRelease(rp->view); rp->view = NULL; rp->view_rid = 0; v = nil;
+        defer_obj_unref(v); CFRelease(rp->view); rp->view = NULL; rp->view_rid = 0; rp->view_pf = 0; rp->view_tt = 0; v = nil;
     }
     treg_t r = *rp;
     id<MTLTexture> base = treg_tex(rp);
@@ -542,7 +542,7 @@ static void *tex_by_id_ref(int tid) {
         }
         g_treg_transient[g_ntreg_transient++] = tid; rp->transient_sub = g_sub_serial;
     }
-    rp->view = (void *)CFBridgingRetain(v); rp->view_rid = v.gpuResourceID._impl; rp->view_ser = sg; rp->view_dirty = dg; treg_pkg_stamp(rp, base);
+    rp->view = (void *)CFBridgingRetain(v); rp->view_rid = v.gpuResourceID._impl; rp->view_tt = (uint8_t)v.textureType; rp->view_pf = (uint32_t)v.pixelFormat; rp->view_ser = sg; rp->view_dirty = dg; treg_pkg_stamp(rp, base);
     if (rp->stand) { treg_drop_stand(rp); g_stand_done++; }
     return rp->view;
 }
@@ -641,11 +641,11 @@ static int mtl_pf_dpf(MTLPixelFormat pf) {
     }
     return NVN_DPF_FLOAT;
 }
-static int img_needs_class_view(id<MTLTexture> t, int dpf) {
-    if (dpf == NVN_DPF_FLOAT && t.textureType != MTLTextureTypeTextureBuffer) return 0;
-    MTLPixelFormat pf = t.pixelFormat;
+static inline int img_needs_class_view_pf(MTLTextureType tt, MTLPixelFormat pf, int dpf) {
+    if (dpf == NVN_DPF_FLOAT && tt != MTLTextureTypeTextureBuffer) return 0;
     return dpf == NVN_DPF_FLOAT ? tbuf_view_format(pf, dpf) != pf : mtl_pf_dpf(pf) != dpf;
 }
+static int img_needs_class_view(id<MTLTexture> t, int dpf) { return img_needs_class_view_pf(t.textureType, t.pixelFormat, dpf); }
 // On the Switch an image's declared format decides how its bits are read: an image of another class gets a same-size view in the shader's class (else undefined values).
 // A texture without the format-view usage is upgraded before the next pass. Caller holds g_rmu.
 static int g_imfit_pend[16];
@@ -713,15 +713,27 @@ static id<MTLTexture> tex_float_fit(int tid, id<MTLTexture> t, uint64_t *rid) {
     r->im = (void *)CFBridgingRetain(v); r->im_of = (__bridge void *)t; r->im_rid = v.gpuResourceID._impl;
     *rid = r->im_rid; return v;
 }
-static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
+// tt / pf (may be NULL): the view's type and pixel format, from the registration when it holds the view, with no message per texture (encode_args_full, pool_entry)
+static inline __attribute__((always_inline)) uint64_t tex_fast_rid_meta(int tid, void **out, uint8_t *tt, uint32_t *pf) {
     uint64_t ep = treg_ep();   // first: a sync clears view_ser of the IDs whose serials changed, which the test below must see
     if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == ep && (!g_treg[tid].view_pkg || g_treg[tid].view_dirty == nvn_dirty_now())) {
         if (!g_pool_walk) g_treg[tid].used = g_tu_now;
-        if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
+        if (out) *out = g_treg[tid].view;
+        if (tt) *tt = g_treg[tid].view_tt;
+        if (pf) *pf = g_treg[tid].view_pf;
+        return g_treg[tid].view_rid; }
     id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t;
-    if (t && tid > 0 && tid < g_ntreg && (__bridge void *)t == g_treg[tid].view) return g_treg[tid].view_rid;
-    return t ? t.gpuResourceID._impl : 0;
+    if (t && tid > 0 && tid < g_ntreg && (__bridge void *)t == g_treg[tid].view) {
+        if (tt) *tt = g_treg[tid].view_tt;
+        if (pf) *pf = g_treg[tid].view_pf;
+        return g_treg[tid].view_rid; }
+    if (t) {
+        if (tt) *tt = (uint8_t)t.textureType;
+        if (pf) *pf = (uint32_t)t.pixelFormat;
+        return t.gpuResourceID._impl; }
+    return 0;
 }
+static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) { return tex_fast_rid_meta(tid, out, NULL, NULL); }
 static MTLSamplerAddressMode wrapm(int w) {
     switch (w) { case 0: case 7: return MTLSamplerAddressModeClampToEdge; case 1: return MTLSamplerAddressModeRepeat;
         case 3: case 2: return MTLSamplerAddressModeMirrorClampToEdge; case 5: case 4: return MTLSamplerAddressModeClampToBorderColor;

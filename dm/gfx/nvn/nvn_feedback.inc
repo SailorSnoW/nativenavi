@@ -283,9 +283,9 @@ static int fb_reach(const NvShader *fs, unsigned reg, int sid, int n, int *lo, i
 void mtl_fb_stats(uint64_t *snaps, uint64_t *reused, uint64_t *tile, uint64_t *wait) { *snaps = g_fb_count; *reused = g_fb_reuse; *tile = g_fb_tile_draws; *wait = g_fb_tile_wait; }
 static uint32_t fb_depth_planes(int tid, uint64_t ser) {
     os_unfair_lock_lock(&g_rmu);
-    void *view = NULL;
-    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].t.serial == ser) tex_fast_rid(tid, &view);
-    MTLPixelFormat format = view ? ((__bridge id<MTLTexture>)view).pixelFormat : MTLPixelFormatInvalid;
+    void *view = NULL; uint32_t vpf = (uint32_t)MTLPixelFormatInvalid;
+    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].t.serial == ser) tex_fast_rid_meta(tid, &view, NULL, &vpf);
+    MTLPixelFormat format = view ? (MTLPixelFormat)vpf : MTLPixelFormatInvalid;
     os_unfair_lock_unlock(&g_rmu);
     switch (format) {
         case MTLPixelFormatDepth16Unorm: case MTLPixelFormatDepth32Float: case MTLPixelFormatDepth32Float_Stencil8: return FB_DS_DEPTH;
