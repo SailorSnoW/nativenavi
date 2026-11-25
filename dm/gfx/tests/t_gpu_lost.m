@@ -54,6 +54,7 @@ int main(void) { @autoreleasepool {
 
     // a recoverable error: the fence's signal goes to a decoy event, the queue held until g_ev is back
     id<MTLSharedEvent> gate = [g_dev newSharedEvent], decoy = [g_dev newSharedEvent], real_ev = g_ev;
+    if (!gate || !decoy) abort();
     rec_queue_block(^{ [g_q4 waitForEvent:gate value:1]; });
     mtl_sub_begin();
     g_ev = decoy;
