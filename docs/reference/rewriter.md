@@ -531,6 +531,14 @@ To enroll a cut for any game's own module:
 - **Found on:** Breath of the Wild.
 - **Check:** synthetic tests cover SIGTERM during active pool jobs, invalid counts and explicit worker limits through the packing script. The original speed measurements and module comparisons are in [PR #761](https://github.com/seedds/nxnative/pull/761); their timings are contributor measurements, not local regression results. Local game validation was recorded in Breath of the Wild's note in nxnative; other games have no new local runtime validation here.
 
+### Spin-wait search memory bounded
+
+- **Symptom:** the rewrite step's memory grows through `find_spin_regions`; on a large `main` the step swaps or does not finish (EA SPORTS FC 27 1.8e, 185 MB of text: more than 24 GB in nxnative).
+- **Cause:** `spin_ins` kept every instruction it decoded, a capstone object of 0.5–2.6 KB, in `spin_dec` for the whole search in each forked worker, though the heads a worker takes are 8 × workers apart and share almost nothing. `spin_region` also decoded six instructions at a head (`spin_lock`) before `DATA_BLOCKS` and `spin_quick` could refuse it, and `spin_lock` decoded its five lookahead words whatever the first one was.
+- **Fix:** `spin_region` checks `DATA_BLOCKS` and `spin_quick` first and clears `spin_dec` when it returns, so the cache holds one head's decodes; `spin_lock` decodes the words after its first only for the mnemonics that start a lock or test form. A region keeps the instructions it holds, and `spin_emit` decodes nothing. The output is the same bytes (upstream nxnative 65b1523b).
+- **Found on:** EA SPORTS FC 27, in nxnative. On this game's 1.1.1 (2026-11-25, M2 Pro): `main` 4.8 → 3.1 GB, `sdk` 1.9 GB → 0.6 GB at the peak (the summed resident size of the rewrite and its workers), `main` 69 → 65 s; the three rewritten modules byte for byte the same.
+- **Check:** `test_spin_waits.py` `test_decode_cache_is_one_heads`.
+
 ### A pool's shutdown hangs on a worker that has just started
 
 - **Symptom:** a rewrite never ends, using no CPU: `patch_nso.py` waits in `wait4` and one forked worker of the same command in `sem_wait`, in `multiprocessing/queues.py` `get`, having run no job. It is rare and needs small jobs (about 1 in 6,000 pools of tiny jobs under load). Separately, a SIGTERM could be ignored until the rewrite ended, or leave workers behind.

@@ -32,13 +32,23 @@ POLL = [0xb4000434, 0xb901028b, 0xb940012e, 0x710005df, 0x54ffffc0, 0x885ffd2e, 
         0x1a9f37ed, 0x14000002, 0xd5033f5f, 0x885f7d2f, 0x710005ff, 0x54ffffa1, 0x880ffd3f, 0x35ffff8f, 0x34fffc0e, 0xd65f03c0]
 
 
-def region(words, T, bes):
+def make_scope(words):
     md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     md.detail = True
     scope = {'re': re, 'struct': struct, 'ARM64_OP_IMM': ARM64_OP_IMM, 'ARM64_OP_MEM': ARM64_OP_MEM, 'ARM64_OP_REG': ARM64_OP_REG,
              'IMG': struct.pack('<' + 'I' * len(words), *words) + bytes(64), 'md': md, 'spin_dec': {}, 'DATA_BLOCKS': [], 'spin_touched': set()}
     exec(compile(ast.Module(body=body, type_ignores=[]), str(TOOLS / 'patch_nso.py'), 'exec'), scope)
-    return scope['spin_region'](T, bes)
+    return scope
+
+
+def region(words, T, bes):
+    return make_scope(words)['spin_region'](T, bes)
+
+
+def decodes(words, T, bes):   # (the region, the addresses it decoded, the cache after it)
+    scope = make_scope(words); seen = []; ins = scope['spin_ins']
+    scope['spin_ins'] = lambda a: (seen.append(a), ins(a))[1]
+    return scope['spin_region'](T, bes), seen, scope['spin_dec']
 
 
 def patched(**at):
@@ -104,6 +114,14 @@ class SpinWaits(unittest.TestCase):
         g = region([0xb9400008, 0x34ffffe8], 0, [4])
         self.assertIsNotNone(g)
         self.assertEqual(g['valid'], {4})
+
+    def test_decode_cache_is_one_heads(self):   # kept across heads, it passed 24 GB on a 185 MB main upstream
+        g, _, cache = decodes(POLL, 0, [0x80])
+        self.assertIsNotNone(g); self.assertEqual(cache, {})
+        g, seen, cache = decodes([0x94000000, 0x17ffffff], 0, [4])   # bl #0; b back: spin_quick refuses it before any decode
+        self.assertIsNone(g); self.assertEqual(seen, []); self.assertEqual(cache, {})
+        g, seen, _ = decodes([0x11000508, 0x34ffffe8], 0, [4])   # add w8, w8, #1; cbz w8, back: no lock's lookahead words decoded
+        self.assertIsNone(g); self.assertLessEqual(set(seen), {0, 4})
 
 
 if __name__ == '__main__':
