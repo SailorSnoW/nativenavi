@@ -50,9 +50,9 @@ NOT_RUN = t_host_stubs t_present_rescue_focus t_gpu_lost_front t_atomic_return t
 RUN_TESTS = $(filter-out $(NOT_RUN),$(basename $(sort $(wildcard t_*.c t_*.m))))
 check_t_%: t_%
 	$(RUN_ENV) ./$<
-.PHONY: run check_test_dmsh_pull check_test_tbdr_budget check_test_dmsh_ast_optimizer check_test_dmsh_native_functions
+.PHONY: run check_test_dmsh_pull check_test_tbdr_budget check_test_dmsh_ast_optimizer check_test_dmsh_native_functions check_test_dmsh_ndsr
 run: $(RUN_TESTS)
-	@$(MAKE) --no-print-directory -j1 $(addprefix check_,$(RUN_TESTS)) check_test_dmsh_pull check_test_tbdr_budget check_test_dmsh_ast_optimizer check_test_dmsh_native_functions
+	@$(MAKE) --no-print-directory -j1 $(addprefix check_,$(RUN_TESTS)) check_test_dmsh_pull check_test_tbdr_budget check_test_dmsh_ast_optimizer check_test_dmsh_native_functions check_test_dmsh_ndsr
 check_test_dmsh_pull:
 	python3 test_dmsh_pull.py
 check_test_tbdr_budget:
@@ -61,6 +61,8 @@ check_test_dmsh_ast_optimizer:
 	DMSH_TEST_GPU=1 python3 test_dmsh_ast_optimizer.py
 check_test_dmsh_native_functions:
 	DMSH_TEST_GPU=1 python3 test_dmsh_native_functions.py
+check_test_dmsh_ndsr:
+	DMSH_TEST_GPU=1 python3 test_dmsh_ndsr.py
 # Per-frame arena blocks: shared between submissions, released above the keep count once idle, never while a pending submission holds them (t_arena_trim.m)
 t_arena_trim: t_arena_trim.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_arena_trim.m $(MTL_T_SRC) $(FW)

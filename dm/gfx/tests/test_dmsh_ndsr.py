@@ -2,9 +2,10 @@
 The game's shader is not here: a synthetic kernel computes the same graph (176 HMMA.16816 calls: 8 patches of three blocks over a 16x16 window, 12 weight matrices in PTX fragment
 order, ReLU between blocks) in the shape the translator and spirv-cross write it (straight-line declarations, the helper's 18 operands, its flags), and goes through
 dmsh_rewrite.hmma_msl as every translated shader does. On the CPU: the pass recognises it under two schedules of the calls (plain operands; TensorPass's chain slots, A reuse and
-interleaved patches), and refuses every change of the graph, leaving the source as it was. On this Mac's GPU: the translated kernel against the rewritten one in one pass and in
-two (DMSH_SPLIT_FC false, then true, the words at DMSH_SPLIT_SLOT), bit for bit on random weights and windows."""
+interleaved patches), and refuses every change of the graph, leaving the source as it was. With DMSH_TEST_GPU=1, on this Mac's GPU: the translated kernel against the rewritten
+one in one pass and in two (DMSH_SPLIT_FC false, then true, the words at DMSH_SPLIT_SLOT), bit for bit on random weights and windows."""
 from pathlib import Path
+import os
 import random
 import shutil
 import struct
@@ -236,7 +237,7 @@ int main(int argc, char **argv) {
 def halves(values): return b''.join(struct.pack('<e', v) for v in values)
 
 
-@unittest.skipUnless(shutil.which('xcrun') and subprocess.run(['xcrun', '-sdk', 'macosx', '-f', 'metal'], capture_output=True).returncode == 0, 'no Metal compiler')
+@unittest.skipUnless(os.environ.get('DMSH_TEST_GPU') == '1' and shutil.which('xcrun'), 'set DMSH_TEST_GPU=1 on a Mac with Xcode (on GitHub\'s virtual Macs the pipeline does not compile)')
 class OnTheGPU(unittest.TestCase):
     def test_bit_exact_with_the_translated_calls(self):
         rnd = random.Random(1937)
