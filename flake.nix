@@ -75,7 +75,8 @@
         let
           own = self.packages.${pkgs.stdenv.hostPlatform.system};
           python = pkgs.python314;
-          dotnet = pkgs.dotnetCorePackages.sdk_10_0;
+          # Microsoft's build: the source-built SDK's NativeAOT pack links nixpkgs' brotli into dmsh_xlate (docs/reference/packing.md)
+          dotnet = pkgs.dotnetCorePackages.sdk_10_0-bin;
           build = [
             python
             dotnet

@@ -112,7 +112,7 @@ Python standard library; LZ4 is loaded when decoding NSO files.
 
 | Shell | What it has | For |
 |---|---|---|
-| `nix develop` (`default`) | Python 3.14 with `tools.txt`; the Rust that `rust-toolchain.toml` names, with clippy and rustfmt; .NET SDK 10; zstd; SPIRV-Tools | building, the packing script, the host, graphics and Python tests, the Rust checks |
+| `nix develop` (`default`) | Python 3.14 with `tools.txt`; the Rust that `rust-toolchain.toml` names, with clippy and rustfmt; Microsoft's .NET SDK 10 (`sdk_10_0-bin`); zstd; SPIRV-Tools | building, the packing script, the host, graphics and Python tests, the Rust checks |
 | `nix develop .#coverage` | the same, with `coverage.txt` added | the coverage job's commands |
 | `nix develop .#lint` | Python 3.14 with `lint.txt` and `tools.txt`; Node.js for pyright; LLVM's release as `LLVM` (`lint-c.yml`'s `LLVM_VERSION`) | `lint_python.py`, `lint_c.py` |
 | `nix develop .#miri` | the nightly with Miri that `flake.lock` pins | `cargo miri test` |

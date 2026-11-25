@@ -22,6 +22,9 @@ build() {   # <name> <csproj> <output executable> [msbuild property]
         # libraries were configured against the current SDK (a source-built one, such as Homebrew's formula) gives these (pipe2); Microsoft's SDK (the cask) does not
         weak=$(nm -m -u "$WORK/$1-$rid/$1" | grep -w weak || true)
         [ -z "$weak" ] || { echo "$weak" >&2; echo "[RED] $1 ($rid) imports functions its minimum macOS does not have, and would crash at address 0 there: build with Microsoft's .NET SDK (brew install --cask dotnet-sdk), not a source-built one" >&2; exit 1; }
+        # A source-built .NET's runtime pack can link libraries of the machine that built it (nixpkgs' links its brotli from /nix/store), which no other Mac has
+        foreign=$(otool -L "$WORK/$1-$rid/$1" | tail -n +2 | awk '{print $1}' | grep -v -e '^/usr/lib/' -e '^/System/Library/' || true)
+        [ -z "$foreign" ] || { echo "$foreign" >&2; echo "[RED] $1 ($rid) links libraries outside macOS, which a player's Mac does not have: build with Microsoft's .NET SDK (nix develop, or brew install --cask dotnet-sdk), not a source-built one" >&2; exit 1; }
     done
     lipo -create "$WORK/$1-osx-arm64/$1" "$WORK/$1-osx-x64/$1" -output "$3"
     for a in arm64 x86_64; do sha=$(arch -"$a" "$3" --source-sha); echo "$1 ($a): source $sha"; done

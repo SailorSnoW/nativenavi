@@ -1,6 +1,7 @@
 """The repository's C# tool is committed as a native universal executable (dm/tools/native_tools.sh, NativeAOT), so a build needs no .NET:
 the shader translator dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate. It must hold both Mac architectures, and it must be built from the sources beside it, which it embeds and
-names with --source-sha, and match dmsh_chain.lock. It may not import a function weakly: that is one newer than the executable's minimum macOS, which binds to 0 on a Mac without it."""
+names with --source-sha, and match dmsh_chain.lock. It may not import a function weakly: that is one newer than the executable's minimum macOS, which binds to 0 on a Mac without it.
+It may link only macOS's own libraries: one from the machine that built it (a source-built .NET's /nix/store brotli) stops it from starting on any other Mac."""
 from pathlib import Path
 import hashlib
 import struct
@@ -41,6 +42,26 @@ def weak_imports(data):
     return out
 
 
+DYLIB_CMDS = {0xC, 0x20, 0x80000018, 0x8000001F, 0x80000023}   # LC_LOAD_DYLIB, LC_LAZY_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB
+
+
+def linked_libraries(data):
+    """{architecture: the install names of the libraries each slice of a universal binary loads}, as otool -L lists them"""
+    out = {}
+    for i in range(struct.unpack_from('>I', data, 4)[0]):
+        cpu, _, off, _, _ = struct.unpack_from('>5I', data, 8 + 20 * i)
+        assert struct.unpack_from('<I', data, off)[0] == 0xFEEDFACF, 'not a 64-bit Mach-O slice'
+        libs, at = [], off + 32
+        for _ in range(struct.unpack_from('<I', data, off + 16)[0]):
+            cmd, size = struct.unpack_from('<II', data, at)
+            if cmd in DYLIB_CMDS:
+                name = at + struct.unpack_from('<I', data, at + 8)[0]
+                libs.append(data[name:data.index(b'\0', name)].decode())
+            at += size
+        out[{0x01000007: 'x86_64', 0x0100000C: 'arm64'}.get(cpu, '?')] = libs
+    return out
+
+
 class NativeTools(unittest.TestCase):
     def test_universal(self):
         for exe in (XLATE,):
@@ -53,6 +74,15 @@ class NativeTools(unittest.TestCase):
             with self.subTest(exe=exe.name):
                 self.assertEqual(weak_imports(exe.read_bytes()), {'arm64': [], 'x86_64': []},
                                  f"{exe.name} imports functions its minimum macOS does not have: rebuild it with Microsoft's .NET SDK (dm/tools/native_tools.sh {exe.name})")
+
+    def test_links_only_system_libraries(self):
+        for exe in (XLATE,):
+            with self.subTest(exe=exe.name):
+                libs = linked_libraries(exe.read_bytes())
+                self.assertEqual(sorted(libs), ['arm64', 'x86_64'])
+                foreign = {a: [l for l in v if not l.startswith(('/usr/lib/', '/System/Library/'))] for a, v in libs.items()}
+                self.assertEqual(foreign, {'arm64': [], 'x86_64': []},
+                                 f"{exe.name} links libraries a player's Mac does not have: rebuild it with Microsoft's .NET SDK (dm/tools/native_tools.sh {exe.name})")
 
     def test_only_the_executable_is_committed(self):   # no dlls, runtimeconfig or satellite folders of a framework-dependent build left beside it
         for exe in (XLATE,):
