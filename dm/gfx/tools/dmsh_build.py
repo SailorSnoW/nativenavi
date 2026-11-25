@@ -128,7 +128,7 @@ def commit(key='', names=None):
     if not STORE.full:
         for p in staged: os.unlink(p)
 
-def publish_library():
+def publish_library(on_progress=None):   # on_progress: shader_lib.write's
     """Files left on disk win over staged ones. When the image cannot be written, a full build out of space stops without unpacking onto the full drive; otherwise
     the staged outputs go back into the folder"""
     d = out
@@ -144,7 +144,7 @@ def publish_library():
     for n in staged: files[n[len(prefix):]] = (lambda n=n: STORE.get(n))
     for n in os.listdir(d):
         if not n.startswith('.') and '.tmp' not in n and os.path.isfile(os.path.join(d, n)): files[n] = os.path.join(d, n)
-    try: shader_lib.write(files, image)
+    try: shader_lib.write(files, image, on_progress=on_progress)
     except (OSError, ValueError) as e:
         cache_full = getattr(STORE, 'full', False)
         def stop(why, err2=None):
@@ -804,17 +804,18 @@ for _root in [cache_root] + [x for x in os.environ.get('DMSH_PREFILL', '').split
         if _b.startswith('b-') and os.path.realpath(shader_lib.folder_of(os.path.join(_root, _b))) != os.path.realpath(out):
             for _ln in MTL.fill(os.path.join(_root, _b)): print(_ln, flush=True)
 
-# Progress for the packing script (a JSON file), at most every half second
+# Progress for the packing script (a JSON file, build_app.py ShaderWatch): at most every half second, and at once for a new step or a forced count
 PROGRESS = os.environ.get('DMSH_PROGRESS')
-_prog = {'t': 0.0, 'lock': threading.Lock()}
-def progress(step, done, total, force=False, **extra):
+_prog = {'t': 0.0, 'step': '', 'lock': threading.Lock()}
+def progress(step, done=None, total=None, force=False, **extra):
     if not PROGRESS: return
     with _prog['lock']:
         now = time.time()
-        if not force and now - _prog['t'] < 0.5: return
-        _prog['t'] = now
+        if not force and step == _prog['step'] and now - _prog['t'] < 0.5: return
+        _prog['t'], _prog['step'] = now, step
+        payload = {'step': step, **({'done': done} if done is not None else {}), **({'total': total} if total is not None else {}), **extra}
         try:
-            with open(PROGRESS + '.tmp', 'w') as f: json.dump({'step': step, 'done': done, 'total': total, **extra}, f)
+            with open(PROGRESS + '.tmp', 'w') as f: json.dump(payload, f)
             os.replace(PROGRESS + '.tmp', PROGRESS)
         except OSError: pass
 
@@ -846,7 +847,7 @@ for i, key in enumerate(keys):
     rule_fps[key] = hashlib.sha256(shader_rule_source(name) + ','.join(sorted(PAIRS.get(key, ()))).encode()).hexdigest()   # rebuilt when its pairs change (vs_pad)
     hit, cache_reasons[key] = cache_lookup(key, digests[key], rule_fps[key], CODE_FP)
     if hit: cache_hits.add(key)
-    progress('cache check', i + 1, len(keys), cached=len(cache_hits))
+    progress('cache check', i + 1, len(keys), force=i + 1 == len(keys), cached=len(cache_hits))
 NMISS = sum(1 for k in keys if k not in cache_hits)
 xerr = {}
 def xlate_errors(r):
@@ -903,7 +904,7 @@ def finished(*_):
     with _prog['lock']:
         DONE['n'] += 1
         n = DONE['n']
-    progress('compiling', n, len(keys), cached=len(cache_hits), misses=NMISS)
+    progress('compiling', n, len(keys), force=n == len(keys), cached=len(cache_hits), misses=NMISS)
 # Shaders finish in forked worker processes (fin holds the GIL), forked before any thread starts so they inherit every table. A worker does not open the cache (Apple's
 # SQLite crashes when a fork opens a database): results come back here in batch order, as with threads. The Metal PCH is made before the fork.
 COUNTERS = (PRE_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, MTL.stats)
@@ -1011,14 +1012,15 @@ if not want:
     with open(os.path.join(out, CAS_USED + '.tmp'), 'w') as _f: _f.write(''.join(d + '\n' for d in sorted(set(digests.values()))))
     os.replace(os.path.join(out, CAS_USED + '.tmp'), os.path.join(out, CAS_USED))
 if not want: dmsh_chain.write_stamp(out, GAME.id, INPUTS)   # a build stopped on a full drive leaves no stamp beside a library it could not write
-publish_library()
+publish_library(lambda done, total, size: progress('writing the library image', done, total, force=done == total, unit='files', bytes=size))
 if not want: print(f'library stamp: game {GAME.id}, inputs {INPUTS}', flush=True)
-if PROGRESS:
-    try: os.unlink(PROGRESS)
-    except FileNotFoundError: pass
 if not want:
-    for _tool, _table in (('c1_guard.py', 'c1_full.tsv'), ('cb_extent.py', 'cb_extent.tsv')):
+    for _tool, _table, _step in (('c1_guard.py', 'c1_full.tsv', 'c1 guard'), ('cb_extent.py', 'cb_extent.tsv', 'uniform read extents')):
+        progress(_step, force=True)
         _r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), _tool), out, str(GAME.table(_table))], capture_output=True, text=True)
         if _r.returncode: sys.exit(f'[RED] {_tool} failed ({_r.returncode}): {_r.stderr.strip()[-500:]}')
         print(f'{_table}: {(_r.stdout.strip().splitlines() or [""])[-1]}', flush=True)
 elif STAMP_BEFORE != INPUTS: print(f'no library stamp: the profile\'s inputs changed since the last full build ({STAMP_BEFORE} → {INPUTS}), and a partial build does not rebuild the rest', flush=True)
+if PROGRESS:
+    try: os.unlink(PROGRESS)
+    except FileNotFoundError: pass
