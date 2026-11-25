@@ -37,7 +37,7 @@ Game vibration plays on a connected controller that has it. Controllers with sep
 
 ## Motion (gyro)
 
-A controller that supplies gyro data through Apple's controller support (a DualSense, a DualShock 4 over USB) drives the game's motion controls. Where the motion data macOS gives for a pad is empty (a Switch Pro Controller, a DualShock 4 over Bluetooth), the host reads the sensor from the controller's own reports instead (`DM_MOTION_HID=0` in `env.txt` turns that off). Joy-Con 2 and Pro Controller 2 gyro come over Bluetooth LE ([Switch 2 controllers](#switch-2-controllers)).
+A controller that supplies gyro data through Apple's controller support (a DualSense, a DualShock 4 over USB) drives the game's motion controls. Where the motion data macOS gives for a pad is empty (a Switch Pro Controller, a DualShock 4 over Bluetooth, an 8BitDo Ultimate 2 Wireless over Bluetooth with firmware 1.03 or later), the host reads the sensor from the controller's own reports instead (`DM_MOTION_HID=0` in `env.txt` turns that off). Joy-Con 2 and Pro Controller 2 gyro come over Bluetooth LE ([Switch 2 controllers](#switch-2-controllers)).
 
 A Switch Pro-compatible controller whose thumbstick stays at zero in Apple's controller support while it moves in its own reports gets that stick from the reports after a short tilt; its buttons, vibration, motion and any working stick stay with Apple's support ([details](reference/services.md#switch-pro-controller-stick-stays-zero-in-gamecontroller)). `DM_PRO_STICKS=0` in `env.txt` turns that off.
 

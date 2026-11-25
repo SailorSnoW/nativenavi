@@ -385,7 +385,7 @@ static void pads_motion_changed(GCController *gone) {
     for (int m = 0; m < PRO_MODELS; m++) player[m] = -1;
     GCController *pro = nil;
     for (GCController *c in GCController.controllers) {
-        int m = c != gone && c.extendedGamepad && !pad_gc_unread(c) ? pro_model_of_category(c.productCategory.UTF8String) : -1;
+        int m = c != gone && c.extendedGamepad && !pad_gc_unread(c) ? pro_model_of_controller(c.productCategory.UTF8String, c.vendorName.UTF8String) : -1;
         if (m >= 0) {
             count[m]++;
             player[m] = pro_gc_player(c);

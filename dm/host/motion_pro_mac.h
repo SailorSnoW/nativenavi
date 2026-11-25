@@ -1,4 +1,4 @@
-// Workaround: macOS's GCMotion of these pads, and the sticks of some Switch Pro-compatible pads, are zero-only, but the HID reports its driver
+// Workaround: macOS's GCMotion of these pads is zero-only or missing, and some Switch Pro-compatible pads' sticks zero-only, but the HID reports its driver
 // receives carry the IMU and the sticks: read them. Main run loop only; one buffer / decoder per retained IOHIDDevice.
 #pragma once
 #import <IOKit/hid/IOHIDManager.h>
@@ -9,16 +9,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-// One row per model; each model pairs on its own, so one pad of each pairs with another model connected
+// One row per model; each model pairs on its own, so one pad of each pairs with another model connected. GameController names a model by its
+// product category, else by its vendorName; gamepad_only: only its GamePad / Joystick HID interfaces
 typedef int (*pro_decoder)(pro_motion *, const uint8_t *, size_t, uint64_t, pro_motion_sample[3]);
-typedef struct { const char *name, *category; int vendor, product[2]; uint8_t report; size_t min_len; pro_decoder decode; } pro_model;
-enum { PRO_MODEL_PRO, PRO_MODEL_DS4, PRO_MODELS };
+typedef struct { const char *name, *category, *vendor_name; int vendor, product[2]; uint8_t report; size_t min_len; int gamepad_only; pro_decoder decode; } pro_model;
+enum { PRO_MODEL_PRO, PRO_MODEL_DS4, PRO_MODEL_8BITDO_U2W, PRO_MODELS };
 enum { PRO_STICK_TRIG = DM_STICK_MAX / 2 };   // half a stick in report 0x30 while GameController reads zero...
 #define PRO_STICK_HOLD_NS 150000000ull        // ...for this long latches the stick onto the HID reports
 static const pro_model g_pro_models[PRO_MODELS] = {
-    {"Pro Controller", "Switch Pro Controller", 0x057E, {0x2009}, 0x30, 49, pro_motion_decode},
+    {"Pro Controller", "Switch Pro Controller", NULL, 0x057E, {0x2009}, 0x30, 49, 0, pro_motion_decode},
     // a DualShock 4 over USB sends 0x01, never 0x11: GameController's motion works there
-    {"DualShock 4", "DualShock 4", 0x054C, {0x05C4, 0x09CC}, 0x11, 78, ds4_motion_decode},
+    {"DualShock 4", "DualShock 4", NULL, 0x054C, {0x05C4, 0x09CC}, 0x11, 78, 0, ds4_motion_decode},
+    // over Bluetooth, firmware 1.03 and later; 1.02's 12-byte reports have no sensor
+    {"8BitDo Ultimate 2 Wireless", NULL, "8BitDo Ultimate 2 Wireless", 0x2DC8, {0x6012}, 0x01, 34, 1, abitdo_motion_decode},
 };
 static int pro_model_of(int vendor, int product) {
     for (int m = 0; m < PRO_MODELS; m++)
@@ -26,13 +29,14 @@ static int pro_model_of(int vendor, int product) {
             if (vendor == g_pro_models[m].vendor && product && product == g_pro_models[m].product[i]) return m;
     return -1;
 }
-static int pro_model_of_category(const char *category) {
-    for (int m = 0; m < PRO_MODELS; m++) if (category && !strcmp(category, g_pro_models[m].category)) return m;
+static int pro_model_of_controller(const char *category, const char *vendor_name) {
+    for (int m = 0; m < PRO_MODELS; m++) if (g_pro_models[m].category && category && !strcmp(category, g_pro_models[m].category)) return m;
+    for (int m = 0; m < PRO_MODELS; m++) if (g_pro_models[m].vendor_name && vendor_name && !strcmp(vendor_name, g_pro_models[m].vendor_name)) return m;
     return -1;
 }
 
 typedef struct pro_device {
-    IOHIDDeviceRef hid; uint8_t report[512]; pro_motion motion; uint64_t heard; int model;   // heard: its last complete report
+    IOHIDDeviceRef hid; uint8_t report[512]; pro_motion motion; uint64_t heard; int model, short_logged;   // heard: its last complete report
     // A Pro Controller's sticks per side: stick_live, GameController moved it (it owns the stick); stick_hid, latched onto report 0x30;
     // stick_since, when the deflection began while GameController read zero; stick_sent / _mask, what was last pushed to front_mac.m
     pad_pro sticks; int32_t stick[4]; int stick_live[2], stick_hid[2]; uint64_t stick_since[2];
@@ -186,7 +190,14 @@ static void pro_report(void *ctx, IOReturn result, void *sender, IOHIDReportType
     pro_device *d = ctx;
     const pro_model *m = &g_pro_models[d->model];
     pro_pairing *g = &g_pro_pair[d->model];
-    if (result != kIOReturnSuccess || type != kIOHIDReportTypeInput || report_id != m->report || len < (CFIndex)m->min_len || r[0] != m->report) return;
+    if (result != kIOReturnSuccess || type != kIOHIDReportTypeInput || report_id != m->report || len < 1 || r[0] != m->report) return;
+    if (len < (CFIndex)m->min_len) {
+        if (d->model == PRO_MODEL_8BITDO_U2W && !d->short_logged) {
+            d->short_logged = 1;
+            LOG("[hid] %s raw motion: %ld-byte report 0x%02x has no sensor data (firmware before 1.03?)", m->name, (long)len, m->report);
+        }
+        return;
+    }
     uint64_t now = now_ns();
     int was = pro_live(d->heard, now);
     if (d->model == PRO_MODEL_PRO && g_pro_sticks) {
@@ -216,6 +227,10 @@ static void pro_found(void *ctx, IOReturn result, void *sender, IOHIDDeviceRef h
     for (pro_device *d = g_pro_devices; d; d = d->next) if (d->hid == hid) return;
     int model = pro_model_of(pro_property(hid, CFSTR(kIOHIDVendorIDKey)), pro_property(hid, CFSTR(kIOHIDProductIDKey)));
     if (model < 0 || (model != PRO_MODEL_PRO && !g_pro_gyro)) return;
+    if (g_pro_models[model].gamepad_only) {
+        int page = pro_property(hid, CFSTR(kIOHIDPrimaryUsagePageKey)), usage = pro_property(hid, CFSTR(kIOHIDPrimaryUsageKey));
+        if (page != kHIDPage_GenericDesktop || (usage != kHIDUsage_GD_Joystick && usage != kHIDUsage_GD_GamePad)) return;
+    }
     pro_device *d = calloc(1, sizeof *d);
     if (!d) {
         LOG("[RED] %s raw HID: cannot allocate device state", g_pro_models[model].name);
@@ -253,8 +268,13 @@ static void dm_motion_pro_start(void (*changed)(void), int (*gc_sticks)(int, int
     NSMutableArray *match = [NSMutableArray array];
     for (int m = 0; m < PRO_MODELS; m++) {
         if (m != PRO_MODEL_PRO && !g_pro_gyro) continue;
-        for (int i = 0; i < 2; i++) if (g_pro_models[m].product[i])
-            [match addObject:@{@kIOHIDVendorIDKey: @(g_pro_models[m].vendor), @kIOHIDProductIDKey: @(g_pro_models[m].product[i])}];
+        for (int i = 0; i < 2; i++) if (g_pro_models[m].product[i]) {
+            if (g_pro_models[m].gamepad_only) {
+                for (int u = 0; u < 2; u++)
+                    [match addObject:@{@kIOHIDVendorIDKey: @(g_pro_models[m].vendor), @kIOHIDProductIDKey: @(g_pro_models[m].product[i]),
+                                       @kIOHIDDeviceUsagePageKey: @(kHIDPage_GenericDesktop), @kIOHIDDeviceUsageKey: @(u ? kHIDUsage_GD_Joystick : kHIDUsage_GD_GamePad)}];
+            } else [match addObject:@{@kIOHIDVendorIDKey: @(g_pro_models[m].vendor), @kIOHIDProductIDKey: @(g_pro_models[m].product[i])}];
+        }
     }
     IOHIDManagerSetDeviceMatchingMultiple(g_pro_manager, (__bridge CFArrayRef)match);
     IOHIDManagerRegisterDeviceMatchingCallback(g_pro_manager, pro_found, NULL);
