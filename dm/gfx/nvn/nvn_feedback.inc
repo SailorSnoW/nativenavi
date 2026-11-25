@@ -175,6 +175,32 @@ static int fb_tile_ready(NvShader *vs, NvShader *fs, id<MTLFunction> fn, const u
     });
     return 0;
 }
+// A shader's bindings that name a texture or an image, and those ubd_conflict_sh looks at, as indices into rf.b in its order: the per-draw checks (fb_depth_rule,
+// fb_prepare, ubd_conflict_*) walk these instead of every binding (docs/reference/frame-rate.md, "Per-draw checks walked every reflected binding"). Made once a
+// shader under the lock; lists_nb is stored last with release and read with acquire, so a thread that sees it also sees both lists.
+static os_unfair_lock g_sh_lists_lock = OS_UNFAIR_LOCK_INIT;
+static __attribute__((noinline)) void sh_lists_make(NvShader *sh) {
+    os_unfair_lock_lock(&g_sh_lists_lock);
+    if (__atomic_load_n(&sh->lists_nb, __ATOMIC_ACQUIRE) == sh->rf.nb + 1) { os_unfair_lock_unlock(&g_sh_lists_lock); return; }
+    int n = 0, m = 0;
+    for (int i = 0; i < sh->rf.nb && i < NVN_REFL_MAXB; i++) {
+        switch (sh->rf.b[i].kind) {   // every kind ubd_conflict_textures, fb_prepare and fb_depth_rule act on (t_binding_lists)
+            case NVN_RB_TEX: case NVN_RB_TBUF: case NVN_RB_TEXU: case NVN_RB_TBUFU: case NVN_RB_IMG: case NVN_RB_IMGU:
+            case NVN_RB_TEXD: case NVN_RB_TEXA: case NVN_RB_TEXP: case NVN_RB_TEXH: sh->tex_idx[n++] = (uint8_t)i; break;
+            default: break;
+        }
+        switch (sh->rf.b[i].kind) {   // what ubd_conflict_sh looks at beside the textures
+            case NVN_RB_CBUF: case NVN_RB_SBUFP: case NVN_RB_UBOP: case NVN_RB_GMEM:
+            case NVN_RB_TEXU: case NVN_RB_SAMPU: case NVN_RB_SBUFU: case NVN_RB_IMGU: case NVN_RB_TBUFU: sh->buf_idx[m++] = (uint8_t)i; break;
+            default: break;
+        }
+    }
+    sh->tex_n = (uint8_t)n; sh->buf_n = (uint8_t)m; __atomic_store_n(&sh->lists_nb, sh->rf.nb + 1, __ATOMIC_RELEASE);
+    os_unfair_lock_unlock(&g_sh_lists_lock);
+}
+static inline void sh_lists(NvShader *sh) { if (__builtin_expect(__atomic_load_n(&sh->lists_nb, __ATOMIC_ACQUIRE) != sh->rf.nb + 1, 0)) sh_lists_make(sh); }
+static inline int sh_tex_list(NvShader *sh, const uint8_t **l) { sh_lists(sh); *l = sh->tex_idx; return sh->tex_n; }
+static inline int sh_buf_list(NvShader *sh, const uint8_t **l) { sh_lists(sh); *l = sh->buf_idx; return sh->buf_n; }
 // texture slots (bit per slot 0-255) read from the tile; 0 = none (then g_fb_tfn and the rest are not this draw's)
 static int fb_tile_plan(NvProg *pr, uint32_t wm, uint64_t tile[4]) {
     NvShader *vs = pr->sh[0], *fs = pr->sh[1]; memset(tile, 0, 4 * sizeof *tile);
@@ -339,8 +365,9 @@ static void fb_depth_rule(NvShader *fs, uint32_t dsw) {
     uint64_t dser = R.rt.depth->serial; int slot[4], stid[4], ns = 0;
     uint32_t direct = fs->rf.bindless ? fb_texu_reads(fs, dser, R.rt.n > 0) : 0;
     uint32_t slot_planes[4];
-    for (int i = 0; i < fs->rf.nb; i++) {
-        const nvn_rbind *b = &fs->rf.b[i];
+    const uint8_t *texs; int ntexs = sh_tex_list(fs, &texs);
+    for (int ti = 0; ti < ntexs; ti++) {
+        int i = texs[ti]; const nvn_rbind *b = &fs->rf.b[i];
         int image = b->kind == NVN_RB_IMG && !b->rw && !b->atom && b->reg < 32;
         if (!image && (b->kind != NVN_RB_TEX || b->reg >= NTEX)) continue;
         int tid = (int)((image ? bound_img(1, b->reg) : bound_tex(1, b->reg)) & 0xfffff);
@@ -388,8 +415,9 @@ static void fb_prepare(NvProg *pr) {
         if (pool || fs->rf.dyn) g_fb_dread |= FB_DS_BOTH;
     }
     uint64_t tile[4]; int ntile = fb_tile_plan(pr, wm, tile);
-    for (int i = 0; i < fs->rf.nb && g_fb_n < 4; i++) {
-        const nvn_rbind *b = &fs->rf.b[i];
+    const uint8_t *texs; int ntexs = sh_tex_list(fs, &texs);
+    for (int ti = 0; ti < ntexs && g_fb_n < 4; ti++) {
+        const nvn_rbind *b = &fs->rf.b[texs[ti]];
         int image = b->kind == NVN_RB_IMG && !b->rw && !b->atom && b->reg < 32;
         // A TEXU handle has no slot, so it never reads the tile, and no level is pinned for it. Arrays and tables of handles are not taken.
         int texu = b->kind == NVN_RB_TEXU && !b->n;

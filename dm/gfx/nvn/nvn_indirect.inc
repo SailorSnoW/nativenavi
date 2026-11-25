@@ -468,10 +468,12 @@ static int ubd_buffer_texture_hit(int tid) {   // caller holds g_rmu; no texture
 }
 static int ubd_conflict_textures(NvShader *sh, int st) {
     if (!g_nubd) return 0;
+    const uint8_t *texs; int ntexs = sh_tex_list(sh, &texs);
+    if (!ntexs) return 0;
     int hit = 0;
     os_unfair_lock_lock(&g_rmu);
-    for (int i = 0; i < sh->rf.nb && !hit; i++) {
-        const nvn_rbind *b = &sh->rf.b[i];
+    for (int ti = 0; ti < ntexs && !hit; ti++) {
+        const nvn_rbind *b = &sh->rf.b[texs[ti]];
         switch (b->kind) {
         case NVN_RB_TEXP: case NVN_RB_TEXH: hit = b->dtt == MTLTextureTypeTextureBuffer; break;   // selected on the GPU: any update may overlap
         case NVN_RB_TEX: case NVN_RB_TBUF: hit = ubd_buffer_texture_hit((int)(bound_tex(st, b->reg) & 0xfffff)); break;
@@ -494,7 +496,8 @@ static int ubd_conflict_textures(NvShader *sh, int st) {
 }
 static int ubd_conflict_sh(NvShader *sh, int st) {
     if (ubd_conflict_textures(sh, st)) return 1;
-    for (int i = 0; i < sh->rf.nb; i++) { const nvn_rbind *b = &sh->rf.b[i];
+    const uint8_t *bufs; int nbufs = sh_buf_list(sh, &bufs);
+    for (int bi = 0; bi < nbufs; bi++) { const nvn_rbind *b = &sh->rf.b[bufs[bi]];
         if (b->kind == NVN_RB_GMEM) { if (ubd_hits(0, UINT64_MAX)) return 1; continue; }
         if (b->reg >= 16) continue;
         const p_bind_buf *u = b->kind == NVN_RB_SBUFP ? &S.ssbo[st][b->reg] : &S.ubo[st][b->reg];

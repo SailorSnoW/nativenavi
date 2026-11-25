@@ -128,6 +128,7 @@ static void shmap_read(void) {
     uint8_t up_mfx;   // 0 not decided, 1 drawn by MetalFX when DM_UPSCALER=metalfx, 2 not one or one its colour keeps
     uint8_t up_color;
     uint8_t up_chain;   // 0 not looked up, 1 one of the upscaler chain, 2 not one
+    uint8_t tex_n, tex_idx[NVN_REFL_MAXB], buf_n, buf_idx[NVN_REFL_MAXB]; int lists_nb;   // sh_lists_make; lists_nb: the rf.nb they were made for + 1, 0 not made
     uint64_t cbs_seen; uint32_t cbs_runs;
     uint8_t ab_cbuf_only;   // 1: its only uniform-buffer reads are plain CBUF slots, so a block can be patched; 0 not decided, 2 not
     // Borrowed from its arena (a strong reference would pin retired arenas) and reused only within render pass ab_pass: another pass's arena may have been reclaimed.
