@@ -639,7 +639,8 @@ def finish(key, w, j, c1):
     try: src = dmsh_rewrite.select_guards(src)
     except ValueError as e: return 'uniform bounds rewrite failed', str(e)[:160], None
     src = dmsh_rewrite.mul_extended(src)
-    src = dmsh_rewrite.float_add_msl(src)
+    try: src = dmsh_rewrite.float_add_msl(src)
+    except ValueError as e: return 'float atomic add rewrite failed', str(e)[:160], None
     try: src = dmsh_rewrite.gather_offsets(src)
     except ValueError as e: return 'gather offsets rewrite failed', str(e)[:160], None
     try: src = dmsh_rewrite.hmma_msl(src)
