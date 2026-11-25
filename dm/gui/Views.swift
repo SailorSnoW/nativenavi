@@ -123,6 +123,7 @@ private struct SetupView: View {
             Form {
                 Section("Your Game") {
                     GameField()
+                    VersionPicker()
                 }
                 Section("What the Build Needs") {
                     XcodeRow()
@@ -234,6 +235,24 @@ private struct GameField: View {
     private func details(_ url: URL) -> String {
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { bytes(Int64($0)) }
         return [size, display(url.deletingLastPathComponent())].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// Shown when the verified file holds more than one version of the game
+private struct VersionPicker: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let known = model.knownGame, known.versions.count > 1 {
+            Picker(selection: Binding(get: { model.chosenVersion?.package ?? "" }, set: { model.version = $0 })) {
+                ForEach(known.versions, id: \.package) { Text($0.display).tag($0.package) }
+            } label: {
+                Text("Version")
+                Text("Your file holds \(ListFormatter.localizedString(byJoining: known.versions.map(\.display))). The game's app is one of them: building the other one later replaces it.")
+            }
+            .pickerStyle(.segmented)
+            .disabled(model.isBusy)
+        }
     }
 }
 
@@ -424,7 +443,7 @@ private struct FinishedView: View {
                     .multilineTextAlignment(.center)
                     .padding(.top, 18)
                     .padding(.horizontal, 40)
-                Text("It's in \(folderName(built.url.deletingLastPathComponent())). Open it from there, from Launchpad or with Spotlight.")
+                Text((built.version.isEmpty ? "" : "Version \(built.version). ") + "It's in \(folderName(built.url.deletingLastPathComponent())). Open it from there, from Launchpad or with Spotlight.")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.top, 6)

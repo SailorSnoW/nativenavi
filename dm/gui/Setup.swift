@@ -9,8 +9,13 @@ struct SetupConfig: Decodable, Sendable {
         let sha256: String
     }
     struct KnownNUP: Decodable, Sendable, Equatable {
+        struct Version: Decodable, Sendable, Equatable {
+            let package: String   // build_app.py -p
+            let display: String
+        }
         let sha256: String
         let bytes: Int64
+        let versions: [Version]   // the default first
         let holds: String
     }
     let python: Pin

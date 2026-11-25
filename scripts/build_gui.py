@@ -65,15 +65,22 @@ def metal_version():
     raise Error('dm/gfx/tools/dmsh_chain.lock has no metal_macosx')
 
 
-def known_nups():   # sha256 <TAB> bytes <TAB> what the container holds
-    table = profile() / 'nup.tsv'
+def game_versions():   # {package: display version} of the profile's build rows
+    rows = [l.split('\t') for l in (profile() / 'game.tsv').read_text(encoding='utf-8').splitlines() if l.startswith('build\t')]
+    return {r[1]: r[2] for r in rows if len(r) > 2}
+
+
+def known_nups():   # sha256 <TAB> bytes <TAB> versions it builds, the default first <TAB> what the container holds
+    table, versions = profile() / 'nup.tsv', game_versions()
     rows = []
     for n, line in enumerate(table.read_text().splitlines() if table.is_file() else [], 1):
         if not line.strip() or line.startswith('#'): continue
         f = line.split('\t')
-        if len(f) != 3 or not re.fullmatch(r'[0-9a-f]{64}', f[0]) or not f[1].isdigit() or not f[2].strip():
-            raise Error(f'{table}:{n}: not a row of sha256 <TAB> bytes <TAB> what it holds: {line!r}')
-        rows.append({'sha256': f[0], 'bytes': int(f[1]), 'holds': f[2].strip()})
+        if len(f) != 4 or not re.fullmatch(r'[0-9a-f]{64}', f[0]) or not f[1].isdigit() or not f[2].split() or not f[3].strip():
+            raise Error(f'{table}:{n}: not a row of sha256 <TAB> bytes <TAB> versions <TAB> what it holds: {line!r}')
+        if lost := [v for v in f[2].split() if v not in versions]:
+            raise Error(f'{table}:{n}: {", ".join(lost)} has no build row in the profile\'s game.tsv: the app builds only a registered version')
+        rows.append({'sha256': f[0], 'bytes': int(f[1]), 'versions': [{'package': v, 'display': versions[v]} for v in f[2].split()], 'holds': f[3].strip()})
     if not rows: raise Error(f'{table} lists no NUP container: the app would refuse every game file')
     return rows
 

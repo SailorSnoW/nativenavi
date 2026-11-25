@@ -67,7 +67,11 @@ private struct BuildEvent: Decodable {
     var unknownGame: String?
     private var gameIdentity: Toolchain.FileIdentity?
     private var verifying: Task<Void, Never>?
-    var gameVerified: Bool { if case .verified = gameCheck { true } else { false } }
+    var gameVerified: Bool { knownGame != nil }
+    var knownGame: SetupConfig.KnownNUP? { if case .verified(let known) = gameCheck { known } else { nil } }
+    /// The version built from the game file (build_app.py -p): the player's choice when the file holds it, else the file's default
+    var version: String? { didSet { UserDefaults.standard.set(version, forKey: Keys.version) } }
+    var chosenVersion: SetupConfig.KnownNUP.Version? { knownGame.map { k in k.versions.first { $0.package == version } ?? k.versions[0] } }
 
     var xcode: Xcode?
     var xcodeCheck = Check.checking
@@ -99,13 +103,14 @@ private struct BuildEvent: Decodable {
     private var stderrTail = Tail()
 
     private enum Keys {
-        static let game = "game.bookmark", destination = "destination.path", buildParent = "build.parent", built = "built.app", hashes = "game.sha256"
+        static let game = "game.bookmark", destination = "destination.path", buildParent = "build.parent", built = "built.app", hashes = "game.sha256", version = "game.version"
     }
 
     init() {
         let d = UserDefaults.standard
         destination = d.string(forKey: Keys.destination).map { URL(filePath: $0, directoryHint: .isDirectory) } ?? AppModel.defaultDestination
         buildParent = d.string(forKey: Keys.buildParent).map { URL(filePath: $0, directoryHint: .isDirectory) }
+        version = d.string(forKey: Keys.version)
         if let data = d.data(forKey: Keys.built), let b = try? JSONDecoder().decode(BuiltApp.self, from: data) { built = b }
         if let data = d.data(forKey: Keys.game) {
             var stale = false
@@ -136,6 +141,7 @@ private struct BuildEvent: Decodable {
         if xcodeCheck.level == .checking { return "Checking this Mac…" }
         if xcodeCheck.level != .ok { return "Xcode \(cfg.xcode) is needed first." }
         if metalCheck.level == .problem { return "This Xcode can't build the game's shaders." }
+        if let built, let v = chosenVersion, !built.version.isEmpty, built.version != v.display { return "This build replaces the game's \(built.version) app with \(v.display)." }
         return FileManager.default.fileExists(atPath: buildFolder.path) ? "This build reuses the earlier one's work." : "A first build takes a few hours."
     }
 
@@ -311,7 +317,7 @@ private struct BuildEvent: Decodable {
     }
 
     func build() {
-        guard canBuild, let game, let xcode else { return }
+        guard canBuild, let game, let xcode, let version = chosenVersion else { return }
         guard let id = Toolchain.identity(game), id == gameIdentity else { checkGame(); return }
         let env = Toolchain.environment(xcode)
         screen = .working
@@ -326,7 +332,7 @@ private struct BuildEvent: Decodable {
                 job = nil
             }
             do {
-                try await run(game: game, env: env)
+                try await run(game: game, version: version.package, env: env)
             } catch is CancellationError {
                 finishStep(.failed)
                 screen = .stopped
@@ -344,7 +350,7 @@ private struct BuildEvent: Decodable {
         await job?.value
     }
 
-    private func run(game: URL, env: [String: String]) async throws {
+    private func run(game: URL, version: String, env: [String: String]) async throws {
         try FileManager.default.createDirectory(at: Paths.root, withIntermediateDirectories: true)
         Toolchain.excludeFromBackup(Paths.root)
         let source = try await step("Unpacking the build scripts") { try await Toolchain.prepareSource(cfg) }
@@ -375,7 +381,7 @@ private struct BuildEvent: Decodable {
         try FileManager.default.createDirectory(at: buildFolder, withIntermediateDirectories: true)
         Toolchain.excludeFromBackup(buildFolder)
 
-        let args = ["-u", source.appending(path: "scripts/build_app.py").path, game.path, "--progress", "json",
+        let args = ["-u", source.appending(path: "scripts/build_app.py").path, game.path, "-p", version, "--progress", "json",
                     "--work-dir", buildFolder.path, "-o", destination.path]
         let status = try await runTool(Toolchain.python3, args, env: env, cwd: source) { [weak self] kind, line in
             guard let self else { return }

@@ -1,4 +1,6 @@
-# The game's NUP containers that the NativeNavi app builds from (docs/gui.md): sha256 <TAB> size in bytes <TAB> what the container holds. The app hashes the file a player
-# chooses and refuses any other one, so that every player's build starts from an input that was built and played from. scripts/build_gui.py copies the rows into the app;
-# scripts/build_app.py does not read this table (from the command line it builds other versions too, from a derived profile). A new row is a dump that was built and played from.
-85b08e81a2a08612f88de1063c8581fe088f7554303aa1ff207972d729b5916f	25622267860	v131072 (1.1.1): the base game and its update
+# The game's NUP containers that the NativeNavi app builds from (docs/gui.md): sha256 <TAB> size in bytes <TAB> the versions it builds from the container, each a build row of game.tsv,
+# the default first <TAB> what the container holds. The app hashes the file a player chooses and refuses any other one, so that every player's build starts from an input that was
+# built and played from; it offers a choice when a container holds more than one version. scripts/build_gui.py copies the rows into the app; scripts/build_app.py does not read
+# this table (from the command line it builds other versions too, from a derived profile). A new row is a dump that was built and played from.
+85b08e81a2a08612f88de1063c8581fe088f7554303aa1ff207972d729b5916f	25622267860	v131072 v0	the base game, 1.0.0, and its update, 1.1.1
+ec3f8e8fb23a3af8560689cce870b4c2c6180497dfffbf9679442d7d53fe5ed2	25251012252	v0	the base game, 1.0.0

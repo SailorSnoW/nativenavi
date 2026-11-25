@@ -61,17 +61,23 @@ class Facts(unittest.TestCase):
         for r in rows:
             self.assertRegex(r['sha256'], SHA)
             self.assertGreater(r['bytes'], 0)
+            self.assertTrue(r['versions'])
         self.assertEqual(len({r['sha256'] for r in rows}), len(rows))
+        self.assertEqual({v['display'] for r in rows for v in r['versions']}, {'1.1.1', '1.0.0'})   # both versions of Ocarina of Time build in the app
 
     def test_nup_table_rows(self):
         with tempfile.TemporaryDirectory() as t:
             table = Path(t) / 'nup.tsv'
+            (Path(t) / 'game.tsv').write_text('build\tv131072\t1.1.1\tmain=' + 'cd' * 16 + '\nbuild\tv0\t1.0.0\tmain=' + 'ef' * 16 + '\n')
             with mock.patch.object(build_gui, 'profile', return_value=Path(t)):
-                table.write_text('# header\n' + 'ab' * 32 + '\t25622267860\tv131072 (1.1.1)\n')
-                self.assertEqual(build_gui.known_nups(), [{'sha256': 'ab' * 32, 'bytes': 25622267860, 'holds': 'v131072 (1.1.1)'}])
-                for bad in ('AB' * 32 + '\t1\tx\n', 'ab' * 32 + '\tbig\tx\n', 'ab' * 32 + '\t1\n'):
+                table.write_text('# header\n' + 'ab' * 32 + '\t25622267860\tv131072 v0\tthe base game and its update\n')
+                self.assertEqual(build_gui.known_nups(), [{'sha256': 'ab' * 32, 'bytes': 25622267860, 'holds': 'the base game and its update',
+                                                           'versions': [{'package': 'v131072', 'display': '1.1.1'}, {'package': 'v0', 'display': '1.0.0'}]}])
+                for bad in ('AB' * 32 + '\t1\tv0\tx\n', 'ab' * 32 + '\tbig\tv0\tx\n', 'ab' * 32 + '\t1\tx\n', 'ab' * 32 + '\t1\t \tx\n'):
                     table.write_text(bad)
                     with self.assertRaises(build_gui.Error): build_gui.known_nups()
+                table.write_text('ab' * 32 + '\t1\tv65536\tx\n')   # a version without a build row
+                with self.assertRaisesRegex(build_gui.Error, 'no build row'): build_gui.known_nups()
                 table.write_text('# only a header\n')
                 with self.assertRaisesRegex(build_gui.Error, 'lists no NUP'): build_gui.known_nups()
 
