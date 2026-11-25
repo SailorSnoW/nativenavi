@@ -162,6 +162,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Fix:** `file_identity` leaves `st_dev` out, as the app packer's record already did. Inode, size, modification and change times still catch an image replaced or written over. An old stamp still misses the fast check, so the [NUP packer verifies the existing image](#an-old-nup-cache-stamp-makes-the-build-unpack-again) before repacking.
 - **Found on:** Ocarina of Time (Switch 2, `0400486024DEC000`, packed from a NUP; PR #1299); the stamps of Star Fox and Mario Kart World show the same two numbers. `dm/tools/tests/test_romfs_image.py` remounts an image under another device number.
 
+### A reboot runs the shader step again
+
+- **Symptom:** the first build after restarting the Mac runs `Mac shaders` again (a cache check of every shader, the library image written again) though nothing changed.
+- **Cause:** the step's reuse key hashes the output of `xcrun -sdk macosx metal --version`, whose last line, `InstalledDir:`, names the mount of the Metal toolchain; since Xcode 26 that is a cryptex whose folder takes a new random suffix at each boot (on this Mac `…/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.cFLtuZ/…`). `regress.py`'s chain keys hashed it too.
+- **Fix:** `build_app.py` `fingerprint` (its `cmd` items) and `regress.py` `toolchain_fp` drop `InstalledDir:` lines, as `dmsh_mtlcache.compiler_id` did already; the version, target and SDK build lines still count (upstream nxnative cdd91f0a).
+- **Found on:** in nxnative, on its NSP script; the line is in this Mac's output (Xcode 27.2).
+- **Check:** `test_shader_toolchain_cache.py` (`test_metal_remount_preserves_reuse`), `test_regress.py` (`test_toolchain_fingerprint_survives_a_remount`).
+
 ### An old NUP cache stamp makes the build unpack again
 
 - **Symptom:** the next build spends minutes unpacking a NUP after a packer update even though its complete `RomFS.img` is still present.

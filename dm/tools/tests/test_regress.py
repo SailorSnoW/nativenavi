@@ -66,6 +66,16 @@ class Regress(unittest.TestCase):
                     self.assertIn('set ' + missing + ':', result.stderr)
             self.assertEqual(list(Path(td).iterdir()), [])
 
+    def test_toolchain_fingerprint_survives_a_remount(self):   # InstalledDir: names the toolchain's mount, renamed at each boot
+        def toolchain(suffix, version='32023.922'):
+            out = {'metal': f'Apple metal version {version} (metalfe-{version}.4)\nTarget: air64-apple-darwin27.2.0\nThread model: posix\n'
+                            f'InstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.{suffix}/Metal.xctoolchain/usr/metal/current/bin\n',
+                   '--show-sdk-build-version': '26B118\n'}
+            return lambda cmd, **kw: NS(stdout=next(v for k, v in out.items() if k in cmd), stderr='')
+        with patch.object(regress, 'sh', toolchain('em8TI5')): first = regress.toolchain_fp()
+        with patch.object(regress, 'sh', toolchain('Xq3ZpA')): self.assertEqual(first, regress.toolchain_fp())
+        with patch.object(regress, 'sh', toolchain('em8TI5', '32023.950')): self.assertNotEqual(first, regress.toolchain_fp())
+
     def test_interface(self):
         vo, fi = regress.msl_io(VS, 'main0_z', 'vs'), regress.msl_io(PS, 'main0', 'ps')
         self.assertEqual(vo, {'locn0': 'float4', 'locn2': 'float4'})
