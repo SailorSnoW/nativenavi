@@ -1132,6 +1132,14 @@ The replay of NVN on Metal (`dm/gfx/nvn/nvn_mtl.m`). Each entry: symptom, cause,
 - **Check:** `dm/gfx/tests/t_pull.m` (the words against Metal's fetch and the CPU conversion), `t_pull_inv.m` (a depth prepass with one pipeline and depth-equal with the other), `test_dmsh_pull.py`.
 - **Found on:** The Legend of Zelda: Breath of the Wild: draws that waited for their pipeline on a cold start.
 
+### Absent vertex attributes lose W
+
+- **Symptom:** a mesh that should be drawn is missing, without a missing-shader line: in nxnative, the Slosher's airborne ink in Splatoon Raiders, whose alpha-tested depth pass reads attribute 12's W while the draw binds attributes 0-9, so its color pass (depth `EQUAL`) drew nothing.
+- **Cause:** NVN (Maxwell's fetch) gives an attribute with no format the vector (0, 0, 0, 1.0), in register bits whatever the input's type. The vertex descriptor read such an attribute from slot 30's zero buffer and the pulling decoder (`dm_fetch`) returned zeros: W was 0.
+- **Fix:** slot 30 is `vertex_constants` (`nvn_state.inc`): zeros at offset 0 and (0, 0, 0, 1.0) at offset 16. `pso_desc` points an absent attribute (format 0) at offset 16; a format the host does not know and the shadow declarations an input does not use stay at offset 0. `dm_fetch` returns the default for format 0 and zeros for a stream without a buffer, which `pull_layout_fill` now leaves in the block with its format. `ZERO_ATTR` declares slot 30 with a stride of 32: the step is constant, so no read moves, but `metal-tt` refuses a layout whose attribute ends past its stride (offset 16 + 16 > 16), which would have left the prewarm files for other GPUs without every pipeline with an absent attribute (upstream nxnative ef8b25d2, 3b882993). The pulling change is a chain change.
+- **Check:** `t_default_attrib` (float, signed and unsigned inputs past `S.nattr`, absent and of an unknown format; a shadow-input pipeline; each within slot 30's stride), `t_pull` (the default, a stream without a buffer, an invalid stream, an unknown format, the layout block's word).
+- **Found on:** Splatoon Raiders, in nxnative; the stride on Ocarina of Time's prewarm files there. [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game) has such pipelines.
+
 ### Float32 vertex padding through integer inputs
 
 - **Symptom:** a fullscreen post-process draw writes no color, then a later blur composite darkens scenery while the character remains visible.
