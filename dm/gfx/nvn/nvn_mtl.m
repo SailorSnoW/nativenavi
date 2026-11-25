@@ -175,8 +175,12 @@ static uint64_t g_link_empty;   // Under g_pq_mu: ticks that found no new frame 
 static nvn_link_drain g_link_drain;   // display-link callback thread only
 static _Atomic int g_link_drain_req;
 static _Atomic uint64_t g_link_blocked_ns, g_link_drain_ns, g_link_drained;
-// Late latch (nvn_link_latch.h): g_link_waiter, under g_link_mu, the tick an acquire blocks for (0 = none); g_link_waiter_end: it ends a drain into the latch
-static uint64_t g_link_waiter, g_link_latched, g_link_latch_out;
+// Late latch (nvn_link_latch.h): g_link_waiter, under g_link_mu, the tick an acquire blocks for (0 = none); g_link_waiter_end: it ends a drain into the latch;
+// g_link_latch_exits: left for late GPU work or a skipped tick; g_link_latch_late_gpu: latched presents whose GPU work ended after targetTimestamp (feedback handler)
+static uint64_t g_link_waiter, g_link_latched, g_link_latch_out, g_link_latch_exits;
+static _Atomic uint64_t g_link_latch_late_gpu;
+static nvn_link_latch_health g_link_latch_health;   // display-link callback thread only
+static double g_present_gpu_s;   // under g_pq_mu: the present command buffer's GPU time, smoothed (seconds)
 static unsigned g_link_latch_misses;
 static int g_link_waiter_end;
 // display-link callback thread only: the previous frame's hold (0 = none) and the ticks it kept empty

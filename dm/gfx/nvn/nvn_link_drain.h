@@ -28,17 +28,21 @@ typedef struct {
 static inline int nvn_link_drain_spare(double age, double tick) { return tick > 0 && age > LINK_DRAIN_MARGIN ? (int)floor((age - LINK_DRAIN_MARGIN) / tick) : 0; }
 
 // With the latch: ticks from the callback that woke the frame's acquire to the take, when its present came early enough after it (under half of room and an eighth of a tick
-// inside the latch's wait) that the latch would have taken it; -1 otherwise (docs/reference/frame-rate.md#the-callback-took-the-frame-queued-after-the-previous-tick)
-static inline int nvn_link_latch_spare(double age, double lead, double room, double tick) {
+// inside the latch's wait) and its GPU work and present pass would end an eighth of a tick before targetTimestamp (gpu_lead < 0: no GPU time), so the latch would have
+// taken it on time; -1 otherwise (docs/reference/frame-rate.md#the-callback-took-the-frame-queued-after-the-previous-tick)
+static inline int nvn_link_latch_spare(double age, double lead, double gpu_lead, double room, double tick) {
     if (tick <= 0 || room <= 0 || lead < 0) return -1;
     double limit = room / 2, inside = nvn_link_latch_reach(room, tick) - tick / 8;
     if (limit > inside) limit = inside;
-    return lead < limit ? (int)floor((age + lead) / tick + 0.5) : -1;
+    if (lead >= limit) return -1;
+    if (gpu_lead >= 0 && gpu_lead >= room - tick / 8) return -1;
+    return (int)floor((age + lead) / tick + 0.5);
 }
 
-// Per frame the callback takes; seconds. age < 0: the latch waited for it; blocked 0: the acquire did not wait; ok 0: says nothing about a standing queue; room 0: no latch.
+// Per frame the callback takes; seconds. age < 0: the latch waited for it; blocked 0: the acquire did not wait; ok 0: says nothing about a standing queue; room 0: no latch;
+// gpu_lead < 0: no GPU time.
 // Returns the ticks the next acquire waits more, | LINK_DRAIN_LATCH. A fallback soon after a drain into the latch doubles the time the next one needs
-static inline int nvn_link_drain_next(nvn_link_drain *d, double now, double age, double tick, double blocked, int ok, double lead, double room) {
+static inline int nvn_link_drain_next(nvn_link_drain *d, double now, double age, double tick, double blocked, int ok, double lead, double gpu_lead, double room) {
     if (d->in) {   // a latched frame holds; one standing past the drain's ticks is a fallback
         if (room <= 0) d->in = 0;   // another link rate or a present interval of 2: no verdict
         else if (age < 0) {
@@ -52,7 +56,7 @@ static inline int nvn_link_drain_next(nvn_link_drain *d, double now, double age,
         }
     }
     double need = LINK_DRAIN_BLOCKED * tick > 0.002 ? LINK_DRAIN_BLOCKED * tick : 0.002;
-    int good = ok && blocked >= need, as = good ? nvn_link_drain_spare(age, tick) : 0, ls = good ? nvn_link_latch_spare(age, lead, room, tick) : 0;
+    int good = ok && blocked >= need, as = good ? nvn_link_drain_spare(age, tick) : 0, ls = good ? nvn_link_latch_spare(age, lead, gpu_lead, room, tick) : 0;
     if (as < 1) {
         d->run = 0;
     } else if (!d->run++) {
