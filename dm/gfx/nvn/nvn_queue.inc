@@ -311,9 +311,9 @@ static void *nq_worker(void *unused) {
                 if(n->kind==NQ_EVENT && n->event) {
                     uint64_t predecessor=nq_event_pending(n->event);
                     if(!n->waiting) n->event_predecessor=predecessor;
-                    // the queued GPU write satisfies the wait: the GPU runs this after it
+                    // the queued GPU write satisfies the wait: the GPU runs this after it, and a fence right behind it waits for the writer
                     nq_event_write *queued=predecessor>mtl_completed_fence() ? nq_event_write_of(n->event) : NULL;
-                    if(queued && queued->exact && nq_predicate(queued->value,n->mode,n->value)) break;
+                    if(queued && queued->exact && nq_predicate(queued->value,n->mode,n->value)) { n->wait_fence=queued->fence; break; }
                     if(predecessor>mtl_completed_fence() || !nq_predicate(atomic_load_explicit((_Atomic uint32_t *)n->event,memory_order_acquire),n->mode,n->value)) {
                         uint64_t t=now_ns();
                         if(!n->wait_since) n->wait_since=t;
