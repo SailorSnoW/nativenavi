@@ -113,7 +113,7 @@ Shown when the game's code can take microphone input. Off by default. Turn it on
 
 ### Microphone gain
 
-Shown under Advanced settings while Microphone is on: from 100 to 800 %, 400 % by default.
+Shown under Advanced settings while Microphone is on: from 100 to 800 %, 100 % by default. Raise it only for a quiet microphone: the game's Humming mode ends a phrase on silence, which room noise boosted 400 % never reached.
 
 ## Performance
 

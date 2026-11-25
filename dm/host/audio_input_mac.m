@@ -129,14 +129,24 @@ static OSStatus input_render(input_device *d, AudioUnitRenderActionFlags *flags,
         atomic_store_explicit(&d->failed, 1, memory_order_release);
         return kAudio_ParamError;
     }
-    for (int i = 0; i < d->channel_count; i++) d->buffers->mBuffers[i].mDataByteSize = frames * sizeof(float);
+    // AUHAL may leave its own buffer pointers in the list: point it at ours again, and read what it rendered into
+    for (int i = 0; i < d->channel_count; i++) {
+        d->buffers->mBuffers[i].mData = d->planes[i];
+        d->buffers->mBuffers[i].mDataByteSize = frames * sizeof(float);
+    }
     OSStatus status = AudioUnitRender(d->unit, flags, time, 1, frames, d->buffers);
     if (status != noErr) {
         atomic_store_explicit(&d->failed, 1, memory_order_release);
         return status;
     }
     const float *planes[INPUT_CHANNEL_MAX];
-    for (int i = 0; i < d->channel_count; i++) planes[i] = d->planes[i];
+    for (int i = 0; i < d->channel_count; i++) {
+        planes[i] = d->buffers->mBuffers[i].mData;
+        if (!planes[i]) {
+            atomic_store_explicit(&d->failed, 1, memory_order_release);
+            return kAudio_ParamError;
+        }
+    }
     dm_audio_input_process(planes, d->channel_count, frames, d->format.mSampleRate);
     return noErr;
 }

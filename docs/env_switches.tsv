@@ -86,7 +86,7 @@ DM_MEM_CAP_GB	switch	`=<GB>`: the memory watchdog exits when resident memory exc
 DM_METAL_HUD	player	`1` shows Apple's Metal performance HUD over the game (frame rate, frame and GPU time, memory)
 DM_MIC	player	`1` lets a game use the Mac's microphone through SDK polling input streams, after macOS grants access. Off by default. A packed Mac app asks before launching the host, including with the settings window hidden
 DM_MIC_DEVICE	player	Core Audio input device UID for Mac microphone capture. Unset or `default` follows the system default. If the selected device is absent, capture uses the system default until it returns
-DM_MIC_GAIN	player	Gain on the Mac microphone before the soft limiter, from 1 to 8 (default 4)
+DM_MIC_GAIN	player	Gain on the Mac microphone before the soft limiter, from 1 to 8 (default 1)
 DM_MODS	path	Folder of mods, one folder each (default `<DM_ROOT>/mods`): their `romfs/` folders join `DM_ROMFS_OVERLAY`, and their `exefs/*.pchtxt` and `.ips` patches are applied to the modules as they load; `order.txt` in it orders them and turns them off
 DM_MODS_CHECK	diagnostic	`=<file>`: the host loads the modules, writes its verdict on every mod patch file of a loaded module's build there (applied, refused, invalid, baked, with the patches as image offsets) and ends before the game starts; `dm/tools/mods_rewrite.py` asks this way which files the modules must be rewritten with
 DM_MOD_PATCHES	path	Set by `dm/tools/mods_rewrite.py` for `patch_nso.py`: a file of mod patches (image offset, bytes, patch file) written into the module's code before it is rewritten; a patch over a cut, a frame step or stub site, or an observation gate ends the rewrite with `MOD_REFUSED` lines and exit status 4

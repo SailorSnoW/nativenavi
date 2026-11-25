@@ -70,6 +70,12 @@ static void test_conversion(void) {
 }
 
 static void test_microphone_gain_preserves_headroom(void) {
+    assert(unsetenv("DM_MIC_GAIN") == 0);
+    assert(input_user_gain() == 1.0f);   // unity by default
+    assert(setenv("DM_MIC_GAIN", "bad", 1) == 0);
+    assert(input_user_gain() == 1.0f);
+    assert(setenv("DM_MIC_GAIN", "0.5", 1) == 0);
+    assert(input_user_gain() == 1.0f);
     assert(setenv("DM_MIC_GAIN", "4", 1) == 0);
     enum { FRAMES = 480 };
     float samples[FRAMES];
@@ -100,7 +106,7 @@ static void test_microphone_gain_preserves_headroom(void) {
     assert(dm_audio_input_read(limited, output, 1) == 1);
     assert(output[0] < INT16_MAX && output[0] > 32000);  // soft limiter stays in range without hard clipping
     dm_audio_input_close(limited);
-    assert(setenv("DM_MIC_GAIN", "1", 1) == 0);
+    assert(unsetenv("DM_MIC_GAIN") == 0);
 }
 
 static void test_rollover(void) {
@@ -183,7 +189,7 @@ static void test_route_recovery(void) {
 
 int main(void) {
     assert(setenv("DM_MIC", "1", 1) == 0);
-    assert(setenv("DM_MIC_GAIN", "1", 1) == 0);
+    assert(unsetenv("DM_MIC_GAIN") == 0);
     test_fanout_and_polling();
     test_conversion();
     test_microphone_gain_preserves_headroom();
