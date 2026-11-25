@@ -610,6 +610,13 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Found on:** MacNativeGames commit `7431eb7` (38 of 55 samples of the serial lookup were `memcmp` in a Tears of the Kingdom profile). Here, a lookup in a 3,000-entry table of 8-byte keys takes 1.5 ns instead of 5.9 ns on an M4 Pro (`clang -O2`, 60 million lookups); no game frame has been measured.
 - **Check:** `t_hmap` checks 8- and 20-byte keys against a naive model through random puts, overwrites, deletes and clears.
 
+### Retain and release in every draw's helpers
+
+- **Symptom:** `objc_retain`, `objc_release` and `objc_retainAutoreleasedReturnValue` spread over the replay thread's samples, under small per-draw helpers.
+- **Cause:** ARC retains and releases every strong local and every returned object. The draw helpers named a program's shaders in strong locals, and `prog_get` and `pso_get` handed their objects over retained and autoreleased at each call, though the program, the serial table and the pipeline tables hold them for the whole draw.
+- **Fix:** those locals (`prog_border`, `draw_color_writes`, `fb_tile_plan`, `fb_prepare`, the program `draw` checks for wide lines), and `cbuf_slot`'s and `enc_r_pso`'s object parameters, are `__unsafe_unretained`; `prog_get` and `pso_get` return plain pointers (`prog_get_ref`, `pso_get_ref`, bridged by macros). Records for the encode thread still retain what they name (`nvn_rec.h`), and a program with no serial is still autoreleased.
+- **Found on:** Donkey Kong Bananza (upstream nxnative `5ccb82ad`): ARC traffic was about 13 % of the replay thread on Layer 1400 (a Metal System Trace's time profile, M5 Pro). With the other changes of its series ([pool lookups by region](#pool-lookups-by-page-missed-with-thousands-of-pools), [vertex streams](#vertex-streams-the-shader-does-not-read-looked-up-every-draw), [binding lists](#per-draw-checks-walked-every-reflected-binding), [feedback views](#same-pass-feedback-views-made-at-every-draw), and one for geometry draws this tree does not have), upstream measured there 13,900 → 11,100–11,900 submit-thread instructions a draw at 10,000–15,000 draws, translation 9.7 → about 8.5 ms a frame at 13,000 draws and the frame time p50 18.2 → 16.7 ms (upstream nxnative `019a1f69`). Ocarina of Time spends 26,000–30,000 instructions a draw (the player's log, 1,500–2,500 draws a frame); not measured here.
+
 ### Submissions handed to the GPU in segments
 
 - **Symptom:** the GPU sits idle each frame while the host translates the submission (a game that does not submit frame N+1 until frame N's GPU work is done).

@@ -590,18 +590,21 @@ static NvShader *shader_get(NSString *pc, int stage) {
     return o;
 }
 static void up_mfx_read_color(NvShader *cs, const NVNshaderData *sd);
-static NvProg *prog_get(const prog_t *cp) {   // the submit thread only
+// A plain pointer (the serial table and lpr hold the object): a function returning an object hands it over retained and autoreleased, two runtime calls at each
+// of the calls a draw makes (docs/reference/frame-rate.md, "Retain and release in every draw's helpers").
+#define prog_get(cp) ((__bridge NvProg *)prog_get_ref(cp))
+static void *prog_get_ref(const prog_t *cp) {   // the submit thread only
     prog_t *p = (prog_t *)cp;
-    if (!p) return nil;
+    if (!p) return NULL;
     static const prog_t *lp;
     static uint64_t lser, lgen;
     static NvProg *lpr;
     uint64_t gen = g_ser_gen;
-    if (p == lp && p->serial == lser && gen == lgen && lpr) return lpr;
+    if (p == lp && p->serial == lser && gen == lgen && lpr) return (__bridge void *)lpr;
     __unsafe_unretained NvProg *have = p->serial ? serial_get(p->serial) : nil;
     if (have) {
         lp = p; lser = p->serial; lgen = gen; lpr = have;
-        return have;
+        return (__bridge void *)have;
     }
     shmap_load();
     NvProg *o = [NvProg new];
@@ -639,11 +642,11 @@ static NvProg *prog_get(const prog_t *cp) {   // the submit thread only
         else MLOG("[RED] shader %s (%s) failed to load: build the shaders with dm/gfx/tools/dmsh_build.py first", k.UTF8String, stage.UTF8String);
         if (sh && st == 5) up_mfx_read_color(sh, &p->sd[i]);
     }
-    if (p->serial) serial_put(p->serial, o);
-    return o;
+    if (p->serial) { serial_put(p->serial, o); return (__bridge void *)o; }
+    return (void *)CFAutorelease(CFBridgingRetain(o));   // no serial: alive until the caller's pool drains, as a returned object was
 }
 void mtl_prog_snapshot(prog_t *copy,const prog_t *source) {
-    prog_get(source); *copy=*source;
+    (void)prog_get(source); *copy=*source;
     if(!source->serial) MDIE("cannot retain a program without an initialization serial");
     own_prog_pin(source->serial);
 }
