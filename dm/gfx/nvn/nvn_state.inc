@@ -165,9 +165,11 @@ static int bind_vbufs(id<MTL4RenderCommandEncoder> en, const nvn_refl *rf) {
     static struct { uint64_t addr, gpu, gen; } cache[16];
     uint64_t gen = atomic_load_explicit(&g_pool_gen, memory_order_acquire);
     unsigned used = vs_streams(rf); int bad = -1;
+    // only the streams the shader's inputs read, which the pipeline's vertex descriptor names (pso_desc); every bound one with no shader
+    unsigned want = rf ? used : 0xffffu;
     for (int s = 0; s < 16; s++) {
         uint64_t addr = S.vbuf[s].address, gpu;
-        if (!addr) continue;
+        if (!addr || !(want >> s & 1)) continue;
         if (((addr & 3) && S.vbuf[s].size) || g_vbuf_need[s]) {
             uint64_t c = vbuf_unaligned(addr, S.vbuf[s].size, g_vbuf_need[s], 0);
             if (c) {
@@ -202,13 +204,14 @@ enum { PULL_SLOT = 16 };   // = dmsh_pull.py SLOT
 typedef struct { uint64_t base; uint32_t stride, divisor; } pull_stream;
 typedef struct { pull_stream s[16]; uint32_t attr[32]; } pull_layout;
 _Static_assert(sizeof(pull_layout) == 384, "dmsh_pull.metal dm_vlayout");
-static void pull_layout_fill(pull_layout *Lp) {
+static void pull_layout_fill(pull_layout *Lp, const nvn_refl *rf) {
     pull_layout L;
     memset(&L, 0, sizeof L);
     uint32_t lo[16] = {0};
+    unsigned want = rf ? vs_streams(rf) : 0xffffu;   // as bind_vbufs
     for (int st = 0; st < 16; st++) {
         uint64_t addr = S.vbuf[st].address, gpu; void *mb; uint64_t mo;
-        if (!addr) continue;
+        if (!addr || !(want >> st & 1)) continue;
         if (!g_vbuf_need[st] || !(gpu = vbuf_unaligned(addr, S.vbuf[st].size, g_vbuf_need[st], 0)))
             if (!mtl_gpu_addr(addr, S.vbuf[st].size ? S.vbuf[st].size : 1, &mb, &mo, &gpu)) continue;
         L.s[st].base = gpu & ~3ull; lo[st] = (uint32_t)(gpu & 3);
@@ -218,15 +221,15 @@ static void pull_layout_fill(pull_layout *Lp) {
         va_st v = S.attr[a];
         if (!v.fmt || v.stream >= 16) continue;
         if (!L.s[v.stream].base) {
-            if (S.vbuf[v.stream].address) RED_ONCE(159, "vertex stream %d's buffer %#llx is in no memory pool; its attributes read zeros", v.stream, (unsigned long long)S.vbuf[v.stream].address);
+            if (S.vbuf[v.stream].address && (want >> v.stream & 1)) RED_ONCE(159, "vertex stream %d's buffer %#llx is in no memory pool; its attributes read zeros", v.stream, (unsigned long long)S.vbuf[v.stream].address);
             continue;
         }
         v.offset += lo[v.stream]; memcpy(&L.attr[a], &v, 4);
     }
     *Lp = L;
 }
-static void pull_bind(id<MTL4RenderCommandEncoder> en) {
-    pull_layout L; pull_layout_fill(&L);
+static void pull_bind(id<MTL4RenderCommandEncoder> en, const nvn_refl *rf) {
+    pull_layout L; pull_layout_fill(&L, rf);
     id<MTLBuffer> ab; size_t off = arena_alloc(sizeof L, &ab);
     memcpy((uint8_t *)ab.contents + off, &L, sizeof L);
     enc_r_vbuf(en, PULL_SLOT, ab.gpuAddress + off);

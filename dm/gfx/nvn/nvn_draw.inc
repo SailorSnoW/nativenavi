@@ -491,7 +491,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
           g_ed.ok |= ED_BLEND;
       }
     }
-    if (cur_pull) { pull_bind(en); g_hy_draws += !g_wl.on; }   // dm_fetch decodes every format
+    if (cur_pull) { pull_bind(en, pr->sh[0] ? &pr->sh[0]->rf : NULL); g_hy_draws += !g_wl.on; }   // dm_fetch decodes every format
     else {
         int bad = bind_vbufs(en, pr->sh[0] ? &pr->sh[0]->rf : NULL);
         if (bad >= 0) { RED_ONCE(158, "vertex stream %d's buffer %#llx is in no memory pool; draw skipped", bad, (unsigned long long)S.vbuf[bad].address); return; }
