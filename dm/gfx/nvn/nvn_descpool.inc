@@ -58,6 +58,8 @@ static void treg_sparse_notes(void) {
 static int *g_treg_transient; static size_t g_ntreg_transient, g_treg_transient_cap;
 // Lock-free ID → serial: IDs are 20 bits (BSS, only touched pages used); release write at registration, relaxed read without g_rmu.
 static _Atomic uint64_t g_tser[1 << 20];
+static inline uint64_t tid_ser(int tid) { return tid > 0 && tid < (1 << 20) ? atomic_load_explicit(&g_tser[tid], memory_order_relaxed) : 0; }
+static inline uint64_t h_ser(uint64_t h) { return tid_ser((int)(h & 0xfffff)); }
 static samp_par *g_sreg; static uint8_t *g_sreg_ok; static void **g_sview; static uint64_t *g_srid; static int g_nsreg;
 static void **g_sview_w; static uint64_t *g_srid_w; static float (*g_sbk)[4];   // a sampler's twin for a border colour Metal lacks (retained, NULL = none) and its factors k (nvn_border.h)
 static _Atomic int g_border_any;   // sticky; set before the lazy Metal creation, so the first draw keeps the corrections
