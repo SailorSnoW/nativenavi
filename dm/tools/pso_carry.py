@@ -8,15 +8,20 @@ Offsets move between versions, so containers are aligned in order, file by file:
 pair in order only when both versions have as many. What is in a container (its variations and stages) is carried only when both hold as many keys and no anchor in
 them moved: a container whose variations were renumbered carries nothing. A file whose name differs only in its numbers (a table named by version) pairs with the one
 other file of that name. A pipeline row is kept only when its carried shader pair is a pair of the new version's files (shader_pairs.tsv, pso_pairs.tsv); rows whose
-shaders the new version has under the same keys are kept as they are.
+shaders the new version has under the same keys are kept as they are. A shader archive's (BFSHA) variations, which an update renumbers, are found again by their
+program's options (dm/tools/bfsha.py): the old version's table of them, and the new version's archives read from its RomFS.
 
-python3 dm/tools/pso_carry.py <from shader_map.tsv> <to shader_map.tsv> <from pso_manifest.tsv> <out pso_manifest.tsv> <to pairs.tsv>...
+python3 dm/tools/pso_carry.py [--programs <from shader_programs.tsv> --romfs <to RomFS>] <from shader_map.tsv> <to shader_map.tsv> <from pso_manifest.tsv> <out pso_manifest.tsv> <to pairs.tsv>...
 """
-USAGE = 'python3 dm/tools/pso_carry.py <from shader_map.tsv> <to shader_map.tsv> <from pso_manifest.tsv> <out pso_manifest.tsv> <to pairs.tsv>...'
+USAGE = ('python3 dm/tools/pso_carry.py [--programs <from shader_programs.tsv> --romfs <to RomFS>] <from shader_map.tsv> <to shader_map.tsv> <from pso_manifest.tsv> '
+         '<out pso_manifest.tsv> <to pairs.tsv>...')
 import collections
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bfsha
 
 POS = re.compile(r'^(.*?)#(BNSH|BAHS|NDSR|NDVE)@(0x[0-9a-f]+)(.*)$')
 DIGITS = re.compile(r'\d+')
@@ -101,6 +106,29 @@ def key_map(a, b):
     return out
 
 
+def program_keys(a, b, km, programs, romfs, warn=print):
+    """old key → new key for keys km lacks whose old variation is a shader archive's program (dm/tools/bfsha.py's table of the old version): the new version's
+    program of the same shading model with the same options, read from its archive in romfs, gives the key of the same stage"""
+    names, want = file_names(a, b), collections.defaultdict(list)
+    for k, (model, digest) in programs.items():
+        v = a.get(k)
+        if k not in km and v and v[1] == 'BNSH' and v[0] in names: want[names[v[0]]].append((k, v[4], model, digest))
+    out = {}
+    for path, keys in sorted(want.items()):
+        try:
+            d = bfsha.read_member(romfs, path)
+            at = {(name, digest): (bnsh, var) for name, bnsh, ids in bfsha.programs(d, path) for var, digest in ids.items()}
+            per = {bnsh: bfsha.variation_keys(d, bnsh, path) for bnsh in {at[m, g][0] for _, _, m, g in keys if (m, g) in at}}
+        except bfsha.Unread as e:
+            warn(f'[RED] {e}: the prewarm list\'s rows of its {len(keys):,} keys are not carried'); continue
+        for k, st, model, digest in keys:
+            if (model, digest) not in at: continue
+            bnsh, var = at[model, digest]
+            t = per[bnsh].get(var, {}).get(bfsha.STAGE.get(st))
+            if t and t not in a and b.get(t) and b[t][4] == st: out[k] = t
+    return out
+
+
 def _field(h, i):
     return bytes.fromhex(h[48 * i:48 * i + 48]).split(b'\0', 1)[0].decode('ascii', 'replace')
 
@@ -142,16 +170,22 @@ def carry(manifest_lines, km, pairs):
     return out, st
 
 
-def carry_file(from_map, to_map, from_manifest, out_manifest, pair_paths, origin=''):
+def carry_file(from_map, to_map, from_manifest, out_manifest, pair_paths, origin='', programs=None, romfs=None, warn=print):
+    """programs: the old version's dm/tools/bfsha.py table, romfs: the new version's RomFS; with both, a shader archive's keys are found again by their program"""
     a, b = read_map(from_map), read_map(to_map)
     km = key_map(a, b)
+    found = {}
+    if programs and romfs:
+        found = program_keys(a, b, km, bfsha.read_table(programs), romfs, warn)
+        km.update(found)
     with open(from_manifest, encoding='utf-8') as f: lines = f.readlines()
     rows, st = carry(lines, km, read_pairs(pair_paths))
     total = sum(n for (k, w), n in st.items() if w == 'all')
     kept = sum(n for (k, w), n in st.items() if w == 'kept')
     moved = sum(n for (k, w), n in st.items() if w == 'carried')
     by = ', '.join(f'{k} {st[k, "kept"] + st[k, "carried"]:,} of {st[k, "all"]:,}' for k in 'SRCM' if st[k, 'all'])
-    note = f'{kept + moved:,} of {total:,} rows ({kept:,} with the same keys, {moved:,} carried to this version\'s keys; {by})'
+    note = (f'{kept + moved:,} of {total:,} rows ({kept:,} with the same keys, {moved:,} carried to this version\'s keys; {by}'
+            + (f'; {len(found):,} shader archive keys found again by their program\'s options' if programs and romfs else '') + ')')
     head = [f'# Prewarm seed list carried by dm/tools/pso_carry.py from {origin or from_manifest}: {note}. The original list\'s comments follow.\n']
     with open(out_manifest + '.partial', 'w', encoding='utf-8') as f:
         f.writelines(head + [ln for ln in lines if ln.startswith('#')] + [r + '\n' for r in rows])
@@ -160,6 +194,7 @@ def carry_file(from_map, to_map, from_manifest, out_manifest, pair_paths, origin
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 6: sys.exit(USAGE)
-    a = sys.argv
-    print(carry_file(a[1], a[2], a[3], a[4], a[5:]))
+    a, opt = sys.argv[1:], {}
+    while a[:1] in (['--programs'], ['--romfs']) and len(a) > 1: opt[a[0][2:]] = a[1]; a = a[2:]
+    if len(a) < 5 or len(opt) == 1: sys.exit(USAGE)
+    print(carry_file(a[0], a[1], a[2], a[3], a[4:], programs=opt.get('programs'), romfs=opt.get('romfs')))

@@ -465,7 +465,7 @@ def profile_folder(args, work):
 
 
 # Derived profile: a version the game's profile was not brought up on
-DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv', 'c1_full.tsv', 'cb_extent.tsv', 'patches.py'}   # made again from the version's files; patches.py holds the registered builds' cuts
+DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv', 'shader_programs.tsv', 'c1_full.tsv', 'cb_extent.tsv', 'patches.py'}   # made again from the version's files; patches.py holds the registered builds' cuts; shader_programs.tsv describes the registered version's files, which only the prewarm list's carry reads
 
 
 def derived_key(profile_dir):
@@ -1838,7 +1838,8 @@ def main(args=None):
                          bool(derived), dlc_roms, None if derived else derive_shader_tables)
     if derived and g.dir != reg.dir and reg.table('pso_manifest.tsv').is_file():   # another version's list names its shaders by their keys there
         note = pso_carry.carry_file(str(reg.table('shader_map.tsv')), str(g.table('shader_map.tsv')), str(reg.table('pso_manifest.tsv')), str(g.table('pso_manifest.tsv')),
-                                    [str(g.table('shader_pairs.tsv')), str(g.table('pso_pairs.tsv'))], f'game profile {reg.id}\'s list for {", ".join(reg.words("shader_versions"))}')
+                                    [str(g.table('shader_pairs.tsv')), str(g.table('pso_pairs.tsv'))], f'game profile {reg.id}\'s list for {", ".join(reg.words("shader_versions"))}',
+                                    programs=str(reg.table('shader_programs.tsv')), romfs=str(rfs.source(game)), warn=say)
         say(f'prewarm list: {note}')
     seen = seen_keys(g, sh, seen_logs(work, app)) if seen_shaders else None
     msl = build_shaders(py, repo, sh, xlate, env, logs, g, pkey, seen)

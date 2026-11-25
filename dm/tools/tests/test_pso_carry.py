@@ -1,10 +1,12 @@
 """dm/tools/pso_carry.py: a prewarm list carried to another version's shader keys, without game files. Shaders are found again by their place in the files: the keys both
 versions share anchor the containers' order; containers between anchors pair only when both sides have as many; a container's variations only when both hold as many
-keys and no anchor in it moved; a file renamed by its version number pairs with its one twin; a pipeline row only when its carried pair is a pair of the new files."""
+keys and no anchor in it moved; a file renamed by its version number pairs with its one twin; a pipeline row only when its carried pair is a pair of the new files. A
+shader archive's keys are found again by their program's options (dm/tools/bfsha.py), its reading faked here."""
 import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('pso_carry', Path(__file__).resolve().parents[1] / 'pso_carry.py')
 assert spec and spec.loader
@@ -78,6 +80,55 @@ class Carry(unittest.TestCase):
             out = (p / 'out.tsv').read_text().splitlines()
             self.assertTrue(out[0].startswith('# Prewarm seed list carried by dm/tools/pso_carry.py from the test'))
             self.assertEqual(out[1:], ['# recorded on v131072', f'S\t{k(103)}_b\t0'])
+
+
+ARC = '/m.Product.110.bfsha.zs#BNSH@0x1000#var'
+P_OLD = [(k(20), 'vertex', ARC + '0'), (k(21), 'pixel', ARC + '0'),
+         (k(22), 'pixel', ARC + '1'),                 # its program is not in the new archive
+         (k(23), 'vertex', ARC + '2'),                # its program's new vertex key is a pixel shader of the new map: not taken
+         (k(24), 'vertex', ARC + '3')]                # not in the table
+P_NEW = [(k(120), 'vertex', '/m.Product.100.bfsha.zs#BNSH@0x2000#var5'), (k(121), 'pixel', '/m.Product.100.bfsha.zs#BNSH@0x2000#var5'),
+         (k(123), 'pixel', '/m.Product.100.bfsha.zs#BNSH@0x2000#var7')]
+P_TABLE = {k(20): ('model', 'aa'), k(21): ('model', 'aa'), k(22): ('model', 'bb'), k(23): ('model', 'cc')}
+
+
+def fake_archive(read=None):
+    return (mock.patch.object(pc.bfsha, 'read_member', side_effect=read or (lambda romfs, path: path.encode())),
+            mock.patch.object(pc.bfsha, 'programs', return_value=[('other', 0x1000, {5: 'aa'}), ('model', 0x2000, {5: 'aa', 6: 'cc'})]),
+            mock.patch.object(pc.bfsha, 'variation_keys', return_value={5: {'vs': k(120), 'ps': k(121)}, 6: {'vs': k(123), 'ps': k(121)}}))
+
+
+class Programs(unittest.TestCase):
+    def test_program_keys(self):
+        a, b = smap(P_OLD), smap(P_NEW)
+        r, p, v = fake_archive()
+        with r as read, p, v:
+            got = pc.program_keys(a, b, pc.key_map(a, b), P_TABLE, '/romfs')
+        self.assertEqual(got, {k(20): k(120), k(21): k(121)})
+        read.assert_called_once_with('/romfs', '/m.Product.100.bfsha.zs')   # the file renamed by version, read from the new version's RomFS
+
+    def test_an_unread_archive_carries_nothing(self):
+        a, b, said = smap(P_OLD), smap(P_NEW), []
+        def unread(romfs, path): raise pc.bfsha.Unread(f'{path}: FSHA version 0x00080000, only 0x00090101 is read')
+        r, p, v = fake_archive(unread)
+        with r, p, v:
+            self.assertEqual(pc.program_keys(a, b, {}, P_TABLE, '/romfs', said.append), {})
+        self.assertEqual(len(said), 1); self.assertTrue(said[0].startswith('[RED] /m.Product.100.bfsha.zs: FSHA version'))
+
+    def test_file(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t)
+            for name, rows in (('from.tsv', P_OLD), ('to.tsv', P_NEW)):
+                (p / name).write_text('package\tindex\tstage\tdm_ctl_sha16\tsource\n' + ''.join(f'x.bin\t0\t{st}\t{key}\t{src}\n' for key, st, src in rows))
+            (p / 'programs.tsv').write_text('key\tmodel\toptions\n' + ''.join(f'{key}\t{m}\t{g}\n' for key, (m, g) in P_TABLE.items()))
+            (p / 'list.tsv').write_text(f'R\t{skey_hex(k(20), k(21))}\nR\t{skey_hex(k(23), k(22))}\n')
+            (p / 'pairs.tsv').write_text(f'{k(120)}\t{k(121)}\n')
+            r, pr, v = fake_archive()
+            with r, pr, v:
+                note = pc.carry_file(str(p / 'from.tsv'), str(p / 'to.tsv'), str(p / 'list.tsv'), str(p / 'out.tsv'), [str(p / 'pairs.tsv')],
+                                     programs=str(p / 'programs.tsv'), romfs='/romfs')
+            self.assertIn('1 of 2 rows', note); self.assertIn('2 shader archive keys found again by their program', note)
+            self.assertEqual((p / 'out.tsv').read_text().splitlines()[1:], [f'R\t{skey_hex(k(120), k(121))}'])
 
 
 if __name__ == '__main__': unittest.main()
