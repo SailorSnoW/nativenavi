@@ -392,15 +392,15 @@ static void fb_depth_rule(NvShader *fs, uint32_t dsw) {
     g_fb_dread |= direct;
 }
 // The view of levels l0 + nl, slices s0 + ns of base in t's format, type and swizzle that a draw sampling its own attachment gets, kept in base's view cache
-// (pad[0] = 1 keeps it apart from a registration's own views) while tid is registered: a mip-chain pass made one at every such draw.
-static id<MTLTexture> fb_view(int tid, id<MTLTexture> base, id<MTLTexture> t, NSUInteger l0, NSUInteger nl, NSUInteger s0, NSUInteger ns) {
+// (pad[0] = 1 keeps it apart from a registration's own views) while tid still holds serial ser: a mip-chain pass made one at every such draw.
+static id<MTLTexture> fb_view(int tid, uint64_t ser, id<MTLTexture> base, id<MTLTexture> t, NSUInteger l0, NSUInteger nl, NSUInteger s0, NSUInteger ns) {
     MTLTextureSwizzleChannels sw = t.swizzle;
     vc_key k; memset(&k, 0, sizeof k); k.pf = (uint32_t)t.pixelFormat; k.tt = (uint8_t)t.textureType; k.l0 = (uint32_t)l0; k.nl = (uint32_t)nl; k.s0 = (uint32_t)s0; k.ns = (uint32_t)ns;
     k.sw[0] = (uint8_t)sw.red; k.sw[1] = (uint8_t)sw.green; k.sw[2] = (uint8_t)sw.blue; k.sw[3] = (uint8_t)sw.alpha; k.pad[0] = 1;
     os_unfair_lock_lock(&g_rmu); id<MTLTexture> v = vc_get(base, &k); os_unfair_lock_unlock(&g_rmu);
     if (v) return v;
     v = [base newTextureViewWithPixelFormat:t.pixelFormat textureType:t.textureType levels:NSMakeRange(l0, nl) slices:NSMakeRange(s0, ns) swizzle:sw];
-    if (v) { os_unfair_lock_lock(&g_rmu); if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && !g_treg[tid].gone) vc_put(base, g_treg[tid].t.pool, &k, v); os_unfair_lock_unlock(&g_rmu); }
+    if (v) { os_unfair_lock_lock(&g_rmu); if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && !g_treg[tid].gone && g_treg[tid].t.serial == ser) vc_put(base, g_treg[tid].t.pool, &k, v); os_unfair_lock_unlock(&g_rmu); }
     return v;
 }
 static void fb_prepare(NvProg *pr) {
@@ -465,7 +465,7 @@ static void fb_prepare(NvProg *pr) {
             int known = !image && !texu && fb_reach(fs, b->reg, (int)(handle >> 20), n, &lo, &hs, &hi);
             if (g_fb_mode == 1 && !((wm | g_fb_wmask) >> k & 1)) { g_fb_rmask |= 1u << k; continue; }
             if (n != 1 && known && lo == hs && lo != a) {
-                id<MTLTexture> use = fb_view(tid, base, t, tl + (NSUInteger)lo, 1, ts, tn);
+                id<MTLTexture> use = fb_view(tid, ser, base, t, tl + (NSUInteger)lo, 1, ts, tn);
                 if (!use) { RED_ONCE(143, "same-pass feedback sampling: cannot make the view of level %lu that the sampler pins (format %lu); left as is", (unsigned long)(tl + (NSUInteger)lo), (unsigned long)t.pixelFormat); continue; }
                 fb_substitute(t, use);
                 static int once; if (!once++) MLOG("same-pass feedback sampling: shader %s renders level %d of a view of levels %lu+%lu; its sampler pins level %lu, which it samples alone", fs->key, lv, (unsigned long)tl, (unsigned long)t.mipmapLevelCount, (unsigned long)(tl + (NSUInteger)lo));
@@ -473,7 +473,7 @@ static void fb_prepare(NvProg *pr) {
             }
             if (known && lo > a) continue;
             if (a > 0 && (!known || lo < a)) {
-                id<MTLTexture> use = fb_view(tid, base, t, tl, (NSUInteger)a, ts, tn);
+                id<MTLTexture> use = fb_view(tid, ser, base, t, tl, (NSUInteger)a, ts, tn);
                 if (!use) { RED_ONCE(82, "same-pass feedback sampling: cannot make the view of levels %lu+%d below the attachment (format %lu); left as is", (unsigned long)tl, a, (unsigned long)t.pixelFormat); continue; }
                 fb_substitute(t, use);
                 static int once; if (!once++) MLOG("same-pass feedback sampling: shader %s renders level %d of a view of levels %lu+%lu; it samples a view of the levels below (mip-chain pass)", fs->key, lv, (unsigned long)tl, (unsigned long)t.mipmapLevelCount);
