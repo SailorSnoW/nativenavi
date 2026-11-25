@@ -126,28 +126,36 @@ Outside a shell, a command takes Apple's `/usr/bin/python3` (3.9.6 with Xcode 27
 
 ## Continuous integration
 
-`.github/workflows/tests.yml` runs host and CPU graphics tests, Python tool
-tests, and a build check of the Mac host and the gfx tests (compiled, not run).
-The jobs that build the host or its tests first install the Rust that
-`dm/host/rust/rust-toolchain.toml` names, and the host-test job runs the Rust
-library's tests and lints ([Rust in the host](#rust-in-the-host)).
-It also runs the CPU texture layout/deswizzle test (`dm/gfx/tex/tests/t_tex`)
-and the host's `tsan` and `memory-tsan` targets for audio and memory races.
-The texture format test (`t_fmt_mtl`) creates Metal textures and stays local.
-All five macOS jobs, including the sanitizer job, run with the toolchain the
-project supports: Xcode 27.2 on GitHub's `xcode-27` image, named by path in
-`DEVELOPER_DIR` so a new default Xcode on the image does not change CI. The
-build check first compares the image's Metal compiler with `dmsh_chain.lock`
-(`own_compilers.py --check-metal`), and `dm/tools/tests/test_ci_toolchain.py`
-keeps the workflow, the image, README and the packing script naming the same
-Xcode: raising the toolchain changes them together. The jobs build for the
-one profile, `GAME=0400486024DEC000`, which the Makefiles also take by default.
+`.github/workflows/tests.yml` runs on pushes to `main`, on pull requests and by
+hand (`gh workflow run tests.yml`), in three macOS jobs. `host` builds the Mac
+host and runs the host's unit tests, the Rust library's tests and lints
+([Rust in the host](#rust-in-the-host)), the CPU texture layout/deswizzle test
+(`dm/gfx/tex/tests/t_tex`) and the graphics tests that need no GPU
+(`make -C dm/gfx/tests cpu-run`, whose list `CPU_TESTS` is in that Makefile).
+`sanitizers` runs them again under sanitizers (below), and `tools` runs the
+Python tool and translator tests. The texture format test (`t_fmt_mtl`) creates
+Metal textures and stays local. The repository is private, where a macOS
+minute counts as ten Linux ones against the included minutes, so two jobs run
+only when asked (`gh workflow run tests.yml -f extended=true`): `coverage`
+(below) and `gfx-build`, which compiles every graphics test without running
+it; `lint-c.yml` parses them all on every C change already.
 
-A separate `sanitizers` job builds the same tests again with sanitizers, each
+Every macOS job runs with the toolchain the project supports: Xcode 27.2 on
+GitHub's `xcode-27` image, named by path in `DEVELOPER_DIR` so a new default
+Xcode on the image does not change CI. The host job first compares the image's
+Metal compiler with `dmsh_chain.lock` (`own_compilers.py --check-metal`), and
+`dm/tools/tests/test_ci_toolchain.py` keeps every workflow, the image, README
+and the packing script naming the same Xcode: raising the toolchain changes
+them together. The jobs build for the one profile, `GAME=0400486024DEC000`,
+which the Makefiles also take by default. The Rust step is the composite
+action `.github/actions/rust`.
+
+The `sanitizers` job builds the same tests again with sanitizers, each
 build in a folder of its own (`build/asan`, `build/tsan`, `asan/`): every host
 unit test and the CPU texture test under AddressSanitizer and
-UndefinedBehaviorSanitizer (`asan`), and the host tests that start threads under
-ThreadSanitizer (`tsan-threads`). Documented exceptions live in
+UndefinedBehaviorSanitizer (`asan`), and under ThreadSanitizer the host's audio,
+HID and guest-memory tests (`tsan`, `memory-tsan`), the host tests that start
+threads (`tsan-threads`) and the CPU graphics tests of concurrent code (`cpu-tsan`). Documented exceptions live in
 `dm/sanitizers/`: ASan and UBSan in `ignorelist.txt` (compile time), TSan in
 `tsan.supp` (run time). These cover
 an intentionally unjoined test and uninstrumented CoreAudio synchronization.
@@ -159,9 +167,9 @@ removed ([audio](reference/audio.md#unaligned-command-headers-during-layout-prob
 locally (about a minute on an Apple-silicon Mac):
 
 ```sh
-make -C dm/host/tests GAME=0400486024DEC000 -j8 asan tsan-threads
+make -C dm/host/tests GAME=0400486024DEC000 -j8 asan tsan memory-tsan tsan-threads
 make -C dm/gfx/tex/tests asan
-make -C dm/gfx/tests GAME=0400486024DEC000 registration-asan
+make -C dm/gfx/tests GAME=0400486024DEC000 -j8 registration-asan cpu-tsan
 ```
 
 The registration test links the real HLE, libc, NVN and
@@ -176,16 +184,16 @@ test (an uninstrumented system framework, a test fixture); then it gets an entry
 with its reason. A fix removes any existing entry in the same change: the job
 then checks the repaired code. A change to `ignorelist.txt` rebuilds the ASan tests.
 
-A `coverage` job measures which lines the tests run, and reports only: no
-threshold fails it. It builds the host unit tests and the CPU texture test again
+The `coverage` job (by hand, `extended`) measures which lines the tests run,
+and reports only: no threshold fails it. It builds the host unit tests and the CPU texture test again
 with clang's source-based coverage (`make coverage`, into `build/cov` and `cov/`;
 `dm/sanitizers/coverage.mk`), and runs the tool tests (`dm/tools/tests`) under
 coverage.py over `dm/tools`, `dm/gfx/tools`, `dm/games` and `scripts`
 (configured in `pyproject.toml`, pinned in `.github/requirements/coverage.txt`,
 installed with `tools.txt`, the packages the tools import).
 `dm/tools/coverage_report.py` turns the reports into the job summary: line
-coverage per area, the 15 largest files and, on a pull request, the changed lines
-the tests run and those they do not. The C areas list only the files a test
+coverage per area, the 15 largest files and the lines the last commit changed
+that the tests run and those they do not. The C areas list only the files a test
 compiles. The raw reports are the job's `coverage` artifact. Locally (about two
 minutes on an Apple-silicon Mac, most of it the tool tests):
 
@@ -227,7 +235,8 @@ do not allow growth.
 `scripts/clean_metal_cache.py` (`-h`, `--dry-run`) frees the internal disk of the build folders Metal's pipeline archive compiler leaves in `getconf DARWIN_USER_CACHE_DIR`/`com.apple.gpuarchiver`, up to about 127 MB for each archive flush of a Mac run, which a host from a build cannot remove itself, and in each built app's `org.nativenavi.<title ID>/com.apple.gpuarchiver`, which the app removes at its next start ([Metal's build folders left by pipeline archive flushes](reference/shaders.md#metals-build-folders-left-by-pipeline-archive-flushes)). It removes only folders idle for an hour and older than every running `dmhost`, and an app's only while no copy of it runs; `scripts/regress.py` runs it too.
 
 `.github/workflows/fuzz.yml` fuzzes the Python parsers of files a player
-supplies, nightly and by hand (never on pull requests): the RomFS image reader
+supplies, on a push to `main` that changes a parser or a harness, weekly and by
+hand (never on pull requests): the RomFS image reader
 (`romfs.py`), the control data (`nacp.py`), the NSO loader and the shader
 containers of `shader_split.py` (BNSH, BAHS, NDSR, NDVE, and SARC / Yaz0
 around them). Each harness, `dm/tools/fuzz/fuzz_<parser>.py`, builds
@@ -288,6 +297,12 @@ no `NOLINT` for a leak.
 Raising `LLVM_VERSION` takes a new baseline in the same change
 (`tidy --rebaseline`; `dm/tools/tests/test_lint_c.py` checks that the two name
 the same release).
+
+`.github/workflows/lint-actions.yml` runs actionlint (pinned with its checksum
+in the workflow) over the workflows on any change under `.github`: expressions,
+contexts, the inputs of the actions they call, runner labels
+(`.github/actionlint.yaml` names `xcode-27`) and, with the image's shellcheck,
+each run step's shell. Locally: `nix run nixpkgs#actionlint`.
 
 ## The packing script in detail
 

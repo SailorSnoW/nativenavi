@@ -1,10 +1,15 @@
 # Fuzzing of the Python file parsers (dm/tools/fuzz) with atheris, from synthetic seeds, never game files. Findings already in dm/tools/fuzz/known.tsv
-# are skipped, so the job fails only on a new one and uploads its input. Nightly and by hand only; dm/tools/tests/test_fuzz_corpus.py replays the corpus.
+# are skipped, so the job fails only on a new one and uploads its input. On a push that changes a parser or a harness, weekly and by hand; never on pull
+# requests. dm/tools/tests/test_fuzz_corpus.py replays the corpus with the tool tests.
 name: fuzz
 
 on:
+  push:
+    branches: [main]
+    paths: [dm/tools/romfs.py, dm/tools/romfs_image.py, dm/tools/nacp.py, dm/tools/nso.py, dm/gfx/tools/shader_split.py, 'dm/tools/fuzz/**',
+            .github/requirements/fuzz.txt, .github/workflows/fuzz.yml]
   schedule:
-    - cron: '17 3 * * *'   # nightly, 03:17 UTC
+    - cron: '17 3 * * 1'   # Mondays, 03:17 UTC: the parsers read the player's own dump (NativeNavi takes only the NUPs nup.tsv lists), and change seldom
   workflow_dispatch:
     inputs:
       seconds:

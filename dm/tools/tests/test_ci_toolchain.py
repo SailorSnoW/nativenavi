@@ -1,6 +1,7 @@
 """CI builds with the toolchain the project supports: the Xcode that .github/workflows/tests.yml names in DEVELOPER_DIR is the one README tells players to install and the NSP
-script names beside dmsh_chain.lock, and every macOS job runs on the GitHub image of that Xcode (xcode-<major>). The build check compares the image's Metal compiler with the
-lock itself (own_compilers.py --check-metal); this test keeps the names in step (own_compilers.py's stop message too), so raising the toolchain is one change in all of them. No Xcode or network needed."""
+script names beside dmsh_chain.lock, and every macOS job of every workflow runs on the GitHub image of that Xcode (xcode-<major>) with that DEVELOPER_DIR. The host job
+compares the image's Metal compiler with the lock itself (own_compilers.py --check-metal); this test keeps the names in step (own_compilers.py's stop message too), so raising
+the toolchain is one change in all of them. No Xcode or network needed."""
 from pathlib import Path
 import re
 import unittest
@@ -16,10 +17,16 @@ class Toolchain(unittest.TestCase):
         self.xcode = m.group(1)
 
     def test_every_macos_job_runs_on_that_xcodes_image(self):
-        runners = re.findall(r'runs-on: (\S+)', self.workflow)
-        self.assertTrue(runners, 'tests.yml: no runs-on')
+        self.assertTrue(re.findall(r'runs-on: (\S+)', self.workflow), 'tests.yml: no runs-on')
         image = f'xcode-{self.xcode.split(".")[0]}'
-        self.assertEqual(sorted({r for r in runners if r.startswith(('macos-', 'xcode-'))}), [image], f'tests.yml: every macOS job runs on {image} (Xcode {self.xcode})')
+        for wf in sorted((REPO / '.github/workflows').glob('*.yml')):
+            text = wf.read_text()
+            mac = {r for r in re.findall(r'runs-on: (\S+)', text) if r.startswith(('macos-', 'xcode-'))}
+            with self.subTest(workflow=wf.name):
+                if mac: self.assertEqual(sorted(mac), [image], f'{wf.name}: every macOS job runs on {image} (Xcode {self.xcode})')
+                for d in re.findall(r'DEVELOPER_DIR: (\S+)', text):
+                    self.assertEqual(d, f'/Applications/Xcode_{self.xcode}.app/Contents/Developer', f'{wf.name}: DEVELOPER_DIR is not tests.yml\'s Xcode {self.xcode}')
+                if mac: self.assertIn('DEVELOPER_DIR: ', text, f'{wf.name}: a macOS job without DEVELOPER_DIR builds with the image\'s default Xcode')
 
     def test_readme_names_the_same_xcode(self):
         readme = (REPO / 'README.md').read_text()

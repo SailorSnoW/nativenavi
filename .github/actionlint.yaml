@@ -1,0 +1,3 @@
+# actionlint's configuration (.github/workflows/lint-actions.yml): xcode-27 is the label of GitHub's macOS image with the supported Xcode, which actionlint does not list
+self-hosted-runner:
+  labels: [xcode-27]

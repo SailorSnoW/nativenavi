@@ -57,17 +57,17 @@ Reading the report (`report.md` beside `report.json` in `<root>/reports/<date-ti
 
 ## 5. Continuous integration
 
-The workflows in `.github/workflows` run on GitHub, on pull requests and pushes to `main`. This fork has no remote yet, so nothing runs them: the local commands of the next section are the check.
+The workflows in `.github/workflows` run on GitHub (`SailorSnoW/nativenavi`, a private repository) on pushes to `main` and pull requests; `gh run list` and `gh run view --log-failed` read them. macOS minutes are the costly ones there (ten Linux minutes each), so a run is the net, not the check: the local commands of the next section come first.
 
-- `tests.yml`: the host's unit tests and ThreadSanitizer targets; the Rust library's tests and lints; the host and CPU texture tests again under ASan, UBSan and TSan (a ratchet over the findings listed in `dm/sanitizers/`: `make -C dm/host/tests asan tsan-threads` and `make -C dm/gfx/tex/tests asan` locally); line coverage of those tests and the tool tests (report only; `make coverage` in both folders and `dm/tools/coverage_report.py` locally); the CPU-only graphics tests; the Python tool tests (`dm/tools/tests`, `dm/gfx/tests`), including the translator's synthetic-shader tests; a Mac host build, and every graphics test compiled ([Continuous integration](../development.md#continuous-integration)).
-- `lint-python.yml` and `lint-c.yml`: the ratchets of `dm/tools/lint_python.py` and `dm/tools/lint_c.py`.
-- `fuzz.yml` fuzzes the file parsers nightly from synthetic seeds; a change to a parser in `romfs.py`, `nacp.py`, `nso.py` or `shader_split.py` can run its harness locally (`dm/tools/fuzz/fuzz_<parser>.py --time 300`).
+- `tests.yml`: the host's unit tests, the Rust library's tests and lints, the CPU texture test, the CPU-only graphics tests (`make -C dm/gfx/tests cpu-run`) and a Mac host build; the same tests under ASan, UBSan and TSan (a ratchet over the findings listed in `dm/sanitizers/`: `make -C dm/host/tests asan tsan memory-tsan tsan-threads`, `make -C dm/gfx/tex/tests asan` and `make -C dm/gfx/tests cpu-tsan` locally); the Python tool tests (`dm/tools/tests`, `dm/gfx/tests`), including the translator's synthetic-shader tests. Line coverage (report only) and every graphics test compiled run only from `gh workflow run tests.yml -f extended=true` ([Continuous integration](../development.md#continuous-integration)).
+- `lint-python.yml` and `lint-c.yml`: the ratchets of `dm/tools/lint_python.py` and `dm/tools/lint_c.py`; `lint-actions.yml`: actionlint over the workflows.
+- `fuzz.yml` fuzzes the file parsers weekly and on a push that changes one, from synthetic seeds; a change to a parser in `romfs.py`, `nacp.py`, `nso.py` or `shader_split.py` can run its harness locally (`dm/tools/fuzz/fuzz_<parser>.py --time 300`).
 
 GitHub's Macs have no Metal 4 and no game files, so these stay local in any case: `make -C dm/gfx/tests run` (the Metal graphics tests), the translator tests with `DMSH_TEST_METAL=1` / `DMSH_TEST_GPU=1`, and everything `regress.py` does.
 
 ## 6. Before you commit
 
-This fork has no remote and no pull requests yet: a change is one local commit per verified stage, made when the user asks, and not pushed ([AGENTS.md](../../AGENTS.md)). What to check, by what the change touches (the largest that applies):
+A change is one local commit per verified stage, made when the user asks, and pushed only when asked ([AGENTS.md](../../AGENTS.md)). What to check, by what the change touches (the largest that applies):
 
 - **Docs only:** `python3 -m unittest dm/tools/tests/test_docs.py`; after a change to `docs/reference`, `python3 dm/tools/docs_symptoms.py`.
 - **A Python tool or script** (`scripts/`, the tools under `dm/`): the Python tests, each file on its own as CI runs them (`for f in dm/tools/tests/test_*.py dm/gfx/tests/test_*.py; do python3 -m unittest "$f"; done`), and the lint ratchet, ruff and pyright with no new finding: `<venv>/bin/python3 dm/tools/lint_python.py`, from a venv with `.github/requirements/lint.txt` installed ([Continuous integration](../development.md#continuous-integration)). The system Python has neither tool, and the check stops at a `[RED]` line there: that is not a pass. A generated page (`docs_*.py`) is compared on a clean checkout, so it must not read untracked or git-ignored files such as `dm/host/gen`.

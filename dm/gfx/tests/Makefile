@@ -44,8 +44,8 @@ check_t_rt_unbind: t_rt_unbind
 # The run list: every t_*.c and t_*.m but those in NOT_RUN. `make run` builds them all (in parallel with -j), then runs each through its check_ target: ./t_x by default,
 # with its RUN_ENV (check_t_x: RUN_ENV = MTL_DEBUG_LAYER=1, beside its build rule), or a check_t_x recipe of its own when it runs several ways. A new test needs its source
 # and its build rule, no list. NOT_RUN: helpers linked into other tests (t_host_stubs, t_present_rescue_focus, t_gpu_lost_front), fixtures their Python tests build
-# (t_atomic_return: test_image_atomic_bounds.py, t_global_memory: test_global_memory.py, t_compute_loops: test_dmsh_compute_loops.py), t_gpuprof (CI's CPU subset runs it,
-# .github/workflows/tests.yml) and t_gpu_fault_kinds (its cases fault the GPU on purpose)
+# (t_atomic_return: test_image_atomic_bounds.py, t_global_memory: test_global_memory.py, t_compute_loops: test_dmsh_compute_loops.py), t_gpuprof (cpu-run runs it)
+# and t_gpu_fault_kinds (its cases fault the GPU on purpose)
 NOT_RUN = t_host_stubs t_present_rescue_focus t_gpu_lost_front t_atomic_return t_global_memory t_compute_loops t_gpuprof t_gpu_fault_kinds
 RUN_TESTS = $(filter-out $(NOT_RUN),$(basename $(sort $(wildcard t_*.c t_*.m))))
 check_t_%: t_%
@@ -63,6 +63,17 @@ check_test_dmsh_native_functions:
 	DMSH_TEST_GPU=1 python3 test_dmsh_native_functions.py
 check_test_dmsh_ndsr:
 	DMSH_TEST_GPU=1 python3 test_dmsh_ndsr.py
+# What runs without a GPU, CI's subset (.github/workflows/tests.yml): cpu-run runs each test as ./t_x, not through its check_ target, which may take the GPU;
+# cpu-tsan, the ThreadSanitizer builds. A test removed above leaves this list too
+CPU_TESTS = t_gfx_suspend t_capture t_dirty_slots t_dirty_race t_dirty_retire_race t_dirty_init t_dirty_reuse t_tex_layout t_pace t_fstep t_link_drain t_link_latch \
+	t_link_ticks t_present_history t_cpu_tex t_pkg_share t_hmap t_pso_skey t_refl t_present_rescue t_gpuprof t_sparse_layout t_timestamp t_counter_clock t_ub \
+	t_pso_pending t_rec_draws t_ubc_wait t_thread_rt t_rt_comp t_pend_index
+.PHONY: cpu-run cpu-tsan
+cpu-run: $(CPU_TESTS) t_perf_order check_t_thermal
+	./t_perf_order --cpu
+	@failed=; for t in $(CPU_TESTS); do echo "== $$t"; ./$$t || failed="$$failed $$t"; done; \
+	if [ -n "$$failed" ]; then echo "[RED] failed:$$failed"; exit 1; fi
+cpu-tsan: thermal-tsan perf-order-tsan tsan-dirty-init tsan-dirty-reuse present-history-tsan
 # Per-frame arena blocks: shared between submissions, released above the keep count once idle, never while a pending submission holds them (t_arena_trim.m)
 t_arena_trim: t_arena_trim.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_arena_trim.m $(MTL_T_SRC) $(FW)

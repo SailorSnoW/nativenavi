@@ -1,0 +1,45 @@
+# actionlint over the workflows: expressions, contexts, the inputs of the actions they call, runner labels (.github/actionlint.yaml) and, through the image's
+# shellcheck, the shell of each run step. Linux, seconds: a mistake shows here, not in a macOS run that fails after its setup.
+name: lint-actions
+
+on:
+  pull_request:
+    paths: ['.github/**']
+  push:
+    branches: [main]
+    paths: ['.github/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-actions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8   # actionlint_<version>_linux_amd64.tar.gz
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint ${{ env.ACTIONLINT_VERSION }}
+        run: |
+          tgz="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$tgz" "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/$tgz"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tgz" -C "$RUNNER_TEMP" actionlint
+          shellcheck --version | head -2
+      - name: Lint the workflows
+        run: '"$RUNNER_TEMP/actionlint" -color'
