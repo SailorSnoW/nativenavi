@@ -1405,6 +1405,7 @@ class SeenShaders(unittest.TestCase):   # --seen-shaders: the keys, the partial 
             cmd, env = self.ran[0]
             self.assertEqual(cmd[2:], [str(self.sh / 'pkg'), str(self.sh / 'partial'), a, b])
             self.assertEqual(env['DMSH_CAS'], str(self.sh / 'cache')); self.assertNotIn('IOSOUT', env); self.assertNotIn('DMSH_TARGETS', env)
+            self.assertTrue(Path(env['DMSH_CAS']).is_dir())   # a missing path would be opened as a database file
             self.assertFalse(old.exists()); self.assertTrue((self.sh / f'partial/b-{self.CHAIN}/k_b.metallib').is_file())
             self.assertFalse((self.sh / f'partial/b-{self.CHAIN}/inputs.tsv').exists()); self.assertFalse((self.tmp / 'c1_full.tsv').exists())   # no stamp: unlisted shaders are not proven safe
             self.assertEqual(self.build([a, b]), self.sh / 'partial'); self.assertEqual(self.ran, [])
@@ -1427,6 +1428,18 @@ class SeenShaders(unittest.TestCase):   # --seen-shaders: the keys, the partial 
         self.assertNotIn('DMSH_CAS', self.ran[0][1])
         self.assertTrue(any('building the whole shader map, 4 shaders' in m and '--seen-shaders builds only the 2' in m for m in self.said))
         self.assertFalse((self.sh / 'partial').exists())
+
+    def test_full_build_recovers_a_cache_written_at_the_folder_path(self):
+        cache, name = self.sh / 'cache', 'metallib/mac/abcd.metallib'
+        old = nsp.shader_cache.Store(cache)
+        try: old.put(name, b'compiled')
+        finally: old.close()
+        with mock.patch.object(nsp, 'chain_tables', lambda *a: True), mock.patch.object(nsp, 'stale_shaders', lambda *a: None), mock.patch.object(nsp, 'prune_stale_chains'), mock.patch.object(nsp, 'prune_shader_cache'):
+            self.assertEqual(self.build(), cache)
+        self.assertFalse((self.sh / 'partial-cache.db').exists())
+        current = nsp.shader_cache.for_chain(cache, self.CHAIN)
+        try: self.assertEqual(current.get(name), b'compiled')
+        finally: current.close()
 
     def test_full_build_of_a_game_without_a_list_says_nothing(self):
         (self.tmp / 'shader_seen.tsv').unlink()

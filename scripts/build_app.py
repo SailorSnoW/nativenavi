@@ -1180,7 +1180,12 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key, seen=None):
     log = logs / 'dmsh_build.log'
     PROG.stage('Mac shaders')
     chain = chain_of(repo)
-    out = sh / 'partial' if seen else sh / 'cache'
+    cache, misplaced = sh / 'cache', sh / 'partial-cache.db'
+    if cache.is_file():   # a partial build on a fresh folder opened the path as its database (DMSH_CAS)
+        shader_cache.Store(cache, say).close(); cache.rename(misplaced)   # its WAL folded in before the move
+    cache.mkdir(parents=True, exist_ok=True)
+    if misplaced.is_file(): misplaced.rename(cache / shader_cache.LEGACY)   # an older generation the next builds read
+    out = sh / 'partial' if seen else cache
     libs, kf = out / f'b-{chain}', out / 'key' if seen else sh / f'mac-b-{chain}.key'
     pso_pairs = g.table('pso_pairs.tsv')
     if not pso_pairs.is_file(): pso_pairs = sh / 'pso_pairs.tsv'
@@ -1196,7 +1201,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key, seen=None):
     if seen: rmtree(out)   # its keys are in partial-keys.txt
     benv = dict(env, XLATE=str(xlate))
     if ALLOW_OTHER_METAL: benv['DM_ALLOW_OTHER_METAL'] = '1'
-    if seen: benv['DMSH_CAS'] = str(sh / 'cache')
+    if seen: benv['DMSH_CAS'] = str(cache)
     benv['DMSH_TABLE_MEMO'] = str(sh / 'cache')
     prog = sh / 'progress.json'; rmtree(prog); benv['DMSH_PROGRESS'] = str(prog)
     try: PROG.watch(ShaderWatch(prog))

@@ -246,6 +246,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Checked:** `test_shader_cache.py` (`Renumbered`) gets SQLite's real error by putting a copy of the file in its place after its first write: the store opens the file twice and keeps its settings through 200 writes, and fails as before when the file moves again; with `DM_EXFAT_DIR` naming a folder on an exFAT volume, the tests also run there. On the reporter's drive, an earlier form of the fix (a new file always opened again after its header) held 500 entries, then 1,200 more from three processes at once ([PR #2435](https://github.com/seedds/nxnative/pull/2435)).
 - **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), its first Mac app build from a NUP onto an exFAT drive ([GitHub issue #2434](https://github.com/seedds/nxnative/issues/2434)). Applies to every game.
 
+### A full build after a partial one stops with NotADirectoryError
+
+- **Symptom:** in a new build folder, a `--seen-shaders` build works, then the next full build stops in the shader step with `NotADirectoryError: … shader/cache/b-<chain>.img`.
+- **Cause:** the partial build passes `DMSH_CAS=<build>/shader/cache`, and `dmsh_build.py` opens a path that is not a folder as one compile cache file: with no folder there yet, `shader/cache` became a SQLite file, where the full build makes its library folder.
+- **Fix:** `build_shaders` makes `shader/cache` before either build; a cache file left at that path is closed (its WAL folded in), moved aside and put back inside the folder as `cas.db`, the older generation the next builds read its compiles from (upstream nxnative ed1cf496).
+- **Found on:** Mortal Kombat 11, in nxnative.
+- **Check:** `test_nsp_mac_app.py` (`SeenShaders`: the folder exists when the partial build runs; a full build over a cache file finds its compile in the folder).
+
 ### Shader libraries take a file per shader variant
 
 - **Symptom:** a game's shader libraries are slow to copy or delete: Skyward Sword HD's `b-<chain>/` held 12,064 files for 2,470 shaders, a third of its build folder's files, and each `regress.py` chain build held another set. A tar would not do: the host reads these files at every run.
