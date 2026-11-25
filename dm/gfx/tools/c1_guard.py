@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # c1_guard.py <dmsh_b version dir> <output tsv>: lists the shaders whose c1 reads are not proven to stay in the span a shared c1 bank gives them (a listed
 # shader gets an exclusive 64 KiB of zeros). Proven: interval arithmetic gives 0 <= index and 16 * (index + 1) <= span (_m0 is float4[4096]).
-import datetime
 import hashlib
 import json
 import multiprocessing
@@ -336,6 +335,18 @@ def unproven(job):
     return digest, answer, key if answer == "u" else None
 
 
+def write_table(lib, output, lines):
+    """The header (the library's chain and inputs), then lines; a table that already holds these bytes is left as it is, mtime included, so the app's inputs do not change"""
+    text = f"{shader_lib.table_head(lib)}\n" + "".join(line + "\n" for line in lines)
+    try:
+        with open(output, encoding="utf-8", newline="") as stream:
+            if stream.read() == text: return False
+    except (OSError, UnicodeDecodeError): pass
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    with open(output, "w", encoding="utf-8", newline="") as stream: stream.write(text)
+    return True
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit(f"usage: {sys.argv[0]} <dmsh_b version dir> <output tsv>")
@@ -343,12 +354,7 @@ def main():
     version_dir = str(shader_lib.view(lib))
     jobs = [(version_dir, name) for name in outputs(version_dir, "metal")]
     keys = [key for key in memo_map("c1_guard", unproven, jobs) if key]
-    os.makedirs(os.path.dirname(output), exist_ok=True)
-    with open(output, "w", encoding="utf-8", newline="") as stream:
-        stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-        stream.write(f"{shader_lib.table_head(lib)} {stamp}\n")
-        for key in keys:
-            stream.write(key + "\n")
+    write_table(lib, output, keys)
     print(f"not proven bounded: {len(keys)} shaders")
 
 

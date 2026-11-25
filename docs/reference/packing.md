@@ -118,6 +118,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Fix:** `prune_shaders` reads names and times from the entry table and sizes only for what it removes. `pso_offline.py` keeps a key of what a run reads by name and time (`run.key` in its work folder: the library image's place, inode, size, modification and change times, the lists, the compiler, the options and the tools' code) with the state of its outputs, and a run with the same key and outputs returns before it reads a library; a library in a folder, or any difference, goes through `archive_key` as before. The inode and change time also catch [changed shader bytes whose modification time was preserved](#a-changed-shader-library-reuses-an-old-pipeline-archive).
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game) v131072 on an M3 Max: 1:45 to 0:10, three builds in a row, the app `reused (inputs unchanged)`; the first build with the new tools took 1:10.
 
+### A full shader build that changed no shader gives the app new tables
+
+- **Symptom:** after a full shader build that restored every shader, the app step packs `c1_full.tsv` and `cb_extent.tsv` again though their rows are the same.
+- **Cause:** `c1_guard.py` and `cb_extent.py` wrote the clock time after the chain and inputs on the tables' first line, and rewrote both tables at every full build.
+- **Fix:** the header is `# chain b-<V> inputs <digest>` alone, and `c1_guard.py` `write_table` leaves a table holding the same bytes as it is, modification time included. The host (`nvn_shader.inc` `table_head_ok`) and `build_app.py` `chain_tables` take the header exact or followed by a space, so tables written before, with a time, still match until the next full build writes them once without it (upstream nxnative 410f0c9e).
+- **Found on:** in nxnative (PR #3172).
+- **Check:** `test_nsp_chain.py` (`test_unchanged_tables_keep_their_bytes_and_carry_no_time`, `test_current_kept` with and without a time), `t_shmap_warm` (both tables taken with the new header; `table_head_ok`).
+
 ### After a chain change the steps behind the last shader take three minutes
 
 - **Symptom:** a build after a chain change that left the MSL as it was (`Metal cache: mac 55482 reused, 0 compiled`) spends about a minute in `writing the library image` and a minute and a half in the c1 and uniform extent tables, and its app step half a minute in `shader libraries` (Ocarina of Time, 42,848 shaders: 0:56, 1:26 and 0:25 on an M3 Max).
