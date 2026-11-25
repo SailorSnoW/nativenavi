@@ -40,9 +40,10 @@ class AppVersion(unittest.TestCase):
             self.assertEqual(v(upd_bare, base, profile('?'), 'v0'), '1.0.0')            # no row for the packed version
             self.assertEqual(v(upd_bare, base_bare, profile('?'), 'v131072'), '')       # nothing: the app says 1.0
 
-    def test_this_game_registers_1_1_1(self) -> None:
+    def test_this_game_registers_its_versions(self) -> None:
         g = game.Game(REPO / 'dm/games/0400486024DEC000')
         self.assertEqual(g.builds()['v131072']['display'], '1.1.1')
+        self.assertEqual(g.builds()['v0']['display'], '1.0.0')
 
 
 if __name__ == '__main__':

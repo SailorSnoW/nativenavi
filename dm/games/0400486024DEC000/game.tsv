@@ -12,6 +12,8 @@ app_category	public.app-category.adventure-games
 
 # ---- Versions ----
 build	v131072	1.1.1	main=e0f3ccfaf50065ae4ea01eb5aeb13b1a	subsdk0=b0110087a7b339ef74588d3bd0b4dd5d	sdk=1643a838814f9c10c696f930ed681e7f
+# 1.0.0, the base game: its shaders are not 1.1.1's (the update recompiled about 60 % of them), so it is built from a derived profile with tables of its own files, its builds registered here
+build	v0	1.0.0	main=33fa6c2c23848282a77e8b88a0a93f48	subsdk0=ecf61f74a892d5b55be2ad09888179ed	sdk=5fd6d40b36fb19c82ef24a03dbcb474c
 package	v131072
 shader_versions	v131072
 

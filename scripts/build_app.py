@@ -799,6 +799,16 @@ def extract_aoc(work, app, fam):
     return work / 'aoc'
 
 
+def derived_reason(g, have, ver):
+    """Why ver is built from a derived profile, or False: a registered version uses the profile when its shader tables are that version's and every version they came from is in the NUP.
+    A registered version outside shader_versions has shaders of its own (Ocarina of Time's 1.0.0): its builds stay registered, with tables of its own files"""
+    builds, need = g.builds(), g.words('shader_versions')
+    if ver not in builds: return f'{ver} is not a version game profile {g.id} registers ({", ".join(v + " " + b["display"] for v, b in builds.items())})'
+    if ver not in need: return f'{ver} ({builds[ver]["display"]}) has shaders of its own: game profile {g.id}\'s shader tables are those of {", ".join(need)}'
+    if lost := [v for v in need if v not in have]: return f'the NUP has no {", ".join(lost)}, whose files game profile {g.id}\'s shader tables were made from'
+    return False
+
+
 def build_mismatch(d, name, g):   # [] = the registered build
     want = g.builds().get(name)
     if want is None: return [f'{name} has no build row']
@@ -1706,7 +1716,7 @@ def report_profile_status(g, reg, pkg_ver, derived, artifact, patched=None):
     known = {(m, b) for row in reg.builds().values() for m, b in row.items() if m != 'display'}
     other = [m for m, b in g.builds()[pkg_ver].items() if m != 'display' and (m, b) not in known]
     registered_builds = ", ".join(f'{v} {b["display"]}' for v, b in reg.builds().items())
-    if g.builds() == reg.builds():
+    if g.builds() == reg.builds() or not other and pkg_ver in reg.builds():
         say(f'this {artifact} uses the registered {pkg_ver} ({disp}) builds and every fix for them, with derived shader tables ({derived})')
     else: say(f'[RED] this {artifact} uses {pkg_ver} ({disp}), which game profile {reg.id} was not brought up on ({registered_builds}): '
         'its settings, with this version\'s own shaders' + (f'; {", ".join(other)} {"is a build" if len(other) == 1 else "are builds"} the profile does not register, so the fixes made for '
@@ -1753,15 +1763,10 @@ def main(args=None):
     if g is None: raise BuildError(f'no game profile for {app:016X}: this repository builds The Legend of Zelda: Ocarina of Time ({gamemod.DEFAULT}) only')
     say(f'game profile: {g.id}')
     if seen_shaders and not g.table('shader_seen.tsv').is_file(): raise BuildError(f'--seen-shaders: game profile {g.id} has no list of the shaders its playtests used ({g.table("shader_seen.tsv")}): build the whole map, without this option')
-    # a registered version uses the profile when every version its shader tables came from is there; any other gets a derived profile
-    builds, need = g.builds(), g.words('shader_versions')
-    have, derived = nup_versions(fam), False
+    need, have = g.words('shader_versions'), nup_versions(fam)
     pkg_ver = args.package or PACKAGE or max(have, key=vnum)
     if pkg_ver not in have: raise BuildError(f'the version to build (-p / PACKAGE) is not in the NUP, which holds {", ".join(sorted(have, key=vnum))}')
-    if pkg_ver not in builds:
-        registered_builds = ", ".join(f'{v} {b["display"]}' for v, b in builds.items())
-        derived = f'{pkg_ver} is not a version game profile {g.id} registers ({registered_builds})'
-    elif not all(v in have for v in need): derived = f'the NUP has no {", ".join(v for v in need if v not in have)}, whose files game profile {g.id}\'s shader tables were made from'
+    derived = derived_reason(g, have, pkg_ver)
     if derived: say(f'{derived}: building {pkg_ver} from a profile derived from it')
     versions = [pkg_ver] if derived else need + ([pkg_ver] if pkg_ver not in need else [])
     work = build_folder(args, nup_dir, g.id); BUILD_FOLDERS.add(work)

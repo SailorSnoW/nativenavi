@@ -590,4 +590,40 @@ class ShaderProfileKey(Base):   # the shader step's key takes the profile's shad
                 before = self.key(); change(); self.assertNotEqual(self.key(), before)
 
 
+class Route(Base):   # which versions build from the profile as it is, and what the end of the build says of the others
+    def profile(self, *rows):
+        (self.src / 'game.tsv').write_text('\n'.join([f'title_id\t{TID:016X}', 'name\tTest Game', 'modules\tmain', *rows]) + '\n')
+        return game.Game(self.src)
+
+    def test_a_registered_version_with_shaders_of_its_own_is_derived(self):   # Ocarina of Time's 1.0.0: its shader tables are not the update's
+        g = self.profile(f'build\tv131072\t1.1.1\tmain={BID}', f'build\tv0\t1.0.0\tmain={BID2}', 'shader_versions\tv131072')
+        both = {'v0': None, 'v131072': Path('u')}
+        self.assertFalse(nsp.derived_reason(g, both, 'v131072'))
+        self.assertIn('v0 (1.0.0) has shaders of its own', nsp.derived_reason(g, both, 'v0'))
+        self.assertIn('has shaders of its own', nsp.derived_reason(g, {'v0': None}, 'v0'))
+        self.assertIn('is not a version', nsp.derived_reason(g, {**both, 'v196608': Path('n')}, 'v196608'))
+
+    def test_a_version_whose_tables_need_another(self):
+        g = self.profile(f'build\tv65536\t1.1.0\tmain={BID}', 'shader_versions\tv0 v65536')
+        self.assertFalse(nsp.derived_reason(g, {'v0': None, 'v65536': Path('u')}, 'v65536'))
+        self.assertIn('the NUP has no v0', nsp.derived_reason(g, {'v65536': Path('u')}, 'v65536'))
+
+    def test_its_derived_profile_keeps_the_display_version(self):   # a NUP without control data: the registered row's
+        g = self.profile(f'build\tv0\t1.0.0\tmain={BID2}', 'shader_versions\tv65536')
+        (self.ex / 'control.nacp').unlink()
+        nsp.derive_profile(g, self.pdir, 'v0', self.ex, ['main'])
+        self.assertEqual(game.Game(self.pdir).builds(), {'v0': {'display': '1.0.0', 'main': BID2}})
+
+    def test_the_end_of_the_build(self):
+        reg = self.profile(f'build\tv131072\t1.1.1\tmain={BID}', f'build\tv0\t1.0.0\tmain={BID2}', 'shader_versions\tv131072')
+        d = self.tmp / 'd'; d.mkdir()
+        def said(row, ver):
+            (d / 'game.tsv').write_text(f'title_id\t{TID:016X}\nname\tTest Game\nmodules\tmain\n{row}\n')
+            with mock.patch.object(nsp, 'say') as say: nsp.report_profile_status(game.Game(d), reg, ver, 'why', 'Mac app')
+            return [c.args[0] for c in say.call_args_list]
+        ok = said(f'build\tv0\t1.0.0\tmain={BID2}', 'v0')
+        self.assertEqual(len(ok), 1); self.assertNotIn('[RED]', ok[0]); self.assertIn('registered v0 (1.0.0) builds', ok[0])
+        self.assertIn('[RED]', said(f'build\tv196608\t?\tmain={"ef" * 16}', 'v196608')[0])
+
+
 if __name__ == '__main__': unittest.main()
