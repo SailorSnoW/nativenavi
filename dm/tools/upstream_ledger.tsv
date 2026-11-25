@@ -125,7 +125,7 @@ c58270fff4cd	2026-11-23	skip	-	tools/tests: type exec namespace in test_nso_matc
 cac1293b4510	2026-11-23	skip	-	host: load exlaunch mod code plugins (PR #3178)	sloperinaGZ's subsdk9 is not exlaunch (no unwind header, no marker); code_write.h serves the removed cheat engine; its svcGetSystemTick x0 fix has no caller in the game's modules
 cdd91f0af41e	2026-11-23	ported	63e8222	tools/regress: ignore Metal InstalledDir mount path in toolchain fingerprints (PR #3232)	toolchain fingerprints without metal --version's InstalledDir (a cryptex mount whose suffix changes at every boot here): no shader step after each reboot
 d08d7da62390	2026-11-23	ported	4df7cc9	gfx/nvn: trim on memory pressure and evict idle spares and uploaded textures	memory pressure trims (critical on the Mac), idle spares and uploads; iOS branches out; fixed: view cache entries taken by texture address, t_pkg_evict waited one submission too early
-d2939c1eb403	2026-11-23	deferred	-	packing/shaders: report post-compile phases through DMSH_PROGRESS (PR #2684)	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): the shader build reports the steps after the last shader through DMSH_PROGRESS; chain b1450d7b27fb
+d2939c1eb403	2026-11-23	ported	115fe34,d069c81	packing/shaders: report post-compile phases through DMSH_PROGRESS (PR #2684)	the shader build reports the steps after the last shader through DMSH_PROGRESS; chain b1450d7b27fb
 d9a70339a0fd	2026-11-23	skip	-	chain/split: read the shaders of Monolith's DMPA model packages and NDSR packs (PR #3135)	DMPA and xbc1 readers absent; the game's agl_ndsr packs are read directly (shader_split ndsr_shaders)
 dbefe889cd1f	2026-11-23	skip	-	games/0400486024DEC000: update sead::PerspectiveProjection in place for Vert+ screen shape	builds on the screen-shape hooks of 47578ded (Vert+ for taller screens), which this tree does not have: the game keeps its 16:9 framing
 dc75d1fc8193	2026-11-23	no-op	-	host/hid: fix handle metadata and bring up Trails into Reverie	the game asks once, npad 0 FullKey (DM_RUMBLE_LOG): the keyboard keeps that style and the haptics sink is installed before the guest thread (front_mac.m); it never calls GetVibrationDeviceInfo
@@ -138,7 +138,7 @@ e575e81226ba	2026-11-23	no-op	-	tools: document DM_NVN_SPARSE_COPY and fix pyrig
 e8460ebc4982	2026-11-23	skip	-	tools/cheat_anchor: bound .bss by the module's end, not the loaded image	cheat tooling (removed)
 ee63b843db2b	2026-11-23	skip	-	packing/profiles: fix registered-update shader coverage and status; register Mario Kart World 1.8.0	registered-update coverage: the profile has one build row per version and no shader_covers
 ef393b7ead46	2026-11-23	partial	bfbc68e	games/pragmata: reserve a 40 GiB iOS alias region and note the entitlement on failure	the reserve error's size and errno only; the iOS alias region of another game not taken
-ef8b25d2c5a8	2026-11-23	deferred	-	nvn/vertex: supply default W=1.0 for absent attributes (PR #3237)	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): absent vertex attributes read (0, 0, 0, 1.0) as NVN gives them, in the descriptor (slot 30) and the pulling decoder; chain b1450d7b27fb
+ef8b25d2c5a8	2026-11-23	ported	7c08ee3,d069c81	nvn/vertex: supply default W=1.0 for absent attributes (PR #3237)	absent vertex attributes read (0, 0, 0, 1.0) as NVN gives them, in the descriptor (slot 30) and the pulling decoder; chain b1450d7b27fb
 f75a85aac739	2026-11-23	skip	-	opengl/shaders: promote desktop GLSL 1.10-1.30, honor layout(binding) and swizzle, and recover GL capture	OpenGL
 fbee62f11b37	2026-11-23	skip	-	ci/tests: account for Ocarina render-scale hooks	adjusts test_ocarina_screen_shape.py, which comes with 47578ded (not taken)
 002724b8e6ae	2026-11-24	skip	-	game: default Assassin's Creed III Remastered to 60 fps	another game (Assassin's Creed III)
@@ -156,7 +156,7 @@ fbee62f11b37	2026-11-23	skip	-	ci/tests: account for Ocarina render-scale hooks	
 2fcf7e8cccaa	2026-11-24	skip	-	opengl/shaders: strip legacy precision statements after preprocessing (PR #3269)	OpenGL
 375129930d30	2026-11-24	no-op	-	host/hid: route JoyDual vibration handles to FullKey and Handheld pads	vib_valid here has another shape; the game rumbles on full pads (FullKey)
 39123f799aa3	2026-11-24	skip	-	games/0100633007D48000: offer 120 fps for Hollow Knight (PR #2478)	120 fps for another game (Hollow Knight)
-3b882993a455	2026-11-24	deferred	-	nvn/vertex: declare slot 30 stride 32 for absent attributes (PR #3258)	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): slot 30 stride 32 (metal-tt rejects offset 16 with stride 16)
+3b882993a455	2026-11-24	ported	7c08ee3	nvn/vertex: declare slot 30 stride 32 for absent attributes (PR #3258)	slot 30 stride 32 (metal-tt rejects offset 16 with stride 16)
 3bcf821365b3	2026-11-24	skip	-	gfx/tools: read MGFX v10 effects and raw-DEFLATE .zxnb assets (PR #2546)	MGFX / zxnb readers (another engine)
 3e3e18fd368a	2026-11-24	skip	-	games/010013C00E930000: offer 120 fps for Hollow Knight: Silksong (PR #2479)	120 fps for another game (Silksong)
 3f6b304dc317	2026-11-24	skip	-	docs/readme: link the prewarm lists discussion	a README link to an upstream discussion
@@ -173,7 +173,7 @@ fbee62f11b37	2026-11-23	skip	-	ci/tests: account for Ocarina render-scale hooks	
 67e671465961	2026-11-24	ported	7c84b7d	host/audren: clear renderer event on Update and remove catch-up queue (PR #3272)	Update clears the renderer event as Horizon does; the catch-up queue (a workaround) removed; game boot to music not yet run on this tree
 685d2aecf0ea	2026-11-24	deferred	-	gfx/nvn: Metal 4 mesh pipeline bases, mesh_pairs.tsv prebuild, and prefetch	mesh bases, mesh_pairs.tsv, prefetch: wanted for first-draw mesh stalls; its own chain change, the split hunk builds on 610baa4d (skipped), M2 mesh compiler check needed
 69b618b31605	2026-11-24	deferred	-	host/threads: enforce Horizon SetThreadActivity and GetThreadContext3 rules	Horizon correctness only; the game imports no SuspendThread / GetThreadContext and the reset does not pause threads
-73150dd93e3d	2026-11-24	deferred	-	chain/atomic: keep float atomic adds out of the constant program	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): float atomic adds through a noinline dm_atomic_add_f32 (M5 + macOS 26.0-26.6 compiler abort on 278f48371bcf0d58_b reproduced offline); chain b1450d7b27fb; not run on an M5
+73150dd93e3d	2026-11-24	ported	ed8a9e1,d069c81	chain/atomic: keep float atomic adds out of the constant program	float atomic adds through a noinline dm_atomic_add_f32 (M5 + macOS 26.0-26.6 compiler abort on 278f48371bcf0d58_b reproduced offline); chain b1450d7b27fb; not run on an M5
 7972b110e0c1	2026-11-24	skip	-	packing/extract: preserve literal RomFS archive paths	nx_extract removed
 7e7e55fde9b0	2026-11-24	skip	-	nvn/rt: retire stalled acquire threads to standard policy (PR #3285)	optional: the game has one acquire thread and the policy line shows none demoted; not taken this run
 7f015ff873d6	2026-11-24	ported	d8f075c	nvn/residency: release committed queue objects under g_res_commit_mu	res_commit releases its queue's objects before unlocking g_res_commit_mu: a recycled heap is back in the recycler before another commit returns
@@ -199,7 +199,7 @@ ed1cf496c644	2026-11-24	ported	97c4b95	packing/shaders: keep partial builds in t
 f3cbbd726d65	2026-11-24	skip	-	game: Shredder's Revenge 1.0.9 runs offline	hle_ro.c (nn::ro) was removed
 f5c5a82305dd	2026-11-24	skip	-	host/web: end an offline HTML page that calls window.close() (PR #3262)	the web applet was removed
 f708540f7b59	2026-11-24	skip	-	packing/mac-app: keep existing app icon on in-place rebuild (PR #3148)	optional: the game's NUP has no icon and the GUI passes none; not taken this run
-f856c78d578f	2026-11-24	deferred	-	chain/tools: include vendored Ryujinx sources in xlate_source_sha	ported on branch port/upstream-nov25 with chain b1450d7b27fb; merged once the shaders are built again (no disk room on 2026-11-25): xlate_source_sha covers the vendored Ryujinx sources; dmsh_xlate rebuilt, lock updated; chain b1450d7b27fb
+f856c78d578f	2026-11-24	ported	10a56d2,d069c81	chain/tools: include vendored Ryujinx sources in xlate_source_sha	xlate_source_sha covers the vendored Ryujinx sources; dmsh_xlate rebuilt, lock updated; chain b1450d7b27fb
 fb0a0d3b5cad	2026-11-24	skip	-	gl/sync: treat a GLsync as a name, not a pointer to read (PR #3282)	OpenGL
 fd4d11342bb5	2026-11-24	skip	-	docs: refresh translator line links in the patch index	a regenerated page
 fe138ad5c9a4	2026-11-24	skip	-	game: Oceanhorn 2 defaults to 60 fps	another game (Oceanhorn 2)
