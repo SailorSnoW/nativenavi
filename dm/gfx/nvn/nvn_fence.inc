@@ -7,7 +7,9 @@ static int bootprof(void) { static int v = -1; if (v < 0) v = getenv("DM_BOOTPRO
 static uint64_t g_bp_lib_n, g_bp_lib_ns, g_bp_pso_n, g_bp_pso_ns, g_bp_up_bytes, g_bp_first_present;
 static uint64_t g_up_total_ns;
 #define GRING 1024
-static struct { _Atomic uint64_t frame, ns, t0, t1; _Atomic int pending; } g_gpu[GRING];   // t0 / t1: earliest GPUStart / latest GPUEnd (mach absolute time, ns)
+// frame: the frame + 1 (0 = an empty slot, apart from frame 0); t0 / t1: earliest GPUStart / latest GPUEnd (mach absolute time, ns). A slot a new frame claims is cleared
+// with frame 0 and published with pending 1 last, so no reader sees it claimed with nothing pending.
+static struct { _Atomic uint64_t frame, ns, t0, t1; _Atomic int pending; } g_gpu[GRING];
 // DM_NVN_UB: alternating phases in one process, so the power / frequency drift cancels; each phase discards its first 45 frames.
 static int g_ub_n = -1, g_ub_N = 180;
 static _Atomic int g_ub_cur = -1;
@@ -217,38 +219,46 @@ void mtl_set_frame(uint64_t f) {
     gpu_capture_frame(f);
 }
 static void gpu_tag_begin(uint64_t f) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f) {
-        atomic_store(&g_gpu[k].frame, f);
-        atomic_store(&g_gpu[k].ns, 0);
-        atomic_store(&g_gpu[k].pending, 0);
-        atomic_store(&g_gpu[k].t0, UINT64_MAX);
-        atomic_store(&g_gpu[k].t1, 0);
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_relaxed) != tag) {
+        atomic_store_explicit(&g_gpu[k].frame, 0, memory_order_release);
+        atomic_store_explicit(&g_gpu[k].ns, 0, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].t0, UINT64_MAX, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].t1, 0, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].pending, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].frame, tag, memory_order_release);
+        return;
     }
-    atomic_fetch_add(&g_gpu[k].pending, 1);
+    atomic_fetch_add_explicit(&g_gpu[k].pending, 1, memory_order_acq_rel);
 }
 static void gpu_tag_done(uint64_t f, double g0, double g1) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f) return;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return;
     double d = g1 - g0;
     if (d > 0 && g0 > 0) {   // a command buffer can complete with no start time (0)
-        atomic_fetch_add(&g_gpu[k].ns, (uint64_t)(d * 1e9));
+        atomic_fetch_add_explicit(&g_gpu[k].ns, (uint64_t)(d * 1e9), memory_order_relaxed);
         uint64_t s0 = (uint64_t)(g0 * 1e9), s1 = (uint64_t)(g1 * 1e9), v;
-        for (v = atomic_load(&g_gpu[k].t0); s0 < v && !atomic_compare_exchange_weak(&g_gpu[k].t0, &v, s0);) {}
-        for (v = atomic_load(&g_gpu[k].t1); s1 > v && !atomic_compare_exchange_weak(&g_gpu[k].t1, &v, s1);) {}
+        for (v = atomic_load_explicit(&g_gpu[k].t0, memory_order_relaxed); s0 < v && !atomic_compare_exchange_weak_explicit(&g_gpu[k].t0, &v, s0, memory_order_relaxed, memory_order_relaxed);) {}
+        for (v = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed); s1 > v && !atomic_compare_exchange_weak_explicit(&g_gpu[k].t1, &v, s1, memory_order_relaxed, memory_order_relaxed);) {}
     }
-    atomic_fetch_sub(&g_gpu[k].pending, 1);
+    atomic_fetch_sub_explicit(&g_gpu[k].pending, 1, memory_order_release);
 }
 double mtl_gpu_ms(uint64_t f) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending)) return -1;
-    return atomic_load(&g_gpu[k].ns) / 1e6;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    if (atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire)) return -1;
+    uint64_t ns = atomic_load_explicit(&g_gpu[k].ns, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;   // claimed by a later frame meanwhile
+    return ns / 1e6;
 }
 int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending)) return 0;
-    *t0 = atomic_load(&g_gpu[k].t0); *t1 = atomic_load(&g_gpu[k].t1);
-    return *t1 >= *t0 && *t1;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return 0;
+    if (atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire)) return 0;
+    uint64_t s0 = atomic_load_explicit(&g_gpu[k].t0, memory_order_relaxed), s1 = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return 0;
+    *t0 = s0; *t1 = s1;
+    return s1 >= s0 && s1;
 }
 static void rp_flush_at(const char *fn, int line);
 #define rp_flush() rp_flush_at(__func__, __LINE__)

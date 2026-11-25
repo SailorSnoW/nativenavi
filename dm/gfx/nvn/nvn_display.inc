@@ -283,11 +283,11 @@ static int link_latch_on(void) {
 // are CACurrentMediaTime nanoseconds; work still running counts as ending now (cb).
 static double link_gpu_lead(uint64_t frame, double t_in, double cb, double wk_cb, double pres_gpu) {
     if (wk_cb < 0) return -1;
-    unsigned k = frame % GRING;
-    if (atomic_load(&g_gpu[k].frame) != frame) return -1;
-    int pend = atomic_load(&g_gpu[k].pending);
-    uint64_t t1 = atomic_load(&g_gpu[k].t1);
-    if (atomic_load(&g_gpu[k].frame) != frame) return -1;
+    unsigned k = frame % GRING; uint64_t tag = frame + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    int pend = atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire);
+    uint64_t t1 = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
     double end;
     if (pend) end = cb;
     else if (t1) end = t1 / 1e9;

@@ -224,6 +224,17 @@ int main(void) { @autoreleasepool {
     CHECK("standing frame after skipped-tick exit backs off the drain", g_link_drain.back == 1 && !g_link_drain.in && queued() == 1);
     while (queued()) tick();
 
+    // 9. the GPU ring: frame 0 apart from an untouched slot, nothing while a command buffer of it runs, then its time and latest end
+    { uint64_t t0 = 0, t1 = 0;
+      CHECK("an untouched slot holds no frame 0", mtl_gpu_ms(0) < 0 && !mtl_gpu_span(0, &t0, &t1) && link_gpu_lead(0, 0, 1, 0, 0) < 0);
+      gpu_tag_begin(0); gpu_tag_begin(0);
+      CHECK("a frame with command buffers running reports no GPU time", mtl_gpu_ms(0) < 0 && !mtl_gpu_span(0, &t0, &t1));
+      gpu_tag_done(0, 10.0, 10.004);
+      CHECK("nor with one of them left", mtl_gpu_ms(0) < 0);
+      gpu_tag_done(0, 10.002, 10.009);
+      double ms = mtl_gpu_ms(0);
+      CHECK("then its GPU time and its latest end", ms > 10.99 && ms < 11.01 && mtl_gpu_span(0, &t0, &t1) && t1 == (uint64_t)(10.009 * 1e9) && t0 == (uint64_t)(10.0 * 1e9)); }
+
     hold_case(2, 120, 60, 2, "60 fps on a 120 Hz link takes the queued frame on the second tick");
     hold_case(2, 144, 60, 3, "60 fps on a virtual 120 Hz link holds through an uneven first tick");
     hold_case(2, 120, 120, 1, "120 fps on a 120 Hz link can take a frame on the next tick");
