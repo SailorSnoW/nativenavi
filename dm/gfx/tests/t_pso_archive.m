@@ -272,6 +272,8 @@ static void mesh_pipelines(void) {
     uint64_t built = g_mtk_built, arch = g_mtk_arch, dev = g_mtk_dev; int pending = g_arch_new, got = 0;
     id<MTLRenderPipelineState> p1 = mtk_build(&k, nil, ms, fs, &err, &got), p2 = mtk_build(&k, os, mt, fs, &err, NULL), p3 = mtk_build(&kz, nil, ms, nil, &err, NULL);
     EXPECT("mesh: pipelines", 1, p1 && p2 && p3);
+    // a mesh pipeline specialized from a base has 0 here and hangs the GPU (shaders.md, Metal 4 specialized mesh pipeline bases hang the GPU)
+    EXPECT("mesh: whole pipeline keeps its mesh grid limit", 1, p1.maxTotalThreadgroupsPerMeshGrid > 0 && p2.maxTotalThreadgroupsPerMeshGrid > 0);
     EXPECT("mesh: built", built + 3, g_mtk_built);
     EXPECT("mesh: not from the archive", 0, got);
     dispatch_sync(arch_harvest_q(), ^{});
@@ -289,6 +291,7 @@ static void mesh_pipelines(void) {
     built = g_mtk_built; pending = g_arch_new;
     id<MTLRenderPipelineState> q1 = mtk_build(&k, nil, ms, fs, &err, &got), q2 = mtk_build(&k, os, mt, fs, &err, NULL), q3 = mtk_build(&kz, nil, ms, nil, &err, NULL);
     EXPECT("mesh again: from the archive", arch + 3, g_mtk_arch);
+    EXPECT("mesh again: archived whole pipeline keeps its mesh grid limit", 1, q1.maxTotalThreadgroupsPerMeshGrid > 0 && q2.maxTotalThreadgroupsPerMeshGrid > 0);
     EXPECT("mesh again: reported as archived", 1, got);
     EXPECT("mesh again: not built", built, g_mtk_built);
     dispatch_sync(arch_harvest_q(), ^{});
