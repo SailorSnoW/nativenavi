@@ -120,7 +120,7 @@ jobs:
         run: python -m pip install -r .github/requirements/tools.txt
       # The translator tests run the committed translator on synthetic shaders, then spirv-val and spirv-cross; their Metal compile (DMSH_TEST_METAL=1)
       # and GPU run (DMSH_TEST_GPU=1) stay local.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'   # the translator is native; some of its tests build their fixtures with .NET
       - name: Install spirv-val   # spirv-cross is the in-repo build (dm/gfx/tools/spirv_cross_bin)
