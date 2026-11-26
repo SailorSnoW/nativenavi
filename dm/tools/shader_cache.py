@@ -199,6 +199,9 @@ class Store(_Files):
             if r is not None: local |= r.names(prefix)
         return local
 
+    def blob_ids(self, prefix):   # {name: blob id} of this file's entries under prefix: dmsh_build.py's staged outputs, which share a blob when their bytes are the same
+        return dict(self._run('SELECT name, blob FROM entry WHERE name>=? AND name<?', prefix, prefix + '\U0010ffff'))
+
     def put(self, name, data, when=None):
         """A full drive is one [RED] line: the build goes on without the cache, and this write's batch is rolled back"""
         if self.full: return   # SQLite may have rolled the failed batch back already
@@ -370,7 +373,7 @@ class Served:
     """Forked workers must not open the file: Apple's SQLite calls os_signpost at open, which in a fork of a process that opened one reads the parent's logging
     state (SIGSEGV in _os_log_preferences_refresh). So every call goes through a pipe to a thread here, on the one connection; a worker's batch is rolled back when it dies.
     Made before the fork; start() once every worker is forked; worker() in each worker gives its store."""
-    OPS = ('get', 'has', 'names', 'put', 'delete_prefix')
+    OPS = ('get', 'has', 'names', 'blob_ids', 'put', 'delete_prefix')
 
     def __init__(self, store, n):
         ctx = multiprocessing.get_context('fork')
@@ -432,6 +435,7 @@ class Remote(_Files):
     def get(self, name): return self._call('get', name)
     def has(self, name): return self._call('has', name)
     def names(self, prefix): return self._call('names', prefix)
+    def blob_ids(self, prefix): return self._call('blob_ids', prefix)
     def put(self, name, data, when=None): self._call('put', name, data, when)
     def delete_prefix(self, prefix): self._call('delete_prefix', prefix)
 

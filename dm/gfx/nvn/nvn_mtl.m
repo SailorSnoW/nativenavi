@@ -247,7 +247,7 @@ static int allocprof_level(void) {
     }
     return g_allocprof;
 }
-// diagnostic: no clocks are read without DM_NVN_CPUPROF
+// diagnostic: no clocks are read without DM_NVN_CPUPROF. The counters are the replay thread's (thread-local), reported by it at the end of mtl_sub_commit, where no phase is open
 typedef struct { uint64_t wall, cpu; } cp_stamp;
 static _Thread_local uint64_t g_cp_wall[6], g_cp_cpu[6], g_cp_calls[6], g_cp_last;
 static int cp_on(void) {
@@ -275,8 +275,10 @@ static void cp_report(void) {
     if (now - g_cp_last < 5000000000ull) return;
     static const char *names[6] = {"pass_end", "pass_begin", "pipeline", "arguments", "texture", "draw"};
     char line[1000] = {0}; size_t at = 0;
-    for (int i = 0; i < 6; i++) if (g_cp_calls[i])
-        at += snprintf(line + at, sizeof line - at, " %s %llu calls %.2f/%.2f ms CPU/wall;", names[i], (unsigned long long)g_cp_calls[i], g_cp_cpu[i] / 1e6, g_cp_wall[i] / 1e6);
+    for (int i = 0; i < 6; i++) if (g_cp_calls[i]) {
+        int n = snprintf(line + at, sizeof line - at, " %s %llu calls %.2f/%.2f ms CPU/wall;", names[i], (unsigned long long)g_cp_calls[i], g_cp_cpu[i] / 1e6, g_cp_wall[i] / 1e6);
+        if (n > 0) at += (size_t)n < sizeof line - at ? (size_t)n : sizeof line - at - 1;
+    }
     MLOG("[cpuprof] inclusive phases over %.2f s (nested phases overlap):%s", (now - g_cp_last) / 1e9, line);
     memset(g_cp_wall, 0, sizeof g_cp_wall);
     memset(g_cp_cpu, 0, sizeof g_cp_cpu);

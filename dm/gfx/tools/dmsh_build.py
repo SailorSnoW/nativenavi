@@ -4,7 +4,7 @@
 # Environment: DM_GAME (a derived profile), XLATE (the translator), DMSH_CAS (compile cache folder or file), DMSH_PREFILL (library roots, :-separated),
 #   J (concurrency), DMSH_PROCS (processes that finish shaders, default J; 0 = threads)
 import atexit, errno, inspect, multiprocessing, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf
-import dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_abi as abi
+import dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_metalwa, dmsh_abi as abi
 dm_dir, out = sys.argv[1:3]
 want = set(sys.argv[3:])
 cache_root = out
@@ -134,17 +134,23 @@ def publish_library(on_progress=None):   # on_progress: shader_lib.write's
     d = out
     image = shader_lib.image_of(d)
     prefix = f'{STAGE}/mac/'
-    files = {}
+    files, share = {}, {}   # share: the outputs of one cache blob, or of one range of the old image, written once (shader_lib.write)
     if OLD_IMAGE is not None:
-        for p in OLD_IMAGE.iterdir():
-            m = OUT_KEY.match(p.name)
-            if (m and owned_output(m.group(1))) or (p.name == dmsh_chain.STAMP and STAMP_BEFORE != INPUTS): continue
-            files[p.name] = str(p)
-    staged = STORE.names(prefix)
-    for n in staged: files[n[len(prefix):]] = (lambda n=n: STORE.get(n))
+        old = romfs.Image(OLD_IMAGE)
+        for name, k in old.children(0):
+            m = OUT_KEY.match(name)
+            if (m and owned_output(m.group(1))) or (name == dmsh_chain.STAMP and STAMP_BEFORE != INPUTS): continue
+            files[name] = str(OLD_IMAGE / name)
+            share[name] = ('old', *old.entry(k)[:2])
+    staged = STORE.blob_ids(prefix)
+    for n, blob in staged.items():
+        files[n[len(prefix):]] = (lambda n=n: STORE.get(n))
+        share[n[len(prefix):]] = ('blob', blob)
     for n in os.listdir(d):
-        if not n.startswith('.') and '.tmp' not in n and os.path.isfile(os.path.join(d, n)): files[n] = os.path.join(d, n)
-    try: shader_lib.write(files, image, on_progress=on_progress)
+        if not n.startswith('.') and '.tmp' not in n and os.path.isfile(os.path.join(d, n)):
+            files[n] = os.path.join(d, n)
+            share.pop(n, None)
+    try: shader_lib.write(files, image, on_progress=on_progress, share=share)
     except (OSError, ValueError) as e:
         cache_full = getattr(STORE, 'full', False)
         def stop(why, err2=None):
@@ -460,7 +466,7 @@ def job_for(key, name, rec, w):
 
 RULES = []
 # CODE_FP: the code form (no comments, docstrings, layout) of this file and of the modules that run only on a cache miss; test_dmsh_code_fp.py checks the list.
-CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_chain.code_form(open(m.__file__, 'r').read()) for m in (dmsh_chain, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_ampere, dmsh_side, abi))
+CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_chain.code_form(open(m.__file__, 'r').read()) for m in (dmsh_chain, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_ampere, dmsh_side, dmsh_metalwa, abi))
                          + b'\0' + inspect.getsource(dmsh_fetch.screen_varyings).encode()
                          + b'\0abi\0' + repr(sorted(abi.VALUES.items())).encode()).hexdigest()
 TOOL_FP = tool_fingerprint().encode()
@@ -663,6 +669,12 @@ def finish(key, w, j, c1):
     blend0 = 0
     if j['stage'] == 'ps': src, blend0 = dmsh_rewrite.blend_zero(src)   # before the entry points that share main0's body
     open(msl, 'w').write(src)
+    if j['stage'] != 'vs':   # Apple GPU compiler workarounds (KK3 ballots behind DMSH_MWA_FC, KK9 loop breaks), before the mesh stage, compute_loops and the side libraries
+        try: t = dmsh_metalwa.apply(src)[0]
+        except ValueError as e: return 'metal workaround rewrite failed', str(e)[:160], None
+        if t != src:
+            src = t
+            open(msl, 'w').write(src)
     first, spill, loop_sites, ndsr = [], 0, [], None
     mesh = j.get('mesh_stage')
     if mesh:

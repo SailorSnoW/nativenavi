@@ -671,15 +671,86 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
                     g = NS(id='game', folder=root / str(derived), build=root / 'build', ver='v0',
                            patched=root / 'patched_v0', derived=derived, env=lambda tree, config=env: dict(config))
                     tree = NS(id='tree', path=root, py=lambda code, e: 'main')
-                    process = NS(poll=lambda: 0, returncode=0)
+                    group = NS(p=NS(poll=lambda: 0, returncode=0), finish=lambda: 0, stragglers=[])
                     with patch.object(regress, 'rewriter_key', return_value='key'), patch.object(regress, 'say'), \
-                         patch.object(regress.subprocess, 'Popen', return_value=process) as spawn, patch.object(regress.time, 'sleep'):
+                         patch.object(regress.proc_group, 'Group', return_value=group) as spawn, patch.object(regress.time, 'sleep'):
                         dst, _ = regress.modules_for(tree, g, True, 1)
                     selected = spawn.call_args.kwargs['env']
                     self.assertEqual(selected.get('DM_GAMES_DIR'), env['DM_GAMES_DIR'] if derived else None)
                     self.assertEqual(selected.get('DM_GAMES_FIRST'), '1' if derived else None)
                     self.assertEqual(selected['DM_GAME'], 'game')
                     self.assertTrue((dst / '.done').is_file())
+
+    def test_modules_for_keys_cache_on_inputs_and_verifies_products(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); build = root / 'build'; exefs = build / 'extract/v0/ExeFS'; exefs.mkdir(parents=True)
+            (exefs / 'main').write_bytes(b'main-v1')
+            prof = root / 'dm/games/game'; prof.mkdir(parents=True)
+            (prof / 'game.tsv').write_text('build\tv0\t1.0\tmain=aaa\n')
+            g = NS(id='game', folder=root / 'nsp', build=build, ver='v0', patched=build / 'patched_v0', derived=False,
+                   env=lambda tree: {'DM_GAME': 'game', 'DM_GAMES_DIR': '/copied/profile', 'DM_GAMES_FIRST': '1'})
+            tree = NS(id='tree', path=root, py=lambda code, e: 'main subsdk0')
+
+            def fake_rewrite(cmd, **kw):
+                src, out, mod = Path(cmd[2]), Path(cmd[3]), cmd[4]
+                (out / f'{mod}.patched.bin').write_bytes(b'patched:' + src.read_bytes())
+                (out / f'{mod}.fixups.tsv').write_text('# BUILD_ID\taaa\n')
+                (out / f'{mod}.gates.tsv').write_text('')
+                return NS(p=NS(poll=lambda: 0, returncode=0), finish=lambda: 0, stragglers=[])
+
+            with patch.object(regress, 'rewriter_key', return_value='rev1'), patch.object(regress, 'say'), \
+                 patch.object(regress.proc_group, 'Group', side_effect=fake_rewrite) as spawn, patch.object(regress.time, 'sleep'):
+                dst1, key1 = regress.modules_for(tree, g, True, 1)
+                self.assertEqual((dst1 / 'main.patched.bin').read_bytes(), b'patched:main-v1')
+                self.assertEqual(spawn.call_count, 1)
+
+                self.assertEqual(regress.modules_for(tree, g, True, 1), (dst1, key1))
+                self.assertEqual(spawn.call_count, 1)
+
+                for missing in ('main.patched.bin', 'main.fixups.tsv', 'main.gates.tsv'):   # .done stays
+                    with self.subTest(missing=missing):
+                        (dst1 / missing).unlink()
+                        before = spawn.call_count
+                        self.assertEqual(regress.modules_for(tree, g, True, 1), (dst1, key1))
+                        self.assertEqual(spawn.call_count, before + 1)
+                        self.assertTrue((dst1 / missing).is_file())
+
+                (exefs / 'main').write_bytes(b'main-v2')   # same path, new bytes
+                dst2, key2 = regress.modules_for(tree, g, True, 1)
+                self.assertNotEqual((dst2, key2), (dst1, key1))
+                self.assertEqual((dst2 / 'main.patched.bin').read_bytes(), b'patched:main-v2')
+
+                (exefs / 'subsdk0').write_bytes(b'subsdk0-v1')
+                dst3, key3 = regress.modules_for(tree, g, True, 1)
+                self.assertNotEqual(key3, key2)
+                self.assertEqual((dst3 / 'subsdk0.patched.bin').read_bytes(), b'patched:subsdk0-v1')
+
+                (prof / 'game.tsv').write_text('build\tv0\t1.0\tmain=aaa\nbuild\tv1\t1.1\tmain=bbb\n')
+                _, key4 = regress.modules_for(tree, g, True, 1)
+                self.assertNotEqual(key4, key3)
+
+                (prof / 'game.tsv').write_text('build\tv0\t1.0\tmain=aaa\nbuild\tv1\t1.1\tmain=bbb\nfps\t60\n')   # a row patch_nso.py does not read
+                self.assertEqual(regress.modules_for(tree, g, True, 1)[1], key4)
+
+    def test_modules_for_without_rewrite_tracks_build_bytes_and_rewriter_tracks_nso_syms(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); patched = root / 'patched_v0'; patched.mkdir()
+            (patched / 'main.patched.bin').write_bytes(b'build-a')
+            g = NS(patched=patched)
+            path1, key1 = regress.modules_for(None, g, False, 1)
+            self.assertEqual(path1, patched)
+            self.assertEqual(regress.modules_for(None, g, False, 1), (patched, key1))
+            (patched / 'main.patched.bin').write_bytes(b'build-b')
+            path2, key2 = regress.modules_for(None, g, False, 1)
+            self.assertEqual(path2, patched)
+            self.assertNotEqual(key2, key1)
+
+            tree = NS(path=root)
+            syms = root / 'dm/tools/nso_syms.py'; syms.parent.mkdir(parents=True)
+            syms.write_text('v1\n')
+            rev1 = regress.rewriter_key(tree)
+            syms.write_text('v2\n')
+            self.assertNotEqual(regress.rewriter_key(tree), rev1)
 
     def test_each_tree_uses_its_own_pso_offline_and_imports(self):   # baseline and candidate trees each run pso_offline in their own process (a dmsh_abi constant new in one of them)
         import sys

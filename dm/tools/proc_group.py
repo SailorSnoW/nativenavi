@@ -75,24 +75,7 @@ class Group:
             time.sleep(TICK)
 
     def stop(self, sig=signal.SIGTERM):
-        """Resumed first: a stopped process acts on no signal but SIGKILL. Returns once the child is reaped and no member is left, or REAP s after the SIGKILL (a member stuck
-        in the kernel). Re-raises the last interrupt that came while it waited"""
-        late, self.done = None, True
-        try:
-            self.resume()
-            self._signal(sig)
-            if self._gone(self.grace):
-                self.p.wait()
-                return
-        except BaseException as e: late = e   # a second interrupt or SIGTERM: no more grace
-        while True:   # an interrupt here only repeats a step
-            try:
-                self._signal(signal.SIGKILL)
-                self.p.wait()
-                self._gone(REAP)
-                break
-            except BaseException as e: late = e
-        if late is not None: raise late
+        stop_all([self], sig)
 
     def finish(self):
         self.p.wait()
@@ -130,6 +113,48 @@ class Group:
             sel.close()
         buf += dec.decode(b'', final=True)
         if buf: yield buf
+
+
+def stop_all(groups, sig=signal.SIGTERM):
+    """sig to every group at once, resumed first (a stopped process acts on no signal but SIGKILL), then SIGKILL to those left after the longest
+    grace. Returns once every child is reaped and no member is left, or REAP s after the SIGKILL (a member stuck in the kernel). Re-raises the
+    last interrupt that came while it waited"""
+    groups = list(groups)
+    if not groups: return
+    late = None
+    for g in groups: g.done = True
+    def still_alive(pool):
+        out = []
+        for g in pool:
+            g.p.poll()
+            if members(g.pgid): out.append(g)
+        return out
+    alive = groups
+    try:
+        for g in alive:
+            g.resume()
+            g._signal(sig)
+        end = time.monotonic() + max(g.grace for g in alive)
+        while True:
+            alive = still_alive(alive)
+            if not alive or time.monotonic() >= end: break
+            time.sleep(TICK)
+        if not alive:
+            for g in groups: g.p.wait()
+            return
+    except BaseException as e: late = e   # a second interrupt or SIGTERM: no more grace
+    while True:   # an interrupt here only repeats a step
+        try:
+            for g in alive: g._signal(signal.SIGKILL)
+            for g in groups: g.p.wait()
+            end = time.monotonic() + REAP
+            while True:
+                alive = still_alive(alive)
+                if not alive or time.monotonic() >= end: break
+                time.sleep(TICK)
+            break
+        except BaseException as e: late = e
+    if late is not None: raise late
 
 
 def describe(stragglers):

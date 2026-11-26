@@ -3,6 +3,7 @@
 # base	2edad182
 # url	https://github.com/seedds/nxnative.git
 742e959e5fd3	2026-11-21	ported	fc9c75b	packing/nup: prefer the selected build's display version	the app's version from the profile's build row when the NUP has no NACP; game.tsv v131072 = 1.1.1 (also the host's GetDisplayVersion); ported by hand to build_app.py
+e8ab5f352f7c	2026-11-21	partial	9c78364	host/input: use the Taiko Drum's HID button map (PR #3061)	only the Switch wired HID layout mechanism, for the PDP pad; the Taiko drum's id left out
 f7ae8a3a4c2c	2026-11-21	no-op	dd9f163	game: Ocarina of Time increases the alias region to 8 GiB	the Mac's alias region is already the Switch's 64 GiB whatever mem_alias says (hle_svc.c mem_init_once): the 4 GiB failure (#3103) is an iPhone's; recorded in the note
 0c39549c1a80	2026-11-22	skip	-	docs/nba-2k26: record the player lighting prototype	another game (NBA 2K26)
 0cf3a70298dc	2026-11-22	skip	-	nvn/geometry: order deferred updates before mesh-stage buffer use (PR #3120)	geometry-as-mesh draws: the geometry stage was removed
@@ -160,7 +161,7 @@ fbee62f11b37	2026-11-23	skip	-	ci/tests: account for Ocarina render-scale hooks	
 3bcf821365b3	2026-11-24	skip	-	gfx/tools: read MGFX v10 effects and raw-DEFLATE .zxnb assets (PR #2546)	MGFX / zxnb readers (another engine)
 3e3e18fd368a	2026-11-24	skip	-	games/010013C00E930000: offer 120 fps for Hollow Knight: Silksong (PR #2479)	120 fps for another game (Silksong)
 3f6b304dc317	2026-11-24	skip	-	docs/readme: link the prewarm lists discussion	a README link to an upstream discussion
-4015ce2c040a	2026-11-24	deferred	-	gfx/nvn: keep resolution families compressed with valid-geometry tracking	ported then left out: measured on the M2 Pro (castle town house, still) the submission 5.0 to 11.6 ms a frame (33 k to 91 k instructions a draw) for 0.4-1 ms of GPU; probably fam_set_valid's args_dirty_all at each owner change, not verified
+4015ce2c040a	2026-11-24	deferred	-	gfx/nvn: keep resolution families compressed with valid-geometry tracking	with its three fixes on port/deferred-families: no storm, GPU -0.4 to -0.6 ms, submission +1.3 ms (+21 % instructions a draw); left out by the user (M2 Pro, 2026-11-26)
 44c5500c209e	2026-11-24	skip	-	host/tests: supply the SDK probe in memory fixtures	test fixtures for a694f179 and cac1293b, not taken
 4561f442cf20	2026-11-24	no-op	-	host/nvn: borrow shader library file mappings on macOS	lib_from_file already borrows the image's and loose files' mappings (the copy of 8c94bd1e it reverts was never taken)
 48bc85368889	2026-11-24	skip	-	nvn/shaders: keep missing shader keys for the next partial build (PR #3288)	optional (missing keys for --seen-shaders through launcher and Application Support paths); not taken this run
@@ -171,7 +172,7 @@ fbee62f11b37	2026-11-23	skip	-	ci/tests: account for Ocarina render-scale hooks	
 5e907fb8022a	2026-11-24	skip	-	packing/forge: read Scimitar v27 shader archives	Scimitar v27 reader (another engine)
 61e97458d286	2026-11-24	ported	ecda0c6	nvn/latch: gate on GPU deadline and exit on late GPU or skipped ticks	the late latch's entry accounts for GPU time and it is left on a late GPU end or a skipped tick (the 60 Hz link with snapshots off)
 67e671465961	2026-11-24	ported	7c84b7d	host/audren: clear renderer event on Update and remove catch-up queue (PR #3272)	Update clears the renderer event as Horizon does; the catch-up queue (a workaround) removed; game boot to music not yet run on this tree
-685d2aecf0ea	2026-11-24	deferred	-	gfx/nvn: Metal 4 mesh pipeline bases, mesh_pairs.tsv prebuild, and prefetch	mesh bases, mesh_pairs.tsv, prefetch: wanted for first-draw mesh stalls; its own chain change, the split hunk builds on 610baa4d (skipped), M2 mesh compiler check needed
+685d2aecf0ea	2026-11-24	skip	-	gfx/nvn: Metal 4 mesh pipeline bases, mesh_pairs.tsv prebuild, and prefetch	upstream reverted it (8ecae8c4): specialized mesh bases hang the GPU; on the M2 Pro too the specialized pipeline reports maxTotalThreadgroupsPerMeshGrid 0
 69b618b31605	2026-11-24	deferred	-	host/threads: enforce Horizon SetThreadActivity and GetThreadContext3 rules	Horizon correctness only; the game imports no SuspendThread / GetThreadContext and the reset does not pause threads
 73150dd93e3d	2026-11-24	ported	ed8a9e1,d069c81	chain/atomic: keep float atomic adds out of the constant program	float atomic adds through a noinline dm_atomic_add_f32 (M5 + macOS 26.0-26.6 compiler abort on 278f48371bcf0d58_b reproduced offline); chain b1450d7b27fb; not run on an M5
 7972b110e0c1	2026-11-24	skip	-	packing/extract: preserve literal RomFS archive paths	nx_extract removed
@@ -204,19 +205,80 @@ fb0a0d3b5cad	2026-11-24	skip	-	gl/sync: treat a GLsync as a name, not a pointer 
 fd4d11342bb5	2026-11-24	skip	-	docs: refresh translator line links in the patch index	a regenerated page
 fe138ad5c9a4	2026-11-24	skip	-	game: Oceanhorn 2 defaults to 60 fps	another game (Oceanhorn 2)
 ffb06d603bd9	2026-11-24	skip	-	nvn/textures: stage native-texture movie frames linearly for GPU blit	nvn_host_write_texture and nn::movie native textures removed (aa21e95); the game's AV1 frames go through nn::codec
+01ee10dbbe02	2026-11-25	skip	-	host/mii: EditAndUpdateMii answered as the editor closed with no change (PR #3298)	hle_mii keeps only Database Initialize / Finalize / GetIndex; the game imports no Mii editor
+04fca5c13382	2026-11-25	skip	-	host/account: preserve open users across oe::ExecuteProgram (PR #3124)	ExecuteProgram and Push/PopOpenUsers removed (6ddc6dc); the game imports none
+1334c97f191a	2026-11-25	no-op	-	gfx/nvn: remove obsolete Metal 3 DM_NVN_PASSGPU profiler	DM_NVN_PASSGPU already removed here (5bd5bbf, a231214)
+168e9e78056f	2026-11-25	skip	-	game: port Iconoclasts to Mac and iOS	another game
+1c83bb5dd929	2026-11-25	ported	59a4859	gfx/nvn: drop finalized pool textures from CPU-write tracking	a finalized pool's textures left in the CPU-write poll
+1cfb717b6096	2026-11-25	skip	-	game: port Volcano Princess to Mac and iOS	another game
+1d6bc765ffb3	2026-11-25	skip	-	host/nvn: back GameChat virtual camera with an off-screen NVN window (PR #1323)	nn::chat hooks removed (6ddc6dc); the game imports no nn::chat symbol
+1e06abd9d5cb	2026-11-25	no-op	-	gfx/nvn: convert GPU feedback timestamps in integer nanoseconds (PR #1978)	already here from the perf branch (ff53e3d): integer-ns feedback times; upstream's 9e9 s bound is past any uptime
+23cf1ec5029b	2026-11-25	ported	60a7ba4	gfx/nvn: report DM_NVN_CPUPROF from replay thread at mtl_sub_commit (PR #1999)	DM_NVN_CPUPROF was empty with replay_ahead; t_cpuprof adapted to this tree's six phases
 2746806f791f	2026-11-25	skip	-	packing/profile: type decoder archive scan results	decoder archive scan types (Oodle), not here
 288803ae3907	2026-11-25	skip	-	packing/regions: make address region verdicts target-aware for Mac-only builds	no address-region step here
+2b202936bab7	2026-11-25	no-op	-	gfx/nvn: fold pso_pend_kick_budget into pso_pend_kick	a refactor of pso_pend_kick*; the same three helpers here (nvn_pso.inc), nothing to fix
+325b9973a372	2026-11-25	skip	-	host/fs: read save data sizes from control.nacp and ExtendSaveData (PR #3334)	save data size entries removed (6ddc6dc), the game imports none; the NUP has no control.nacp
+3426bd1fbf7e	2026-11-25	skip	-	host/save-sync: skip pre-launch save sync report when cloud sync is off	save sync removed (93c193d); dm/mac/Launcher.swift has no sync report
+3736ce6ac447	2026-11-25	skip	-	game: port Outer Wilds to Mac and iOS	another game; its dmsh_build.py hunk patches one NVN1 Unity LUT shader, which this chain refuses
+3778104bffb9	2026-11-25	skip	-	docs/readme: lead Games section with compatibility list	README compatibility list
+41cf6091f492	2026-11-25	skip	-	game: target 60 fps in Apollo Justice: Ace Attorney Trilogy	another game, on fps_target.py / hle_fpslock, both gone here
+48c1154d94d4	2026-11-25	ported	c604732,145a1ac	gfx/xlate: write UIMAD.WIDE carry out to uniform predicate (PR #1548)	no MSL change for this game (all its (U)IMAD.WIDE write PT); translator rebuilt; chain a465a2d531d0
 4be2de4a465d	2026-11-25	skip	-	chain/split: share the zlib header check across archive readers	zlib check shared across other engines' readers
 4fdfd4793182	2026-11-25	ported	eb1c552,fca7773	gfx/nvn: raise fence event from post_complete on unsignaled feedback (PR #1409)	post_complete raises the fence event: a recovered GPU error no longer leaves a fast-wake SyncWait waiting up to an hour
+5285c89b23e4	2026-11-25	ported	17f7515	tools/regress: remove unused pid_alive and own_tree helpers	unused helpers here too
+5491ae39e594	2026-11-25	ported	ed36757	gfx/nvn: specialize shader entry function constants before noting g_fn4	fn_load specializes before fn4_note (one MTLFunction per content, confirmed on the M2 Pro); fn_d too
 551228c9bbee	2026-11-25	skip	-	gfx/nvn, tools: honor acquire sync deadlines, fix movie texture handoff/aliases, zxnb reader table, nx_extract literal opens, and provisional marker reuse	(a) acquire deadlines build on c17a5498 (b) movie handoff on ffb06d60 (c) a chain bump for XNB (d) nx_extract (e) provisional profiles: none here
+5b5504ab466e	2026-11-25	ported	62ba93d	host/fs: answer path not found for DeleteFile on a directory (PR #3329)	unlink(2) on a directory gives EPERM on macOS, which poisoned the save's next commit
+5bdc85b1ee45	2026-11-25	skip	-	game: port Naruto Storm Connections to the Mac	another game; its general hunks are NVN-GL interop the game names but never calls
+5dcd1f19336d	2026-11-25	deferred	-	gfx/nvn: prune unregistered family serials in fam_set_valid	on port/deferred-families with 4015ce2c; fam_set_valid prunes by trylock: g_rmu can be held there in this tree
 5dfc86ae80c5	2026-11-25	skip	-	game: port Apollo Justice: Ace Attorney Trilogy to Mac	another game (Apollo Justice)
+5e55efad8af1	2026-11-25	ported	09e9ee3	host/fs: stream RomFS image directories by cursor instead of snapshotting	cursor fields in the fork's dir handle, reset tracking kept; no gain at the game's two small Foliage folders, parity and no die()
+636218f6f1f5	2026-11-25	ported	c3667cd	tools/bench: stop host and release lock on SIGTERM and SIGINT (PR #2447)	bench.py stops the host and frees --lock on SIGTERM / SIGINT; adapted to the DM_REC loop
+6b3529346e34	2026-11-25	skip	-	packing/shaders: decode nested zstd archive members (PR #1764)	the game's RomFS has no nested zstd member (10,451 SARC, none with a zstd frame); a chain change for nothing
+6cefd10ef8a8	2026-11-25	skip	-	packing/extract: read the base RomFS when an update's data patch changes nothing (PR #3335)	nx_extract removed (f019c6d); pack_nup.py falls back to the base RomFS and 1.1.1 carries a full patched RomFS
+7cc6f19feaa0	2026-11-25	skip	-	docs/readme: link the community Game Compatibility List	README link to the multi-game compatibility list
+8172902d1fad	2026-11-25	ported	584ba70	host/mac: use non-opaque Metal layer in mirrored fullscreen (#1821)	non-opaque layer only in fullscreen on a mirrored display (an Apple scanout defect reported on this game); untested here
+872601836ed6	2026-11-25	ported	9c78364	host/input: read PDP Wired Fight Pad Pro in Switch wired HID layout (PR #3307)	PDP Wired Fight Pad Pro (found on this game) in a Switch wired layout; untested here (no such pad)
+889ffd6c76d5	2026-11-25	ported	f31317d	gfx/nvn: read the pool tables' counts under g_rmu (PR #3330)	the power line's unlocked read of pool table buffers: a SIGSEGV every 10-15 min on this game
+8a8dfcf6ac07	2026-11-25	ported	a9440e0	tools/proc_group: reap sibling process groups on parallel rewrite failure	adapted to build_app.py's rewrite and regress.py
+8ddd5c3fd71b	2026-11-25	deferred	-	gfx/nvn: sync uncompressed 2D storage aliases on demand (PR #3318)	R32UI/RGB9E5 already views here (6558a45); the R8 4WxH -> RGBA8 read and family-member twins are new: wait for a 1.0.0 floor pass dump that shows the read (~575 lines on every write path)
+8ecae8c410ef	2026-11-25	docs	f867edd	gfx/nvn: build Metal 4 mesh pipelines whole to avoid GPU hangs	this tree never took 685d2aec: the entry and the mesh-grid checks; the M2 Pro reports maxTotalThreadgroupsPerMeshGrid 0 when specialized
+930aa5971ec3	2026-11-25	deferred	-	gfx/nvn: prune unregistered serials from resolution-family lists (PR #3331)	on port/deferred-families with 4015ce2c; removes the pool-table storm on the M2 Pro (3.5 whole builds a frame -> 0)
 953e892709fe	2026-11-25	skip	-	nvn/tests: check movie readback buffer allocation	fixes ffb06d60's test, not taken
+95940778a62a	2026-11-25	ported	1f94de3	nvn/present: pace covered Mac windows by the host clock (PR #1302)	a covered window in focus paces by the host clock instead of rescues and probation hitches; the game pauses out of focus
+9ae4907a4d4d	2026-11-25	docs	f0c056e	docs: update pipeline look-ahead limits to match 960d203e (PR #1344)	the look-ahead limits of 960d203e in 05-debugging.md and development.md
 9b2ee6c7cab8	2026-11-25	skip	-	tools/packing: discover decoder-backed archives in DLC for Oodle host (PR #1403)	Oodle / DLC archives: the game has neither
 9e889a86225f	2026-11-25	skip	-	game: Captain Tsubasa 2 World Fighters defaults to 60 fps	another game (Captain Tsubasa 2)
 a0d1b2f6902a	2026-11-25	ported	021df54	nvn/tests: check pool-residency kernel lookup	its t_pool_cow_residency lookup fix, folded into b6336876's port
+a5b00ba16959	2026-11-25	skip	-	vulkan/images: track first upload of converted linear images	Vulkan
+b89b2feed0a5	2026-11-25	ported	7f3ade9,145a1ac	gfx/shaders: work around Apple Metal divergent ballot and loop-break bugs (PR #2397)	KK9 reproduces on the M2 Pro (2,048 of 2,048 lanes); 2,610 shaders guarded; no GPU change measured standing still; KK3 off on macOS 27
+b8e2645ab7b2	2026-11-25	ported	f9c1b09	tools/regress: key rewritten module cache on actual inputs and verify products	regress.py's module cache missed nso_syms.py, module bytes and build rows; NRO / snowdrop parts dropped
 ba15f55de0b2	2026-11-25	skip	-	game: port XCOM 2 Collection to the Mac	another game (XCOM 2), its reader and nx_extract
 bb593d1ceb01	2026-11-25	partial	23e8098	host/vi: use pacer vsync grid for missing frame-history timestamps (#2339)	the g_gpu ring's frame+1 tag and release ordering; ListFrameHistory is gone here
 bd3fc7791c50	2026-11-25	skip	-	game: BioShock Remastered plays on the Mac + shadercache.nx reader (PR #3247)	another game (BioShock) and its shadercache.nx reader
 c07a3cc5b616	2026-11-25	skip	-	chain/split: report invalid PACx LZ4 chunks	PACx reader (another engine)
+c698ab830284	2026-11-25	ported	584ba70	docs/env: add missing DM_MAC_COMPOSITED switch	the DM_MAC_COMPOSITED row, with 8172902d
+cde54c16191f	2026-11-25	deferred	-	gfx/nvn: cache compressed resolution-family metadata on treg_t	on port/deferred-families with 4015ce2c
+cfbda8fbdc86	2026-11-25	ported	0c013cc	host/threads: back off repeated zero-timeout waits as polls (PR #3333)	zero-timeout polls back off; the game makes only 0.3 % zero-timeout waits (no measured gain), taken for later thread merges
+d14217007e76	2026-11-25	skip	-	host/save-sync: make cloud replacement conditional under per-title coordination	iCloud save sync removed (93c193d)
+d144e6e8b703	2026-11-25	skip	-	games/0100606026F12000: set depth_mode zero and add prewarm seed list (PR #1344)	another game's depth mode and seed list; its test row and shaders.md entry explain cover pairs this tree never writes
+d24d92068b81	2026-11-25	skip	-	host/vi: bind frame history entries to nq_worker physical present tickets	ListFrameHistory / GetLatestFrameNumber removed (6ddc6dc); the game's modules import no frame-history entry; bb593d1c's g_gpu frame+1 tag is already here
 d83c32ec0c55	2026-11-25	skip	-	opengl/shaders: add missing es profile on #version 310/320 (#3292)	OpenGL
+d85b9cb4f51e	2026-11-25	ported	e9f3bcb	gfx/nvn: keep a texture registered when a copy is finalized (PR #3305)	a copy's Finalize dropped the live texture from the CPU-write poll
+ea016897c6b5	2026-11-25	skip	-	games/dsr: floor 60 fps FXR emitter intervals to 30 Hz	another game
+f529885c3181	2026-11-25	partial	0fca87a	tools/npdm: read ACI0 via one bounds-checked section reader	only the NPDM / ACI0 bounds checks, inlined in pack_nup.py (profile_guess and the rest gone here)
+f9306791166a	2026-11-25	skip	-	game: target 60 fps in Outer Wilds	another game
+faf91a9dfa16	2026-11-25	skip	-	gfx/nvn: skip synthetic # cover padding pairs in prebuild and offline archive	cover pairs come from single-stage engines: the game's shader_pairs / pso_pairs have none and this shader_split.py writes none; a chain change for nothing
 fb3ca11af9d2	2026-11-25	ported	03a9ea0	nvn/present: filter minified presents with a separable tent kernel	a minified present (window or drawable smaller than 2560x1440) through a separable tent filter
+fcccbfa70143	2026-11-25	skip	-	host/fs: forward IsSaveDataExisting(Uid) to explicit overload	both IsSaveDataExisting overloads removed (6ddc6dc); the game imports neither
+fd5ae4b9f78a	2026-11-25	skip	-	packing/work: honor caller WORK in task-owned scratch folders (PR #1476)	a caller's WORK for build_ipa scratch folders; build_app.py sets WORK and dmsh_build.py makes its own dmsh_<pid> folder
+00904635e304	2026-11-26	skip	-	nvn/pso: guard Metal cache cleanup by directory identity (PR #2691)	hardening of the gpuarchiver cleanup: the folder is the bundle's own, under the flock; only a theoretical reused-name race
+5ac4f7edb5e4	2026-11-26	partial	38518fb	gfx/nvn: key prebuild and mesh prewarm dedup sets by string/dict instead of NSArray	only seen_mesh and pso_bundle_covers keyed by string; pre_parse_into belongs to faf91a9d (skipped)
+62bcfd20479d	2026-11-26	ported	94db790,145a1ac	packing/shaders: preserve shared cache blobs in library images	library 9.49 -> 9.10 GB, the app subset 0.19 GiB less
+67495b458f15	2026-11-26	skip	-	game: port Xenoblade Chronicles 2 Switch 2 Edition to Mac	another game
+9016bbe526a3	2026-11-26	ported	4437aa1	host/threads: keep wait polls out of clock_wait and include wait target in zero-timeout signature	fixes cfbda8fb's poll signature and keeps polls out of clock_wait
+99ae7c6fc468	2026-11-26	ported	b52341d	gfx/nvn: reject invalid GPU completion times (PR #1759)	a faulted buffer's unwritten end time fed the frame step judge (could hold it at 20 fps)
+b0c7928b898b	2026-11-26	skip	-	host/audio: implement AudioOut flush and port Devil May Cry 3	the game uses AudioRenderer and OutputStream, imports no FlushAudioOutBuffers; the rest is another game
+b680dbb9e925	2026-11-26	skip	-	host/aoc: deduplicate add-on content entries while scanning (PR #1990)	the game has no add-on content (no Resources/aoc, count 0)
+eed6ffc95a0f	2026-11-26	skip	-	gfx/shaders: match bounded int(cond) word-1 indices in first_store and float_add_msl	builds on 48781edc (skipped); 0 of 4,130 compute shaders have the first_store preamble or a bounded store / CAS
+ef0b5be323fe	2026-11-26	ported	36e67da	host/input: read unclaimed wired Xbox 360 (XUSB) pads over USB on macOS (PR #2436)	wired Xbox 360 pads over IOUSBHost, plus the gip_remove use-after-free and GIP length check; untested here

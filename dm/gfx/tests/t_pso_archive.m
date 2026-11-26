@@ -272,6 +272,8 @@ static void mesh_pipelines(void) {
     uint64_t built = g_mtk_built, arch = g_mtk_arch, dev = g_mtk_dev; int pending = g_arch_new, got = 0;
     id<MTLRenderPipelineState> p1 = mtk_build(&k, nil, ms, fs, &err, &got), p2 = mtk_build(&k, os, mt, fs, &err, NULL), p3 = mtk_build(&kz, nil, ms, nil, &err, NULL);
     EXPECT("mesh: pipelines", 1, p1 && p2 && p3);
+    // a mesh pipeline specialized from a base has 0 here and hangs the GPU (shaders.md, Metal 4 specialized mesh pipeline bases hang the GPU)
+    EXPECT("mesh: whole pipeline keeps its mesh grid limit", 1, p1.maxTotalThreadgroupsPerMeshGrid > 0 && p2.maxTotalThreadgroupsPerMeshGrid > 0);
     EXPECT("mesh: built", built + 3, g_mtk_built);
     EXPECT("mesh: not from the archive", 0, got);
     dispatch_sync(arch_harvest_q(), ^{});
@@ -289,6 +291,7 @@ static void mesh_pipelines(void) {
     built = g_mtk_built; pending = g_arch_new;
     id<MTLRenderPipelineState> q1 = mtk_build(&k, nil, ms, fs, &err, &got), q2 = mtk_build(&k, os, mt, fs, &err, NULL), q3 = mtk_build(&kz, nil, ms, nil, &err, NULL);
     EXPECT("mesh again: from the archive", arch + 3, g_mtk_arch);
+    EXPECT("mesh again: archived whole pipeline keeps its mesh grid limit", 1, q1.maxTotalThreadgroupsPerMeshGrid > 0 && q2.maxTotalThreadgroupsPerMeshGrid > 0);
     EXPECT("mesh again: reported as archived", 1, got);
     EXPECT("mesh again: not built", built, g_mtk_built);
     dispatch_sync(arch_harvest_q(), ^{});
@@ -1651,6 +1654,31 @@ int main(int argc, char **argv) { @autoreleasepool {
         EXPECT("constants: that pipeline went through the MTLDevice", legacy0 + 1, g_pb_legacy);
         EXPECT("constants: the vertex function given to it is specialized once", 1, fn_dev(cv) != cv && fn_dev(cv) == fn_dev(cv));
         EXPECT("constants: a function without constants is its own", 1, fn_dev(cd.fragmentFunction) == cd.fragmentFunction);
+        // Metal gives every library of this source the same MTLFunction: an unspecialized note would replace the specialized one other threads build from
+        id<MTLLibrary> bl = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nconstant bool dm_blend_off [[function_constant(217)]];\n"
+            "fragment float4 bfs() { return is_function_constant_defined(dm_blend_off) && dm_blend_off ? float4(1) : float4(0); }\n" options:nil error:&err];
+        id<MTLFunction> raw_bfs = [bl newFunctionWithName:@"bfs"];
+        fn4_note(raw_bfs, bl, @"bfs", nil);
+        EXPECT("constants: no unspecialized note for a function with constants", 1, fn4_of(raw_bfs) == nil);
+        id<MTLFunction> bf = fn_load(bl, @"bfs", &se);
+        EXPECT("constants: fn_load specializes it", 1, bf != nil && [fn4_of(bf) isKindOfClass:MTL4SpecializedFunctionDescriptor.class]);
+        fn4_note(raw_bfs, bl, @"bfs", nil);
+        EXPECT("constants: an unspecialized note leaves the specialized one", 1, [fn4_of(bf) isKindOfClass:MTL4SpecializedFunctionDescriptor.class]);
+        __block _Atomic int bad_race = 0;
+        dispatch_group_t rg = dispatch_group_create();
+        dispatch_queue_t rq = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+        for (int t = 0; t < 4; t++) dispatch_group_async(rg, rq, ^{
+            for (int i = 0; i < 2000; i++) {
+                if (t == 0) {
+                    if (![fn4_of(bf) isKindOfClass:MTL4SpecializedFunctionDescriptor.class]) atomic_fetch_add(&bad_race, 1);
+                } else {
+                    id<MTLFunction> rf = fn_load(bl, @"bfs", NULL);
+                    if (!rf || ![fn4_of(rf) isKindOfClass:MTL4SpecializedFunctionDescriptor.class]) atomic_fetch_add(&bad_race, 1);
+                }
+            }
+        });
+        dispatch_group_wait(rg, DISPATCH_TIME_FOREVER);
+        EXPECT("constants: fn_load on four threads never shows an unspecialized note", 0, atomic_load(&bad_race));
     }
     repeated_archive_miss();
     spec_desc_ownership();

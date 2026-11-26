@@ -165,10 +165,10 @@ class Nup:
         b = Buf(); self.copy(i, b); return bytes(b)
 
 
-def program_id(npdm, where):
-    if npdm[:4] != b'META': raise Error(f'{where}: not an NPDM')
+def program_id(npdm, where):   # the META header is 0x80 bytes; the ACI0 it names follows it, 0x18 bytes at least, within the file
+    if len(npdm) < 0x80 or npdm[:4] != b'META': raise Error(f'{where}: not an NPDM')
     off, size = struct.unpack_from('<II', npdm, 0x70)
-    if npdm[off:off + 4] != b'ACI0' or size < 0x18: raise Error(f'{where}: no ACI0 section')
+    if off < 0x80 or size < 0x18 or off + size > len(npdm) or npdm[off:off + 4] != b'ACI0': raise Error(f'{where}: no ACI0 section')
     return struct.unpack_from('<Q', npdm, off + 0x10)[0]
 
 

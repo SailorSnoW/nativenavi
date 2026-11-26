@@ -252,7 +252,30 @@ static void hid_layouts(void) {
     pad_hid_sticks(&find(nin)->st, s); assert(s[2] == DM_STICK_MAX && s[3] == -DM_STICK_MAX);
     for (TestDev *d in @[steam, other, nin]) hidpad_removed(NULL, kIOReturnSuccess, NULL, ref(d));
     assert(!attached && !g_hidpads && !g_hidpads_gc && !g_hidpads_waiting);
-    puts("t_pad_hid_mac: Xbox axis matching and Nintendo report precedence passed");
+
+    // PDP's Wired Fight Pad Pro for Switch (0e6f:0185) and another PDP pad with the same 14 button usages: only the first takes the Switch wired layout
+    NSMutableArray *pdp_buttons = [NSMutableArray array], *other_buttons = [NSMutableArray array];
+    for (uint32_t u = 1; u <= 14; u++) {
+        [pdp_buttons addObject:elem(0, 0, kHIDPage_Button, u)];
+        [other_buttons addObject:elem(0, 1, kHIDPage_Button, u)];
+    }
+    TestDev *pdp = virtual_pad(@"Wired Fight Pad Pro for Nintendo Switch", 0x0e6f, 116), *pdp_other = virtual_pad(@"PDP pad", 0x0e6f, 117);
+    pdp.pid = 0x0185; pdp_other.pid = 0x02a8; pdp.virtualDevice = pdp_other.virtualDevice = nil;
+    pdp.elements = [@[elem(0, 0, 1, 0x30), elem(0, 0, 1, 0x31), elem(0, 0, 1, 0x32), elem(0, 0, 1, 0x35), elem(0, 0, 1, 0x39)]
+        arrayByAddingObjectsFromArray:pdp_buttons];
+    pdp_other.elements = [@[x, y, z, rz, elem(0, 1, 1, 0x39)] arrayByAddingObjectsFromArray:other_buttons];
+    for (TestDev *d in @[pdp, pdp_other]) hidpad_found(NULL, kIOReturnSuccess, NULL, ref(d));
+    wait_ms(2200);
+    push_value(pdp, pdp_buttons[2], 1); assert(buttons == DM_BTN_A);
+    push_value(pdp, pdp_buttons[2], 0); assert(buttons == 0);
+    push_value(pdp, pdp_buttons[5], 1); assert(buttons == DM_BTN_R);
+    push_value(pdp, pdp_buttons[5], 0); assert(buttons == 0);
+    push_value(pdp_other, other_buttons[2], 1); assert(buttons == 0);   // the default map has no usage 3
+    push_value(pdp_other, other_buttons[0], 1); assert(buttons == DM_BTN_B);
+    push_value(pdp_other, other_buttons[0], 0); assert(buttons == 0);
+    for (TestDev *d in @[pdp, pdp_other]) hidpad_removed(NULL, kIOReturnSuccess, NULL, ref(d));
+    assert(!attached && !g_hidpads && !g_hidpads_gc && !g_hidpads_waiting);
+    puts("t_pad_hid_mac: Xbox axis matching, Nintendo report precedence and the Switch wired layout passed");
 }
 
 int main(void) { @autoreleasepool {

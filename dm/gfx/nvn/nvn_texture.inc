@@ -598,8 +598,8 @@ static void up_flush(void) {
             own_epoch();   // on a cache hit tex_mtl is not passed through
             MLOG("%supload command buffer dropped: the %lu textures of this batch are marked unwritten and re-uploaded on next use (%d awaiting re-upload)", fake_lost ? "DM_TEST_UP_LOST: " : "", (unsigned long)dsts.count, n);
         }
-        double d = f.GPUEndTime - f.GPUStartTime;
-        if (d > 0) atomic_fetch_add(&g_upload_gpu_ns, (uint64_t)(d * 1e9));
+        double g0 = f.GPUStartTime, g1 = f.GPUEndTime;
+        if (gpu_time_valid(g0, g1)) atomic_fetch_add(&g_upload_gpu_ns, (uint64_t)((g1 - g0) * 1e9));
         @autoreleasepool {
             for (id<MTLResource> obj in staging) res_remove(obj);
             [staging removeAllObjects];

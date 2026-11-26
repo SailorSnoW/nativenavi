@@ -393,6 +393,32 @@ int main(int argc, char **argv) { @autoreleasepool {
         }
         res_remove(sw);
     }
+    {   // Output alpha is 1 (255) for a swapchain of alpha 0, as a non-opaque layer needs: bilinear and tent paths, classic and Metal 4
+        g_present_shape[0]=g_present_shape[1]=1;   // square fixtures: the picture fills the output, no bars
+        MTLTextureDescriptor *sd=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:16 height:16 mipmapped:NO];
+        sd.storageMode=MTLStorageModeShared; sd.usage=MTLTextureUsageShaderRead;
+        id<MTLTexture> zsrc=[g_dev newTextureWithDescriptor:sd];
+        uint8_t sp[16*16*4];
+        for(int i=0;i<16*16;i++){sp[4*i+0]=200;sp[4*i+1]=100;sp[4*i+2]=50;sp[4*i+3]=0;}
+        [zsrc replaceRegion:MTLRegionMake2D(0,0,16,16) mipmapLevel:0 withBytes:sp bytesPerRow:16*4];
+        res_add(zsrc); res_commit();
+        const int sizes[2]={16,8};   // 16: bilinear (step 1.0), 8: minified tent (step 2.0)
+        for(int k=0;k<2;k++) for(int m4=0;m4<2;m4++) {
+            int ow=sizes[k];
+            MTLTextureDescriptor *od=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:ow height:ow mipmapped:NO];
+            od.storageMode=MTLStorageModeShared; od.usage=MTLTextureUsageRenderTarget;
+            id<MTLTexture> ot=[g_dev newTextureWithDescriptor:od]; res_add(ot); res_commit();
+            if(m4) EXPECT(k?"Metal 4 minified zero-alpha present":"Metal 4 bilinear zero-alpha present",PRESENT_STANDARD,present_offscreen_wait(zsrc,NULL,ot));
+            else { id<MTLCommandBuffer> cb=[g_q commandBuffer]; EXPECT(k?"classic minified zero-alpha present":"classic bilinear zero-alpha present",1,present_encode(cb,zsrc,ot,NULL)); [cb commit]; [cb waitUntilCompleted]; }
+            uint8_t o[16*16*4]; [ot getBytes:o bytesPerRow:ow*4 fromRegion:MTLRegionMake2D(0,0,ow,ow) mipmapLevel:0];
+            int bad=0;
+            for(int i=0;i<ow*ow;i++) bad += abs((int)o[4*i+0]-200)>1 || abs((int)o[4*i+1]-100)>1 || abs((int)o[4*i+2]-50)>1 || o[4*i+3]!=255;
+            EXPECT(k?(m4?"Metal 4 minified zero-alpha output is opaque":"classic minified zero-alpha output is opaque"):(m4?"Metal 4 bilinear zero-alpha output is opaque":"classic bilinear zero-alpha output is opaque"),0,bad);
+            res_remove(ot);
+        }
+        g_present_shape[0]=1920;g_present_shape[1]=1080;
+        res_remove(zsrc);
+    }
 #endif
     h_nvnQueueFinalize(&queue);
     printf("== %d checks, %d failed ==\n",cases,failed);return failed!=0;

@@ -3,7 +3,7 @@ integer outputs bit for bit and float outputs through their normalized target's 
 outputs get none. With --fixture <dir>, writes the replay test's shaders (t_logic.m): the base and side libraries and their generated reflection"""
 import ast, collections, json, os, pathlib, re, shutil, struct, subprocess, sys, tempfile, threading, types, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'tools'))
-import dmsh_abi, dmsh_atomic, dmsh_chain, dmsh_entry, dmsh_fetch, dmsh_logic, dmsh_reflect, dmsh_rewrite, dmsh_side, dmsh_wide
+import dmsh_abi, dmsh_atomic, dmsh_chain, dmsh_entry, dmsh_fetch, dmsh_logic, dmsh_metalwa, dmsh_reflect, dmsh_rewrite, dmsh_side, dmsh_wide
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # its sibling test module, also when the file runs alone (python -m unittest <file>, as CI does)
 from test_dmsh_alpha import compile_lib   # noqa: E402
 

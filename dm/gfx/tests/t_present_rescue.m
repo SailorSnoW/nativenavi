@@ -37,6 +37,7 @@
 static uint64_t test_now;
 int test_focus = 1;
 int test_fullscreen;
+int test_covered;
 int test_variable_refresh;
 int test_game_fps = 60;
 int test_screen_hz;   // the screen's maximumFramesPerSecond (front_screen_max_fps); 0 = not known, as the graphics layer's weak default
@@ -52,7 +53,7 @@ uint64_t now_ns(void) { return test_now; }
 static int checks, failed;
 #define CHECK(name, ok) do { int pass = !!(ok); checks++; failed += !pass; printf("%s: %s\n", name, pass ? "PASS" : "FAIL"); } while (0)
 static void reset(void) {
-    test_now = 10000000000ull; test_focus = 1; test_focus_since = 0;
+    test_now = 10000000000ull; test_focus = 1; test_focus_since = 0; test_covered = 0; atomic_store(&g_covered, 0);
     g_dm_present_link = 1; g_rescue_mode = 0; g_rescue_back_ns = 3000000000ull; g_rescue_n = 0;
     g_link_probe_pending = 0; g_link_probe_at = 0; g_link_probe_fail = 0;
     atomic_store(&g_test_link_hold, 0);
@@ -111,6 +112,73 @@ static void lifecycle(void) {
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
     CHECK("rescue invalidates the link before releasing the layer", link.invalidated && !g_link && !g_link_owns_layer);
     g_link_started = 0;
+}
+static void covered(void) {   // a covered window: the host's clock paces (mode 0) until it is visible, then the requested link again; the link's silence meanwhile is no stall
+    reset(); SilentDisplayLink *link = [SilentDisplayLink new];
+    g_link = link; g_link_started = 1; g_link_rl = CFRunLoopGetCurrent();
+    link_sync(); CHECK("a visible window keeps the display link", mtl_link_active() && g_link_mode == 1);
+    test_covered = 1; link_sync();
+    CHECK("a covered window stops display-link pacing at once", !mtl_link_active() && !mtl_link_wait_tick(1, 1000));
+    CHECK("covered keeps the requested mode and is no rescue", g_dm_present_link == 1 && !g_rescue_mode && g_link_mode == 0);
+    // a callback while covered, before the invalidation runs, leaves the stall clock and the ticks alone
+    g_stall_t0 = g_link_tick_ns = test_now - 1000000000ull;
+    uint64_t tick0 = g_link_tick_n, last0 = g_link_tick_ns;
+    RescueUpdate *upd = [RescueUpdate new]; upd.targetTimestamp = upd.targetPresentationTimestamp = CACurrentMediaTime();
+    [[NvMetalDisplayLinkDelegate new] metalDisplayLink:(id)link needsUpdate:(id)upd];
+    CHECK("a callback while covered leaves watchdog and ticks alone", g_stall_t0 && g_link_tick_ns == last0 && g_link_tick_n == tick0);
+    wait_frame();
+    CHECK("a covered window's silent link does not trigger rescue", !g_rescue_mode);
+    // DM_PRESENT_SCREEN: 4 presents not yet on screen would make the acquire wait two periods
+    g_pq_in = 5; atomic_store(&g_pres_seen, 0);
+    uint64_t sdw0 = atomic_load(&g_sdw_n);
+    CHECK("covered window skips DM_PRESENT_SCREEN's wait", mtl_present_screen_wait(1.0 / 60) == 0 && atomic_load(&g_sdw_n) == sdw0);
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
+    CHECK("covered invalidates the link and releases the layer to the present thread", link.invalidated && !g_link && !g_link_owns_layer);
+    g_link_started = 0;
+    for (int frame = 0; frame < 3; frame++) link_sync();
+    CHECK("no link while the window stays covered", g_link_mode == 0 && !g_link_started && !mtl_link_active());
+    g_stall_t0 = test_now - 2000000000ull; g_link_tick_ns = test_now - 2000000000ull; test_now += 1000;
+    test_covered = 0; link_sync();
+    CHECK("visible again wants the requested link", g_link_mode == 1 && g_dm_present_link == 1);
+    CHECK("visible again starts a fresh stall clock", !g_stall_t0 && g_link_tick_ns == test_now);
+    g_link = [SilentDisplayLink new]; g_link_owns_layer = 1;   // as link_main does once the new link exists
+    CHECK("the new link paces again", mtl_link_active());
+    g_link = nil; g_link_started = 0;
+
+    // covered before link_sync samples front_window_covered: no probation failure or rescue either
+    reset(); g_link = [SilentDisplayLink new]; g_link_started = 1; g_link_rl = CFRunLoopGetCurrent();
+    link_sync();
+    g_link_probe_at = test_now - LINK_PROBE_NS;
+    g_stall_t0 = g_link_tick_ns = test_now - 500000000ull;
+    test_covered = 1; wait_frame();
+    CHECK("covering before link_sync does not trip probation or rescue", !g_rescue_mode && g_link_probe_fail == 0);
+    link_sync();
+    CHECK("covering clears active probation", !g_link_probe_pending && !g_link_probe_at);
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
+    g_link_started = 0; test_covered = 0; link_sync();
+
+    // the timed retry after a rescue waits while covered, and goes on probation once visible
+    reset(); g_link = [SilentDisplayLink new]; g_link_started = 1; g_link_rl = CFRunLoopGetCurrent();
+    link_sync(); wait_frame(); link_sync();
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false); g_link_started = 0;
+    CHECK("rescue entered before cover", g_rescue_mode == 1);
+    test_covered = 1; test_now = g_rescue_back_at + 1000; link_sync();
+    CHECK("timed rescue retry waits while the window is covered", g_rescue_mode == 1 && !g_link_probe_pending);
+    test_covered = 0; link_sync();
+    CHECK("uncovering after rescue deadline ends rescue and queues probation", !g_rescue_mode && g_link_probe_pending && g_link_mode == 1);
+
+    // covered at startup (the link published after the last enqueue, applied still 0): the link is still retired
+    reset(); g_link = nil; g_link_started = 0; g_link_owns_layer = 0; g_dm_present_link = 0; link_sync();
+    g_dm_present_link = 1; g_link_started = 1; g_link_owns_layer = 1; g_link_rl = CFRunLoopGetCurrent();
+    test_covered = 1; link_sync();   // applied is 0, the link not published yet
+    link = [SilentDisplayLink new]; g_link = link;
+    link_sync();
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
+    CHECK("covered during startup still invalidates a newly published link", link.invalidated && !g_link && !g_link_owns_layer);
+    g_link_started = 0; test_covered = 0; link_sync();
+
+    reset(); g_dm_present_link = 0; test_covered = 1; link_sync(); test_covered = 0; link_sync();
+    CHECK("DM_PRESENT_LINK=0 stays without the link either way", !mtl_link_active() && !g_link_started);
 }
 static void startup_rescue(void) {
     reset(); g_link_started = 1; g_link_rl = CFRunLoopGetCurrent();
@@ -348,7 +416,7 @@ static void metal_lifecycle(void) {
 int main(int argc, char **argv) { @autoreleasepool {
     alarm(10); setbuf(stdout, NULL);
     if (argc > 2 || (argc == 2 && strcmp(argv[1], "--metal"))) return 2;
-    thresholds(); backoff(); settings(); startup_rescue(); lifecycle(); latency(); thirty(); vrr120(); settling(); probation();
+    thresholds(); backoff(); settings(); startup_rescue(); lifecycle(); covered(); latency(); thirty(); vrr120(); settling(); probation();
     if (argc == 2) metal_lifecycle();
     printf("present rescue: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }
