@@ -67,7 +67,7 @@ typedef struct thr {
     uint64_t nspin, nspin_seen, spin_site; const char *spin_mod;   // spin wait passes (those that yield count in nyield too)
     uint64_t srun_svc, srun_t0, spin_ret;
     uint64_t cpu_seen_us;                     // µs
-    uint64_t yrun_svc, yrun_t0, yrun_sig, yrun_sig2, poll_ret;   // a run of yields lasts while no other SVC comes between and x19-x28 match one of the last two (thr_yield)
+    uint64_t yrun_svc, yrun_yield, yrun_t0, yrun_sig, yrun_sig2, poll_ret;   // a run of steps lasts while no other SVC comes between and the signature matches one of the last two (thr_yield); yrun_yield: nsvc + 1 at the last yield
     uint64_t yrun_clk;                        // a pass that read the clock since makes the yield a clock wait
     uint64_t cw_sig, cw_run, cw_last, cw_end, cw_per, cw_per2, cw_wake, ncwpred, ncwpred_seen;   // the clock wait followed (clock_wait), by its x19-x28
     int cw_ok, cw_pred, cw_after, cw_trip;
@@ -938,9 +938,10 @@ static void yield_for(thr_t *me, uint64_t run_ns, int clock) {
 }
 // A run of yields is a wait only while the loop makes no progress (x19-x28 unchanged, or back to the yield before last); a yield that made
 // progress returns at once (docs/reference/threads.md#yields-that-make-progress-return-at-once-thr_yield). A pass that read the clock makes a clock wait.
+static inline uint64_t fnv_mix(uint64_t sig, uint64_t v) { return (sig ^ v) * 0x100000001b3ull; }
 static uint64_t yield_sig(const uint64_t *regs) {
     uint64_t sig = 0xcbf29ce484222325ull;
-    for (int i = 19; i <= 28; i++) sig = (sig ^ regs[i]) * 0x100000001b3ull;
+    for (int i = 19; i <= 28; i++) sig = fnv_mix(sig, regs[i]);
     return sig;
 }
 static void clock_wait(thr_t *me, uint64_t sig, uint64_t now, int predict);
@@ -949,10 +950,11 @@ static void thr_yield(thr_t *me, const uint64_t *regs) {
     uint64_t y0 = now_ns(), sig = yield_sig(regs);
     int same = me->yrun_svc + 1 == me->nsvc;
     int moved = same && me->yrun_sig != sig && me->yrun_sig2 != sig;
-    int clock = g_yield_clock && same && !moved && dm_clock_reads != me->yrun_clk;
+    int clock = g_yield_clock && me->yrun_yield && me->yrun_yield == me->nsvc && !moved && dm_clock_reads != me->yrun_clk;   // only yields in a row: a wait or sleep between leaves yrun_clk stale
     me->nyield++;
     if (!same || moved) me->yrun_t0 = y0;
     me->yrun_svc = me->nsvc;
+    me->yrun_yield = me->nsvc + 1;
     me->yrun_sig2 = me->yrun_sig;
     me->yrun_sig = sig;
     me->yrun_clk = dm_clock_reads;
@@ -1033,14 +1035,15 @@ static int64_t poll_wait_begin(int64_t ns) {
     me->nyield++; me->nbackoff++;
     return (int64_t)bo;
 }
-// A timed-out wait with a timeout of 0 is a step of the run of yields by their rules (x19-x28 included: 0 is also the SDK's try form); past the back-off's
-// start the thread sleeps after it, never as a waiter, and still answers TimedOut as Horizon does (docs/reference/threads.md#zero-timeout-waits-are-polls).
-static void poll_wait_end(int64_t ns, int64_t r, const uint64_t *regs) {
+// A timed-out wait with a timeout of 0 is a step of the run of yields by their rules; its signature mixes x19-x28 (0 is also the SDK's try form) with
+// target_sig, the wait's target and lr, since the SDK's non-tail-call wrappers overwrite x19-x21 with constants. Past the back-off's start the thread
+// sleeps after it, never as a waiter, and still answers TimedOut as Horizon does (docs/reference/threads.md#zero-timeout-waits-are-polls).
+static void poll_wait_end(int64_t ns, int64_t r, const uint64_t *regs, uint64_t target_sig) {
     if (ns < 0 || ns >= 20000) return;
     thr_t *me = pthread_getspecific(g_keythr); if (!me) return;
     if (r != R_TIMEOUT) { me->yrun_svc = 0; return; }
     if (ns) { me->poll_ret = now_ns(); return; }
-    uint64_t now = now_ns(), sig = yield_sig(regs);
+    uint64_t now = now_ns(), sig = fnv_mix(yield_sig(regs), target_sig);
     int same = me->yrun_svc && me->yrun_svc + 1 == me->nsvc && now >= me->poll_ret && now - me->poll_ret <= SPIN_GAP_NS;
     if (!same || (me->yrun_sig != sig && me->yrun_sig2 != sig)) me->yrun_t0 = now;
     me->yrun_svc = me->nsvc; me->yrun_sig2 = me->yrun_sig; me->yrun_sig = sig;
@@ -1301,7 +1304,8 @@ static int svc_thread_impl(int num, uint64_t *regs) {
 #endif
         int64_t r = block(t, 2, poll_wait_begin((int64_t)regs[3]));   // timeout: the lock is not re-acquired (user mode takes it)
         g_unlock();
-        poll_wait_end((int64_t)regs[3], r, regs);
+        uint64_t wsig = !regs[3] && r == R_TIMEOUT ? fnv_mix(fnv_mix(fnv_mix(0x1c, addr), key), regs[30]) : 0;
+        poll_wait_end((int64_t)regs[3], r, regs, wsig);
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x1D: {  // SignalProcessWideKey(x0 key, w1 count, <= 0 all)
@@ -1324,7 +1328,10 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         if (!ok) r = R_BAD_STATE;
         else { t->waddr = addr; r = block(t, 3, poll_wait_begin((int64_t)regs[3])); }
         g_unlock();
-        if (ok) poll_wait_end((int64_t)regs[3], r, regs);
+        if (ok) {
+            uint64_t wsig = !regs[3] && r == R_TIMEOUT ? fnv_mix(fnv_mix(fnv_mix(fnv_mix(0x34, addr), (uint64_t)type), regs[2]), regs[30]) : 0;
+            poll_wait_end((int64_t)regs[3], r, regs, wsig);
+        }
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x35: {  // SignalToAddress(x0 address, w1 type, w2 value, w3 count): 0 wake, 1 increment if equal and wake, 2 modify by waiter count if equal and wake
@@ -1392,7 +1399,12 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         }
         for (int i = 0; i < held; i++) sync_close(objects[i]);
         g_unlock();
-        poll_wait_end(ns, r, regs);
+        uint64_t wsig = 0;
+        if (!ns && r == R_TIMEOUT) {
+            wsig = fnv_mix(fnv_mix(0x18, (uint64_t)n), regs[30]);
+            for (int i = 0; i < n; i++) wsig = fnv_mix(wsig, hs[i]);
+        }
+        poll_wait_end(ns, r, regs, wsig);
         regs[0] = (uint64_t)r; regs[1] = idx >= 0 ? (uint64_t)idx : 0; return 1;
     }
     case 0x19: {  // CancelSynchronization(w0 thread)
