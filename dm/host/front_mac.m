@@ -639,8 +639,8 @@ static void hidpad_detach(hid_pad *d) {   // d is already off g_hidpads
     dm_pad_players(pad_slot_mask(&g_slots));
     cp_poll();
 }
-// Xbox One pads over USB with no macOS driver (pad_gip_mac.h): a player from its connection, as a GameController controller, or at its first
-// press with DM_PAD_PRESS_TO_JOIN; its Xbox button is Home (hq_buttons)
+// Xbox One (GIP) and Xbox 360 (XUSB) pads over USB with no macOS driver (pad_gip_mac.h): a player from its connection, as a GameController controller,
+// or at its first press with DM_PAD_PRESS_TO_JOIN; an Xbox One pad's Xbox button is Home (hq_buttons)
 static void gippad_read(gip_pad *d) {
     if (!g_input_on) return;
     hq_poll();
