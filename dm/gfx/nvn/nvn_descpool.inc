@@ -549,7 +549,7 @@ static void *tex_by_id_ref(int tid) {
     return rp->view;
 }
 // A declared type other than the descriptor's: a compatible view. Maxwell's instruction carries its dimension; Metal reads a mismatched type undefined. 2D in a cube or 3D slot
-// reads zero; any other mismatch is reported once. Caller holds g_rmu.
+// and 3D in a 2D, 2D array or cube slot read zero; any other mismatch is reported once. Caller holds g_rmu.
 #define DMY_NT 10
 static id<MTLTexture> dummy_tex(int dtt, int dpf); static uint64_t g_dummy_tex_rid[DMY_NT][4];
 // 0 when no view bridges the types. 2D, 2D array, cube and cube array are all layers to Maxwell; the declared type only says how many. A Metal cube's arrayLength is 1,
@@ -575,6 +575,11 @@ static id<MTLTexture> tex_fit(int tid, id<MTLTexture> t, MTLTextureType want, ui
     if (!ns && want == MTLTextureType3D && (have == MTLTextureType2D || have == MTLTextureType2DArray)) {
         static int noted; if (!noted++) MLOG("3D binding fallback: texture ID %d is %s %lux%lu (Metal format %lu); zero 3D texture bound", tid, have == MTLTextureType2D ? "2D" : "a 2D array",
                                              (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.pixelFormat);
+        id<MTLTexture> z = dummy_tex((int)want, NVN_DPF_FLOAT); *rid = g_dummy_tex_rid[want % DMY_NT][NVN_DPF_FLOAT]; return z; }
+    // and a 3D texture in a 2D, 2D array or cube slot: the zero texture of the slot's type
+    if (!ns && have == MTLTextureType3D && (want == MTLTextureType2D || want == MTLTextureType2DArray || want == MTLTextureTypeCube || want == MTLTextureTypeCubeArray)) {
+        static int noted; if (!noted++) MLOG("3D texture binding fallback: texture ID %d is a 3D texture %lux%lux%lu (Metal format %lu) in a slot of Metal type %lu; zero texture of that type bound", tid,
+                                             (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth, (unsigned long)t.pixelFormat, (unsigned long)want);
         id<MTLTexture> z = dummy_tex((int)want, NVN_DPF_FLOAT); *rid = g_dummy_tex_rid[want % DMY_NT][NVN_DPF_FLOAT]; return z; }
     if (!ns || tid <= 0 || tid >= g_ntreg) return nil;
     treg_t *r = &g_treg[tid];

@@ -1,5 +1,6 @@
 // A runtime branch chooses one of two cube inputs. An unused input may retain a 2D descriptor from an earlier pass: production tex_fit must bind a valid zero cube without
-// diagnosing the binding itself as a rendering error. The same for a 3D input holding a 2D texture or 2D array: the zero 3D texture.
+// diagnosing the binding itself as a rendering error. The same for a 3D input holding a 2D texture or 2D array, and for a 2D, 2D array or cube input holding a 3D texture:
+// the zero texture of the input's type.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -46,7 +47,9 @@ int main(void) { @autoreleasepool {
     NSString *source = @"#include <metal_stdlib>\nusing namespace metal;\n"
         "kernel void cube(texturecube<float> a [[texture(0)]], texturecube<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float3(0,0,1),level(0)); else out[0] = a.sample(s,float3(0,0,1),level(0)); }\n"
         "kernel void cubes(texturecube<float> a [[texture(0)]], texturecube_array<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float3(0,0,1),0,level(0)); else out[0] = a.sample(s,float3(0,0,1),level(0)); }\n"
-        "kernel void volume(texture3d<float> a [[texture(0)]], texture3d<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float3(0.5),level(0)); else out[0] = a.sample(s,float3(0.5),level(0)); }\n";
+        "kernel void volume(texture3d<float> a [[texture(0)]], texture3d<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float3(0.5),level(0)); else out[0] = a.sample(s,float3(0.5),level(0)); }\n"
+        "kernel void layers(texture2d_array<float> a [[texture(0)]], texture2d_array<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float2(0.5),0,level(0)); else out[0] = a.sample(s,float2(0.5),0,level(0)); }\n"
+        "kernel void flat(texture2d<float> a [[texture(0)]], texture2d<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float2(0.5),level(0)); else out[0] = a.sample(s,float2(0.5),level(0)); }\n";
     id<MTLLibrary> library = [g_dev newLibraryWithSource:source options:nil error:&error];
     if (!library) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 2; }
     id<MTLTexture> primary = texture(MTLTextureTypeCube, 1);
@@ -67,5 +70,14 @@ int main(void) { @autoreleasepool {
     if (!pipeline) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 2; }
     const NSUInteger layer_counts[] = {0, 1, 5};
     for (int i = 0; i < 3; i++) run_case(texture(layer_counts[i] ? MTLTextureType2DArray : MTLTextureType2D, layer_counts[i] ?: 1), MTLTextureType3D, volume, pipeline);
+    const MTLTextureType slots[] = {MTLTextureType2DArray, MTLTextureType2D, MTLTextureTypeCube};
+    NSString *const kernels[] = {@"layers", @"flat", @"cube"};
+    for (int i = 0; i < 3; i++) {
+        id<MTLTexture> real = slots[i] == MTLTextureTypeCube ? primary : texture(slots[i], 1);
+        if (real != primary) [real replaceRegion:MTLRegionMake3D(0,0,0,1,1,1) mipmapLevel:0 slice:0 withBytes:blue bytesPerRow:4 bytesPerImage:4];
+        id<MTLComputePipelineState> p = [g_dev newComputePipelineStateWithFunction:[library newFunctionWithName:kernels[i]] error:&error];
+        if (!p) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 2; }
+        run_case(texture(MTLTextureType3D, 1), slots[i], real, p);
+    }
     printf("cube and 3D placeholders: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }
