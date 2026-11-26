@@ -10,7 +10,7 @@
 
 #define PAD_HID_DEFAULT_VENDOR 0x2DC8   // 8BitDo, whose numbering the default map is
 enum { PH_X, PH_Y, PH_Z, PH_RX, PH_RY, PH_RZ, PH_BRAKE, PH_ACCEL, PH_AXES };
-enum pad_hid_layout { PAD_HID_DEFAULT, PAD_HID_NINTENDO, PAD_HID_X360 };
+enum pad_hid_layout { PAD_HID_DEFAULT, PAD_HID_NINTENDO, PAD_HID_X360, PAD_HID_SWITCH_WIRED };
 typedef struct {
     uint32_t buttons;          // bit u - 1: usage u held
     int hat;                   // -1 centered, 0 up, clockwise to 7 up-left
@@ -40,12 +40,15 @@ static const char *const pad_hid_names[16] = {"A", "B", "X", "Y", "LS", "RS", "L
 static const uint8_t pad_hid_nin_map[16] = {2, 1, 4, 3, 11, 12, 5, 6, 7, 8, 10, 9};
 // Steam Link's virtual Xbox 360 pad's usages as macOS delivers them (measured, not the descriptor's order); the triggers are axes
 static const uint8_t pad_hid_x360_map[16] = {2, 1, 4, 3, 7, 8, 5, 6, 0, 0, 9, 10, 14, 12, 15, 13};
+// Switch wired HID usages: 1 Y, 2 B, 3 A, 4 X, 5 / 6 L / R, 7 / 8 ZL / ZR, 9 minus, 10 plus, 11 / 12 stick clicks, 13 Home, 14 Capture (report 0x3F's start 1 B, 2 A)
+static const uint8_t pad_hid_switch_wired_map[16] = {3, 2, 4, 1, 11, 12, 5, 6, 7, 8, 10, 9};
 
 // a virtual pad can reuse the Xbox ID with Brake / Accelerator usages
 static enum pad_hid_layout pad_hid_layout_for(int nin, int vid, int pid, const uint8_t has[PH_AXES]) {
     if (nin & PAD_NIN_SIMPLE) return PAD_HID_NINTENDO;
     if (vid == 0x045e && pid == 0x028e && has[PH_X] && has[PH_Y] && has[PH_RX] && has[PH_RY] &&
         has[PH_Z] && has[PH_RZ] && !has[PH_BRAKE] && !has[PH_ACCEL]) return PAD_HID_X360;
+    if (vid == 0x0e6f && pid == 0x0185) return PAD_HID_SWITCH_WIRED;   // PDP Wired Fight Pad Pro for Switch, by its ID: PDP's other pads number theirs otherwise
     return PAD_HID_DEFAULT;
 }
 
@@ -55,10 +58,17 @@ static inline int pad_dupes_want(int n, int listed, int read, int due) { return 
 // Report 0x3F usages: 1 B, 2 A, 3 Y, 4 X, 5 / 6 L / R, 7 / 8 ZL / ZR, 9 minus, 10 plus, 11 / 12 stick clicks, 13 Home, 14 Capture
 static void pad_hid_init(pad_hid *h, const char *map, enum pad_hid_layout layout) {
     static const uint8_t def[16] = {2, 1, 5, 4, 14, 15, 7, 8, 9, 10, 12, 11};
+    const uint8_t *button_map = def;
+    switch (layout) {
+    case PAD_HID_NINTENDO: button_map = pad_hid_nin_map; break;
+    case PAD_HID_X360: button_map = pad_hid_x360_map; break;
+    case PAD_HID_SWITCH_WIRED: button_map = pad_hid_switch_wired_map; break;
+    case PAD_HID_DEFAULT: break;
+    }
     memset(h, 0, sizeof *h);
     h->hat = -1;
     h->layout = layout;
-    memcpy(h->map, layout == PAD_HID_NINTENDO ? pad_hid_nin_map : layout == PAD_HID_X360 ? pad_hid_x360_map : def, sizeof h->map);
+    memcpy(h->map, button_map, sizeof h->map);
     for (int a = 0; a < PH_AXES; a++) h->axis[a] = a >= PH_BRAKE ? -1 : 0;
     for (const char *s = map; s && *s; s = strchr(s, ',') ? strchr(s, ',') + 1 : "") {
         const char *eq = strchr(s, '='), *end = strchr(s, ',');

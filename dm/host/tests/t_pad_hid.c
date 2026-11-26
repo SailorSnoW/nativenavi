@@ -1,4 +1,4 @@
-// Raw HID gamepads (pad_hid.h): the default map and DM_HID_MAP, the Xbox 360 layout of virtual pads, report 0x3F's map, raw sticks and Nintendo's descriptor, hat directions, axis scaling, the stick dead zone and analog triggers
+// Raw HID gamepads (pad_hid.h): the default map and DM_HID_MAP, the Xbox 360 layout of virtual pads, the Switch wired layout, report 0x3F's map, raw sticks and Nintendo's descriptor, hat directions, axis scaling, the stick dead zone and analog triggers
 #include <stdio.h>
 #include "../pad_hid.h"
 
@@ -94,6 +94,16 @@ int main(void) {
     CHECK(s[2] == -DM_STICK_MAX && abs(s[3]) < 2);                                          // the right stick from Rx / Ry
     CHECK(pad_hid_buttons(&h) == DM_BTN_ZL);                                                // left trigger down, right one up
     pad_hid_init(&h, "A=1,B=2", PAD_HID_X360); h.buttons = 1u << 0; CHECK(pad_hid_buttons(&h) == DM_BTN_A);   // DM_HID_MAP still replaces entries
+    // PDP's Wired Fight Pad Pro for Switch (0e6f:0185, GitHub issue #3290): the Switch wired layout by its full ID; PDP's other pads and report 0x3F keep theirs
+    uint8_t wired[PH_AXES] = {[PH_X] = 1, [PH_Y] = 1, [PH_Z] = 1, [PH_RZ] = 1};
+    CHECK(pad_hid_layout_for(0, 0x0e6f, 0x0185, wired) == PAD_HID_SWITCH_WIRED);
+    CHECK(pad_hid_layout_for(0, 0x0e6f, 0x02a8, wired) == PAD_HID_DEFAULT);
+    CHECK(pad_hid_layout_for(0, 0x2dc8, 0x0185, wired) == PAD_HID_DEFAULT);
+    CHECK(pad_hid_layout_for(PAD_NIN_SIMPLE, 0x0e6f, 0x0185, wired) == PAD_HID_NINTENDO);
+    pad_hid_init(&h, NULL, pad_hid_layout_for(0, 0x0e6f, 0x0185, wired));
+    { static const uint64_t want[] = {DM_BTN_Y, DM_BTN_B, DM_BTN_A, DM_BTN_X, DM_BTN_L, DM_BTN_R, DM_BTN_ZL, DM_BTN_ZR, DM_BTN_MINUS, DM_BTN_PLUS, DM_BTN_LS, DM_BTN_RS, 0, 0};
+      for (unsigned i = 0; i < sizeof want / sizeof *want; i++) { h.buttons = 1u << i; CHECK(pad_hid_buttons(&h) == want[i]); } }
+    pad_hid_init(&h, "A=1,Y=3", PAD_HID_SWITCH_WIRED); h.buttons = 1u << 0; CHECK(pad_hid_buttons(&h) == DM_BTN_A);   // DM_HID_MAP still replaces entries
     // identical pads: a model is read here only with two or more pads and more than GameController lists, after the wait, and stops at once
     CHECK(pad_dupes_want(1, 0, 0, 1) == 0); CHECK(pad_dupes_want(2, 2, 1, 0) == 0); CHECK(pad_dupes_want(3, 3, 0, 1) == 0);
     CHECK(pad_dupes_want(2, 1, 0, 0) == -1); CHECK(pad_dupes_want(2, 1, 0, 1) == 1); CHECK(pad_dupes_want(2, 0, 0, 1) == 1);
