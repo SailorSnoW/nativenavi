@@ -28,6 +28,8 @@ Never commit or attach game files or anything extracted from the game: RomFS, co
 
 ## Graphical front ends
 
-An app that packs the game or starts it (a build window, a library) is a separate project, not a part of this repository. Such an app needs no changes here to work: the packing script reports its stages as JSON lines (`--progress json`), a built Mac app carries the list of the game's settings (`dm/launcher.json`, from `dm/games/settings.tsv`), and the app takes those settings as environment switches or as saved choices in its preferences, which every start reads ([Front ends](docs/frontends.md)).
+This repository has one app that packs the game: [NativeNavi](docs/gui.md), in `dm/gui`, packed by `scripts/build_gui.py`. It drives the packing script through the interface in [Front ends](docs/frontends.md) and nothing else, as any other front end would.
 
-The settings window inside the Mac app is part of this repository ([Settings](docs/settings.md)): it draws the same list and keeps the same saved choices as any front end.
+Another app that packs the game or starts it (a library, a launcher) is a project of its own and needs no changes here to work: the packing script reports its stages as JSON lines (`--progress json`), a built Mac app carries the list of the game's settings (`dm/launcher.json`, from `dm/games/settings.tsv`), and the app takes those settings as environment switches or as saved choices in its preferences, which every start reads.
+
+The settings window inside the game's Mac app is part of this repository too ([Settings](docs/settings.md)): it draws the same list and keeps the same saved choices as any front end.
