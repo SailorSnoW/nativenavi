@@ -14,9 +14,19 @@ import romfs, shader_lib   # metal-tt alone needs files of its own (real_librari
 import dmsh_abi as abi, dmsh_side
 import vol_space
 
-# The constants the host's prebuild sets (nvn_mtl.m pre_fn): dm_border_off true (almost no draw binds a border twin); dm_blend_off false, so one pulling
-# base serves draws of both blend_live values as a hybrid stand-in
-HOST_CONSTANTS = {'dm_border_off': (abi.BORDER_FC, True), 'dm_blend_off': (abi.BLEND_OFF_FC, False)}
+# The constants the host sets (nvn_mtl.m pre_fn, fn_spec): dm_border_off true (almost no draw binds a border twin); dm_blend_off false, so one pulling
+# base serves draws of both blend_live values as a hybrid stand-in; dm_mwa3_fc by the archive's macOS, as the host's mwa_on takes the running one's
+def mwa_on(osmin):
+    """KK3's ballot rewrite on that macOS: on below 27, whose GPU compiler speculates ballots out of divergent branches"""
+    try: return int(str(osmin).split('.')[0]) < 27
+    except ValueError: return True
+
+
+def host_constants(osmin=None):
+    return {'dm_border_off': (abi.BORDER_FC, True), 'dm_blend_off': (abi.BLEND_OFF_FC, False), 'dm_mwa3_fc': (abi.MWA_FC, mwa_on(osmin) if osmin else True)}
+
+
+HOST_CONSTANTS = host_constants()
 # A kernel in two passes (dmsh_ndsr.py) gets three compute pipelines: DMSH_SPLIT_FC undefined, false and true (nvn_mtl.m split_pipes)
 SPLIT_PASSES = {'split0': False, 'split1': True}
 
@@ -235,9 +245,10 @@ def cut_entries(lib_dir, bases, computes=()):
     return found
 
 
-def script(lib_dir, bases, computes=()):
+def script(lib_dir, bases, computes=(), constants_map=None):
     """One render pipeline descriptor per base and one compute descriptor per (library, entry), naming the function alone as cps_bundle looks it up; a function
-    with constants is named through its HOST_CONSTANTS specialization"""
+    with constants is named through its specialization by constants_map (host_constants of the archive's macOS; default HOST_CONSTANTS)"""
+    cmap = HOST_CONSTANTS if constants_map is None else constants_map
     libs, fns, specs, declared, pipes = {}, {}, {}, {}, []
     def fd(lib, entry, split=None):   # split: a pass of a kernel in two, its constant set as split_pipes sets it
         if lib not in declared:
@@ -251,7 +262,7 @@ def script(lib_dir, bases, computes=()):
         if not cs: return f'fnd:{label}'
         spec = f'{label}.host' + (f'.{split}' if split else '')
         if spec not in specs:
-            values = sorted([HOST_CONSTANTS[c] for c in cs if c in HOST_CONSTANTS] + ([(abi.SPLIT_FC, SPLIT_PASSES[split])] if split else []))
+            values = sorted([cmap[c] for c in cs if c in cmap] + ([(abi.SPLIT_FC, SPLIT_PASSES[split])] if split else []))
             specs[spec] = {'label': spec, 'function_descriptor': f'fnd:{label}',
                            'constant_values': [{'id_type': 'FunctionConstantIndex', 'id': {'data': i}, 'value_type': 'ConstantBool', 'value': {'data': v}} for i, v in values]}
         return f'fnd:{spec}'
@@ -413,7 +424,8 @@ def compile_isolating(lib_dir, bases, computes, js, part, work, arch, osmin):
     """One pipeline the GPU compiler stops on would cost the app its whole archive, so with room on the volume the failures are found (isolate) and left out.
     → (bases left out, compute pipelines left out)"""
     def run(items):
-        write_script(js, script(real_libraries(lib_dir, [x for k, x in items if k == 'b'], work, [x for k, x in items if k == 'c']), [x for k, x in items if k == 'b'], [x for k, x in items if k == 'c']))
+        write_script(js, script(real_libraries(lib_dir, [x for k, x in items if k == 'b'], work, [x for k, x in items if k == 'c']), [x for k, x in items if k == 'b'], [x for k, x in items if k == 'c'],
+                                host_constants(osmin)))
         try:
             compile_archive(js, part, work, arch, osmin, len(items))
             return None
@@ -491,7 +503,7 @@ def clear_real_libraries(work): shutil.rmtree(Path(work) / 'libraries', ignore_e
 def compile_batch(lib_dir, bases, work, arch, osmin, toolchain, computes=()):
     """One bounded group, cached by its actual libraries and descriptors; its left-out pipelines are in read_failed(work, arch)"""
     work.mkdir(parents=True, exist_ok=True)
-    configuration = script(lib_dir, bases, computes)
+    configuration = script(lib_dir, bases, computes, host_constants(osmin))
     js = work / 'bases.mtl4-json'
     write_script(js, configuration)
     key = archive_key(configuration, library_digest(lib_dir, bases, computes), arch, osmin, toolchain)
@@ -653,7 +665,8 @@ def main(argv=None):
     if not text: sys.exit(f'[RED] pso_offline: no pair list ({", ".join(a.pairs)})')
     zero = a.depth == 'zero'
     t0 = time.time()
-    quick = None if a.script_only else run_key(a, archs, text, a.os_min or os_min_default())
+    osmin = a.os_min or os_min_default()
+    quick = None if a.script_only else run_key(a, archs, text, osmin)
     if quick and (notes := run_reused(work, quick, out, archs)):
         print('\n'.join(notes))
         save_run(work, quick, out, archs)
@@ -666,7 +679,7 @@ def main(argv=None):
     work.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     js = work / 'bases.mtl4-json'   # metal-tt takes the format from the extension
-    configuration = script(lib_dir, bases, computes)
+    configuration = script(lib_dir, bases, computes, host_constants(osmin))
     write_script(js, configuration)
     st = stamp(chain, zero, text)
     print(f'pso_offline: {len(pairs)} pairs: {len(bases)} bases, {len(rest)} left to the device (function constants), left out as the host leaves them: '
@@ -680,7 +693,6 @@ def main(argv=None):
     if not pairs: print('pso_offline: no pairs (only a header): nothing to build, no archive')
     gpus = archs
     if not bases and not computes: archs = []
-    osmin = a.os_min or os_min_default()
     tv = tool_version() if bases or computes else 'not used (function constants only)'
     libraries = library_digest(lib_dir, bases, computes)
     keys = {arch: archive_key(configuration, libraries, arch, osmin, tv) for arch in archs}

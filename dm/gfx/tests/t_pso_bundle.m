@@ -191,6 +191,42 @@ int main(void) { @autoreleasepool {
             EXPECT("steady-state blend-off (FN_OFF_BORDER|FN_OFF_BLEND) is distinct", 0, p1 && [boArchive newRenderPipelineStateWithDescriptor:p1 error:nil] != nil);
         }
     }
+    // KK3's constant (dm_mwa3_fc) in a render and a compute shader: pso_offline.py specializes it by the archive's macOS as mwa_on does by the running one's, so the base,
+    // the draw's pipeline (fn_spec) and the compute pipeline (cps_new_b) are found in the archive
+    NSString *fm = [NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\nconstant bool dm_mwa3_fc [[function_constant(%d)]];\n"
+        "constant bool dm_mwa3 = is_function_constant_defined(dm_mwa3_fc) ? dm_mwa3_fc : true;\n"
+        "fragment float4 main0() { return float4(dm_mwa3 ? 1 : 0, 0, 0, 1); }\n", DMSH_MWA_FC];
+    NSString *cm = [NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\nconstant bool dm_mwa3_fc [[function_constant(%d)]];\n"
+        "constant bool dm_mwa3 = is_function_constant_defined(dm_mwa3_fc) ? dm_mwa3_fc : true;\n"
+        "kernel void main0(device uint *out [[buffer(0)]]) { out[0] = dm_mwa3 ? 1u : 0u; }\n", DMSH_MWA_FC];
+    if (!lib(msl, @"fm_b", fm) && !lib(msl, @"cm_b", cm)) {
+        put([msl stringByAppendingPathComponent:@"fm_b.json"], [NSString stringWithFormat:@"{\"chain\": \"%s\", \"entry\": \"main0\"}", DMSH_CHAIN]);
+        put([msl stringByAppendingPathComponent:@"cm_b.json"], [NSString stringWithFormat:@"{\"chain\": \"%s\", \"stage\": \"cs\", \"entry\": \"main0\"}", DMSH_CHAIN]);
+        put([tables stringByAppendingPathComponent:@"mwa.tsv"], @"v1\tfm\n");
+        put([tables stringByAppendingPathComponent:@"mwa_map.tsv"], @"package\tindex\tstage\tdm_ctl_sha16\tsource\ncs.bin\t0\tcompute\tcm\tx\n");
+        NSString *mw = [root stringByAppendingPathComponent:@"mwa"];
+        int rc = sh([NSString stringWithFormat:@"python3 %@ --gpu %@ --msl %@ --pairs %@/mwa.tsv --shader-map %@/mwa_map.tsv --out %@ --work %@/mwa-work --depth gl > %@/pso_mwa.log 2>&1",
+                     tool, gpu, msl, tables, tables, mw, root, root]);
+        EXPECT("mwa constant: pso_offline.py made the archive", 0, rc);
+        if (rc) fprintf(stderr, "%s\n", [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"pso_mwa.log"] encoding:NSUTF8StringEncoding error:nil].UTF8String);
+        NSString *mwPath = [mw stringByAppendingFormat:@"/%@.mtl4a", gpu];
+        id<MTL4Archive> mwArchive = arch_file_ok(mwPath) ? [g_dev newArchiveWithURL:[NSURL fileURLWithPath:mwPath] error:nil] : nil;
+        EXPECT("mwa constant: archive opened", 1, mwArchive != nil);
+        EXPECT("mwa constant: render base in the archive (no rest_pairs)", 0, [NSFileManager.defaultManager fileExistsAtPath:[mw stringByAppendingPathComponent:@"rest_pairs.tsv"]]);
+        MTL4RenderPipelineDescriptor *dm = pre_desc(@"v1", @"fm", 0);
+        EXPECT("mwa constant: pre_desc base found in the archive", 1, dm && [mwArchive newRenderPipelineStateWithDescriptor:dm error:nil] != nil);
+        id<MTLLibrary> vl = lib_from_file([msl stringByAppendingPathComponent:@"v1_bp.metallib"], NULL), fl = lib_from_file([msl stringByAppendingPathComponent:@"fm_b.metallib"], NULL);
+        MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+        d.vertexFunction = fn4_note([vl newFunctionWithName:@"main0"], vl, @"main0", nil); d.fragmentFunction = fn_spec(fl, @"main0", [MTLFunctionConstantValues new], nil);
+        d.vertexDescriptor = [MTLVertexDescriptor vertexDescriptor]; d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+        MTL4RenderPipelineDescriptor *dd = pso_desc4(d, 1, FN_OFF_BORDER);
+        EXPECT("mwa constant: the draw's pipeline (fn_spec) found in the archive", 1, dd && [mwArchive newRenderPipelineStateWithDescriptor:dd error:nil] != nil);
+        id<MTLLibrary> cl = lib_from_file([msl stringByAppendingPathComponent:@"cm_b.metallib"], NULL);
+        id<MTLFunction> cf = fn_spec(cl, @"main0", [MTLFunctionConstantValues new], NULL);
+        MTL4ComputePipelineDescriptor *cd = [MTL4ComputePipelineDescriptor new]; cd.computeFunctionDescriptor = fn4_of_b(cf, FN_OFF_BORDER);
+        EXPECT("mwa constant: compute shader taken as host-specialized", 1, fd_host_fc(cd.computeFunctionDescriptor));
+        EXPECT("mwa constant: compute pipeline found in the archive", 1, [mwArchive newComputePipelineStateWithDescriptor:cd error:nil] != nil);
+    }
     EXPECT("batched archive: full coverage stamp preserved", 1, [[NSString stringWithContentsOfFile:[batched stringByAppendingPathComponent:@"prebuilt.tsv"] encoding:NSUTF8StringEncoding error:nil]
             isEqualToString:[NSString stringWithContentsOfFile:[bundle stringByAppendingPathComponent:@"prebuilt.tsv"] encoding:NSUTF8StringEncoding error:nil]]);
     // stamp matches: only the pair with function constants is built here

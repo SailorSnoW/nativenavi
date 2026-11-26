@@ -62,13 +62,15 @@ static NSDictionary<NSString *, NSString *> *pre_fail_load(NSString *path, NSStr
     if ([head isEqualToString:pre_fail_head(want)]) return pairs;
     *other = 1; return @{};
 }
-static MTL4FunctionDescriptor *pre_fn(id<MTLLibrary> lib, NSString *name) {   // border corrections off, blend fix-up on (false) so one base serves every blend state (pso_offline.py HOST_CONSTANTS)
+static MTL4FunctionDescriptor *pre_fn(id<MTLLibrary> lib, NSString *name) {   // border corrections off, blend fix-up on (false) so one base serves every blend state, KK3 by the OS (pso_offline.py host_constants)
     id<MTLFunction> f = [lib newFunctionWithName:name]; if (!f) return nil;
     MTL4LibraryFunctionDescriptor *ld = [MTL4LibraryFunctionDescriptor new]; ld.library = lib; ld.name = name;
-    if (!f.functionConstantsDictionary.count) return ld;
+    NSDictionary *fc = f.functionConstantsDictionary;
+    if (!fc.count) return ld;
     MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
-    if (f.functionConstantsDictionary[@"dm_border_off"]) { BOOL yes = YES; [cv setConstantValue:&yes type:MTLDataTypeBool atIndex:DMSH_BORDER_FC]; }
-    if (f.functionConstantsDictionary[@"dm_blend_off"]) { BOOL no = NO; [cv setConstantValue:&no type:MTLDataTypeBool atIndex:DMSH_BLEND_OFF_FC]; }
+    if (fc[@"dm_border_off"]) { BOOL yes = YES; [cv setConstantValue:&yes type:MTLDataTypeBool atIndex:DMSH_BORDER_FC]; }
+    if (fc[@"dm_blend_off"]) { BOOL no = NO; [cv setConstantValue:&no type:MTLDataTypeBool atIndex:DMSH_BLEND_OFF_FC]; }
+    fc_set_mwa(cv, fc);
     MTL4SpecializedFunctionDescriptor *sd = [MTL4SpecializedFunctionDescriptor new]; sd.functionDescriptor = ld; sd.constantValues = cv; return sd;
 }
 static NSDictionary *pre_json(NSString *key) { NSData *d = msl_data([NSString stringWithFormat:@"%@/%@_b.json", g_msl_dir, key]); return d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil; }

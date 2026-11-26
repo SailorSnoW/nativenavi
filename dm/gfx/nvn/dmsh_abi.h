@@ -143,6 +143,8 @@
 #define DMSH_BORDER_FC 216
 // bool, pixel shaders with dm_blend0: true when both blend words are 0; false or undefined reads DMSH_BLEND_BUFFER (pair archives keep false)
 #define DMSH_BLEND_OFF_FC 217
+// bool, every stage but vertex: KosmicKrisp's KK_WORKAROUND_3 ballot rewrite is used (dmsh_metalwa.py; undefined: true). The host and pso_offline.py set it false from macOS 27
+#define DMSH_MWA_FC 220
 // Logic op state of _l entry points: uint op (NVN_LOGIC_OP_*), 12 bytes padding, a uint4 channel mask per colour target
 #define DMSH_LOGIC_BUFFER 29
 // bool at + n: colour target n is attached

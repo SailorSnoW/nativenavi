@@ -4,7 +4,7 @@
 # Environment: DM_GAME (a derived profile), XLATE (the translator), DMSH_CAS (compile cache folder or file), DMSH_PREFILL (library roots, :-separated),
 #   J (concurrency), DMSH_PROCS (processes that finish shaders, default J; 0 = threads)
 import atexit, errno, inspect, multiprocessing, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf
-import dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_abi as abi
+import dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_metalwa, dmsh_abi as abi
 dm_dir, out = sys.argv[1:3]
 want = set(sys.argv[3:])
 cache_root = out
@@ -460,7 +460,7 @@ def job_for(key, name, rec, w):
 
 RULES = []
 # CODE_FP: the code form (no comments, docstrings, layout) of this file and of the modules that run only on a cache miss; test_dmsh_code_fp.py checks the list.
-CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_chain.code_form(open(m.__file__, 'r').read()) for m in (dmsh_chain, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_ampere, dmsh_side, abi))
+CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_chain.code_form(open(m.__file__, 'r').read()) for m in (dmsh_chain, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_ndsr, dmsh_reflect, dmsh_entry, dmsh_ampere, dmsh_side, dmsh_metalwa, abi))
                          + b'\0' + inspect.getsource(dmsh_fetch.screen_varyings).encode()
                          + b'\0abi\0' + repr(sorted(abi.VALUES.items())).encode()).hexdigest()
 TOOL_FP = tool_fingerprint().encode()
@@ -663,6 +663,12 @@ def finish(key, w, j, c1):
     blend0 = 0
     if j['stage'] == 'ps': src, blend0 = dmsh_rewrite.blend_zero(src)   # before the entry points that share main0's body
     open(msl, 'w').write(src)
+    if j['stage'] != 'vs':   # Apple GPU compiler workarounds (KK3 ballots behind DMSH_MWA_FC, KK9 loop breaks), before the mesh stage, compute_loops and the side libraries
+        try: t = dmsh_metalwa.apply(src)[0]
+        except ValueError as e: return 'metal workaround rewrite failed', str(e)[:160], None
+        if t != src:
+            src = t
+            open(msl, 'w').write(src)
     first, spill, loop_sites, ndsr = [], 0, [], None
     mesh = j.get('mesh_stage')
     if mesh:

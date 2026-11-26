@@ -44,9 +44,9 @@ check_t_rt_unbind: t_rt_unbind
 # The run list: every t_*.c and t_*.m but those in NOT_RUN. `make run` builds them all (in parallel with -j), then runs each through its check_ target: ./t_x by default,
 # with its RUN_ENV (check_t_x: RUN_ENV = MTL_DEBUG_LAYER=1, beside its build rule), or a check_t_x recipe of its own when it runs several ways. A new test needs its source
 # and its build rule, no list. NOT_RUN: helpers linked into other tests (t_host_stubs, t_present_rescue_focus, t_gpu_lost_front), fixtures their Python tests build
-# (t_atomic_return: test_image_atomic_bounds.py, t_global_memory: test_global_memory.py, t_compute_loops: test_dmsh_compute_loops.py), t_gpuprof (cpu-run runs it)
-# and t_gpu_fault_kinds (its cases fault the GPU on purpose)
-NOT_RUN = t_host_stubs t_present_rescue_focus t_gpu_lost_front t_atomic_return t_global_memory t_compute_loops t_gpuprof t_gpu_fault_kinds
+# (t_atomic_return: test_image_atomic_bounds.py, t_global_memory: test_global_memory.py, t_compute_loops: test_dmsh_compute_loops.py), t_gpuprof (cpu-run runs it),
+# t_gpu_fault_kinds (its cases fault the GPU on purpose) and t_metalwa (test_dmsh_metalwa.py builds and runs it with DMSH_TEST_METAL=1)
+NOT_RUN = t_host_stubs t_present_rescue_focus t_gpu_lost_front t_atomic_return t_global_memory t_compute_loops t_gpuprof t_gpu_fault_kinds t_metalwa
 RUN_TESTS = $(filter-out $(NOT_RUN),$(basename $(sort $(wildcard t_*.c t_*.m))))
 check_t_%: t_%
 	$(RUN_ENV) ./$<

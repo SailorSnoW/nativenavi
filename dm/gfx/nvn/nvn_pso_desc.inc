@@ -94,6 +94,7 @@ static id<MTLFunction> side_spec(id<MTLLibrary> lib, NSString *name, uint32_t cl
         [cv setConstantValue:&on type:MTLDataTypeBool atIndex:DMSH_LOGIC_FC + n];
     }
     [cv setConstantValue:&a type:MTLDataTypeBool atIndex:DMSH_TYPED_ALPHA_FC]; [cv setConstantValue:&l type:MTLDataTypeBool atIndex:DMSH_TYPED_LOGIC_FC];
+    fc_set_mwa(cv, [lib newFunctionWithName:name].functionConstantsDictionary);
     return fn_lib_spec(lib, name, cv, e);
 }
 static os_unfair_lock g_bx_lock = OS_UNFAIR_LOCK_INIT;

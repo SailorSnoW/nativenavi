@@ -348,19 +348,40 @@ static os_unfair_lock g_fn_dev_lock = OS_UNFAIR_LOCK_INIT;
 @interface FnDev : NSObject { @public id<MTLFunction> fn; } @end
 @implementation FnDev @end
 static NSMapTable *g_fn_dev;
+// KosmicKrisp's KK_WORKAROUND_3 (dmsh_metalwa.py, dm_mwa3_fc): the GPU compiler below macOS 27 speculates simd_ballot out of divergent branches (Apple FB20113490).
+// It follows the running OS, as pso_offline.py host_constants does for the archive's macOS (docs/reference/shaders.md, A ballot under divergent control flow sees every lane)
+static int mwa_on(void) {
+    static int v; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *e = getenv("DM_NVN_METALWA");
+        int on = ![[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){27, 0, 0}];
+        if (e && *e) on = strcmp(e, "0") != 0;
+        if (!on || (e && *e)) MLOG("Metal compiler workaround KK3: %s (%s)", on ? "on" : "off", e && *e ? "DM_NVN_METALWA" : "macOS 27 or later");
+        v = on;
+    });
+    return v;
+}
+static void fc_set_mwa(MTLFunctionConstantValues *cv, NSDictionary *fc) {
+    if (fc[@"dm_mwa3_fc"]) { BOOL on = mwa_on() ? YES : NO; [cv setConstantValue:&on type:MTLDataTypeBool atIndex:DMSH_MWA_FC]; }
+}
 static id<MTLFunction> fn_lib_spec(id<MTLLibrary> lib, NSString *name, MTLFunctionConstantValues *cv, NSError **e) {
     if (!lib || !name || !cv) return nil;
     return fn4_note(dev_fn(lib, name, cv, e), lib, name, cv);
 }
 static id<MTLFunction> fn_spec(id<MTLLibrary> lib, NSString *name, MTLFunctionConstantValues *cv, NSError **e) {
     if (!lib || !name) return nil;
-    if (!pso4_compiler()) return fn_lib_spec(lib, name, cv, e);
+    if (!pso4_compiler()) {
+        fc_set_mwa(cv, [lib newFunctionWithName:name].functionConstantsDictionary);
+        return fn_lib_spec(lib, name, cv, e);
+    }
     id<MTLFunction> f = [lib newFunctionWithName:name];
     if (!f) {
         if (e) *e = [NSError errorWithDomain:@"dm" code:1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"no function %@ in the library", name]}];
         return nil;
     }
-    if (!f.functionConstantsDictionary.count) return fn4_note(f, lib, name, nil);
+    NSDictionary *fc = f.functionConstantsDictionary;
+    if (!fc.count) return fn4_note(f, lib, name, nil);
+    fc_set_mwa(cv, fc);
     os_unfair_lock_lock(&g_fn_dev_lock);
     if (!g_fn_dev) g_fn_dev = map_by_identity();
     if (![g_fn_dev objectForKey:f]) [g_fn_dev setObject:[FnDev new] forKey:f];
@@ -438,7 +459,7 @@ static FnOff *fn_off(id<MTLFunction> f, int mask) {
         int blend = (mask & FN_OFF_BLEND) && fc[@"dm_blend_off"];
         int split = (mask & (FN_SPLIT0 | FN_SPLIT1)) && fc_index(fc, DMSH_SPLIT_FC);
         if (!border && !blend && !split) { o->none = 1; return nil; }
-        if (!cv) cv = [MTLFunctionConstantValues new];
+        if (!cv) { cv = [MTLFunctionConstantValues new]; fc_set_mwa(cv, fc); }
         BOOL yes = YES;
         if (border) [cv setConstantValue:&yes type:MTLDataTypeBool atIndex:DMSH_BORDER_FC];
         if (blend) [cv setConstantValue:&yes type:MTLDataTypeBool atIndex:DMSH_BLEND_OFF_FC];

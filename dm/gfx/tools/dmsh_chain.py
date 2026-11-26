@@ -10,7 +10,7 @@ from typing import Any
 import os, sys, ast, hashlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 GFX = os.path.dirname(HERE)
-FILES = ['tools/dmsh_chain.py', 'tools/dmsh_build.py', 'tools/dmsh_atomic.py', 'tools/dmsh_wide.py', 'tools/dmsh_fetch.py', 'tools/dmsh_vin.py', 'tools/dmsh_pull.py', 'tools/dmsh_pull.metal', 'tools/dmsh_alpha.py', 'tools/dmsh_logic.py', 'tools/dmsh_side.py', 'tools/dmsh_rewrite.py', 'tools/dmsh_ndsr.py', 'tools/dmsh_reflect.py', 'tools/dmsh_entry.py', 'tools/dmsh_meshstage.py', 'tools/dmsh_facts.py', 'tools/dmsh_ampere.py', 'nvn/dmsh_abi.h', 'tools/dmsh_abi.py', 'tools/dmsh_xlate/Program.cs', 'tools/dmsh_xlate/dmsh_xlate.csproj', 'tools/dmsh_chain.lock']
+FILES = ['tools/dmsh_chain.py', 'tools/dmsh_build.py', 'tools/dmsh_atomic.py', 'tools/dmsh_wide.py', 'tools/dmsh_fetch.py', 'tools/dmsh_vin.py', 'tools/dmsh_pull.py', 'tools/dmsh_pull.metal', 'tools/dmsh_alpha.py', 'tools/dmsh_logic.py', 'tools/dmsh_side.py', 'tools/dmsh_rewrite.py', 'tools/dmsh_ndsr.py', 'tools/dmsh_reflect.py', 'tools/dmsh_entry.py', 'tools/dmsh_meshstage.py', 'tools/dmsh_facts.py', 'tools/dmsh_ampere.py', 'tools/dmsh_metalwa.py', 'nvn/dmsh_abi.h', 'tools/dmsh_abi.py', 'tools/dmsh_xlate/Program.cs', 'tools/dmsh_xlate/dmsh_xlate.csproj', 'tools/dmsh_chain.lock']
 # The vendored translator sources the chain's lowering lives in (the whole Ryujinx shader library, so stages the game lacks too)
 FILES += ['../third_party/ryujinx/src/Ryujinx.Graphics.Shader/' + f for f in (
     'Instructions/InstEmitSurface.cs', 'IntermediateRepresentation/TextureFlags.cs',
