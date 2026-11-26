@@ -1,14 +1,48 @@
 #!/usr/bin/env python3
 # A repeatable benchmark of the game in the Mac host along a route of dm/games/<id>/bench.tsv (docs/development.md#a-benchmark-on-the-mac).
 # Usage: python3 scripts/bench.py <id>_build folder [--route NAME] [--save DIR] [--variant 'label:KEY=VALUE,…'] [--runs N] [--fps N] [--env KEY=VALUE] [--headless] [--out DIR]
-#   Exit code 0 when every run gave frames, 1 otherwise. Compare variants of one invocation, not invocations: load on the Mac moves the numbers.
-import argparse, datetime, json, math, os, re, shutil, signal, statistics, subprocess, sys, time
+#   Exit code 0 when every run gave frames, 1 otherwise, 130 when interrupted, 143 on SIGTERM (either way the host is stopped and --lock released first).
+#   Compare variants of one invocation, not invocations: load on the Mac moves the numbers.
+import argparse, contextlib, datetime, json, math, os, re, shutil, signal, statistics, subprocess, sys, threading, time
 from typing import NoReturn
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / 'dm/tools'))
 import romfs as rfs
+
+HOST_GRACE = 5.0   # seconds between the host's SIGTERM and its SIGKILL
+
+
+class Stopped(BaseException):   # main's SIGTERM: not an Exception, so it unwinds through run_one's finally
+    pass
+
+
+_defer_depth = 0
+_pending_stop: int | None = None
+
+
+def _on_signal(sig, frame):
+    global _pending_stop
+    if _defer_depth > 0:
+        if _pending_stop is None or sig == signal.SIGTERM: _pending_stop = sig
+        return
+    _pending_stop = None
+    raise Stopped() if sig == signal.SIGTERM else KeyboardInterrupt()
+
+
+@contextlib.contextmanager
+def _defer_stops():
+    """Holds SIGTERM and SIGINT until the Popen or the lock file is bound. A flag, not pthread_sigmask: the host inherits an unblocked mask and SIG_DFL across execve"""
+    global _defer_depth, _pending_stop
+    _defer_depth += 1
+    try:
+        yield
+    finally:
+        _defer_depth -= 1
+        if _defer_depth == 0 and _pending_stop is not None:
+            sig, _pending_stop = _pending_stop, None
+            raise Stopped() if sig == signal.SIGTERM else KeyboardInterrupt()
 
 
 def fail(msg) -> NoReturn:
@@ -149,23 +183,19 @@ def run_one(a, gid, build, var, route, out, lock):
         last_shot, end_frame, shots = int(shots[-1]), int(max(shots[-1], route['from'] + route['secs'])), []
         end = getattr(a, 'timeout', None) or 600
     p = None
-    if lock: wait_lock(lock)
-    try:
-        with open(out / 'log.txt', 'w') as log:
-            p = subprocess.Popen([str(host), str(patched)], cwd=out, env=env, stdout=log, stderr=subprocess.STDOUT)
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < end and p.poll() is None:
-            if by_frame and last_frame(out / 'frames.tsv') > end_frame and (out / f'shot_f{last_shot}.png').is_file(): break
-            el = time.monotonic() - t0
-            while shots and el >= shots[0]:
-                with open(out / 'ctl', 'a') as c: c.write(f'shot {out}/shot_{int(shots.pop(0))}s.png\n')
-            time.sleep(0.2)
-    finally:
-        if p is not None and p.poll() is None:
-            p.send_signal(signal.SIGTERM)
-            try: p.wait(5)
-            except subprocess.TimeoutExpired: p.kill(); p.wait()
-        if lock: lock.unlink(missing_ok=True)
+    with hold_lock(lock):
+        try:
+            with open(out / 'log.txt', 'w') as log, _defer_stops():
+                p = subprocess.Popen([str(host), str(patched)], cwd=out, env=env, stdout=log, stderr=subprocess.STDOUT)
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < end and p.poll() is None:
+                if by_frame and last_frame(out / 'frames.tsv') > end_frame and (out / f'shot_f{last_shot}.png').is_file(): break
+                el = time.monotonic() - t0
+                while shots and el >= shots[0]:
+                    with open(out / 'ctl', 'a') as c: c.write(f'shot {out}/shot_{int(shots.pop(0))}s.png\n')
+                time.sleep(0.2)
+        finally:
+            stop_host(p)
     budget = 1000.0 / (a.fps or 60)
     s = {'frames': 0}
     if (out / 'frames.tsv').is_file():
@@ -183,6 +213,21 @@ def run_one(a, gid, build, var, route, out, lock):
     return s
 
 
+def stop_host(p):
+    """SIGTERM, HOST_GRACE s, then SIGKILL, and reaped. A second stop during the grace goes straight to the kill and is raised again once the host is gone"""
+    if p is None or p.poll() is not None: return
+    late = None
+    try:
+        p.send_signal(signal.SIGTERM); p.wait(HOST_GRACE); return
+    except subprocess.TimeoutExpired: pass
+    except BaseException as e: late = e
+    while True:   # a stop here only repeats the kill and the wait
+        try:
+            p.kill(); p.wait(); break
+        except BaseException as e: late = e
+    if late is not None: raise late
+
+
 def lock_holder(lock):
     """0 for a lock naming no ID or a dead one while a game runs; None for a free or stale lock"""
     try: text = Path(lock).read_text()
@@ -196,18 +241,48 @@ def lock_holder(lock):
     return 0 if subprocess.run(['pgrep', '-x', 'dmhost'], capture_output=True).returncode == 0 else None
 
 
+def _try_lock(lock, payload):   # one atomic attempt; a half-written file is removed
+    try: fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError: return False
+    try: os.write(fd, payload)
+    except BaseException:
+        os.close(fd); Path(lock).unlink(missing_ok=True); raise
+    os.close(fd); return True
+
+
+def _drop_stale(lock):
+    if lock_holder(lock) is not None: return False
+    print(f'removing the stale measuring lock {lock} ({Path(lock).read_text(errors="replace").strip()[:80]}: its process is gone, no game runs)', flush=True)
+    Path(lock).unlink(missing_ok=True); return True
+
+
+@contextlib.contextmanager
+def hold_lock(lock, owner=''):   # removes only a lock it took: a stop while another process holds it leaves that one
+    if not lock:
+        yield; return
+    payload = (f'{owner} pid {os.getpid()}' if owner else str(os.getpid())).encode()
+    taken = False
+    try:
+        while not taken:
+            with _defer_stops(): taken = _try_lock(lock, payload)
+            if not taken and not _drop_stale(lock): time.sleep(2)
+        yield
+    finally:
+        if taken:
+            with _defer_stops(): Path(lock).unlink(missing_ok=True)
+
+
 def wait_lock(lock, owner=''):   # taken atomically; a stale one is removed
+    payload = (f'{owner} pid {os.getpid()}' if owner else str(os.getpid())).encode()
     while True:
+        taken = False
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, (f'{owner} pid {os.getpid()}' if owner else str(os.getpid())).encode())
-            os.close(fd)
-            return
-        except FileExistsError:
-            if lock_holder(lock) is None:
-                print(f'removing the stale measuring lock {lock} ({Path(lock).read_text(errors="replace").strip()[:80]}: its process is gone, no game runs)', flush=True)
-                Path(lock).unlink(missing_ok=True); continue
-            time.sleep(2)
+            with _defer_stops(): taken = _try_lock(lock, payload)
+        except BaseException:
+            if taken: Path(lock).unlink(missing_ok=True)
+            raise
+        if taken: return
+        if not _drop_stale(lock): time.sleep(2)
 
 
 def table(results, keys):
@@ -224,6 +299,26 @@ def table(results, keys):
 
 
 def main():
+    # Python's default SIGTERM ends the process without run_one's finally. The handlers are set only while main runs, and only in the main thread (Python's rule)
+    global _pending_stop
+    _pending_stop = None
+    saved = {}
+    if threading.current_thread() is threading.main_thread():
+        saved[signal.SIGTERM] = signal.signal(signal.SIGTERM, _on_signal)
+        if signal.getsignal(signal.SIGINT) is signal.default_int_handler:
+            saved[signal.SIGINT] = signal.signal(signal.SIGINT, _on_signal)
+    code = None
+    try: run_benchmark()
+    except KeyboardInterrupt:
+        print('interrupted', file=sys.stderr); code = 130
+    except Stopped:
+        print('stopped (SIGTERM)', file=sys.stderr); code = 143
+    finally:
+        for sig, h in saved.items(): signal.signal(sig, signal.SIG_DFL if h is None else h)   # None: a handler not set from Python
+    if code is not None: sys.exit(code)
+
+
+def run_benchmark():
     ap = argparse.ArgumentParser(description='Benchmark a game in the Mac host along a fixed route (see the comment at the top of this file).')
     ap.add_argument('build', help='the <id>_build folder of a --platform mac build')
     ap.add_argument('--route', help='a route name from dm/games/<id>/bench.tsv (default: its first)')
