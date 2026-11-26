@@ -845,27 +845,51 @@ def rewrite(py, repo, exe_dir, out, env, logs, g):
         PROG.end(f'{", ".join(mods)}, reused (inputs unchanged)'); return
     tmp = out.with_name(out.name + '.partial'); rmtree(tmp); tmp.mkdir(parents=True); logs.mkdir(parents=True, exist_ok=True)
     PROG.set(step=', '.join(mods), done=0, total=len(mods), unit='modules')
-    procs, logf, todo, cores = {}, {}, list(mods), max(2, os.cpu_count() or 4)
+    groups, todo, cores, stop_sig = {}, list(mods), max(2, os.cpu_count() or 4), signal.SIGTERM
     jobs = max(1, min(cores, 2 * cores // max(1, len(mods))))   # so parallel rewrites don't oversubscribe
     rewrite_env = dict(env, DM_REWRITE_J=str(workers if workers is not None else jobs))
+
+    def stop_remaining():   # each rewrite's worker pool is in its group: a failed sibling or an interrupt stops them all
+        try: proc_group.stop_all([grp for grp, _ in groups.values()], stop_sig)
+        finally:
+            for _, fh in groups.values(): fh.close()
+            groups.clear()
+
+    def fail(m, why):
+        stop_remaining()
+        log = logs / f'rewrite_{m}.log'
+        PROG.end(ok=False)
+        with open(log, errors='replace') as lf: tail = collections.deque(lf, maxlen=40)
+        PROG.say(f'---- last lines of {log} ----\n' + ''.join(tail).rstrip('\n'))
+        raise BuildError(f'{why} (full output: {log})')
     try:
-        while todo or procs:
-            while todo and len(procs) < cores:
-                m = todo.pop(0); logf[m] = open(logs / f'rewrite_{m}.log', 'w')
-                procs[m] = subprocess.Popen([str(py), str(repo / 'dm/tools/patch_nso.py'), str(src[m]), str(tmp), m], env=rewrite_env, stdout=logf[m], stderr=subprocess.STDOUT)
-            for m in [m for m in procs if procs[m].poll() is not None]:
-                p = procs.pop(m); logf[m].close(); PROG.set(done=len(mods) - len(todo) - len(procs))
-                if p.returncode:
-                    log = logs / f'rewrite_{m}.log'
-                    PROG.end(ok=False)
-                    with open(log, errors='replace') as f: tail = collections.deque(f, maxlen=40)
-                    PROG.say(f'---- last lines of {log} ----\n' + ''.join(tail).rstrip('\n'))
-                    raise BuildError(f'patch_nso.py exit code {p.returncode} on {m} (full output: {log})')
-            time.sleep(0.2)
-    finally:   # an error or an interrupt stops the other rewrites
-        for p in procs.values():
-            if p.poll() is None: p.terminate(); p.wait()
-        for f in logf.values(): f.close()
+        while todo or groups:
+            while todo and len(groups) < cores:
+                m = todo.pop(0); f = open(logs / f'rewrite_{m}.log', 'w')
+                try: grp = proc_group.Group([str(py), str(repo / 'dm/tools/patch_nso.py'), str(src[m]), str(tmp), m], env=rewrite_env, stdout=f, stderr=subprocess.STDOUT)
+                except BaseException:
+                    f.close(); raise
+                groups[m] = (grp, f)
+            for m in [m for m, (grp, _) in groups.items() if grp.p.poll() is not None]:
+                grp, f = groups[m]
+                if grp.p.returncode: fail(m, f'patch_nso.py exit code {grp.p.returncode} on {m}')
+                groups.pop(m)
+                try:
+                    rc = grp.finish()
+                    if grp.stragglers:
+                        os.write(f.fileno(), f'[RED] patch_nso.py exited, but {proc_group.describe(grp.stragglers)} still ran {grp.drain:g} s later and was stopped: what it writes may be incomplete\n'.encode())
+                except BaseException:
+                    groups[m] = (grp, f); raise
+                finally:
+                    if m not in groups: f.close()
+                PROG.set(done=len(mods) - len(todo) - len(groups))
+                if rc: fail(m, f'patch_nso.py exit code {rc} on {m}')
+                if grp.stragglers: fail(m, f'patch_nso.py exited on {m}, but {proc_group.describe(grp.stragglers)} still ran {grp.drain:g} s later and was stopped: what it writes may be incomplete')
+            if todo or groups: time.sleep(0.2)
+    except KeyboardInterrupt:
+        stop_sig = signal.SIGINT; raise
+    finally:
+        stop_remaining()
     rmtree(kf); swap_in(tmp, out); kf.write_text(f'{key}\n')
     PROG.end(', '.join(mods))
 

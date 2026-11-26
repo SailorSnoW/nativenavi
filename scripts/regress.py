@@ -650,20 +650,36 @@ def modules_for(tree, g, rewrite, jobs):
     tmp = dst.with_name(f'{dst.name}.partial.{os.getpid()}')
     shutil.rmtree(tmp, ignore_errors=True); tmp.mkdir(parents=True)
     say(f'  {g.id}: rewriting {len(src)} modules with the rewriter of {tree.id}')
-    procs, todo = {}, list(src)
+    # each rewrite in a group of its own: patch_nso.py forks a worker pool, which a failed sibling or an interrupt stops with it
+    groups, todo, stop_sig = {}, list(src), signal.SIGTERM
     try:
-        while todo or procs:
-            while todo and len(procs) < jobs:
+        while todo or groups:
+            while todo and len(groups) < jobs:
                 m = todo.pop(0); f = open(tmp / f'rewrite_{m}.log', 'w')
-                procs[m] = (subprocess.Popen([sys.executable, str(tree.path / 'dm/tools/patch_nso.py'), str(src[m]), str(tmp), m], env=mods, stdout=f, stderr=subprocess.STDOUT), f)
-            for m in [m for m, (p, _) in procs.items() if p.poll() is not None]:
-                p, f = procs.pop(m); f.close()
-                if p.returncode: raise HarnessError(f'{g.id}: patch_nso.py of {tree.id} failed on {m} (see {tmp / f"rewrite_{m}.log"})')
-            time.sleep(0.2)
+                try: grp = proc_group.Group([sys.executable, str(tree.path / 'dm/tools/patch_nso.py'), str(src[m]), str(tmp), m], env=mods, stdout=f, stderr=subprocess.STDOUT)
+                except BaseException:
+                    f.close(); raise
+                groups[m] = (grp, f)
+            for m in [m for m, (grp, _) in groups.items() if grp.p.poll() is not None]:
+                grp, f = groups[m]
+                if grp.p.returncode: raise HarnessError(f'{g.id}: patch_nso.py of {tree.id} failed on {m} (see {tmp / f"rewrite_{m}.log"})')
+                groups.pop(m)
+                try:
+                    rc = grp.finish()
+                    if grp.stragglers:
+                        os.write(f.fileno(), f'[RED] patch_nso.py exited, but {proc_group.describe(grp.stragglers)} still ran {grp.drain:g} s later and was stopped: what it writes may be incomplete\n'.encode())
+                except BaseException:
+                    groups[m] = (grp, f); raise
+                finally:
+                    if m not in groups: f.close()
+                if rc or grp.stragglers: raise HarnessError(f'{g.id}: patch_nso.py of {tree.id} failed on {m} (see {tmp / f"rewrite_{m}.log"})')
+            if todo or groups: time.sleep(0.2)
+    except KeyboardInterrupt:
+        stop_sig = signal.SIGINT; raise
     finally:
-        for p, f in procs.values():
-            if p.poll() is None: p.terminate(); p.wait()
-            f.close()
+        try: proc_group.stop_all([grp for grp, _ in groups.values()], stop_sig)
+        finally:
+            for _, f in groups.values(): f.close()
     (tmp / '.done').write_text('')
     # another harness may have finished the same key meanwhile
     if dst.exists():
