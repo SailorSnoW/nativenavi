@@ -150,7 +150,7 @@ static _Atomic uint32_t g_hold_recs;         // submit thread
 static volatile uint32_t *g_hold_word;
 static unsigned g_hold_mode;
 static uint32_t g_hold_value;
-static uint64_t g_hold_t0, g_hold_first;
+static uint64_t g_hold_t0, g_hold_first, g_hold_idle;   // idle: the encode thread's, when the work committed before the hold had left the GPU
 static NSMutableArray *g_hold_ops;           // encode thread's
 static pthread_mutex_t g_hold_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_hold_cv = PTHREAD_COND_INITIALIZER;
@@ -175,8 +175,11 @@ static int hold_check(void) {
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     if (!req && hold_ready()) req = 1;
     uint64_t stuck = atomic_load(&g_hold_stuck);
-    // The process exits after a crash report, which may run on the game thread that signals, or the watchdog's last dump: nothing to force
-    if (!req && stuck && now > stuck && now - stuck > HOLD_MAX_NS && !crash_ending()) {
+    // The game signals once the frame before has left the GPU: a wait counts from then. The process exits after a crash report, which may run on the game thread that
+    // signals, or the watchdog's last dump: nothing to force
+    if (stuck && !g_hold_idle && atomic_load(&g_done) + 1 >= g_hold_first) g_hold_idle = now;
+    uint64_t from = stuck > g_hold_idle ? stuck : g_hold_idle;
+    if (!req && stuck && g_hold_idle && now > from && now - from > HOLD_MAX_NS && !crash_ending()) {
         req = 2;
         g_hold_force_why = "a thread had waited for them for 200 ms with no signal";
     }
@@ -194,6 +197,7 @@ static int hold_check(void) {
     if (g_hold_n % 3000 == 0) MLOG("replay ahead: %llu holds, %.1f queue operations and %.2f ms a hold, %llu forced, %llu ended by a drain of the host's, submit thread stopped %llu times before the signal (%.1f queue operations recorded by then); of them at a condition whose report was in flight %llu", (unsigned long long)g_hold_n, (double)g_hold_ops_n / g_hold_n, g_hold_ns / 1e6 / g_hold_n, (unsigned long long)g_hold_forced, (unsigned long long)g_hold_drained, (unsigned long long)g_hold_blocks, g_hold_blocks ? (double)g_hold_block_recs / g_hold_blocks : 0.0, (unsigned long long)g_rc_ahead_waits);
     pthread_mutex_lock(&g_hold_mu);
     atomic_store(&g_hold_stuck, 0);
+    g_hold_idle = 0;
     atomic_store_explicit(&g_hold_on, 0, memory_order_release);
     pthread_cond_broadcast(&g_hold_cv);
     pthread_mutex_unlock(&g_hold_mu);
