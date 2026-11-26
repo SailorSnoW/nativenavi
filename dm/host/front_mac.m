@@ -65,6 +65,8 @@ static void screen_refresh(NSScreen *screen) {
 }
 static _Atomic int g_fullscreen;
 int front_fullscreen(void) { return g_fullscreen; }
+static _Atomic int g_window_covered;   // from the window's occlusion state, on the main thread
+int front_window_covered(void) { return g_window_covered; }
 // The display link waits while the screen settles (fullscreen not entered, a match queued, a switch < 1 s ago):
 // docs/reference/frame-rate.md#the-display-link-started-before-fullscreens-mode-switch
 static _Atomic int g_fs_starting, g_match_pending;
@@ -1238,19 +1240,23 @@ void front_run(void (*guest)(void)) {
             [win orderFrontRegardless];
             LOG("front end: window kept in front (DM_WINDOW_TOP)");
         }
-        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeOcclusionStateNotification object:win queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
-            (void)n;
+        // Covered, presents follow the host's clock (nvn_display.inc link_sync). Read again a second after opening: a window that opens behind another and stays
+        // there may send no change.
+        void (^occl)(void) = ^{
             static int vis = -1;
             int v = (win.occlusionState & NSWindowOcclusionStateVisible) != 0;
             if (v == vis) return;
             vis = v;
+            g_window_covered = !v;
             if (v) {
                 dm_fstep_settle();
                 LOG("front end: window visible");
             } else {
-                LOG("front end: window covered (its display link fires about once a second: frame times measure nothing)");
+                LOG("front end: window covered (its display link fires about once a second: presents follow the host's clock until it is visible)");
             }
-        }];
+        };
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeOcclusionStateNotification object:win queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; occl(); }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), occl);
         // AppKit runs ⌘ shortcuts only through menu items
         NSMenu *bar = [NSMenu new], *app = [NSMenu new], *wm = [[NSMenu alloc] initWithTitle:@"Window"];
         [[bar addItemWithTitle:@"" action:nil keyEquivalent:@""] setSubmenu:app];

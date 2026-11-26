@@ -263,6 +263,11 @@ static uint64_t g_link_probe_at, g_link_probe_fail;
 // While the app is inactive or in the background the system does not call back anyway: the watchdog counts active time only.
 __attribute__((weak)) int dm_focus_now(void) { return 1; }   // graphics tests without the host count as always active
 __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
+// macOS fires a covered window's link about once a second, focus or not: while the front end says so, link_sync runs mode 0 as a rescue does (the acquire follows
+// the host's clock) and the link's silence is no stall. docs/reference/frame-rate.md#a-covered-windows-presents-follow-the-hosts-clock
+__attribute__((weak)) int front_window_covered(void) { return 0; }   // front_mac.m; graphics tests without the host are never covered
+static _Atomic int g_covered;   // link_sync's sample of front_window_covered, also read without g_pq_mu
+static int link_watchdog_active(void) { return dm_focus_now() == 1 && !atomic_load(&g_covered) && !front_window_covered(); }
 static int g_link_drain_on = -1;   // -1 = not read yet (file-level so that t_present_rescue can set it)
 static int link_drain_on(void) {
     if (g_link_drain_on < 0) {
@@ -315,7 +320,7 @@ static void pq_drop(uint64_t first, uint64_t last) {
     double cb = CACurrentMediaTime();
     pthread_mutex_lock(&g_pq_mu);
     // a callback that cannot take a present neither resets the watchdog nor counts a pacing tick
-    if (!g_dm_present_link || g_rescue_mode) { pthread_mutex_unlock(&g_pq_mu); return; }
+    if (!g_dm_present_link || g_rescue_mode || atomic_load(&g_covered)) { pthread_mutex_unlock(&g_pq_mu); return; }
     g_link_probe_at = 0;
     if (g_stall_t0) {
         uint64_t since = dm_focus_in_since(), t = now_ns();
@@ -347,7 +352,7 @@ static void pq_drop(uint64_t first, uint64_t last) {
     pthread_mutex_unlock(&g_link_mu);
     pthread_mutex_lock(&g_pq_mu);
     // checked again: the queue lock was released to publish the tick, and a rescue or mode change may have taken the queue meanwhile
-    if (!g_dm_present_link || g_rescue_mode) { pthread_mutex_unlock(&g_pq_mu); return; }
+    if (!g_dm_present_link || g_rescue_mode || atomic_load(&g_covered)) { pthread_mutex_unlock(&g_pq_mu); return; }
     // a multi-tick frame stays on screen until its hold ends, even with the next frame queued
     const int hold = g_link_hold_until > 0 && tick_time < g_link_hold_until - 0.002;
     // The late latch (nvn_link_latch.h): wait briefly for the woken acquire's present, g_pq_mu released meanwhile. Only into an empty queue, and only on the 60 Hz link,
@@ -439,7 +444,7 @@ static CAMetalDisplayLink *g_link;
 static CFRunLoopRef g_link_rl;
 static int g_link_started;
 static int g_link_owns_layer, g_classic_busy;   // under g_pq_mu: nextDrawable throws while the layer has a display link attached, so the two exclude each other
-static int link_on(void) { return g_dm_present_link && !atomic_load(&g_rescue_mode) && g_link != nil; }
+static int link_on(void) { return g_dm_present_link && !atomic_load(&g_rescue_mode) && !atomic_load(&g_covered) && g_link != nil; }
 // On a screen whose rate is no multiple of the link's (144, 165 Hz) the system fires a 60 Hz link every third refresh (55 Hz): the link runs at the screen's rate and only
 // the refreshes nearest a steady 1/60 s clock count as ticks.
 __attribute__((weak)) int front_screen_settling(void) { return 0; }   // front_mac.m: startup fullscreen not entered yet, screen match pending, or mode switched under 1 s ago
@@ -497,7 +502,7 @@ static void *link_main(void *arg) {
     g_link_rl = CFRunLoopGetCurrent(); g_link = link;
     if (g_link_probe_pending) {
         g_link_probe_pending = 0;
-        if (!g_rescue_mode && g_dm_present_link) {
+        if (!g_rescue_mode && !atomic_load(&g_covered) && g_dm_present_link) {
             g_stall_t0 = 0; g_link_probe_at = now_ns();
             __atomic_store_n(&g_link_tick_ns, g_link_probe_at, __ATOMIC_RELAXED);
         }
@@ -513,12 +518,19 @@ static void link_sync(void) {   // at every present, on the game's thread: the l
     pthread_mutex_lock(&g_pq_mu);
     int want = g_dm_present_link;
     if (want < 0 || want > 2) { g_dm_present_link = applied == 3 ? 1 : applied; pthread_mutex_unlock(&g_pq_mu); return; }
-    if (g_rescue_mode && (want != g_rescue_mode || now_ns() >= g_rescue_back_at)) {
+    int cov = front_window_covered() != 0;
+    if (g_rescue_mode && (want != g_rescue_mode || (!cov && now_ns() >= g_rescue_back_at))) {
         g_rescue_mode = 0; g_stall_t0 = 0; __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
-        g_link_probe_pending = want != 0; g_link_probe_at = 0;   // probation starts once the link is live on its run loop
-        MLOG("display link: rescue ended, trying pacing mode %d (frame %llu)", want, (unsigned long long)atomic_load(&g_cur_frame));
+        g_link_probe_pending = want != 0 && !cov; g_link_probe_at = 0;   // probation starts once the link is live on its run loop
+        if (cov) MLOG("display link: rescue ended (window covered; pacing mode %d waits, frame %llu)", want, (unsigned long long)atomic_load(&g_cur_frame));
+        else MLOG("display link: rescue ended, trying pacing mode %d (frame %llu)", want, (unsigned long long)atomic_load(&g_cur_frame));
     }
-    if (g_rescue_mode) want = 0;
+    if (cov != atomic_load(&g_covered)) {
+        atomic_store(&g_covered, cov);
+        if (!cov) { g_stall_t0 = 0; __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED); }   // the link's silence while covered was no stall
+        if (want && !g_rescue_mode) MLOG("display link: window %s (frame %llu)", cov ? "covered, presents follow the host's clock" : "visible, back to the display link", (unsigned long long)atomic_load(&g_cur_frame));
+    }
+    if (g_rescue_mode || cov) want = 0;
     if (!want) { g_link_probe_pending = 0; g_link_probe_at = 0; }
     pthread_mutex_unlock(&g_pq_mu);
     if (want && mtl_fps_target() == 30 && link_30hz()) want = 3;
@@ -818,7 +830,7 @@ uint64_t mtl_present_screen_wait(double period) {
         mode = sw_mode("DM_PRESENT_SCREEN", 1);
         MLOG("present: without the display link the acquire waits until at most %d present(s) queued are not yet on screen (DM_PRESENT_DEPTH; DM_PRESENT_SCREEN %s)", g_sdw_depth, mode == 1 ? "on" : mode ? "ab" : "off");
     }
-    if (!sw_on(mode) || link_on() || mtl_snap_on() || atomic_load(&g_present_discard)) return 0;
+    if (!sw_on(mode) || link_on() || atomic_load(&g_covered) || front_window_covered() || mtl_snap_on() || atomic_load(&g_present_discard)) return 0;   // covered: no screen to wait for
     if (!(period > 0)) period = 1.0 / 60;
     uint64_t t0 = now_ns(); int waited = 0, to = 0;
     pthread_mutex_lock(&g_pq_mu);
@@ -861,7 +873,7 @@ void mtl_present_wait(uint64_t tk) {
         if (!g_link_owns_layer) { pthread_cond_wait(&g_pq_cv, &g_pq_mu); continue; }
         if (g_pq_read >= tk) { pthread_cond_wait(&g_pq_cv, &g_pq_mu); continue; }   // taken by the display link already: until it is handed to the GPU
         uint64_t pns = link_probe_ns(), wait_ns = STALL_NS;
-        if (g_link_probe_at && dm_focus_now() == 1) {
+        if (g_link_probe_at && link_watchdog_active()) {
             uint64_t pnow = now_ns(), psince = dm_focus_in_since(), pfrom = g_link_probe_at > psince ? g_link_probe_at : psince;
             uint64_t pel = pnow >= pfrom ? pnow - pfrom : 0, rem = pel >= pns ? 0 : pns - pel;
             if (rem < wait_ns) wait_ns = rem;
@@ -871,7 +883,7 @@ void mtl_present_wait(uint64_t tk) {
         if (!g_stall_t0 && wait_ns && (pthread_cond_timedwait(&g_pq_cv, &g_pq_mu, &ts) != ETIMEDOUT || g_pq_done >= tk)) continue;
         uint64_t now = now_ns(), last = __atomic_load_n(&g_link_tick_ns, __ATOMIC_RELAXED);
         if (g_pq_read >= tk) continue;
-        int active = dm_focus_now() == 1; uint64_t since = dm_focus_in_since();
+        int active = link_watchdog_active(); uint64_t since = dm_focus_in_since();
         uint64_t pfrom = g_link_probe_at > since ? g_link_probe_at : since;
         uint64_t pelapsed = now >= pfrom ? now - pfrom : 0;
         int probe_failed = active && g_link_probe_at && pelapsed >= pns;
@@ -891,7 +903,7 @@ void mtl_present_wait(uint64_t tk) {
             g_stall_drop = 0; g_stall_red = 0; g_stall_logged = 0; g_stall_n++;
         }
         g_stall_drop += n;
-        active = dm_focus_now() == 1; since = dm_focus_in_since();
+        active = link_watchdog_active(); since = dm_focus_in_since();
         uint64_t from = g_stall_t0 > since ? g_stall_t0 : since;
         uint64_t elapsed = now >= from ? now - from : 0;   // focus may have come back after the now sample
         pfrom = g_link_probe_at > since ? g_link_probe_at : since;

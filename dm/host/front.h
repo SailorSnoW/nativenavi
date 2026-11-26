@@ -20,6 +20,8 @@ int front_screen_variable_refresh(void);
 void front_screen_match(int fps);
 // Any thread.
 int front_screen_settling(void);
+// No part of the window is on screen (other windows over it, another Space). Any thread.
+int front_window_covered(void);
 // title NULL hides it. Any thread; does not block.
 void front_progress(const char *title, long done, long total);
 // Set before start: gets front_progress's values on the main thread in place of the built-in screen.
