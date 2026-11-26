@@ -66,7 +66,7 @@ check_test_dmsh_ndsr:
 # What runs without a GPU, CI's subset (.github/workflows/tests.yml): cpu-run runs each test as ./t_x, not through its check_ target, which may take the GPU;
 # cpu-tsan, the ThreadSanitizer builds. A test removed above leaves this list too
 CPU_TESTS = t_gfx_suspend t_capture t_dirty_slots t_dirty_race t_dirty_retire_race t_dirty_init t_dirty_reuse t_tex_layout t_pace t_fstep t_link_drain t_link_latch \
-	t_link_ticks t_present_history t_cpu_tex t_pkg_share t_hmap t_pso_skey t_refl t_present_rescue t_gpuprof t_sparse_layout t_timestamp t_counter_clock t_ub \
+	t_link_ticks t_present_history t_cpu_tex t_pkg_share t_hmap t_pso_skey t_refl t_present_rescue t_gpuprof t_gpu_timing t_sparse_layout t_timestamp t_counter_clock t_ub \
 	t_pso_pending t_rec_draws t_ubc_wait t_thread_rt t_rt_comp t_pend_index
 .PHONY: cpu-run cpu-tsan
 cpu-run: $(CPU_TESTS) t_perf_order check_t_thermal
@@ -397,6 +397,8 @@ check_t_vbuf: t_vbuf
 	DM_NVN_VBUF_CACHE=0 MTL_DEBUG_LAYER=1 ./t_vbuf
 t_feedback: t_feedback.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_feedback.m $(MTL_T_SRC) $(FW)
+t_gpu_timing: t_gpu_timing.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_gpu_timing.m $(MTL_T_SRC) $(FW)
 t_rast_discard: t_rast_discard.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rast_discard.m $(MTL_T_SRC) $(FW)
 t_queue_origin: t_queue_origin.m $(MTL_T_DEP)

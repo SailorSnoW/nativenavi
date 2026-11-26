@@ -230,6 +230,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Check:** `t_counter_clock` converts 20,000 times read just before the call, none of which may come out unknown (failed in every run before, passes in 100 of 100 after, on an M4 up for 33 hours), and a time one double step ahead of the read, which must be the read's time.
 - **Found on:** the unit test, on an M5 Max (3 of 20 runs) and an M4 (6 of 40); no game report.
 
+### Invalid GPU completion times inflate frame diagnostics
+
+- **Symptom:** after a GPU address fault, a frame's GPU time (`@gpu_ms` in the `DM_NVN_TSV` table, the frame step's GPU cost) is trillions of milliseconds while the frames around it report ordinary times.
+- **Cause:** `gpu_tag_done` (`nvn_fence.inc`) took any positive duration with a positive start, and `up_flush` (`nvn_texture.inc`, `g_upload_gpu_ns`) any positive duration. A faulted command buffer's feedback can carry an end that was never written (`UINT64_MAX` ticks, about 6.15e9 s at Apple silicon's 125/3 timebase), or one that is not finite: it went into the frame's summed time (`mtl_gpu_ms`, `@upload_gpu_ms`), its span (`mtl_gpu_span`) and the integer casts.
+- **Fix:** `gpu_time_valid` (`nvn_fence.inc`), shared by both, takes only finite, positive, ordered times whose end has passed on Metal's host clock (`CACurrentMediaTime`). An invalid completion still retires; it adds neither time nor span, and the valid work of the same frame still counts. GPU execution and fault recovery are unchanged.
+- **Check:** `make -C dm/gfx/tests check_t_gpu_timing` (no GPU, in `cpu-run`): missing, negative, reversed, equal, NaN, infinite, future and #1737-sized ends; a frame mixing valid and invalid completions; a ring slot reused by a later frame.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game) in nxnative ([issue #1737](https://github.com/seedds/nxnative/issues/1737)); upstream nxnative `99ae7c6f` ([PR #1759](https://github.com/seedds/nxnative/pull/1759)). Not taken: its check of `mtl_gpu_done`, which this tree does not have. The GPU address fault behind it is open.
+
 ### The Switch 2's system tick is 31.25 MHz
 
 - **Symptom:** a Switch 2 game holds 20 or 30 fps on the Mac although its frame work fits in one vsync: its frame-rate controller raises the present interval (`the game sets present interval 1 → 3` in the log) and never steps back down.
