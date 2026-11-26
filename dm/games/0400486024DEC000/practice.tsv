@@ -2,9 +2,9 @@
 # SHA-256 of its zip (the game's note, "Practice tools"). scripts/build_app.py takes the zip from <build folder>/practice/, or downloads it from url there, and refuses one with
 # other bytes. From it: the module, which patch_nso.py rewrites; of the patches folder the IPS whose name is main's build ID, which the host checks applies; the license.
 # A new release is new rows here, and the game played with it again.
-release	0.0.12
-url	https://github.com/PracticeROM/sloperina/releases/download/v0.0.12/sloperinaGZ-0.0.12.zip
-sha256	ece7a291c871838350dd1cc6a202fec8ba97dd2b6bb03adf1243565c498fd1e9
-module	sloperinaGZ-0.0.12/files/exefs/subsdk9
-patches	sloperinaGZ-0.0.12/files/exefs
-license	sloperinaGZ-0.0.12/LICENSE
+release	0.0.14
+url	https://github.com/PracticeROM/sloperina/releases/download/v0.0.14/sloperinaGZ-0.0.14.zip
+sha256	0c9e497f35c730845f38f6da9d284a2fcb84c57d3fb08e0664be50d3641356c0
+module	sloperinaGZ-0.0.14/files/exefs/subsdk9
+patches	sloperinaGZ-0.0.14/files/exefs
+license	sloperinaGZ-0.0.14/LICENSE
