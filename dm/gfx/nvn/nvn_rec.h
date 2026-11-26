@@ -160,6 +160,7 @@ static uint64_t g_rc_ahead_waits;
 static const char HOLD_DRAIN[] = "drain";
 static int on_sub_thread(void);
 void nvn_queue_ahead_refuse(volatile uint32_t *word);
+int crash_ending(void);
 static void hold_stuck(void) {
     uint64_t z = 0;
     atomic_compare_exchange_strong(&g_hold_stuck, &z, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
@@ -174,7 +175,8 @@ static int hold_check(void) {
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     if (!req && hold_ready()) req = 1;
     uint64_t stuck = atomic_load(&g_hold_stuck);
-    if (!req && stuck && now > stuck && now - stuck > HOLD_MAX_NS) {
+    // The process exits after a crash report, which may run on the game thread that signals, or the watchdog's last dump: nothing to force
+    if (!req && stuck && now > stuck && now - stuck > HOLD_MAX_NS && !crash_ending()) {
         req = 2;
         g_hold_force_why = "a thread had waited for them for 200 ms with no signal";
     }

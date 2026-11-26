@@ -10,6 +10,7 @@ void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t *g_mod; int g_nmod;
 void svc_thread_dump(void) {}
+void crash_end_begin(void);
 uint64_t now_ns(void) { return bp_now(); }
 static int checks, failures;
 #define CHECK(c, name) do { int check_ok = !!(c); checks++; failures += !check_ok; printf("%s: %s\n", check_ok ? "PASS" : "FAIL", name); } while (0)
@@ -140,6 +141,16 @@ int main(void) { @autoreleasepool {
     P(nvnEventSignal)(&event, NVN_EVENT_SIGNAL_MODE_WRITE, 1);
     require(landed(&sync, 5000000000ull), "the last submission lands"); P(nvnSyncFinalize)(&sync);
     CHECK(pixels(0, 0, 255), "blue");
+
+    puts("CASE a thread stuck on held work while a crash report is written");   // last: the process does not come back from it
+    for (int i = 0; i < 40; i++) P(nvnEventSignal)(&event, NVN_EVENT_SIGNAL_MODE_WRITE, i & 1);
+    P(nvnEventSignal)(&event, NVN_EVENT_SIGNAL_MODE_WRITE, 0); memset(memory + OUTPUT, 0x5a, BYTES); forced = g_hold_forced;
+    crash_end_begin();
+    submit(0, record(&event, green, NULL), &sync);
+    if (on) CHECK(!landed(&sync, 400000000ull) && untouched() && g_hold_forced == forced, "a wait of more than 200 ms leaves it held: the report may run on the thread that signals");
+    P(nvnEventSignal)(&event, NVN_EVENT_SIGNAL_MODE_WRITE, 1);
+    require(landed(&sync, 5000000000ull), "it lands after the signal"); P(nvnSyncFinalize)(&sync);
+    CHECK(pixels(0, 255, 0), "green");
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;

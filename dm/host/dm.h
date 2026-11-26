@@ -130,6 +130,9 @@ uint64_t dm_nvn_frame_count(void);
 void dm_backtrace(uint64_t fp);
 void crash_watch_frame(void);
 void crash_dump_now(const char *why);
+// The process exits once the crash report or the watchdog's dump that began is written; it may run on any thread, a game thread among them
+int crash_ending(void);
+void crash_end_begin(void);
 // Diagnostic switches are read once at start: getenv takes libc's environment lock
 extern uint64_t g_t0_ns;
 extern struct dm_flags { int thr, svc, fs, dbg, imports, bootprof; } g_flag;

@@ -18,6 +18,9 @@ static _Atomic uint64_t g_watch_last_ns;
 static unsigned g_watch_stall;
 static void (*g_dump_hook)(void);
 static void (*g_wait_dump)(void);
+static _Atomic int g_ending;
+int crash_ending(void) { return atomic_load_explicit(&g_ending, memory_order_relaxed); }
+void crash_end_begin(void) { atomic_store(&g_ending, 1); }
 
 static uint64_t watch_now_ns(void) {
     struct timespec ts;
@@ -52,6 +55,7 @@ static void *watchdog_main(void *arg) {
         uint64_t now = watch_now_ns();
         if (last > now) continue;
         if (g_watch_stall && now - last >= (uint64_t)g_watch_stall * 1000000000ull) {
+            crash_end_begin();
             LOG("[RED] watchdog: no frame presented for %llu s", (unsigned long long)((now - last) / 1000000000ull));
             if (g_dump_hook) g_dump_hook();
             if (g_wait_dump) g_wait_dump();
@@ -116,6 +120,7 @@ static _Atomic uintptr_t g_crash_owner;
 static void crash_gate(int sig) {
     uintptr_t me = (uintptr_t)pthread_self(), none = 0;
     if (atomic_compare_exchange_strong(&g_crash_owner, &none, me)) {
+        crash_end_begin();
         alarm(15);
         return;
     }
