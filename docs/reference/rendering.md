@@ -178,6 +178,14 @@ The replay of NVN on Metal (`dm/gfx/nvn/nvn_mtl.m`). Each entry: symptom, cause,
 - **Found on:** Batman: Arkham Knight (four shaders, 3,813 draws in a run to the diner). The same red line is recorded on FINAL FANTASY RESONANCE, ROMANCE OF THE THREE KINGDOMS 8 REMAKE, Luigi's Mansion 3 and Hyrule Warriors: Age of Calamity, none of them run with this rule.
 - **Check:** `make -C dm/gfx/tests GAME=<id> check_t_cube_placeholder` also covers a 2D texture and one- and five-layer 2D arrays in a `texture3d` argument: an unselected fallback leaves the real volume's output alone, a selected one reads zero.
 
+### A 3D texture in a 2D array slot binds a zero texture
+
+- **Symptom:** `[RED] texture type mismatch: shader … declares slot … as Metal type 3, texture ID … is type 7 (NVN target 2, …); bound as is` (or type 2, a 2D slot); the reads are undefined.
+- **Cause:** the game leaves a 3D texture bound in a slot its shader reads as a 2D array, and Metal makes no view of a 3D texture but a 3D one. Ocarina of Time does so with its 128x72x96 R11G11B10F volume, in a compute shader that fetches 16-bit values from a 2D array there once at an area load, and in a UI shader whose branch does not read the slot. The game binds the volume (two textures it alternates frame by frame) at compute slot 0 of its queue 5, and agl's `eularian_fluid_simulation` dispatched on that queue binds nothing there: bindings are each queue's state, on the console as in the host (`mtl_queue_activate`), so the slot holds the game's own binding. What the Switch's texture unit reads from a 3D texture header through a 2D array instruction is not known.
+- **Fix:** as for [a 2D texture in a 3D slot](#a-2d-texture-in-a-3d-slot-binds-the-zero-3d-texture), `tex_fit` binds the zero texture of the slot's type, a defined read, for a 3D texture in a 2D, 2D array, cube or cube array slot, and logs the first case (`3D texture binding fallback`).
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game) (`49b2e53ad1d6f147`, compute slot 0; `9b310b3349825e9a`, slot 7).
+- **Check:** `make -C dm/gfx/tests GAME=<id> check_t_cube_placeholder` also covers a 3D texture in a `texture2d_array`, `texture2d` and `texturecube` argument: an unselected fallback leaves the real texture's output alone, a selected one reads zero.
+
 ### Multisample texture slots
 
 - **Symptom:** `[RED] texture type mismatch: shader … declares slot … as Metal type 2, texture ID … is type 4 (NVN target 5, …); bound as is`, for a shader whose MSL declares the slot `texture2d_ms`.
