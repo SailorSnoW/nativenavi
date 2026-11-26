@@ -134,17 +134,23 @@ def publish_library(on_progress=None):   # on_progress: shader_lib.write's
     d = out
     image = shader_lib.image_of(d)
     prefix = f'{STAGE}/mac/'
-    files = {}
+    files, share = {}, {}   # share: the outputs of one cache blob, or of one range of the old image, written once (shader_lib.write)
     if OLD_IMAGE is not None:
-        for p in OLD_IMAGE.iterdir():
-            m = OUT_KEY.match(p.name)
-            if (m and owned_output(m.group(1))) or (p.name == dmsh_chain.STAMP and STAMP_BEFORE != INPUTS): continue
-            files[p.name] = str(p)
-    staged = STORE.names(prefix)
-    for n in staged: files[n[len(prefix):]] = (lambda n=n: STORE.get(n))
+        old = romfs.Image(OLD_IMAGE)
+        for name, k in old.children(0):
+            m = OUT_KEY.match(name)
+            if (m and owned_output(m.group(1))) or (name == dmsh_chain.STAMP and STAMP_BEFORE != INPUTS): continue
+            files[name] = str(OLD_IMAGE / name)
+            share[name] = ('old', *old.entry(k)[:2])
+    staged = STORE.blob_ids(prefix)
+    for n, blob in staged.items():
+        files[n[len(prefix):]] = (lambda n=n: STORE.get(n))
+        share[n[len(prefix):]] = ('blob', blob)
     for n in os.listdir(d):
-        if not n.startswith('.') and '.tmp' not in n and os.path.isfile(os.path.join(d, n)): files[n] = os.path.join(d, n)
-    try: shader_lib.write(files, image, on_progress=on_progress)
+        if not n.startswith('.') and '.tmp' not in n and os.path.isfile(os.path.join(d, n)):
+            files[n] = os.path.join(d, n)
+            share.pop(n, None)
+    try: shader_lib.write(files, image, on_progress=on_progress, share=share)
     except (OSError, ValueError) as e:
         cache_full = getattr(STORE, 'full', False)
         def stop(why, err2=None):

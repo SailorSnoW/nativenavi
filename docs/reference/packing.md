@@ -306,6 +306,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Fix:** use `shader_lib.name_of` for the output stem in the signed `ShaderLibraries` bundle and in its reuse key, The stem still takes the explicit `--msl-name` override and supplies `DMChain`. `test_nsp_mac_app.py` checks the signed layout and reuse across both input spellings.
 - **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), a Mac app packed by hand from the build's `shader/cache/b-<chain>.img` ([PR #1790](https://github.com/seedds/nxnative/pull/1790)).
 
+### Identical shader files repeated inside library images
+
+- **Symptom:** a shader library image `b-<chain>.img` is larger than the outputs of the compile cache it was written from: every file has a copy of its own, also where `cas-<chain>.db` holds those bytes once.
+- **Cause:** `dmsh_build.py` `publish_library` took the staged outputs by name only (`STORE.names`), and `shader_lib.write` gave every name a range of its own; `shader_lib.subset` and `pack` copied each file of the image they read. The readers (`romfs.py`, `dm/host/romfs_image.h` and `dm/gfx/nvn/msl_image.h` over it) only bounds-check a file's range, so several names may point at one.
+- **Fix:** `shader_cache.Store.blob_ids` gives the staged outputs' blob IDs; `shader_lib.write` takes `share` (`{name: key}`): the names of one key take the first one's range, and their own sources are neither called nor read. `publish_library` passes the blob IDs and the old image's ranges, `subset` and `pack` the ranges of the image they read. The format, the readers and the files' bytes do not change; a folder packed with no image before stays unshared. Found upstream (upstream nxnative 62bcfd20, after Pokémon Pokopia's issue #1174 and [PR #2140](https://github.com/seedds/nxnative/pull/2140)), which measured 0.357 GiB of 9.250 GiB repeated (3.86 %, 5,825 entries) and 0.199 GiB of the app's 4.732 GiB subset in Ocarina of Time's `b-13b3bdb97e7e.img`.
+- **Measured** here on the build folder's `shader/cache/b-b1450d7b27fb.img`, before the change: 0.365 GiB of 8.830 GiB repeated (4.14 %, 5,488 entries), and 0.189 GiB of the app's 4.377 GiB subset (4.32 %).
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game).
+
 ### A shader build leaves a file per shader output while it runs or after a stop
 
 - **Symptom:** a game's build folder holds tens of thousands of small files while its shaders build, and keeps them when the build stops: Octopath Traveler 0's `_build`, stopped in its compile, held 68,230 files (38,376 in `tmp/dmsh_*`, 29,757 in `shader/cache/b-<chain>/`), against 105 once a build finished. Every later build made another `tmp/dmsh_*` beside the old one.

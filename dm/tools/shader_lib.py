@@ -60,13 +60,14 @@ def _names(folder):
     return out
 
 
-def write(files, dst, on_progress=None):
+def write(files, dst, on_progress=None, share=None):
     """files: {name: path, bytes, or a function called only when its file is written, so no library is held in memory whole}.
+    share: {name: key}; the names of one key take the first one's range, their own sources neither called nor read (the readers allow it: romfs.py, romfs_image.h).
     Written by way of dst.part, removed on failure so a full drive gets its space back: an image is whole or absent.
     on_progress(files written, files, bytes written): at the start and after each file"""
     part = dst + '.part'
     try:
-        _write_part(files, part, on_progress)
+        _write_part(files, part, on_progress, share)
         os.replace(part, dst)
     except BaseException:
         try: os.unlink(part)
@@ -74,16 +75,26 @@ def write(files, dst, on_progress=None):
         raise
 
 
-def _write_part(files, part, on_progress=None):
+def _write_part(files, part, on_progress=None, share=None):
     names = sorted((n.encode() for n in files))
-    ents, off = [], romfs.HEAD.size
+    share = share or {}
+    first, alias = set(), {}
+    for name in names:
+        key = share.get(name.decode())
+        if key is None: continue
+        if key in first: alias[name] = key
+        else: first.add(key)
+    ents, off, placed = [], romfs.HEAD.size, {}
     if on_progress: on_progress(0, len(names), 0)
     # called one after the other, the sources held a library's write to the cache file's read speed
-    readers = concurrent.futures.ThreadPoolExecutor(READERS) if any(callable(v) for v in files.values()) else None
+    readers = concurrent.futures.ThreadPoolExecutor(READERS) if any(name not in alias and callable(files[name.decode()]) for name in names) else None
     ahead, todo = collections.deque(), iter(names)
     def sources():
         while True:
             while len(ahead) < (4 * READERS if readers else 1) and (name := next(todo, None)) is not None:
+                if name in alias:
+                    ahead.append((name, None))
+                    continue
                 source = files[name.decode()]
                 ahead.append((name, readers.submit(source) if readers and callable(source) else source))
             if not ahead: return
@@ -93,6 +104,10 @@ def _write_part(files, part, on_progress=None):
         if readers: done.callback(readers.shutdown, cancel_futures=True)   # after an error, the functions not yet called are not
         out.write(b'\0' * off)
         for name, source in sources():
+            if name in alias:
+                ents.append((name, *placed[alias[name]]))
+                if on_progress: on_progress(len(ents), len(names), off)
+                continue
             off += -off % ALIGN
             out.seek(off)
             n = 0
@@ -107,6 +122,7 @@ def _write_part(files, part, on_progress=None):
                         out.write(b)
                         n += len(b)
             ents.append((name, off, n))
+            if (key := share.get(name.decode())) is not None: placed[key] = (off, n)
             off += n
             if on_progress: on_progress(len(ents), len(names), off)
         out.seek(off)
@@ -130,11 +146,15 @@ def pack(lib, say=print):
             os.rmdir(folder)
             before = None
         if before is None: return os.path.isfile(image)
-        files = {n: os.path.join(folder, n) for n in before}
+        files, share = {n: os.path.join(folder, n) for n in before}, {}
         if os.path.isfile(image) and STAMP not in before:
-            with romfs.scandir(image) as it:
-                for e in it: files.setdefault(e.name, e.path)
-        write(files, image)
+            old = romfs.Image(image)
+            for name, k in old.children(0):
+                if name not in files:
+                    files[name] = os.path.join(image, name)
+                    share[name] = old.entry(k)[:2]
+        if share: write(files, image, share=share)
+        else: write(files, image)
         if _names(folder) != before:   # a build wrote to it meanwhile: the folder is the newer one
             say(f'{folder} changed while it was packed: it stays a folder')
             return True
@@ -174,9 +194,13 @@ def app_files(lib):
 def subset(lib, dst):
     files = app_files(lib)
     if not any(n.endswith('.metallib') for n in files): raise ValueError(f'no shader libraries at {lib}')
+    src, share = view(lib), {}
+    if os.path.isfile(src):
+        img = romfs.Image(src)
+        share = {name: img.entry(k)[:2] for name, k in img.children(0) if name in files}
     def whole(path):
         with romfs.open(path, 'rb') as f: return f.read()
-    write({n: (lambda p=p: whole(p)) for n, p in files.items()}, os.fspath(dst))
+    write({n: (lambda p=p: whole(p)) for n, p in files.items()}, os.fspath(dst), share=share)
     return len(files)
 
 
