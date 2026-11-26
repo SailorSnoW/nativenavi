@@ -1,0 +1,72 @@
+name: The build stops
+description: Packing the game failed, in the NativeNavi app or with scripts/build_app.py.
+labels: [build]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read [When a build stops](https://github.com/SailorSnoW/nativenavi/blob/main/docs/gui.md#when-a-build-stops) first: free space, App Management and files in a cloud drive stop most builds.
+  - type: dropdown
+    id: how
+    attributes:
+      label: Built with
+      options:
+        - The NativeNavi app
+        - scripts/build_app.py
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Where it stopped
+      description: The step, and the last `[RED]` line the window or Terminal showed.
+    validations:
+      required: true
+  - type: dropdown
+    id: version
+    attributes:
+      label: Game version being built
+      options:
+        - 1.1.1
+        - 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: nup
+    attributes:
+      label: The game file
+      description: The `.nup` file's size, and whether NativeNavi accepted it.
+      placeholder: 25.6 GB, accepted
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: The commit
+      description: NativeNavi › About NativeNavi shows it; in a checkout, `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac, macOS, Xcode and free space
+      description: "`xcodebuild -version` gives Xcode's."
+      placeholder: MacBook Air, M3, 16 GB, macOS 27.2, Xcode 27.2, 120 GB free
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Logs
+      description: |
+        NativeNavi: **Show Log** in its window, and File › Show NativeNavi Log. Terminal: the script's whole output.
+        They show your Mac's user name in their paths; you may replace it.
+    validations:
+      required: true
+  - type: checkboxes
+    id: files
+    attributes:
+      label: No game files
+      options:
+        - label: I attached nothing from the game (the NUP, its RomFS, code, shaders or keys).
+          required: true

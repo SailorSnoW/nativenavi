@@ -1,0 +1,22 @@
+name: An idea
+description: Something the Mac app could do better for playing, running or practising.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The aim is the game as it ships, at its own resolution and frame rate, as well as a Mac can run it. Modes beyond it (a higher frame rate, a higher resolution) are out of scope; mods load from the mods folder.
+        An idea for the practice menu itself goes to [sloperinaGZ](https://github.com/PracticeROM/sloperina/issues).
+  - type: textarea
+    id: what
+    attributes:
+      label: The idea
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What it is for
+      description: What you are trying to do (a run, practice, a stream, play), and what gets in the way today.
+    validations:
+      required: true

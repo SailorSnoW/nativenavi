@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A question, or help to get the game running
+    url: https://github.com/SailorSnoW/nativenavi/discussions/categories/q-a
+    about: Ask in Discussions. Issues are for problems in the code.
+  - name: A problem in sloperinaGZ itself
+    url: https://github.com/PracticeROM/sloperina/issues
+    about: When its menu does the same on a console or an emulator, report it to PracticeROM. When it works there and not in the Mac app, report it here.
+  - name: Another game, an iPhone or an iPad
+    url: https://github.com/seedds/nxnative
+    about: This repository runs Ocarina of Time on Macs only. nxnative, which it was forked from, runs the others.

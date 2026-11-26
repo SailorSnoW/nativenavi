@@ -1,0 +1,14 @@
+# The workflows' actions only: they are pinned by commit, which the repository's Actions policy requires. The translator's and the host's
+# dependencies stay out: a change to one changes the shader chain (every shader is translated again) or the host, and is made by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+    labels: [dependencies]
+    commit-message:
+      prefix: ci

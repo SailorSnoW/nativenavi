@@ -1,0 +1,93 @@
+name: Something is wrong in the game
+description: A crash, a hang, a wrong picture, sound, controls, saves or the frame rate.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search the [open issues](https://github.com/SailorSnoW/nativenavi/issues) and the [symptom index](https://github.com/SailorSnoW/nativenavi/blob/main/docs/agents/symptoms.md) first, with a line of the log or a word for what you see.
+        A trick or glitch that behaves differently from a Switch 2 has [its own form](https://github.com/SailorSnoW/nativenavi/issues/new?template=2-console-parity.yml).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead. A screenshot or a video helps.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to see it again
+      description: Where in the game, what you did, and how often it happens. A save is welcome.
+      placeholder: |
+        1. Load the save in Kakariko Village
+        2. Walk into the graveyard
+        3. The game freezes after about a minute, 3 times out of 3
+    validations:
+      required: true
+  - type: dropdown
+    id: version
+    attributes:
+      label: Game version
+      options:
+        - 1.1.1
+        - 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: built
+    attributes:
+      label: How the game was built
+      options:
+        - The NativeNavi app
+        - scripts/build_app.py (a Mac app)
+        - scripts/build_app.py --platform mac (a development build)
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: The build line of the log
+      description: One of the log's first lines.
+      placeholder: "build: commit 7b61fbd, shader chain b622b2538e2c, profile 0400486024DEC000"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS
+      placeholder: MacBook Pro, M2 Pro, 16 GB, macOS 27.2
+    validations:
+      required: true
+  - type: dropdown
+    id: practice
+    attributes:
+      label: Practice tools
+      options:
+        - "Off"
+        - "On"
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings changed from the defaults
+      description: In the settings window before the game, and any line of an `env.txt`. "None" when you changed nothing.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Drag in the whole log of the run, `~/Library/Logs/NativeNavi/0400486024DEC000.log` (in Finder: Go › Go to Folder…). The next start moves it to `0400486024DEC000.prev.log` and the one after that replaces it. A development build writes where its command says.
+        The log shows your Mac's user name in its paths; you may replace it.
+    validations:
+      required: true
+  - type: checkboxes
+    id: files
+    attributes:
+      label: No game files
+      options:
+        - label: I attached nothing from the game (the NUP, its RomFS, code, shaders or keys).
+          required: true

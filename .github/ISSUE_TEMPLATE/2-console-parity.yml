@@ -1,0 +1,112 @@
+name: Differs from a Switch 2 (speedrun)
+description: A trick, a glitch, timing, lag or loading that is not what the console does.
+title: "[Parity] "
+labels: [console-parity]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The aim is the game as a Switch 2 runs it, so that what is learned here holds on a console. A difference is a bug, even when it makes a run faster.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What differs
+      options:
+        - A trick or glitch that fails here and works on a Switch 2
+        - A trick or glitch that works here and not on a Switch 2
+        - Timing, frame windows or input lag
+        - Lag frames or frame rate
+        - Loading times
+        - Randomness, physics or another behaviour
+    validations:
+      required: true
+  - type: input
+    id: trick
+    attributes:
+      label: The trick or setup
+      description: Its usual name, and a link to a guide or to the speedrun wiki if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: On a Switch 2
+      description: What happens there, with a video link. A capture shows frame by frame what a phone video cannot.
+    validations:
+      required: true
+  - type: textarea
+    id: here
+    attributes:
+      label: In the Mac app
+      description: What happens here, with a video link, and how often (for example 0 out of 20 tries).
+    validations:
+      required: true
+  - type: dropdown
+    id: version
+    attributes:
+      label: Game version
+      options:
+        - 1.1.1
+        - 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: practice
+    attributes:
+      label: Practice tools
+      description: Does it happen with the practice tools off too? A setup made with a warp or a memfile can differ from one played into.
+      options:
+        - "Off"
+        - On, and also with them off
+        - On, not tried with them off
+    validations:
+      required: true
+  - type: dropdown
+    id: fps
+    attributes:
+      label: Frame rate setting
+      options:
+        - 60 fps (the default)
+        - 30 fps
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Other settings changed from the defaults
+      description: In the settings window and any line of an `env.txt`. "None" when you changed nothing.
+    validations:
+      required: true
+  - type: input
+    id: controller
+    attributes:
+      label: Controller
+      placeholder: Switch Pro Controller over Bluetooth
+  - type: input
+    id: build
+    attributes:
+      label: The build line of the log
+      description: One of the first lines of `~/Library/Logs/NativeNavi/0400486024DEC000.log`.
+      placeholder: "build: commit 7b61fbd, shader chain b622b2538e2c, profile 0400486024DEC000"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS
+      placeholder: MacBook Pro, M2 Pro, 16 GB, macOS 27.2
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Drag in the log of a run where it happened; the run before the last one is in `0400486024DEC000.prev.log`. It shows your Mac's user name in its paths; you may replace it.
+  - type: checkboxes
+    id: files
+    attributes:
+      label: No game files
+      options:
+        - label: I attached nothing from the game (the NUP, its RomFS, code, shaders or keys).
+          required: true
