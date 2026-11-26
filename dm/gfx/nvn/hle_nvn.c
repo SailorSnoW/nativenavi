@@ -568,7 +568,7 @@ int nvn_flushed(const void *p, uint64_t n) {
 NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) {
     const tex_builder_t *s = (const tex_builder_t *)b; tex_t *o = TX(t);
     // NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult): the object's bytes are the game's, read on purpose
-    if (o->magic == MAGIC('T', 'E', 'X', 0) && o->serial) { static uint64_t n; if (!n++) LOG("[nvn] TextureInitialize on a texture object that is still live (no Finalize): releasing the old host texture (first case ser=%llu)", (unsigned long long)o->serial); mtl_tex_release(o); }
+    if (o->magic == MAGIC('T', 'E', 'X', 0) && o->serial) { static uint64_t n; if (!n++) LOG("[nvn] TextureInitialize on a texture object that is still live (no Finalize): releasing the old host texture (first case ser=%llu)", (unsigned long long)o->serial); uint64_t old = o->serial; if (mtl_tex_release(o)) ft_del(old); }
     memset(o, 0, sizeof *o);
     o->magic = MAGIC('T', 'E', 'X', 0); o->d = s->d; o->pool = s->pool; o->off = s->off;
     // NVN2 device flag bit 16 selects X1 GOB order; the texture keeps its device's
@@ -595,7 +595,8 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     ft_add(o); live_add(LV_TEX, t);
     return 1;
 }
-NVN(nvnTextureFinalize, void, NVNtexture *t) { live_del(LV_TEX, t); ft_del(TX(t)->serial); mtl_tex_release(TX(t)); TX(t)->magic = 0; }
+// NVNtexture is plain data: a copy's Finalize ends only the copy (own_tex_end_locked), and the texture stays registered for the CPU's writes (GitHub issue #2975)
+NVN(nvnTextureFinalize, void, NVNtexture *t) { live_del(LV_TEX, t); uint64_t serial = TX(t)->serial; if (mtl_tex_release(TX(t))) ft_del(serial); TX(t)->magic = 0; }
 NVN(nvnTextureGetFlags, NVNtextureFlags, const NVNtexture *t) { return (NVNtextureFlags)CTX(t)->d.flags; }
 NVN(nvnTextureGetWidth, int, const NVNtexture *t) { return (int)CTX(t)->d.width; }
 NVN(nvnTextureGetHeight, int, const NVNtexture *t) { return (int)CTX(t)->d.height; }

@@ -1285,11 +1285,11 @@ void mtl_spare_stats(uint64_t *held, uint64_t *trimmed, uint64_t *trimmed_mb) { 
 uint64_t mtl_pkg_edge_skips(void) { return g_pkg_edge_skips; }
 uint64_t mtl_pkg_miss(void) { return g_pkg_miss; }
 static void treg_retire_serial(uint64_t ser);
-void mtl_tex_release(tex_t *t) {
-    if (!t->serial) return;
+int mtl_tex_release(tex_t *t) {
+    if (!t->serial) return 1;
     pthread_mutex_lock(&g_smu);
     int was_live = own_tex_end_locked(t);   // -1: a copy's Finalize, the texture's own object still holds it
-    if (was_live < 0) { pthread_mutex_unlock(&g_smu); return; }
+    if (was_live < 0) { pthread_mutex_unlock(&g_smu); return 0; }
     free(nvn_hm_del(&g_image_desc, &t->serial));
     pthread_mutex_lock(&g_cpu_tex_mu);
     cpu_pool *cp = cpu_pool_get(t->pool, 0);
@@ -1305,4 +1305,5 @@ void mtl_tex_release(tex_t *t) {
     serial_del(t->serial);
     // NVNtexture is plain data, so a game may finalize several copies: only the first release retires the serial's descriptors.
     if (was_live) treg_retire_serial(t->serial);
+    return 1;
 }
