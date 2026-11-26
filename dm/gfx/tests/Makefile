@@ -295,6 +295,16 @@ t_pool_cow_residency: t_pool_cow_residency.m $(MTL_T_DEP)
 check_t_pool_cow_residency: t_pool_cow_residency
 	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=0 ./t_pool_cow_residency
 	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 ./t_pool_cow_residency
+t_pool_stats: t_pool_stats.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pool_stats.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+# The plain build cannot see the race of the power line's read with the walks (issue #3300): the check runs the ThreadSanitizer build too
+t_pool_stats_tsan: t_pool_stats.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -fsanitize=thread -o $@ t_pool_stats.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+.PHONY: check_t_pool_stats pool-stats-tsan
+check_t_pool_stats: t_pool_stats pool-stats-tsan
+	MTL_DEBUG_LAYER=1 ./t_pool_stats
+pool-stats-tsan: t_pool_stats_tsan
+	TSAN_OPTIONS=halt_on_error=1:abort_on_error=0 ./t_pool_stats_tsan   # exit, not abort: the crash handler would report the abort
 t_htab_update: t_htab_update.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_htab_update.m $(MTL_T_SRC) $(FW)
 check_t_htab_update: RUN_ENV = MTL_DEBUG_LAYER=1
