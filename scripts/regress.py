@@ -59,7 +59,7 @@ ROOT = Path(os.environ.get('REGRESS_ROOT', ''))
 GAMES = Path(os.environ.get('REGRESS_GAMES', ''))
 HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex')
 RUST_FILES = ('dm/host/rust.mk', 'dm/host/rust/Cargo.toml', 'dm/host/rust/Cargo.lock', 'dm/host/rust/rust-toolchain.toml')
-REWRITER = ('dm/tools/patch_nso.py', 'dm/tools/jump_solver.py', 'dm/tools/nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py')
+REWRITER = ('dm/tools/patch_nso.py', 'dm/tools/jump_solver.py', 'dm/tools/nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_syms.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py')
 HEAVY_EXE = {'clang', 'make', 'xcodebuild', 'ld', 'ld64', 'swift-frontend', 'dotnet', 'metal', 'metal-tt', 'air-tt', 'applegpu-nt', 'dmsh_xlate', 'spirv-cross', 'cargo', 'rustc'}   # jobs that skew a measurement
 HEAVY_PY = r'(dmsh_build|shader_split|own_compilers|patch_nso)\.py'
 # from runs of one revision against itself
@@ -613,30 +613,69 @@ def rewriter_key(tree):
     return digest([tree.path / f for f in REWRITER] + sorted((tree.path / 'dm/games').glob('*/patches.py')))[:16]
 
 
+def build_modules_key(patched):
+    p = Path(patched)
+    files = sorted(f for f in p.iterdir() if f.is_file()) if p.is_dir() else []
+    return 'build-' + digest(files, p.name.encode())[:16]
+
+
+def modules_complete(dst, names):
+    return (dst / '.done').is_file() and all((dst / f'{m}.{ext}').is_file() for m in names for ext in ('patched.bin', 'fixups.tsv', 'gates.tsv'))
+
+
 def modules_for(tree, g, rewrite, jobs):
-    if not rewrite: return g.patched, 'build'
-    key = rewriter_key(tree)
-    dst = game_root(g) / 'patched' / key / g.patched.name
-    if (dst / '.done').is_file(): return dst, key
+    if not rewrite: return g.patched, build_modules_key(g.patched)
     mods = g.env(tree)
     if not g.derived:
         # with both on the path each build's cuts would register twice
         mods.pop('DM_GAMES_DIR', None)
         mods.pop('DM_GAMES_FIRST', None)
     names = tree.py(f"import sys; sys.path.insert(0, 'dm/games'); import game; print(' '.join(game.load({g.id!r}).words('modules')))", mods).split()
-    src = {m: g.build / 'extract' / g.ver / 'ExeFS' / m for m in names if m == 'main' or (g.build / 'extract' / g.ver / 'ExeFS' / m).is_file()}
-    shutil.rmtree(dst, ignore_errors=True); dst.mkdir(parents=True)
+    exefs = g.build / 'extract' / g.ver / 'ExeFS'
+    src = {m: exefs / m for m in names if m == 'main' or (exefs / m).is_file()}
+    extra_patches = [p for d in mods.get('DM_GAMES_DIR', '').split(os.pathsep) if d for p in sorted(Path(d).glob('*/patches.py'))]
+    # patch_nso.py reads the build rows of the tree's profile, never DM_GAMES_DIR's
+    try: own = [l for l in (tree.path / 'dm/games' / Path(mods.get('DM_GAME') or '-').name / 'game.tsv').read_text(encoding='utf-8').splitlines() if l.startswith('build\t')]
+    except OSError: own = []
+    try:
+        import capstone
+        cs_ver = capstone.__version__
+    except ImportError:
+        cs_ver = 'missing'
+    meta = json.dumps({'rev': rewriter_key(tree), 'modules': list(src), 'capstone': cs_ver, 'env': {k: mods.get(k) for k in ('DM_GAME', 'DM_PATCH_FRONT')}, 'profile': own,
+                       'extra_patches': [f'{p.parent.name}/{p.name}' for p in extra_patches]}, sort_keys=True).encode()
+    key = digest(extra_patches + list(src.values()), meta)[:16]
+    dst = game_root(g) / 'patched' / key / g.patched.name
+    if modules_complete(dst, src): return dst, key
+    tmp = dst.with_name(f'{dst.name}.partial.{os.getpid()}')
+    shutil.rmtree(tmp, ignore_errors=True); tmp.mkdir(parents=True)
     say(f'  {g.id}: rewriting {len(src)} modules with the rewriter of {tree.id}')
     procs, todo = {}, list(src)
-    while todo or procs:
-        while todo and len(procs) < jobs:
-            m = todo.pop(0); f = open(dst / f'rewrite_{m}.log', 'w')
-            procs[m] = (subprocess.Popen([sys.executable, str(tree.path / 'dm/tools/patch_nso.py'), str(src[m]), str(dst), m], env=mods, stdout=f, stderr=subprocess.STDOUT), f)
-        for m in [m for m, (p, _) in procs.items() if p.poll() is not None]:
-            p, f = procs.pop(m); f.close()
-            if p.returncode: raise HarnessError(f'{g.id}: patch_nso.py of {tree.id} failed on {m} (see {dst / f"rewrite_{m}.log"})')
-        time.sleep(0.2)
-    (dst / '.done').write_text('')
+    try:
+        while todo or procs:
+            while todo and len(procs) < jobs:
+                m = todo.pop(0); f = open(tmp / f'rewrite_{m}.log', 'w')
+                procs[m] = (subprocess.Popen([sys.executable, str(tree.path / 'dm/tools/patch_nso.py'), str(src[m]), str(tmp), m], env=mods, stdout=f, stderr=subprocess.STDOUT), f)
+            for m in [m for m, (p, _) in procs.items() if p.poll() is not None]:
+                p, f = procs.pop(m); f.close()
+                if p.returncode: raise HarnessError(f'{g.id}: patch_nso.py of {tree.id} failed on {m} (see {tmp / f"rewrite_{m}.log"})')
+            time.sleep(0.2)
+    finally:
+        for p, f in procs.values():
+            if p.poll() is None: p.terminate(); p.wait()
+            f.close()
+    (tmp / '.done').write_text('')
+    # another harness may have finished the same key meanwhile
+    if dst.exists():
+        if modules_complete(dst, src):
+            shutil.rmtree(tmp, ignore_errors=True)
+            return dst, key
+        shutil.rmtree(dst, ignore_errors=True)
+    try:
+        tmp.rename(dst)
+    except OSError:
+        if not modules_complete(dst, src): raise
+        shutil.rmtree(tmp, ignore_errors=True)
     return dst, key
 
 
