@@ -6,6 +6,7 @@
 #import <GameController/GameController.h>
 #include "dm.h"
 #include "front_role.h"
+#include "front_mac_present.h"
 #include "dm_input.h"
 #include "front.h"
 #include "hle.h"
@@ -74,6 +75,28 @@ int front_screen_settling(void) {
     if (g_match_pending > 0 && g_fullscreen) return 1;
     return g_mode_switched > 0 && now - g_mode_switched < 1.0;
 }
+// Main thread: the layer is opaque (Direct-to-Display) except in fullscreen on a mirrored display, a workaround (front_mac_present.h)
+static void layer_opaque_sync(NSScreen *screen, int fullscreen) {
+    if (!g_layer) return;
+    static int mode = -2, applied = -1;
+    static CGDirectDisplayID last;   // the window's last screen, for a window on none
+    if (mode == -2) {
+        const char *e = getenv("DM_MAC_COMPOSITED");
+        mode = front_mac_composited_mode(e);
+        if (e && *e && mode == FRONT_MAC_COMP_AUTO && strcmp(e, "auto")) LOG("[RED] DM_MAC_COMPOSITED=%s: 1, 0 or auto; using auto", e);
+    }
+    if (screen) last = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+    CGDirectDisplayID id = last ? last : CGMainDisplayID();
+    int mirrored = id != kCGNullDirectDisplay && CGDisplayIsInMirrorSet(id) != 0;
+    int op = front_mac_layer_opaque(mode, fullscreen, mirrored), first = applied < 0;
+    if (op == applied) return;
+    applied = op;
+    g_layer.opaque = op ? YES : NO;
+    const char *why = front_mac_layer_opaque_why(mode, fullscreen, mirrored);
+    if (!op) LOG("front end: Metal layer non-opaque (%s%s)", why, mode == FRONT_MAC_COMP_AUTO ? "; DM_MAC_COMPOSITED=0 keeps it opaque" : "");
+    else if (!first || mode == FRONT_MAC_COMP_OFF) LOG("front end: Metal layer opaque (%s)", why);
+}
+static int win_fullscreen(NSWindow *win) { return g_fullscreen || (win.styleMask & NSWindowStyleMaskFullScreen) != 0; }
 // Fullscreen switches the screen, for this app only, to a mode whose rate the game's divides (DM_SCREEN_MATCH=0: off), VRR screens
 // too (their 60 Hz link misses): docs/reference/frame-rate.md#fullscreen-switches-the-screen-to-a-rate-the-frame-rate-divides
 static NSWindow *g_win;
@@ -1164,6 +1187,7 @@ void front_run(void (*guest)(void)) {
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];
         win.title = @(DM_GAME_NAME);
+        win.backgroundColor = NSColor.blackColor;   // behind a non-opaque layer
         // without FullScreenPrimary the green button only zooms
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
         NSView *v = win.contentView = [[DmGameView alloc] initWithFrame:r];
@@ -1172,6 +1196,9 @@ void front_run(void (*guest)(void)) {
         g_layer.device = MTLCreateSystemDefaultDevice();
         g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         g_layer.contentsScale = win.backingScaleFactor;
+        const char *fs = getenv("DM_FULLSCREEN");   // any value but 0: start in fullscreen
+        int want_fs = fs && strcmp(fs, "0");
+        layer_opaque_sync(win.screen ?: NSScreen.mainScreen, want_fs);   // before the first drawable
         // developerHUDProperties stay unset: mode=default kept the HUD on after the menu's Hide HUD
         if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) LOG("front end: Metal performance HUD on (DM_METAL_HUD)");
         v.layer = g_layer;
@@ -1201,6 +1228,7 @@ void front_run(void (*guest)(void)) {
         }
         [win makeKeyAndOrderFront:nil];
         screen_refresh(win.screen ?: NSScreen.mainScreen);
+        layer_opaque_sync(win.screen ?: NSScreen.mainScreen, want_fs);
         g_win = win;
         [NSApp activateIgnoringOtherApps:YES];
         // A host another process starts is not activated and can open behind other windows:
@@ -1246,8 +1274,7 @@ void front_run(void (*guest)(void)) {
         [[bar addItemWithTitle:@"Window" action:nil keyEquivalent:@""] setSubmenu:wm];
         [wm addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"].keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
         NSApp.mainMenu = bar;
-        const char *fs = getenv("DM_FULLSCREEN");   // any value but 0: start in fullscreen
-        if (fs && strcmp(fs, "0")) {
+        if (want_fs) {
             g_fs_asked = CACurrentMediaTime();
             g_fs_starting = 1;
             // Opened from a fullscreen app, the game starts while macOS leaves that Space: ask for fullscreen after activation and the Space
@@ -1268,6 +1295,7 @@ void front_run(void (*guest)(void)) {
                 LOG("front end: fullscreen was refused (app active %d, window on the active Space %d)%s", NSApp.isActive, win.isOnActiveSpace, retried ? "" : ", asking once more");
                 if (retried) {
                     g_fs_starting = 0;
+                    layer_opaque_sync(win.screen, 0);
                     return;
                 }
                 retried = 1;
@@ -1309,17 +1337,23 @@ void front_run(void (*guest)(void)) {
             (void)n;
             screen_refresh(win.screen);
             if (win.screen) g_layer.contentsScale = win.backingScaleFactor;
+            layer_opaque_sync(win.screen, win_fullscreen(win) || g_fs_starting);
             screen_match_apply();
             dm_fstep_settle();
         }];
-        [nc addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); }];
+        [nc addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+            (void)n;
+            screen_refresh(win.screen);
+            layer_opaque_sync(win.screen, win_fullscreen(win) || g_fs_starting);   // mirroring turned on or off
+        }];
         // the layer follows the view; only the scale factor follows the screen
-        for (NSNotificationName nm in @[NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification])
-            [nc addObserverForName:nm object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_fstep_settle(); }];
+        [nc addObserverForName:NSWindowWillEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; layer_opaque_sync(win.screen, 1); dm_fstep_settle(); }];
+        [nc addObserverForName:NSWindowWillExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_fstep_settle(); }];
         [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) {
             (void)n;
             screen_refresh(win.screen);
             g_layer.contentsScale = win.backingScaleFactor;
+            layer_opaque_sync(win.screen, 1);
             screen_match_apply();
             g_fullscreen = 1;
             g_fs_starting = 0;
@@ -1330,6 +1364,7 @@ void front_run(void (*guest)(void)) {
             g_fullscreen = 0;
             screen_refresh(win.screen);
             g_layer.contentsScale = win.backingScaleFactor;
+            layer_opaque_sync(win.screen, 0);
             screen_match_apply();
             dm_fstep_settle();
         }];

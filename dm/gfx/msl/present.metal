@@ -38,11 +38,12 @@ static float4 sample_row(texture2d<float> t, sampler s, float3 px, float3 wx, fl
 }
 // At its size or larger: one bilinear tap. Smaller (2560x1440 on a 1080p screen, or a small window): a separable tent over each pixel's footprint, as one tap weighs the
 // texels by where the pixel's centre falls (stair-stepped, crawling edges; past 2:1 texels skipped). edge: the crop's first and last texel centres (uv).
+// Alpha is 1: the Switch's scan-out ignores the swapchain's, and a non-opaque layer (front_mac.m layer_opaque_sync) would blend it with the window.
 fragment float4 fs(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant Crop& c [[buffer(0)]]) {
     float2 uv = in.uv * c.rect.zw + c.rect.xy;
     float2 size = float2(t.get_width(), t.get_height());
     float2 step = abs(float2(dfdx(uv.x), dfdy(uv.y))) * size;   // texels per pixel: uv is linear, the derivatives exact
-    if (step.x < 1.001 && step.y < 1.001) return t.sample(s, clamp(uv, c.edge.xy, c.edge.zw));
+    if (step.x < 1.001 && step.y < 1.001) return float4(t.sample(s, clamp(uv, c.edge.xy, c.edge.zw)).rgb, 1.0);
     float2 inv_size = 1.0 / size, p = uv * size;
     float2 lo = min(c.edge.xy, c.edge.zw) * size, hi = max(c.edge.xy, c.edge.zw) * size;
     float3 px, wx, py, wy;
@@ -51,5 +52,5 @@ fragment float4 fs(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler
     float4 sum = wy.x * sample_row(t, s, px, wx, py.x);
     if (wy.y > 0.0) sum += wy.y * sample_row(t, s, px, wx, py.y);
     if (wy.z > 0.0) sum += wy.z * sample_row(t, s, px, wx, py.z);
-    return sum;
+    return float4(sum.rgb, 1.0);
 }

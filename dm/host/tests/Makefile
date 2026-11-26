@@ -72,6 +72,7 @@ run: $(B)/t_mods $(B)/t_mii $(B)/t_net_eventfd $(B)/t_motion $(B)/t_heap_size $(
 	$(B)/t_haptics
 	$(B)/t_haptics_apple
 	$(B)/t_front_role
+	$(B)/t_front_present
 	TMPDIR="$(abspath $(B))" $(B)/t_mods $(QUIET)
 	$(B)/t_symbols
 	$(B)/t_server_environment
@@ -261,6 +262,10 @@ $(B)/t_hid_tsan: t_hid.c ../hle_hid.c ../motion_fusion.h ../hle_haptics.c ../hle
 run: $(B)/t_front_role
 $(B)/t_front_role: t_front_role.c ../front_role.h | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -I.. -o $@ t_front_role.c
+# The Metal layer's opacity in mirrored fullscreen (front_mac_present.h).
+run: $(B)/t_front_present
+$(B)/t_front_present: t_front_present.c ../front_mac_present.h | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -I.. -o $@ t_front_present.c
 $(B)/t_haptics: t_haptics.c ../hle_haptics.c ../hle_haptics.h ../dm_input.h | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -I.. -o $@ t_haptics.c ../hle_haptics.c
 $(B)/t_haptics_apple: t_haptics_apple.m ../haptics_apple.m ../haptics_apple.h ../hle_haptics.c ../hle_haptics.h ../pad_jc1.h ../pad_pro.h | $(B)
