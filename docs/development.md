@@ -127,18 +127,17 @@ Outside a shell, a command takes Apple's `/usr/bin/python3` (3.9.6 with Xcode 27
 ## Continuous integration
 
 `.github/workflows/tests.yml` runs on pushes to `main`, on pull requests and by
-hand (`gh workflow run tests.yml`), in three macOS jobs. `host` builds the Mac
+hand (`gh workflow run tests.yml`), in five macOS jobs. `host` builds the Mac
 host and runs the host's unit tests, the Rust library's tests and lints
 ([Rust in the host](#rust-in-the-host)), the CPU texture layout/deswizzle test
 (`dm/gfx/tex/tests/t_tex`) and the graphics tests that need no GPU
 (`make -C dm/gfx/tests cpu-run`, whose list `CPU_TESTS` is in that Makefile).
-`sanitizers` runs them again under sanitizers (below), and `tools` runs the
-Python tool and translator tests. The texture format test (`t_fmt_mtl`) creates
-Metal textures and stays local. The repository is private, where a macOS
-minute counts as ten Linux ones against the included minutes, so two jobs run
-only when asked (`gh workflow run tests.yml -f extended=true`): `coverage`
-(below) and `gfx-build`, which compiles every graphics test without running
-it; `lint-c.yml` parses them all on every C change already.
+`sanitizers` runs them again under sanitizers (below), `tools` runs the
+Python tool and translator tests, `coverage` measures what the tests run
+(below), and `gfx-build` compiles every graphics test without running it
+(`lint-c.yml` only parses them). The texture format test (`t_fmt_mtl`) creates
+Metal textures and stays local. The repository is public, so GitHub's macOS
+runners cost it nothing and every job runs each time.
 
 Every macOS job runs with the toolchain the project supports: Xcode 27.2 on
 GitHub's `xcode-27` image, named by path in `DEVELOPER_DIR` so a new default
@@ -184,7 +183,7 @@ test (an uninstrumented system framework, a test fixture); then it gets an entry
 with its reason. A fix removes any existing entry in the same change: the job
 then checks the repaired code. A change to `ignorelist.txt` rebuilds the ASan tests.
 
-The `coverage` job (by hand, `extended`) measures which lines the tests run,
+The `coverage` job measures which lines the tests run,
 and reports only: no threshold fails it. It builds the host unit tests and the CPU texture test again
 with clang's source-based coverage (`make coverage`, into `build/cov` and `cov/`;
 `dm/sanitizers/coverage.mk`), and runs the tool tests (`dm/tools/tests`) under

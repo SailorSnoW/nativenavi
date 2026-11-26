@@ -1,6 +1,5 @@
 # Tests that need no game files, keys or GPU. GitHub's macOS runners have no Metal 4, so the tests that go through mtl_init stay local
-# (`make -C dm/gfx/tests GAME=<id> run` on an Apple-silicon Mac). A private repository's macOS minute costs ten Linux ones, so the jobs that only report
-# (coverage) or repeat another check (every gfx test compiled: lint-c.yml parses them all) run only when asked: workflow_dispatch with `extended`.
+# (`make -C dm/gfx/tests GAME=<id> run` on an Apple-silicon Mac).
 name: tests
 
 on:
@@ -8,11 +7,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      extended:
-        description: Also measure coverage and compile every gfx test
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -156,7 +150,6 @@ jobs:
   # Report only: no threshold fails it, and a failing test is the other jobs' to report, so the runs here keep going.
   coverage:
     name: Coverage (host, CPU texture and tool tests; report only)
-    if: inputs.extended
     runs-on: xcode-27
     timeout-minutes: 25
     steps:
@@ -213,7 +206,6 @@ jobs:
 
   gfx-build:
     name: Every gfx test compiled, not run
-    if: inputs.extended
     runs-on: xcode-27
     timeout-minutes: 40
     steps:
