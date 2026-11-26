@@ -246,6 +246,16 @@ int main(void) { @autoreleasepool {
         [sparse appendString:@"v1\tf1\n"];
         put([bundle stringByAppendingPathComponent:@"prebuilt.tsv"], pre_stamp(sparse, 0));
         EXPECT("probe: no eligible sample cannot establish coverage", 0, pso_bundle_covers(pre_parse(sparse), pre_stamp(sparse, 0), 0, nil));
+        // 20,000 pairs left to the device: a set of NSArray pairs (hash = element count) took seconds to build and probe
+        NSMutableString *many = [NSMutableString string], *many_rest = [NSMutableString string];
+        for (int i = 0; i < 20000; i++) [many_rest appendFormat:@"missing%06d\tf%06d\n", i, i];
+        [many appendString:many_rest]; [many appendString:@"v1\tf1\n"];
+        put([bundle stringByAppendingPathComponent:@"prebuilt.tsv"], pre_stamp(many, 0));
+        uint64_t t0 = bp_now();
+        int covers = pso_bundle_covers(pre_parse(many), pre_stamp(many, 0), 0, many_rest);
+        uint64_t ms = (bp_now() - t0) / 1000000;
+        EXPECT("probe: 20,000 pairs left to the device leave the one bundled pair to probe", 1, covers);
+        EXPECT("probe: 20,000 pairs left to the device are filtered in under 2 s", 1, ms < 2000);
         put([bundle stringByAppendingPathComponent:@"prebuilt.tsv"], pre_stamp(txt, 0));
     }
     // Metal crashes on a non-archive file and on a bare Mach-O header: such files are never handed to it
