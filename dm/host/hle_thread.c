@@ -938,11 +938,15 @@ static void yield_for(thr_t *me, uint64_t run_ns, int clock) {
 }
 // A run of yields is a wait only while the loop makes no progress (x19-x28 unchanged, or back to the yield before last); a yield that made
 // progress returns at once (docs/reference/threads.md#yields-that-make-progress-return-at-once-thr_yield). A pass that read the clock makes a clock wait.
+static uint64_t yield_sig(const uint64_t *regs) {
+    uint64_t sig = 0xcbf29ce484222325ull;
+    for (int i = 19; i <= 28; i++) sig = (sig ^ regs[i]) * 0x100000001b3ull;
+    return sig;
+}
 static void clock_wait(thr_t *me, uint64_t sig, uint64_t now, int predict);
 static void thr_yield(thr_t *me, const uint64_t *regs) {
     if (!me) { sched_yield(); return; }
-    uint64_t y0 = now_ns(), sig = 0xcbf29ce484222325ull;
-    for (int i = 19; i <= 28; i++) sig = (sig ^ regs[i]) * 0x100000001b3ull;
+    uint64_t y0 = now_ns(), sig = yield_sig(regs);
     int same = me->yrun_svc + 1 == me->nsvc;
     int moved = same && me->yrun_sig != sig && me->yrun_sig2 != sig;
     int clock = g_yield_clock && same && !moved && dm_clock_reads != me->yrun_clk;
@@ -1029,10 +1033,20 @@ static int64_t poll_wait_begin(int64_t ns) {
     me->nyield++; me->nbackoff++;
     return (int64_t)bo;
 }
-static void poll_wait_end(int64_t ns, int64_t r) {
-    if (ns <= 0 || ns >= 20000) return;
+// A timed-out wait with a timeout of 0 is a step of the run of yields by their rules (x19-x28 included: 0 is also the SDK's try form); past the back-off's
+// start the thread sleeps after it, never as a waiter, and still answers TimedOut as Horizon does (docs/reference/threads.md#zero-timeout-waits-are-polls).
+static void poll_wait_end(int64_t ns, int64_t r, const uint64_t *regs) {
+    if (ns < 0 || ns >= 20000) return;
     thr_t *me = pthread_getspecific(g_keythr); if (!me) return;
-    if (r == R_TIMEOUT) me->poll_ret = now_ns(); else me->yrun_svc = 0;
+    if (r != R_TIMEOUT) { me->yrun_svc = 0; return; }
+    if (ns) { me->poll_ret = now_ns(); return; }
+    uint64_t now = now_ns(), sig = yield_sig(regs);
+    int same = me->yrun_svc && me->yrun_svc + 1 == me->nsvc && now >= me->poll_ret && now - me->poll_ret <= SPIN_GAP_NS;
+    if (!same || (me->yrun_sig != sig && me->yrun_sig2 != sig)) me->yrun_t0 = now;
+    me->yrun_svc = me->nsvc; me->yrun_sig2 = me->yrun_sig; me->yrun_sig = sig;
+    uint64_t bo = yield_backoff_ns(now - me->yrun_t0, 0);
+    if (bo) { me->nyield++; backoff_sleep(me, bo); }
+    me->poll_ret = now_ns();
 }
 // A sleep shorter than the back-off cap is a poll, a step of the run of yields (docs/reference/threads.md#short-sleeps-are-polls)
 void dm_guest_sleep_ns(int64_t ns);
@@ -1287,7 +1301,7 @@ static int svc_thread_impl(int num, uint64_t *regs) {
 #endif
         int64_t r = block(t, 2, poll_wait_begin((int64_t)regs[3]));   // timeout: the lock is not re-acquired (user mode takes it)
         g_unlock();
-        poll_wait_end((int64_t)regs[3], r);
+        poll_wait_end((int64_t)regs[3], r, regs);
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x1D: {  // SignalProcessWideKey(x0 key, w1 count, <= 0 all)
@@ -1310,7 +1324,7 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         if (!ok) r = R_BAD_STATE;
         else { t->waddr = addr; r = block(t, 3, poll_wait_begin((int64_t)regs[3])); }
         g_unlock();
-        if (ok) poll_wait_end((int64_t)regs[3], r);
+        if (ok) poll_wait_end((int64_t)regs[3], r, regs);
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x35: {  // SignalToAddress(x0 address, w1 type, w2 value, w3 count): 0 wake, 1 increment if equal and wake, 2 modify by waiter count if equal and wake
@@ -1378,7 +1392,7 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         }
         for (int i = 0; i < held; i++) sync_close(objects[i]);
         g_unlock();
-        poll_wait_end(ns, r);
+        poll_wait_end(ns, r, regs);
         regs[0] = (uint64_t)r; regs[1] = idx >= 0 ? (uint64_t)idx : 0; return 1;
     }
     case 0x19: {  // CancelSynchronization(w0 thread)
