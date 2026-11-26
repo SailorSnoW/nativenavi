@@ -163,8 +163,7 @@ static id<MTLFunction> at_fn(NvShader *fs, id<MTLFunction> base) {
         id<MTLFunction> own[2] = {fs->fn, fs->fn_d};
         for (int i = 0; i < 2 && !why; i++) {
             if (!own[i]) continue;
-            NSString *name = [own[i].name stringByAppendingString:@"_a"]; id<MTLFunction> f = fn4_note([lib newFunctionWithName:name], lib, name, nil);
-            if (f && f.functionConstantsDictionary.count) f = fn_spec(lib, name, [MTLFunctionConstantValues new], &e);
+            NSString *name = [own[i].name stringByAppendingString:@"_a"]; id<MTLFunction> f = fn_load(lib, name, &e);
             if (!f) why = "no entry point";
             else if (!fn_args_match(fs, f)) why = "its argument buffer differs from the base library's";
             else fs->afn[i] = f;

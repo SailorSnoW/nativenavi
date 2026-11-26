@@ -138,8 +138,7 @@ static id<MTLFunction> side_lib_entry(NvShader *vs, const char *suffix, NSString
     size_t kl = strlen(vs->key);
     NSString *path = [NSString stringWithFormat:@"%@/%.*s%s.metallib", g_msl_dir, (int)(kl > 2 ? kl - 2 : kl), vs->key, suffix];
     id<MTLLibrary> lib = lib_from_file(path, e);
-    id<MTLFunction> f = lib && name ? fn4_note([lib newFunctionWithName:name], lib, name, nil) : nil;
-    if (f && f.functionConstantsDictionary.count) f = fn_spec(lib, name, [MTLFunctionConstantValues new], e);
+    id<MTLFunction> f = fn_load(lib, name, e);
     *why = !lib ? "no library" : !f ? "no entry point" : NULL;
     if (f && vs->rf.nb && [f newArgumentEncoderWithBufferIndex:vs->rf.abi].encodedLength != vs->arg_len) { *why = "its argument buffer differs from the base library's"; f = nil; }
     *lib_out = lib;
@@ -177,9 +176,7 @@ static void pull_load(NvShader *vs) {
         vs->pfn = f;
         vs->pfn_state = 1;
         NSString *wn = vs->wlentry ?: [NSString stringWithFormat:@"%@_wl", vs->ventry];
-        id<MTLFunction> w = fn4_note([lib newFunctionWithName:wn], lib, wn, nil);
-        if (w && w.functionConstantsDictionary.count) w = fn_spec(lib, wn, [MTLFunctionConstantValues new], &e);
-        vs->wlfn = w;
+        vs->wlfn = fn_load(lib, wn, &e);
     } else {
         static _Atomic int n;
         if (n++ < 8) MLOG("[RED] pulling library of %s not usable (%s%s%s): its draws wait for their pipelines", vs->key, why, e ? ": " : "", e ? e.localizedDescription.UTF8String : "");

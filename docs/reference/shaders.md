@@ -2088,10 +2088,11 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 
 ### Function constants specialized at load
 
-- **Symptom:** `fragmentFunction main0 cannot be used to build a pipeline state` (a Metal validation assertion).
-- **Cause:** SPIRV-Cross declares an optional function constant, `spvLinearTextureAlignmentOverride`, in shaders that read a texel buffer, and Metal refuses any function with function constants until it is specialized.
-- **Fix:** `shader_load` specializes such functions with an empty set of values. On the Metal 4 path the pipeline's descriptor specializes them, not the library: [Functions with function constants specialized by the pipeline, not the library](#functions-with-function-constants-specialized-by-the-pipeline-not-the-library).
-- **Found on:** Pokémon Legends: Z-A (one imgui pixel shader).
+- **Symptom:** `fragmentFunction main0 cannot be used to build a pipeline state` (a Metal validation assertion). Later, the same text in a `SIGABRT` under `validateWithDevice` while shaders load and Metal 4 pipelines build on other threads.
+- **Cause:** SPIRV-Cross declares an optional function constant, `spvLinearTextureAlignmentOverride`, in shaders that read a texel buffer, and Metal refuses any function with function constants until it is specialized. The abort: the loaders (`shader_load`'s entries, `side_lib_entry` for `pull_load` and `vin_fn`, the `_wl` entry, `at_fn`) noted each entry in `g_fn4` unspecialized (`fn4_note(f, …, nil)`) and only then specialized it (`fn_spec`). `g_fn4` is keyed by the `MTLFunction`'s identity, and Metal hands out one `MTLFunction` per function content, device-wide, across libraries (on this Mac's M2 Pro with macOS 27.2.1, two libraries made from one source give the same object). So loading a shader again, or another with the same entry, put an unspecialized descriptor back for a while over the specialized one a pipeline build on another thread was reading.
+- **Fix:** `shader_load` specializes such functions, with `dm_blend_off` false when declared and the other constants at their defaults. On the Metal 4 path the pipeline's descriptor specializes them, not the library: [Functions with function constants specialized by the pipeline, not the library](#functions-with-function-constants-specialized-by-the-pipeline-not-the-library). Every loader takes its entries through `fn_load` (`nvn_shader.inc`), which specializes before it notes anything (`shader_load`'s main, dual-source, discard and mesh object entries, the side libraries' and the alpha test's); `fn4_note` makes no unspecialized note for a function that declares constants and never replaces a specialized one with one.
+- **Check:** `make -C dm/gfx/tests check_t_pso_archive`: no note for an unspecialized function with constants, a specialized note kept against an unspecialized one, and four threads of `fn_load` and `fn4_of` that never see an unspecialized note.
+- **Found on:** Pokémon Legends: Z-A (one imgui pixel shader). The abort upstream, nxnative `5491ae39`.
 
 ### Functions with function constants specialized by the pipeline, not the library
 

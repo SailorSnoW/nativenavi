@@ -318,8 +318,11 @@ static NSMapTable *g_fn4;
 static NSMapTable *map_by_identity(void) {   // keys compared by pointer, keys and values held strongly
     return [[NSMapTable alloc] initWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory capacity:0];
 }
+// Metal hands out one MTLFunction per function content, device-wide: an unspecialized note for a function that declares constants would replace the specialized one
+// another thread's pipeline build reads (validateWithDevice: "cannot be used to build a pipeline state"), so it is never made
 static id<MTLFunction> fn4_note(id<MTLFunction> f, id<MTLLibrary> lib, NSString *name, MTLFunctionConstantValues *cv) {
     if (!f || !lib || !name) return f;
+    if (!cv && f.functionConstantsDictionary.count) return f;
     MTL4LibraryFunctionDescriptor *ld = [MTL4LibraryFunctionDescriptor new]; ld.library = lib; ld.name = name;
     MTL4FunctionDescriptor *d = ld;
     if (cv) {
@@ -329,6 +332,7 @@ static id<MTLFunction> fn4_note(id<MTLFunction> f, id<MTLLibrary> lib, NSString 
     }
     os_unfair_lock_lock(&g_fn4_lock);
     if (!g_fn4) g_fn4 = map_by_identity();
+    if (!cv && [[g_fn4 objectForKey:f] isKindOfClass:MTL4SpecializedFunctionDescriptor.class]) { os_unfair_lock_unlock(&g_fn4_lock); return f; }
     [g_fn4 setObject:d forKey:f];
     os_unfair_lock_unlock(&g_fn4_lock);
     return f;
@@ -380,6 +384,16 @@ static id<MTLFunction> fn_dev(id<MTLFunction> f) {
         }
         return dev->fn;
     }
+}
+// An entry point, specialized before it is noted when it declares constants (fn4_note); dm_blend_off = false, so the descriptors match the offline pair archive (pre_fn, pso_offline.py)
+static id<MTLFunction> fn_load(id<MTLLibrary> lib, NSString *name, NSError **e) {
+    if (!lib || !name) return nil;
+    id<MTLFunction> f = [lib newFunctionWithName:name];
+    if (!f) return nil;
+    if (!f.functionConstantsDictionary.count) return fn4_note(f, lib, name, nil);
+    MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
+    if (f.functionConstantsDictionary[@"dm_blend_off"]) { BOOL no = NO; [cv setConstantValue:&no type:MTLDataTypeBool atIndex:DMSH_BLEND_OFF_FC]; }
+    return fn_spec(lib, name, cv, e);
 }
 // Metal hands out one MTLFunction per function content, device-wide, so a variant (no border corrections, etc.) has no function object of its own:
 // the pipeline builder names it by mask and takes fn4_of_b / fn_dev_b.
@@ -491,14 +505,19 @@ static NvShader *shader_load(NSString *pc, int stage) {
         o->mesh_notask = o->mesh_kind == 2 && ![mst[@"task"] boolValue];
         if (o->mesh_kind == 2 && atomic_load(&g_depth_zero) && j[@"entry_z"]) entry = j[@"entry_z"];
     }
-    o->fn = fn4_note([lib newFunctionWithName:entry], lib, entry, nil);
+    NSError *fe = nil;
+    o->fn = fn_load(lib, entry, &fe);
+    if (!o->fn && fe) {
+        MLOG("[RED] shader %s: specializing its function constants failed: %s", pc.UTF8String, fe.localizedDescription.UTF8String);
+        o->fn = [lib newFunctionWithName:entry];
+    }
     o->stage = stage; strlcpy(o->key, pc.UTF8String, sizeof o->key); o->ventry = entry;
     if (stage == 0) {
         o->pentry = side_entry(j[@"pull"], ez ? @"entry_z" : @"entry", entry);
         o->wlentry = side_entry(j[@"pull"], ez ? @"entry_z_wl" : @"entry_wl", [entry stringByAppendingString:@"_wl"]);
         o->vinentry = side_entry(j[@"vin"], ez ? @"entry_z" : @"entry", entry);
     }
-    if (o->mesh_notask && !(o->mesh_obj = j[@"entry_object"] ? fn4_note([lib newFunctionWithName:j[@"entry_object"]], lib, j[@"entry_object"], nil) : nil))
+    if (o->mesh_notask && !(o->mesh_obj = fn_load(lib, j[@"entry_object"], NULL)))
         MLOG("[RED] mesh shader %s: no object entry point (entry_object) in its library: its draws are skipped", pc.UTF8String);
     if (stage == 0) o->has_pull = [j[@"pull"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) {
@@ -506,13 +525,9 @@ static NvShader *shader_load(NSString *pc, int stage) {
         o->has_bz = [j[@"blend_zero"] boolValue];
         o->has_logic = [j[@"logic"] isKindOfClass:[NSDictionary class]];
     }
-    // A function declaring function constants needs specializing before a pipeline takes it, even when every constant is optional: an empty set keeps the defaults.
+    // A function declaring function constants needs specializing before a pipeline takes it, even when every constant is optional (fn_load).
     if (j[@"entry_discard"]) {
-        o->discard_fn = fn4_note([lib newFunctionWithName:j[@"entry_discard"]], lib, j[@"entry_discard"], nil);
-        if (o->discard_fn.functionConstantsDictionary.count) {
-            MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new]; NSError *error = nil;
-            o->discard_fn = fn_spec(lib, j[@"entry_discard"], cv, &error);
-        }
+        o->discard_fn = fn_load(lib, j[@"entry_discard"], NULL);
         if (!o->discard_fn) MLOG("[RED] shader %s: no rasterizer-discard entry point %s in its library", pc.UTF8String, [j[@"entry_discard"] UTF8String]);
     }
     if (stage == 1 && [j[@"entry_u"] isKindOfClass:NSString.class]) {
@@ -528,21 +543,8 @@ static NvShader *shader_load(NSString *pc, int stage) {
         }
     }
     if (stage == 1 && j[@"entry_d"]) {
-        o->fn_d = fn4_note([lib newFunctionWithName:j[@"entry_d"]], lib, j[@"entry_d"], nil);
+        o->fn_d = fn_load(lib, j[@"entry_d"], NULL);
         if (!o->fn_d) MLOG("[RED] shader %s: no dual-source entry point %s in its library", pc.UTF8String, [j[@"entry_d"] UTF8String]);
-    }
-    if (o->fn.functionConstantsDictionary.count) {
-        // dm_blend_off = false explicitly, so the descriptors match the offline pair archive (pre_fn, pso_offline.py)
-        NSError *fe = nil; MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
-        if (o->fn.functionConstantsDictionary[@"dm_blend_off"]) { BOOL no = NO; [cv setConstantValue:&no type:MTLDataTypeBool atIndex:DMSH_BLEND_OFF_FC]; }
-        id<MTLFunction> f = fn_spec(lib, entry, cv, &fe);
-        if (f) o->fn = f;
-        else MLOG("[RED] shader %s: specializing its function constants failed: %s", pc.UTF8String, fe.localizedDescription.UTF8String);
-        if (o->fn_d) {
-            MTLFunctionConstantValues *dcv = [MTLFunctionConstantValues new];
-            if (o->fn_d.functionConstantsDictionary[@"dm_blend_off"]) { BOOL no = NO; [dcv setConstantValue:&no type:MTLDataTypeBool atIndex:DMSH_BLEND_OFF_FC]; }
-            o->fn_d = fn_spec(lib, j[@"entry_d"], dcv, &fe);
-        }
     }
     if (o->rf.nb) {
         o->ae = [o->fn newArgumentEncoderWithBufferIndex:o->rf.abi];
