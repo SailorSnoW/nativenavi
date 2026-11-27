@@ -1,7 +1,8 @@
 """dm/tools/pso_carry.py: a prewarm list carried to another version's shader keys, without game files. Shaders are found again by their place in the files: the keys both
 versions share anchor the containers' order; containers between anchors pair only when both sides have as many; a container's variations only when both hold as many
-keys and no anchor in it moved; a file renamed by its version number pairs with its one twin; a pipeline row only when its carried pair is a pair of the new files. A
-shader archive's keys are found again by their program's options (dm/tools/bfsha.py), its reading faked here."""
+keys and no anchor in it moved; a file renamed by its version number pairs with its one twin; a pipeline row only when its carried pair is a pair of the new files. An
+effect set's (a .vsetb file's) BNSH variations are found again within their container, anchored on the shared keys and paired in order between anchors that hold as
+many. A shader archive's keys are found again by their program's options (dm/tools/bfsha.py), its reading faked here."""
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -80,6 +81,37 @@ class Carry(unittest.TestCase):
             out = (p / 'out.tsv').read_text().splitlines()
             self.assertTrue(out[0].startswith('# Prewarm seed list carried by dm/tools/pso_carry.py from the test'))
             self.assertEqual(out[1:], ['# recorded on v131072', f'S\t{k(103)}_b\t0'])
+
+
+V_OLD = [(k(30), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var0'), (k(31), 'pixel', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var0'),   # anchors: the same keys
+         (k(32), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var1'), (k(33), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var2'),   # recompiled, between the anchors, as many variations on both sides
+         (k(35), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var3'),   # the second anchor, moved to var7 in the new file
+         (k(36), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var5'), (k(37), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var6'),   # 2 variations against 1: not paired
+         (k(40), 'compute', '/Effect/static.vsetb.byml.zs#BNSH@0x9000#var0')]  # the compute BNSH
+V_NEW = [(k(30), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x3000#var0'), (k(31), 'pixel', '/Effect/static.vsetb.byml.zs#BNSH@0x3000#var0'),
+         (k(130), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x3000#var2'), (k(131), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x3000#var3'),
+         (k(35), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x3000#var7'),
+         (k(132), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x3000#var9'),
+         (k(140), 'compute', '/Effect/static.vsetb.byml.zs#BNSH@0xa000#var0')]
+
+
+class Vsetb(unittest.TestCase):
+    def test_variations_pair_by_their_anchors(self):
+        a, b = smap(V_OLD), smap(V_NEW)
+        got = pc.vsetb_keys(a, b)
+        self.assertEqual(got, {k(32): k(130), k(33): k(131), k(40): k(140)})   # the keys both versions have are key_map's (k→k), not these
+        # k(32)/k(33): between the anchors var0 and var3→var7, as many variations on both sides, paired in order
+        # k(36)/k(37): the last segment holds 2 old against 1 new: not paired; k(40): the compute BNSH pairs with the compute BNSH
+
+    def test_a_container_count_mismatch_pairs_nothing(self):
+        old = [(k(42), 'vertex', '/Effect/x.vsetb.byml.zs#BNSH@0x100#var0'), (k(43), 'vertex', '/Effect/x.vsetb.byml.zs#BNSH@0x200#var0')]
+        new = [(k(142), 'vertex', '/Effect/x.vsetb.byml.zs#BNSH@0x800#var0')]
+        self.assertEqual(pc.vsetb_keys(smap(old), smap(new)), {})
+
+    def test_a_non_vsetb_file_is_left_to_the_place_carry(self):
+        old = [(k(50), 'vertex', '/Shader/x.bin#BNSH@0x100#var0'), (k(51), 'vertex', '/Shader/x.bin#BNSH@0x100#var1')]
+        new = [(k(150), 'vertex', '/Shader/x.bin#BNSH@0x800#var0'), (k(151), 'vertex', '/Shader/x.bin#BNSH@0x800#var1')]
+        self.assertEqual(pc.vsetb_keys(smap(old), smap(new)), {})
 
 
 ARC = '/m.Product.110.bfsha.zs#BNSH@0x1000#var'

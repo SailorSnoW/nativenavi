@@ -9,7 +9,9 @@ pair in order only when both versions have as many. What is in a container (its 
 them moved: a container whose variations were renumbered carries nothing. A file whose name differs only in its numbers (a table named by version) pairs with the one
 other file of that name. A pipeline row is kept only when its carried shader pair is a pair of the new version's files (shader_pairs.tsv, pso_pairs.tsv); rows whose
 shaders the new version has under the same keys are kept as they are. A shader archive's (BFSHA) variations, which an update renumbers, are found again by their
-program's options (dm/tools/bfsha.py): the old version's table of them, and the new version's archives read from its RomFS.
+program's options (dm/tools/bfsha.py): the old version's table of them, and the new version's archives read from its RomFS. An effect set's (a .vsetb file's) BNSH
+variations are found again within their container: the containers of one file pair in order, the variations whose keys both versions share anchor the order
+within a paired container, and the variations between two anchors pair in order only when both sides hold as many.
 
 python3 dm/tools/pso_carry.py [--programs <from shader_programs.tsv> --romfs <to RomFS>] <from shader_map.tsv> <to shader_map.tsv> <from pso_manifest.tsv> <out pso_manifest.tsv> <to pairs.tsv>...
 """
@@ -24,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bfsha
 
 POS = re.compile(r'^(.*?)#(BNSH|BAHS|NDSR|NDVE)@(0x[0-9a-f]+)(.*)$')
+VAR = re.compile(r'^#var(\d+)$')
 DIGITS = re.compile(r'\d+')
 
 
@@ -106,6 +109,58 @@ def key_map(a, b):
     return out
 
 
+def varno(s):
+    m = VAR.match(s)
+    return int(m.group(1)) if m else None
+
+
+def vsetb_keys(a, b):
+    """old key → new key for keys in an effect set's BNSH (a .vsetb file) whose variations an update renumbered: the containers of one file pair in order,
+    and within a paired container the variations whose keys both versions share anchor the order; the variations between two anchors pair in order only
+    when both sides hold as many. A container with a different number of BNSHs in the new version pairs with none."""
+    names = file_names(a, b)
+    at = {}   # (file, BNSH offset, variation, stage) → key of the new map
+    for k, v in b.items():
+        n = varno(v[3]) if v and v[1] == 'BNSH' else None
+        if n is not None: at[(v[0], v[2], n, v[4])] = k
+    cont = collections.defaultdict(list)   # (file, BNSH offset) → old keys
+    for k, v in a.items():
+        n = varno(v[3]) if v and v[0] in names and v[0].endswith('.vsetb.byml.zs') and v[1] == 'BNSH' else None
+        if n is not None: cont[(names[v[0]], v[2])].append(k)
+    files = collections.defaultdict(list)
+    for f, off in cont: files[f].append(off)
+    out = {}
+    for f, offs in sorted(files.items()):
+        nb = sorted({v[2] for v in b.values() if v and v[0] == f and v[1] == 'BNSH'})
+        if len(nb) != len(offs): continue   # a vsetb holds one graphics and one compute BNSH; another count pairs with none
+        for oa, ob in zip(sorted(offs), nb):
+            old = {k: a[k] for k in cont[(f, oa)]}
+            anchor = {}   # old variation → new variation, for keys both versions hold in the paired containers
+            for k, v in old.items():
+                w = b.get(k)
+                if w and w[0] == f and w[2] == ob:
+                    mv, ov = varno(w[3]), varno(v[3])
+                    if mv is not None and ov is not None: anchor.setdefault(ov, mv)
+            ovs = sorted({n for n in (varno(v[3]) for v in old.values()) if n is not None})
+            nvs = sorted({n for v in b.values() if v and v[0] == f and v[2] == ob for n in (varno(v[3]),) if n is not None})
+            if not ovs or not nvs: continue
+            oi, ni = {v: i for i, v in enumerate(ovs)}, {v: i for i, v in enumerate(nvs)}
+            pairs = {}
+            bounds = [(-1, -1)] + [(oi[x], ni[anchor[x]]) for x in sorted(anchor) if x in oi and anchor[x] in ni] + [(len(ovs), len(nvs))]
+            for (a0, b0), (a1, b1) in zip(bounds, bounds[1:]):
+                if a0 >= 0: pairs[ovs[a0]] = nvs[b0]
+                if a1 - a0 == b1 - b0:
+                    for d in range(1, a1 - a0):
+                        if a0 + d < len(ovs) and b0 + d < len(nvs): pairs[ovs[a0 + d]] = nvs[b0 + d]
+            for k, v in old.items():
+                ov = varno(v[3])
+                if ov is None: continue
+                nv = pairs.get(ov)
+                t = nv is not None and at.get((f, ob, nv, v[4]))
+                if t and t not in a: out[k] = t
+    return out
+
+
 def program_keys(a, b, km, programs, romfs, warn=print):
     """old key → new key for keys km lacks whose old variation is a shader archive's program (dm/tools/bfsha.py's table of the old version): the new version's
     program of the same shading model with the same options, read from its archive in romfs, gives the key of the same stage"""
@@ -174,6 +229,8 @@ def carry_file(from_map, to_map, from_manifest, out_manifest, pair_paths, origin
     """programs: the old version's dm/tools/bfsha.py table, romfs: the new version's RomFS; with both, a shader archive's keys are found again by their program"""
     a, b = read_map(from_map), read_map(to_map)
     km = key_map(a, b)
+    vsetb = {k: v for k, v in vsetb_keys(a, b).items() if k not in km}
+    km.update(vsetb)
     found = {}
     if programs and romfs:
         found = program_keys(a, b, km, bfsha.read_table(programs), romfs, warn)
@@ -185,6 +242,7 @@ def carry_file(from_map, to_map, from_manifest, out_manifest, pair_paths, origin
     moved = sum(n for (k, w), n in st.items() if w == 'carried')
     by = ', '.join(f'{k} {st[k, "kept"] + st[k, "carried"]:,} of {st[k, "all"]:,}' for k in 'SRCM' if st[k, 'all'])
     note = (f'{kept + moved:,} of {total:,} rows ({kept:,} with the same keys, {moved:,} carried to this version\'s keys; {by}'
+            + (f'; {len(vsetb):,} effect-set (vsetb) keys found again by their variation\'s anchored place' if vsetb else '')
             + (f'; {len(found):,} shader archive keys found again by their program\'s options' if programs and romfs else '') + ')')
     head = [f'# Prewarm seed list carried by dm/tools/pso_carry.py from {origin or from_manifest}: {note}. The original list\'s comments follow.\n']
     with open(out_manifest + '.partial', 'w', encoding='utf-8') as f:
