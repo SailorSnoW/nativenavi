@@ -625,8 +625,12 @@ def fingerprint(*items, env=None):
         if kind == 'files':
             for p in map(rfs.Path, v):
                 h.update(p.name.encode() + b'\0')
-                try: h.update(hashlib.sha256(p.read_bytes()).digest())
+                try:
+                    fh = hashlib.sha256()
+                    with rfs.open(p, 'rb') as f:
+                        while chunk := f.read(1 << 20): fh.update(chunk)
                 except OSError: h.update(b'missing')
+                else: h.update(fh.digest())
         elif kind in ('tree', 'stat'):
             for rel, st in files_under(v): h.update(f'{rel}\0{st.st_size}\0{st.st_mtime_ns if kind == "stat" else ""}\n'.encode())
         elif kind == 'cmd':
@@ -672,8 +676,8 @@ def split_profile_inputs(g):
     return [g.id, settings, ('files', tables)]
 
 
-def split_output_key(pkg, g):
-    return fingerprint(package_key(pkg), ('files', [pkg.with_name('pso_pairs.tsv')] if not g.table('pso_pairs.tsv').is_file() else []))
+def split_output_key(pkg, g, pkg_key=None):
+    return fingerprint(pkg_key or package_key(pkg), ('files', [pkg.with_name('pso_pairs.tsv')] if not g.table('pso_pairs.tsv').is_file() else []))
 
 
 def package_key(pkg):
@@ -1054,8 +1058,10 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, own=False, dlc_roms=
             promote()
             key = fingerprint(*inputs, *split_profile_inputs(g))
     have_pairs = g.table('pso_pairs.tsv').is_file() or pkg.with_name('pso_pairs.tsv').is_file()
-    if pkg.is_dir() and have_pairs and (note := reused(kf, key)) is not None and reused(outputkf, split_output_key(pkg, g)) is not None:
-        PROG.end(f'{note}, reused (inputs unchanged)'); return package_key(pkg)
+    if pkg.is_dir() and have_pairs and (note := reused(kf, key)) is not None:
+        pkg_key = package_key(pkg)   # 14 files, 514 MB for Ocarina of Time: read once per build
+        if reused(outputkf, split_output_key(pkg, g, pkg_key)) is not None:
+            PROG.end(f'{note}, reused (inputs unchanged)'); return pkg_key
     PROG.set(step='splitting')
     tmp = pkg.with_name(pkg.name + '.partial'); rmtree(tmp); (tmp / 'tables').mkdir(parents=True)
     def counted(ln):
@@ -1084,12 +1090,13 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, own=False, dlc_roms=
     rmtree(kf); rmtree(outputkf); swap_in(tmp / 'pkg', pkg); rmtree(tmp)
     note = (f'{int(m.group(1)):,} shaders' if m else '') + (f', {bad.group(1)} file(s) unreadable' if bad else '')
     key = fingerprint(*inputs, *split_profile_inputs(g))   # again: a derived profile's tables were just written
-    outputkf.write_text(split_output_key(pkg, g) + '\n')
+    pkg_key = package_key(pkg)
+    outputkf.write_text(split_output_key(pkg, g, pkg_key) + '\n')
     kf.write_text(f'{key}\n{note}\n')
     if promoted and dlckey: dlckf.write_text(f'{dlckey}\nDLC-only shader content\n')
     else: rmtree(dlckf)
     PROG.end(note)
-    return package_key(pkg)
+    return pkg_key
 
 
 def shader_keys(g):

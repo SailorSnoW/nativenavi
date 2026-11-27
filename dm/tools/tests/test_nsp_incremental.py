@@ -1,10 +1,12 @@
 """build_app.py's reuse across builds of a derived profile and of the registered one. Real fingerprints and mock tool runs; no game files or Xcode needed."""
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
+import tracemalloc
 import unittest
 from unittest import mock
 
@@ -483,6 +485,20 @@ class SplitShaders(Base):
         with self.assertRaisesRegex(nsp.BuildError, r'^1 file\(s\) could not be read'):
             self.go(g, own=False)
 
+    def test_package_key_is_read_once_per_reuse_or_split(self):
+        g = self.own()
+        calls = 0
+        real = nsp.package_key
+        def counting(pkg):
+            nonlocal calls
+            calls += 1
+            return real(pkg)
+        with mock.patch.object(nsp, 'package_key', side_effect=counting):
+            k1 = self.go(g); self.assertEqual(calls, 1)
+            k2 = self.go(g); self.assertEqual((calls, k2), (2, k1))
+            (self.pkg / 'main.bin').write_bytes(b'tampered')   # the reuse check's read, then the new package's
+            k3 = self.go(g); self.assertEqual((calls, k3), (4, k1))
+
     def test_mode_is_in_the_key(self):   # the same files split as an own profile, then checked against them as a registered one
         g = self.own(); self.go(g)
         self.assertEqual(self.go(g, own=False), nsp.package_key(self.pkg)); self.assertEqual(self.splits, 2)
@@ -638,6 +654,52 @@ class Route(Base):   # which versions build from the profile as it is, and what 
         ok = said(f'build\tv0\t1.0.0\tmain={BID2}', 'v0')
         self.assertEqual(len(ok), 1); self.assertNotIn('[RED]', ok[0]); self.assertIn('registered v0 (1.0.0) builds', ok[0])
         self.assertIn('[RED]', said(f'build\tv196608\t?\tmain={"ef" * 16}', 'v196608')[0])
+
+
+class StreamedFingerprints(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.tmp)
+
+    def whole_file(self, paths):   # what fingerprint gave before it streamed
+        h = hashlib.sha256()
+        h.update(b'\0files\0')
+        for p in map(nsp.rfs.Path, paths):
+            h.update(p.name.encode() + b'\0')
+            try: h.update(hashlib.sha256(p.read_bytes()).digest())
+            except OSError: h.update(b'missing')
+        return h.hexdigest()
+
+    def test_streamed_fingerprint_matches_whole_file_and_missing(self):
+        import romfs_image
+        empty = self.tmp / 'empty.bin'; empty.write_bytes(b'')
+        loose = self.tmp / 'loose.bin'; loose.write_bytes(b'hello-' * 500000)
+        missing = self.tmp / 'does_not_exist.bin'
+        src = self.tmp / 'rsrc'; src.mkdir()
+        (src / 'in_img.bin').write_bytes(b'romfs-data-' * 120000)
+        (src / 'img_empty.bin').write_bytes(b'')
+        img = self.tmp / 'RomFS.img'; romfs_image.pack(src, img)
+        paths = [empty, missing, loose, nsp.rfs.Path(img / 'in_img.bin'), nsp.rfs.Path(img / 'img_empty.bin'), nsp.rfs.Path(img / 'missing.bin')]
+        self.assertEqual(nsp.fingerprint(('files', paths)), self.whole_file(paths))
+        class FailingStream:   # an OSError mid-stream gives the missing file's digest, and the outer hash takes nothing of the read
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n): raise OSError('disk read error')
+        want = self.whole_file([self.tmp / 'nonexistent' / loose.name])
+        with mock.patch.object(nsp.rfs, 'open', return_value=FailingStream()):
+            self.assertEqual(nsp.fingerprint(('files', [loose])), want)
+
+    def test_streamed_fingerprint_has_bounded_peak_allocation(self):
+        big = self.tmp / 'big.bin'
+        big.write_bytes(b'x' * (6 << 20))
+        tracemalloc.start()
+        try:
+            tracemalloc.clear_traces()
+            digest = nsp.fingerprint(('files', [big]))
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(digest, self.whole_file([big]))
+        self.assertLess(peak, 3 << 20)
 
 
 if __name__ == '__main__': unittest.main()
