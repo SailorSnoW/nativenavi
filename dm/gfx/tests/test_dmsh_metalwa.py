@@ -288,6 +288,104 @@ kernel void main0(device uint* o [[buffer(0)]])
         self.assertIn('@"dm_mwa3_fc"', fd_sec)
 
 
+LD_SRC = """#include <metal_stdlib>
+using namespace metal;
+
+struct main0_out { float4 c [[color(0)]]; };
+struct main0_in { float4 v [[user(locn0)]]; };
+struct dm_alpha_state { uint func; float ref; };
+
+static __attribute__((always_inline)) main0_out dm_body_main0(main0_in in, float4 gl_FragCoord)
+{
+    main0_out out = {};
+    if (in.v.x < 0.0)
+    {
+        discard_fragment();
+    }
+    if (in.v.x < 0.0)
+    {
+        out.c = float4(0.0);
+        return out;
+    }
+    if (in.v.y > 0.5) discard_fragment();   // a comment: return discard_fragment();
+    bool gl_HelperInvocation = false;
+    if (in.v.z > 0.5)
+    {
+        gl_HelperInvocation = true, discard_fragment();
+    }
+    out.c = in.v;
+    return out;
+}
+
+fragment main0_out main0(main0_in in [[stage_in]], float4 gl_FragCoord [[position]])
+{
+    return dm_body_main0(in, gl_FragCoord);
+}
+
+fragment main0_out main0_a(main0_in in [[stage_in]], float4 gl_FragCoord [[position]], constant dm_alpha_state& dm_alpha [[buffer(30)]])
+{
+    main0_out dm_r = dm_body_main0(in, gl_FragCoord);
+    if (dm_r.c.w < dm_alpha.ref) discard_fragment();
+    return dm_r;
+}
+
+fragment void main0_v(main0_in in [[stage_in]])
+{
+    if (in.v.z > 0.0) discard_fragment();
+}
+"""
+
+
+class LateDiscard(unittest.TestCase):
+    def test_flag_through_the_body_and_a_repeat_after_it(self):
+        out, n = W.late_discard(LD_SRC)
+        self.assertEqual(n, 3)
+        self.assertIn('main0_out dm_body_main0(main0_in in, float4 gl_FragCoord, thread bool& dm_kill)', out)
+        body = out[out.index('dm_body_main0(main0_in'):out.index('fragment main0_out main0(')]
+        self.assertEqual(body.count('(dm_kill = true, discard_fragment());'), 3)   # all kept where they were: a block's, a single-statement if's, a comma expression's
+        self.assertIn('if (in.v.y > 0.5) (dm_kill = true, discard_fragment());', body)
+        self.assertIn('gl_HelperInvocation = true, (dm_kill = true, discard_fragment());', body)
+        self.assertIn('// a comment: return discard_fragment();', body)   # comments untouched
+        self.assertNotIn('if (dm_kill)', body)   # the body returns as before
+        e = out[out.index('fragment main0_out main0('):]
+        e = e[:e.index('\n}\n')]
+        self.assertIn('bool dm_kill = false;', e)
+        # the value first: the call is what sets the flag
+        self.assertIn('{ main0_out dm_ld_r = dm_body_main0(in, gl_FragCoord, dm_kill); if (dm_kill) discard_fragment(); return dm_ld_r; }', e)
+        a = out[out.index('fragment main0_out main0_a('):]
+        a = a[:a.index('\n}\n')]
+        self.assertIn('main0_out dm_r = dm_body_main0(in, gl_FragCoord, dm_kill);', a)
+        self.assertIn('if (dm_r.c.w < dm_alpha.ref) (dm_kill = true, discard_fragment());', a)
+        self.assertIn('{ main0_out dm_ld_r = dm_r; if (dm_kill) discard_fragment(); return dm_ld_r; }', a)
+        v = out[out.index('fragment void main0_v('):]
+        v = v[:v.index('\n}\n')]
+        self.assertTrue(v.rstrip().endswith('if (dm_kill) discard_fragment();'))
+        self.assertIn(W.LD_MARK, out)
+
+    def test_idempotent_unchanged_and_refused(self):
+        once = W.late_discard(LD_SRC)[0]
+        self.assertEqual(W.late_discard(once), (once, 0))
+        plain = LD_SRC.replace('discard_fragment();', '')
+        self.assertEqual(W.late_discard(plain), (plain, 0))
+        with self.assertRaises(ValueError): W.late_discard(LD_SRC.replace('float4 gl_FragCoord)\n{', 'float4 gl_FragCoord)\n{\n    bool dm_kill = false;', 1))
+        kern = '#include <metal_stdlib>\nusing namespace metal;\n\nstatic void f(int x)\n{\n    if (x) discard_fragment();\n}\n\nkernel void k(uint i [[thread_position_in_grid]])\n{\n    f(int(i));\n}\n'
+        with self.assertRaises(ValueError): W.late_discard(kern)
+
+    def test_build_runs_it_on_every_pixel_unit(self):
+        b = (TOOLS / 'dmsh_build.py').read_text()
+        ps = b[b.index('def ps_libraries('):]
+        ps = ps[:ps.index('\npc_of, loc = {}, {}')]
+        self.assertIn('unit = late_discard(key, unit)', ps)   # every unit compiled, before it is written
+        self.assertIn('plain = late_discard(key, full)', ps)   # and the plain source when there is no unit
+
+    @unittest.skipUnless(shutil.which('xcrun'), 'needs the offline Metal compiler')
+    def test_compiles(self):
+        with tempfile.TemporaryDirectory() as d:
+            m = Path(d) / 'ld.metal'
+            m.write_text(W.late_discard(LD_SRC)[0])
+            subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', '-O1', '-fpreserve-invariance', str(m), '-o', str(Path(d) / 'ld.air')], check=True, capture_output=True)
+
+
 REPRO = (Path(__file__).resolve().parent / 't_metalwa.metal').read_text()
 
 

@@ -16,6 +16,10 @@ M2 Pro) and is written unconditionally with no function constant.
   KK9  a ballot before the only break of a loop sees all lanes, at -O0 and on macOS 27.2.1 as well (dEQP-VK.reconvergence.maximal.*). Guards every loop break (never a switch break)
        in functions that use subgroup operations (directly or through callees) with `if ((ulong)simd_active_threads_mask()) break;`.
 
+late_discard(msl), not KosmicKrisp's: on Apple's GPU a discard_fragment() late in a fragment shader may stop the colour write and leave the depth write
+(macOS 27.2.1, M2 Pro; docs/reference/shaders.md#a-late-discard-that-keeps-its-depth-write). Every discard stays and sets a flag, and every fragment entry point
+discards again on the flag before it returns. dmsh_build runs it on a pixel shader's whole unit, after its side entry points exist.
+
 apply(msl, enable=ALL, gate='fc') returns (msl, stats). A source without subgroup operations or matching patterns is returned unchanged (the same object), and a source already marked is
 returned unchanged. Vertex functions (whose subgroups dmsh_build rewrites to one lane) are skipped. Where KK3 would leave a ballot call
 unrewritten, apply raises ValueError so the shader fails closed instead of silently compiling the bug.
@@ -250,6 +254,85 @@ def apply(msl, enable: 'set[int] | frozenset[int]' = ALL, gate='fc'):
     m = re.search(r'^using namespace metal;\n', msl, flags=re.M)
     if not m: raise ValueError('dmsh_metalwa: no `using namespace metal;`')
     return msl[:m.end()] + '\n' + hdr + msl[m.end():], stats
+
+
+LD_MARK = '// dmsh_metalwa: late discard'
+LD_FLAG = 'dm_kill'
+_DISCARD = re.compile(r'\bdiscard_fragment\s*\(\s*\)')   # a call, as a statement or in SPIRV-Cross's `gl_HelperInvocation = true, discard_fragment();`
+_RETURN = re.compile(r'\breturn\b[^;]*;')
+
+
+def _fragment_entry(lines, f):
+    head = lines[f[0] - 1].strip() if f[0] else ''
+    frag = re.compile(r'^(?:\[\[[^\]]*\]\]\s*)*fragment\s')
+    return f[5] and bool(frag.match(lines[f[0]].strip()) or frag.match(head))
+
+
+def _masked_sub(pat, body, rep):
+    """pat's matches outside comments → rep(match text)"""
+    masked = _COMMENT.sub(lambda m: re.sub(r'[^\n]', ' ', m[0]), body)
+    out, i = [], 0
+    for m in pat.finditer(masked):
+        out.append(body[i:m.start()]); out.append(rep(body[m.start():m.end()])); i = m.end()
+    return ''.join(out + [body[i:]])
+
+
+def late_discard(msl):
+    """A discard_fragment() late in a fragment shader can leave its depth write in place on Apple's GPU, while one at the entry point's end does not
+    (docs/reference/shaders.md#a-late-discard-that-keeps-its-depth-write). Each discard stays where it is and also sets a flag (thread bool& through every
+    function between it and the entry point), and each fragment entry point discards again before it returns. Run on a pixel shader's whole unit, after
+    its side entry points exist. → (msl, number of entry points changed); raises ValueError on a shape it does not handle"""
+    if LD_MARK in msl or not _DISCARD.search(msl): return msl, 0
+    if re.search(r'\b(?:' + LD_FLAG + r'|dm_ld_r)\b', msl): raise ValueError(f'dmsh_metalwa: the source already names {LD_FLAG} or dm_ld_r')
+    lines = msl.split('\n')
+    fns = [f for f in functions(msl) if not _helper(f[3])]
+    names = [f[3] for f in fns]
+    if len(names) != len(set(names)): raise ValueError('dmsh_metalwa: two functions of one name (overloads are not handled)')
+    bodies = {f[3]: '\n'.join(lines[f[1] + 1:f[2]]) for f in fns}
+    calls = lambda b, n: re.search(r'\b' + re.escape(n) + r'\s*\(', _COMMENT.sub('', b))
+    flagged = {f[3] for f in fns if not f[5] and _DISCARD.search(_COMMENT.sub('', bodies[f[3]]))}
+    while True:
+        more = {f[3] for f in fns if not f[5] and f[3] not in flagged and any(calls(bodies[f[3]], m) for m in flagged)}
+        if not more: break
+        flagged |= more
+    if any(_DISCARD.search(_COMMENT.sub('', h)) for h in ('\n'.join(lines[f[1] + 1:f[2]]) for f in functions(msl) if _helper(f[3]))):
+        raise ValueError('dmsh_metalwa: a discard in a helper function')
+    sig_new, edits, n = {}, {}, 0
+    for f in fns:
+        s, o, c, name, params, entry = f
+        b = bodies[name]
+        reach = [m for m in flagged if calls(b, m)]
+        own = bool(_DISCARD.search(_COMMENT.sub('', b)))
+        if not reach and not own: continue
+        if entry and not _fragment_entry(lines, f): raise ValueError(f'dmsh_metalwa: {name} is no fragment entry point but reaches a discard')
+        for m in reach: b = _pass_lane(b, m, LD_FLAG)
+        b = _masked_sub(_DISCARD, b, lambda t: '(' + LD_FLAG + ' = true, ' + t + ')')   # an expression: it stands wherever the call did
+        if entry:
+            ret = re.search(r'\b(\w+)\s+' + re.escape(name) + r'\s*\(', _ATTR.sub(' ', lines[s]))
+            if not ret: raise ValueError(f'dmsh_metalwa: no return type for {name}')
+            rtype = ret.group(1)
+            void = rtype == 'void'
+            def guard(t, rt=rtype):   # the value first: it may be the call that sets the flag
+                v = t[len('return'):-1].strip()
+                if not v: return '{ if (' + LD_FLAG + ') discard_fragment(); return; }'
+                return '{ ' + rt + ' dm_ld_r = ' + v + '; if (' + LD_FLAG + ') discard_fragment(); return dm_ld_r; }'
+            b = _masked_sub(_RETURN, b, guard)
+            b = f'    bool {LD_FLAG} = false;\n' + b + (f'\n    if ({LD_FLAG}) discard_fragment();' if void else '')
+            n += 1
+        else:
+            sig_new[s] = lines[s].rstrip()[:-1] + (', ' if params.strip() else '') + f'thread bool& {LD_FLAG})'
+        edits[o] = b
+    if not n: return msl, 0
+    out, skip_to, starts = [], -1, {f[1]: f[2] for f in fns}
+    for i, l in enumerate(lines):
+        if i < skip_to: continue
+        if i in sig_new: out.append(sig_new[i]); continue
+        if i in edits: out.append(l); out.extend(edits[i].split('\n')); skip_to = starts[i]; continue
+        out.append(l)
+    msl = '\n'.join(out)
+    m = re.search(r'^using namespace metal;\n', msl, flags=re.M)
+    if not m: raise ValueError('dmsh_metalwa: no `using namespace metal;`')
+    return msl[:m.end()] + '\n' + LD_MARK + ': every discard repeated at its fragment entry point\'s exit\n' + msl[m.end():], n
 
 
 if __name__ == '__main__':

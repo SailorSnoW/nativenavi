@@ -241,6 +241,7 @@ VIN_STATS = collections.Counter()
 PULL_STATS = collections.Counter()
 SIDE_STATS = collections.Counter()
 BF_STATS = collections.Counter()
+LD_STATS = collections.Counter()
 
 def pull_finish(key, full, refl):
     """<key>_bp of a vertex shader with stage inputs (dmsh_pull.py); none without them or when the variant does not fit. Changes refl; the caller writes it"""
@@ -342,6 +343,17 @@ def vs_libraries(key, msl, full):
     refl = pull_finish(key, full, vin_finish(key, full, {'stage': 'vs'}))
     return {k: refl[k] for k in ('pull', 'vin') if k in refl}, False
 
+def late_discard(key, unit):
+    """dmsh_metalwa.late_discard on a pixel shader's whole source; the source unchanged, with a red line, on a shape it does not handle"""
+    try:
+        t, k = dmsh_metalwa.late_discard(unit)
+        LD_STATS['changed'] += k > 0
+        return t
+    except ValueError as e:
+        LD_STATS['failed'] += 1
+        print(f'[RED] {key}: late discard rewrite not applied ({str(e)[:120]}): a late discard may keep its depth write', flush=True)
+        return unit
+
 def ps_libraries(key, msl, full, bindings):
     """<key>_b, _bx (alpha test, logic op, main0_u) and _bf (readable tile, main0_f) cut from one compile (dmsh_side.cut). What does not build is left out with a
     red line, its stale library removed. → the reflection's view. Raises CalledProcessError when the plain source does not compile"""
@@ -354,6 +366,7 @@ def ps_libraries(key, msl, full, bindings):
     side = (set(info['alpha'] + info['logic']) if src else set()) | typed
     folded, fmeta = dmsh_fetch.fold(src or full, bindings, om_only_ok=key in BF_WANT)
     for unit, fetch in ([(folded, fmeta)] if folded else []) + ([(src or full, None)] if src or typed else []):
+        unit = late_discard(key, unit)
         names = ['_b'] + (['_bx'] if side else []) + (['_bf'] if fetch else [])
         groups = ([side] if side else []) + ([{'main0_f'}] if fetch else [])
         u = os.path.join(w, key + '_bu.metal')
@@ -377,7 +390,13 @@ def ps_libraries(key, msl, full, bindings):
         return {**{f: {'entries': info[f]} for f in ('alpha', 'logic') if src and side and info[f]}, **({'fetch': fetch} if fetch else {}), **({'entry_u_side': True} if typed else {})}
     SIDE_STATS['not generated'] += not src
     drop('_bx', '_bf')
-    MTL.compile('mac', msl, os.path.join(out, key + '_b.metallib'))
+    plain = late_discard(key, full)
+    if plain is full: MTL.compile('mac', msl, os.path.join(out, key + '_b.metallib'))
+    else:
+        u = os.path.join(w, key + '_bu.metal')
+        open(u, 'w').write(plain)
+        try: MTL.compile('mac', u, os.path.join(out, key + '_b.metallib'))
+        finally: os.unlink(u)
     return {}
 
 pc_of, loc = {}, {}
@@ -919,7 +938,7 @@ def finished(*_):
     progress('compiling', n, len(keys), force=n == len(keys), cached=len(cache_hits), misses=NMISS)
 # Shaders finish in forked worker processes (fin holds the GIL), forked before any thread starts so they inherit every table. A worker does not open the cache (Apple's
 # SQLite crashes when a fork opens a database): results come back here in batch order, as with threads. The Metal PCH is made before the fork.
-COUNTERS = (PRE_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, MTL.stats)
+COUNTERS = (PRE_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, LD_STATS, MTL.stats)
 def worker_start():
     global PROGRESS, STORE
     assert SERVED is not None
@@ -988,6 +1007,7 @@ print(f'readable-tile versions (<key>_bf, dmsh_fetch.py): {BF_STATS["generated"]
 print(f'shadow-input libraries (<key>_bv, dmsh_vin.py): {VIN_STATS["generated"]} generated, {VIN_STATS["failed"]} failed to compile, {VIN_STATS["not generated"]} not generated; '
       f'{VIN_STATS["inputs"]} integer inputs shadowed, {VIN_STATS["float only"]} of them with no other-sign shadow (attribute indices ran out)')
 print(f'alpha test and logic operation libraries (<key>_bx, dmsh_side.py): {SIDE_STATS["generated"]} generated, {SIDE_STATS["failed"]} failed to compile, {SIDE_STATS["not generated"]} pixel shaders without either')
+print(f'late discard (dmsh_metalwa.late_discard): {LD_STATS["changed"]} pixel shader sources with every discard repeated at their entry points\' exit, {LD_STATS["failed"]} left as they were')
 print(f'pulling libraries (<key>_bp, dmsh_pull.py): {PULL_STATS["generated"]} generated, {PULL_STATS["failed"]} failed to compile, {PULL_STATS["not generated"]} not generated, '
       f'{PULL_STATS["no stage input"]} vertex shaders without stage inputs (none needed); '
       f'{PULL_STATS["unit"]} vertex shaders\' libraries cut from one compile (dmsh_side.vs_unit), {PULL_STATS["unit failed"]} compiled each from its own source instead')
