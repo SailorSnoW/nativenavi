@@ -273,12 +273,68 @@ fb3ca11af9d2	2026-11-25	ported	03a9ea0	nvn/present: filter minified presents wit
 fcccbfa70143	2026-11-25	skip	-	host/fs: forward IsSaveDataExisting(Uid) to explicit overload	both IsSaveDataExisting overloads removed (6ddc6dc); the game imports neither
 fd5ae4b9f78a	2026-11-25	skip	-	packing/work: honor caller WORK in task-owned scratch folders (PR #1476)	a caller's WORK for build_ipa scratch folders; build_app.py sets WORK and dmsh_build.py makes its own dmsh_<pid> folder
 00904635e304	2026-11-26	skip	-	nvn/pso: guard Metal cache cleanup by directory identity (PR #2691)	hardening of the gpuarchiver cleanup: the folder is the bundle's own, under the flock; only a theoretical reused-name race
+0834cb6aebd1	2026-11-26	skip	-	game: port Xenoblade Chronicles X Switch 2 Edition to Mac	another game; its indexed MountRom(name, index) is not in this tree and the game imports only MountRom(name) / (name, cache, size)
+0a554d79f41a	2026-11-26	skip	-	host/nvn: honour fps_hold at 120 fps (PR #3339)	120 fps only: fps_high() needs g_fps_engine, set only in tests; at the 60 cap fstep_hold() already decides kmax
+0c932bc95e1b	2026-11-26	skip	-	host/save_sync: propagate getxattr failures when scanning or packing saves	save_sync removed
+10d5324981e6	2026-11-26	skip	-	docs: list DM_NVN_ROP_F16 and DM_SAVE_BACKUPS in env_switches.tsv	rows for DM_NVN_ROP_F16 (59fc8445 not taken) and DM_SAVE_BACKUPS (save_sync removed)
+1999cbd1f340	2026-11-26	deferred	-	gfx/nvn: wait for successor present on window acquire sync (PR #3372)	OoT has 3 images and ~0 ms a frame blocked on the acquire sync, no symptom; built on skipped c17a5498 / 551228c9; a successor present held by replay ahead would block nvnSyncWait
+1abb838a2eed	2026-11-26	partial	ea3463e	tools/regress: Make-driven host staging and fixed-function GL mode	make-driven host staging keyed by the built binary (the source list missed min_os.mk, dav1d, the toolchain); not the GL fixed-function mode
+1c672bac8ad8	2026-11-26	skip	-	game: run Naruto Storm Connections at 60 fps	another game
+2ffed890ca95	2026-11-26	ported	fac0597	tools/nup: scope memoryviews in Nup.copy to preserve write and decode errors	an ENOSPC or zstd error while unpacking the NUP surfaced as BufferError from mmap.close (reproduced on Python 3.14)
+392f98a13fe1	2026-11-26	skip	-	gfx/vk: honor partial renderArea for clears, discards, and resolves	Vulkan removed
+396441a92cae	2026-11-26	ported	af3c4df	gfx/nvn: round present viewport size before centring (PR #2295)	windowed sizes where pw * s lands a hair over the canvas put the picture at x = -1 (about 2 % of sizes) or a row off centre (about 23 %)
+407671726df4	2026-11-26	skip	-	ios/tests: share packing fixture setting GFXAPI and GD (PR #3370)	iOS removed
+45ff56c77b86	2026-11-26	skip	-	games/naruto-storm3: add Full Burst support	another game; its host part (a view for a compressed texture re-initialized with fewer mips) has no sign in this game
+473c90dea1b7	2026-11-26	skip	-	gfx/nvn: cache last mesh pipeline and run-twin lookup (PR #1847)	nvn_geometry.inc removed; the game's task / mesh draws (mtk_pso) take no lock and box nothing
+5572329f3ad4	2026-11-26	ported	2c3c3f8	packing/mac: include checkout provenance in Mac app reuse key (PR #2232)	DMCommit went stale on a reused app after a checkout-only change
+59fc8445a9bc	2026-11-26	no-op	-	nvn/shaders: store float colours into 16-bit float targets toward zero (PR #3348)	the M2 Pro stores float32 into 16-bit float targets toward zero in hardware (probe: 63,602 of 63,602 differing values), as upstream's M4 Pro / M5 Pro: a chain change for nothing
 5ac4f7edb5e4	2026-11-26	partial	38518fb	gfx/nvn: key prebuild and mesh prewarm dedup sets by string/dict instead of NSArray	only seen_mesh and pso_bundle_covers keyed by string; pre_parse_into belongs to faf91a9d (skipped)
+617bb33abf6e	2026-11-26	partial	6911dbb	tools/packer: target-specific shader stamps, packed GL roots, streamed fingerprints	streamed file fingerprints and one hash of the 514 MB shader package a build; not the GL / VK target stamps
 62bcfd20479d	2026-11-26	ported	94db790,145a1ac	packing/shaders: preserve shared cache blobs in library images	library 9.49 -> 9.10 GB, the app subset 0.19 GiB less
 67495b458f15	2026-11-26	skip	-	game: port Xenoblade Chronicles 2 Switch 2 Edition to Mac	another game
+6a02debec728	2026-11-26	ported	b9b3e34	host/input: filter mouse collections, unwrap -1..0 axes and read AC Back (PR #3352)	a composite keyboard / mouse receiver with a gamepad collection joined on a click and its mouse drove the left stick; wrapped -1..0 axes, AC Back; untested on a SHIELD or a real receiver
+6fd6bba61bb4	2026-11-26	ported	6d99335	packing: honor allow-damaged on matching shader tables (PR #3369)	--allow-damaged now passes the split's unreadable-file check; every table still compared
+73d19ea84a49	2026-11-26	skip	-	tools/ue: stamp complete Unreal decode inputs and verify before publish	Unreal tools removed
+7886d303853a	2026-11-26	skip	-	host/save_sync: publish conflict cloud backup before rotating	save_sync removed
+7c02b857ccf6	2026-11-26	no-op	-	host/sf: give duplicate service handles and in-flight requests shared ownership	hle_sf.c here serves only notif:a / caps:* with zeroed answers and keeps no session state; no sf: line in 189 logs
 9016bbe526a3	2026-11-26	ported	4437aa1	host/threads: keep wait polls out of clock_wait and include wait target in zero-timeout signature	fixes cfbda8fb's poll signature and keeps polls out of clock_wait
 99ae7c6fc468	2026-11-26	ported	b52341d	gfx/nvn: reject invalid GPU completion times (PR #1759)	a faulted buffer's unwritten end time fed the frame step judge (could hold it at 20 fps)
+9a4a3c5f80a3	2026-11-26	no-op	-	host/fs: reject stale save handles after rollback and scan read-only save mounts live	the game's only read-only mount is content: (a RomFS image, no name index); no save commit with files open in 189 logs; the releasable hunks need add-on mounts
 b0c7928b898b	2026-11-26	skip	-	host/audio: implement AudioOut flush and port Devil May Cry 3	the game uses AudioRenderer and OutputStream, imports no FlushAudioOutBuffers; the rest is another game
+b4d406352b2e	2026-11-26	skip	-	tools/bug_report: read provenance from runtime logs and sibling NSP apps (PR #2453)	bug_report.py removed (8277280)
 b680dbb9e925	2026-11-26	skip	-	host/aoc: deduplicate add-on content entries while scanning (PR #1990)	the game has no add-on content (no Resources/aoc, count 0)
+b9d0f83208e0	2026-11-26	skip	-	host/save_sync: keep atomic start-of-session save backups (PR #2455)	save_sync removed: the start-of-session backups live in save_sync_mount
+bfa8c0708524	2026-11-26	skip	-	ios/build_ipa: overwrite existing Info.plist stamps with plutil -replace	iOS removed
+c68421432107	2026-11-26	no-op	-	tools/romfs: filter NRR and recursive basename globs before building paths	no **/name glob over a RomFS image in this tree's packing; the NRR / NRO collector was removed
+caa1ab48ff1b	2026-11-26	docs	be63a90	docs/ocarina: record #2909 M1/M2 and M5/M6 GPU hang follow-ups	M2 Pro spilling ruled out, M5 / M6 cases are 685d2aec's bases; upstream's open M1 / M2 builds keep the task noinline call this tree removed
+cea11c7d6002	2026-11-26	deferred	-	gfx/nvn: make uncompressed alias bookkeeping incremental (PR #3363)	builds on 8ddd5c3f (deferred); 1.1.1 makes 0 uncompressed alias copies
+d65c0af0ad0e	2026-11-26	skip	-	gfx/vk: respect swapchain image ownership and acquire timeouts	Vulkan removed; its Metal part only exports two functions this tree lacks
+d75a2157a63c	2026-11-26	deferred	-	gfx/nvn: zero CPU_NO_ACCESS float textures with non-finite initial storage (PR #3140)	host workaround for Metal's NaN x 0 on stale float storage; no NaN symptom open for the game; take with 401c7b09 and 99224562's segment table
+de4ca24d5bac	2026-11-26	skip	-	packing/unity: support stripped Unity 2017.2 shaders (#2649)	Unity removed
+e257bade588c	2026-11-26	skip	-	games/naruto-storm3: enable native 60 fps	another game
+e65c3577322c	2026-11-26	skip	-	host/cheats: deliver enabled cheats once per presented guest frame	cheat engine removed; dm_guest_frame_tick and its counter are already here
+e8ac733c4941	2026-11-26	skip	-	ios/build_ipa: fail when sips writes no icon PNG (PR #2448)	iOS removed
+e9bcc5f357d0	2026-11-26	no-op	-	gfx/nvn: build MetalFX DLSS scalers synchronously, cache per size, and retire on finalize (PR #3373)	the game never calls NVN DLSS (0 'DLSS network' lines in its logs); its upscaler is MetalFX's spatial scaler
 eed6ffc95a0f	2026-11-26	skip	-	gfx/shaders: match bounded int(cond) word-1 indices in first_store and float_add_msl	builds on 48781edc (skipped); 0 of 4,130 compute shaders have the first_store preamble or a bounded store / CAS
 ef0b5be323fe	2026-11-26	ported	36e67da	host/input: read unclaimed wired Xbox 360 (XUSB) pads over USB on macOS (PR #2436)	wired Xbox 360 pads over IOUSBHost, plus the gip_remove use-after-free and GIP length check; untested here
+f15dfe4623e6	2026-11-26	skip	-	tools/bug_report: collect macOS GPU fault reports of the host	bug_report.py removed (8277280)
+f56fddeb94db	2026-11-26	docs	be63a90	docs/ocarina: record #2777 M1 Max GPU hang follow-up	the M1 Max case came from a build before 6dc27632 (by-reference subgroup miscompile)
+f90ba1de2136	2026-11-26	skip	-	packing/shaders: read Fenrir NSGZ shader records (PR #3236)	chain change for Sega's NSGZ records: 0 in 1.0.0's 26.2 GB RomFS
+fa4df544cd3e	2026-11-26	deferred	-	gfx/nvn: snapshot uncompressed alias writer entries across sync	with 8ddd5c3f and cea11c7d
+ff6b20dbff4b	2026-11-26	skip	-	opengl/shaders: lower variable texel offsets via overloaded GLSL helpers	OpenGL removed
+2daf825bcf8d	2026-11-27	no-op	-	host/time: report the host IANA time zone as device location name (PR #1989)	GetDeviceLocationName removed (not imported); this host never reads the snapshot's location
+2f959ede5f1e	2026-11-27	ported	54ebad2	host/audio: write DM_AUDIO_DUMP per output and unpack DeviceSink PCM	DM_AUDIO_DUMP: one file per output, DeviceSink's 8-channel blocks unpacked to stereo or 5.1 (diagnostic)
+35fea5c2ee78	2026-11-27	skip	-	packing/multi-program: discover and pack sibling programs provisionally	the game is one program: pack_nup refuses several, hle_oe has no ExecuteProgram
+401c7b09cee2	2026-11-27	deferred	-	gfx/nvn: scan only addressable texels in stale-float init check	with d75a2157; needs 99224562's g_segments row table, not in this tree
+60f0fe506dd5	2026-11-27	skip	-	host/fs: preserve save capacity records in sync and enforce fallback limit	save_sync removed; builds on 325b9973 (skip); the game imports no GetSaveDataSize* / Extend*
+6234610ceeaa	2026-11-27	skip	-	host/offline: answer BLE GATT notification-path and disconnect calls offline (PR #2363)	hle_offline.c has no BLE section; the game imports no nn::bluetooth
+6c3f27a1d8e1	2026-11-27	ported	7aa0c1a	gfx/nvn: reject missing texture-copy objects before pass-dump logging (PR #2158)	DM_NVN_PASSDUMP's line read a missing copy texture's serial (segfault in t_copy_missing without the fix)
+85219dd1dfd1	2026-11-27	skip	-	tools/regress: cover supplemental GL shaders on mixed NVN+GL builds	GL in regress.py: OpenGL removed
+92cc26f0ac5f	2026-11-27	skip	-	game/alien-isolation: default to 60 fps	another game
+96b0cc329ea6	2026-11-27	skip	-	host/hid: let the right stick drive motion controls on Mac (PR #2968)	gyro aiming is optional in OoT and the stick aims; the mode takes the camera stick; built on the phone path and cheats menu removed here
+96f1f0766344	2026-11-27	skip	-	game/alien-isolation: register Switch update 1.1.5	another game
+b2743d11be3b	2026-11-27	no-op	-	ci/checks: restore the lint ratchets and tool tests	its code hunks are on code this tree lacks (nvn_acq_ref, rop_f16_probe, ga_rmtree_fd); the rest upstream's own lint baselines and tests of removed code
+d3e951d67092	2026-11-27	skip	-	packing/dump: read extracted Control NCA metadata and Ounce Acd_1 identity (PR #1562)	pack_dump removed; taking the name from the packed version's NACP first changes nothing here
+dbfe1d8141b2	2026-11-27	ported	bc23489	host/threads: validate DM_YIELD_BACKOFF and normalize backoff sleep timespec (PR #2231)	hardening: a DM_YIELD_BACKOFF of 1 s or more gave nanosleep EINVAL and a busy loop; unreachable with the default 250 us
+e8f9c8381d70	2026-11-27	skip	-	packing/shaders: fingerprint DLC roots separately and require shader tables in cache	DLC image identity and GL / VK stamps: the game's NUP has no DLC, the fork no GL / VK
+fbee094552a4	2026-11-27	skip	-	opengl: retain bound buffers across deletion and track EGL surfaces	OpenGL removed
