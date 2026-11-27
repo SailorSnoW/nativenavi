@@ -784,7 +784,7 @@ static inline __attribute__((always_inline)) void *samp_fast(int sid) {
     return (__bridge void *)samp_by_id(sid);
 }
 
-@interface NvArena : NSObject { @public id<MTLBuffer> buf; uint8_t *cpu; uint64_t gpu, fence; size_t used, len; } @end
+@interface NvArena : NSObject { @public id<MTLBuffer> buf; uint8_t *cpu; uint64_t gpu, fence, loop_fence; size_t used, len; } @end
 @implementation NvArena @end
 static NSMutableArray<NvArena *> *g_arenas; static NvArena *g_cur_arena; static NSMutableArray<NvArena *> *g_sub_arenas;
 // The next submission goes on in the block the last one ended in while it has room, so blocks follow the bytes in flight, not the submissions. DM_NVN_ARENA_SHARE=0: a block each.
@@ -802,8 +802,10 @@ static int arena_trim_on(void) {
 static NvArena *arena_new(size_t minimum) {
     // The for-in variable does not retain: take a strong reference before removing it. The smallest that fits, last used first, so blocks a peak made go once idle.
     NvArena *r = nil;
-    for (NvArena *it in g_arenas) if (it->fence && it->fence <= g_done && it->len >= minimum && (!r || it->len < r->len || (it->len == r->len && it->fence > r->fence))) r = it;
-    if (r) { if (r == g_arena_next) g_arena_next = nil; [g_arenas removeObjectIdenticalTo:r]; r->fence = 0; r->used = 0; return r; }
+    // loop_fence: a commit block still has to read this block's loop hit records (g_loop_read). The fast wake (post_early) can advance
+    // g_done before that feedback handler runs, so g_done alone does not prove the read happened (a recycled word logged a bogus site).
+    for (NvArena *it in g_arenas) if (it->fence && it->fence <= g_done && it->loop_fence <= g_loop_read && it->len >= minimum && (!r || it->len < r->len || (it->len == r->len && it->fence > r->fence))) r = it;
+    if (r) { if (r == g_arena_next) g_arena_next = nil; [g_arenas removeObjectIdenticalTo:r]; r->fence = 0; r->loop_fence = 0; r->used = 0; return r; }
     NvArena *a = [NvArena new]; a->buf = [g_dev newBufferWithLength:MAX(minimum, 4u << 20) options:MTLResourceStorageModeShared];
     if (!a->buf) MDIE("cannot allocate %zu bytes of frame scratch", minimum);
     a->gpu = a->buf.gpuAddress; a->len = a->buf.length; a->cpu = a->buf.contents; res_add(a->buf); g_arena_made++; g_arena_live++; g_arena_live_bytes += a->len; return a;
@@ -839,7 +841,7 @@ void arena_commit(uint64_t fence) {
 }
 // An unqualified id * out-parameter is __autoreleasing under ARC: __strong avoids autoreleasing the arena buffer each allocation (docs/reference/frame-rate.md, Arena buffer ownership on allocation).
 // Use the addresses arena_take returns, never g_cur_arena after it: any allocation in between can roll it over to a new block.
-typedef struct { size_t off; uint8_t *cpu; uint64_t gpu; } arena_at;
+typedef struct { size_t off; uint8_t *cpu; uint64_t gpu; NvArena *a; } arena_at;
 static arena_at arena_take(size_t n, __strong id<MTLBuffer> *buf) {
     n = (n + 255) & ~(size_t)255;
     if (!g_cur_arena || g_cur_arena->used + n > g_cur_arena->len) {
@@ -847,6 +849,6 @@ static arena_at arena_take(size_t n, __strong id<MTLBuffer> *buf) {
         [g_sub_arenas addObject:g_cur_arena];
     }
     NvArena *a = g_cur_arena; size_t off = a->used; a->used += n; *buf = a->buf;
-    return (arena_at){off, a->cpu + off, a->gpu + off};
+    return (arena_at){off, a->cpu + off, a->gpu + off, a};
 }
 static size_t arena_alloc(size_t n, __strong id<MTLBuffer> *buf) { return arena_take(n, buf).off; }

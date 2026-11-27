@@ -214,15 +214,23 @@ static uint64_t loop_state(NvShader *cs) {
         abort_gpu = ab.gpuAddress + off; sub = fence;
     }
     if (cs->loop_sub != fence) {
-        __strong id<MTLBuffer> b = nil; size_t off = arena_alloc(DMSH_LOOP_BYTES, &b);
-        uint8_t *state = (uint8_t *)b.contents + off; uint32_t hit = UINT32_MAX;
+        __strong id<MTLBuffer> b = nil; arena_at at = arena_take(DMSH_LOOP_BYTES, &b); size_t off = at.off;
+        uint8_t *state = at.cpu; uint32_t hit = UINT32_MAX;
         memcpy(state, &abort_gpu, sizeof abort_gpu); memcpy(state + DMSH_LOOP_HIT, &hit, sizeof hit);
+        // The commit block below reads the hit word after the GPU completes. The fast wake (post_early) can advance g_done before that
+        // feedback handler runs, so this block stays recyclable only once the handler has run (g_loop_read), not on g_done alone.
+        if (fence > at.a->loop_fence) at.a->loop_fence = fence;
         if (!cs->loop_sub) MLOG("compute loop containment: kernel %s, %u loop sites (including helpers)", cs->key, cs->rf.loop_sites);
         cs->loop_sub = fence; cs->loop_gpu = b.gpuAddress + off;
         [g_commit_blocks addObject:^{
             uint32_t site; memcpy(&site, (const uint8_t *)b.contents + off + DMSH_LOOP_HIT, sizeof site);
-            if (site != UINT32_MAX && !atomic_exchange(&cs->loop_reported, 1))
-                MLOG("[RED] loop cap hit: submission %llu, kernel %s, loop site %u (loop_sites in its reflection; cause open)", (unsigned long long)fence, cs->key, site);
+            if (site != UINT32_MAX && !atomic_exchange(&cs->loop_reported, 1)) {
+                if (site >= 1 && site <= cs->rf.loop_sites)
+                    MLOG("[RED] loop cap hit: submission %llu, kernel %s, loop site %u (loop_sites in its reflection; cause open)", (unsigned long long)fence, cs->key, site);
+                else
+                    MLOG("[RED] loop cap hit: submission %llu, kernel %s, hit word %u (0x%08x) is outside its reflection's %u loop sites: not a site index; cause open",
+                         (unsigned long long)fence, cs->key, site, site, cs->rf.loop_sites);
+            }
         }];
     }
     return cs->loop_gpu;

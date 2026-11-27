@@ -423,6 +423,9 @@ uint64_t mtl_sub_commit(void) {
         (void)f;
         atomic_fetch_sub(&g_seg_inflight, 1);
         for (dispatch_block_t block in commit_blocks) block();
+        // The blocks above read arena memory (the loop hit records); only now may blocks holding them be recycled. post_early can
+        // have advanced g_done before this handler ran, so g_done alone is not the gate.
+        if (fence > g_loop_read) g_loop_read = fence;
     }];
     uint64_t gpu_f = atomic_load(&g_cur_frame); gpu_tag_begin(gpu_f);
     NSString *cctx = @(cctx_snap());

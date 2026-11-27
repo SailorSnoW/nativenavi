@@ -223,6 +223,7 @@ static int g_cut_copy;                          // a buffer → texture copy sin
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
 static _Atomic uint64_t g_done;                 // GPU complete and all CPU-visible effects published
+static _Atomic uint64_t g_loop_read;            // the submission's commit feedback ran and its commit blocks read the arena (loop hit records) up to this fence
 static _Atomic(uint32_t *) g_mesh_scr;         // post_complete publishes g_done there
 static _Atomic uint64_t g_arena_made, g_arena_live, g_arena_live_bytes, g_arena_freed, g_arena_freed_bytes;
 static uint64_t g_cm_mdraws;
