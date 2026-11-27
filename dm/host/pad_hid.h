@@ -14,6 +14,7 @@ enum pad_hid_layout { PAD_HID_DEFAULT, PAD_HID_NINTENDO, PAD_HID_X360, PAD_HID_S
 typedef struct {
     uint32_t buttons;          // bit u - 1: usage u held
     int hat;                   // -1 centered, 0 up, clockwise to 7 up-left
+    uint8_t ac_back;           // Consumer AC Back (0x0C:0x224) held: Minus
     float axis[PH_AXES];       // -1..1 (a trigger rests at -1)
     uint8_t has[PH_AXES];
     uint8_t map[16];           // Switch button bit -> HID button usage, 0 none
@@ -91,6 +92,14 @@ static int pad_hid_axis_for(enum pad_hid_layout layout, int axis) {
     return axis;
 }
 static float pad_hid_norm(long v, long min, long max) { return max > min ? (float)(2.0 * (v - min) / (max - min) - 1) : 0; }
+// A descriptor that writes an unsigned Logical Maximum as signed -1 (0xFFFF on a 16-bit field) reaches IOHIDFamily's element as -1..0: the field's width gives the range back
+static float pad_hid_norm_bits(long v, long min, long max, uint32_t bits) {
+    if (bits > 1 && bits < 32 && ((min == -1 && max == 0) || (min == 0 && max == -1))) {
+        uint32_t mask = (1u << bits) - 1u;
+        return pad_hid_norm((long)((uint32_t)v & mask), 0, (long)mask);
+    }
+    return pad_hid_norm(v, min, max);
+}
 // Report 0x3F's sticks are raw (off centre, short of range): measured from the first value as rest; the reach only grows. Report 0x30 is calibrated.
 #define PAD_HID_RAW_REACH 0.7f
 static float pad_hid_raw_axis(pad_hid *h, int a, float v) {
@@ -134,6 +143,7 @@ static uint64_t pad_hid_buttons(const pad_hid *h) {
     static const uint64_t hat[8] = {DM_BTN_UP, DM_BTN_UP | DM_BTN_RIGHT, DM_BTN_RIGHT, DM_BTN_RIGHT | DM_BTN_DOWN, DM_BTN_DOWN, DM_BTN_DOWN | DM_BTN_LEFT, DM_BTN_LEFT, DM_BTN_LEFT | DM_BTN_UP};
     uint64_t m = pad_hid_map_buttons(h, h->buttons);
     if (h->hat >= 0 && h->hat < 8) m |= hat[h->hat];
+    if (h->ac_back) m |= DM_BTN_MINUS;
     if (h->has[PH_BRAKE] && h->axis[PH_BRAKE] > 0) m |= DM_BTN_ZL;
     if (h->has[PH_ACCEL] && h->axis[PH_ACCEL] > 0) m |= DM_BTN_ZR;
     return m;
