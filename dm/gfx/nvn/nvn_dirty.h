@@ -15,6 +15,9 @@ void nvn_dirty_protect_sparse(const void *addr, size_t len);
 uint64_t nvn_dirty_sparse_writes(void);
 void nvn_dirty_own_thread(void);                                   // the calling thread replays submissions
 uint64_t nvn_dirty_own_writes(void);
+// While a replay_ahead hold is open, count the guest pages a write unprotects (between the parked submissions and the game's signal)
+void nvn_dirty_ahead_watch(int on);
+void nvn_dirty_ahead_stats(uint64_t *pages, uint64_t *bytes, uint64_t *holds);
 void nvn_dirty_gpu_written(uintptr_t addr, size_t len);             // GPU writes bypass page protection
 void nvn_dirty_touch(void);                                        // moves the generation, no page written: callers that kept "nothing written since" ask again
 uint64_t nvn_dirty_now(void);                                      // take the stamp before nvn_dirty_protect and before reading the content

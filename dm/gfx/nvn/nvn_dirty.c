@@ -196,6 +196,27 @@ static void own_note(void) {
 }
 void nvn_dirty_own_thread(void) { atomic_store(&g_own, pthread_self()); }
 uint64_t nvn_dirty_own_writes(void) { return atomic_load(&g_own_writes); }
+// replay_ahead (docs/reference/frame-rate.md#the-gpu-waits-at-a-frames-start-for-commands-the-game-queued-long-before) translates a parked frame before the game's
+// signal and holds its commits: the copies it makes at translation read guest memory ahead of the signal, so a write another thread makes in between can be
+// missed. While a hold is open (nvn_dirty_ahead_watch, set by hold_begin and cleared when the hold ends) every page a write unprotects is counted here; the
+// replay thread's own writes are ordered with the commands it replays and are not counted. A page not re-protected since its last write is not seen.
+static _Atomic int g_ahead_watch;
+static _Atomic uint64_t g_ahead_pages, g_ahead_bytes, g_ahead_holds;
+void nvn_dirty_ahead_watch(int on) {
+    if (atomic_exchange(&g_ahead_watch, on) != on) atomic_fetch_add(&g_ahead_holds, on);
+}
+void nvn_dirty_ahead_stats(uint64_t *pages, uint64_t *bytes, uint64_t *holds) {
+    if (pages) *pages = atomic_load(&g_ahead_pages);
+    if (bytes) *bytes = atomic_load(&g_ahead_bytes);
+    if (holds) *holds = atomic_load(&g_ahead_holds);
+}
+static void ahead_note(uint64_t npages) {
+    if (!npages || !atomic_load_explicit(&g_ahead_watch, memory_order_relaxed)) return;
+    pthread_t o = atomic_load_explicit(&g_own, memory_order_relaxed);
+    if (o && pthread_equal(o, pthread_self())) return;
+    atomic_fetch_add(&g_ahead_pages, npages);
+    atomic_fetch_add(&g_ahead_bytes, npages * (uint64_t)g_pg);
+}
 static _Atomic uint64_t g_sparse_writes;
 static void sparse_note(range_t *r, uintptr_t p) {
     _Atomic uint8_t *sp = atomic_load(&r->sparse);
@@ -206,6 +227,7 @@ static void unprotect_page(range_t *r, uintptr_t p) {   // the caller already se
     stamp_page(r, p);
     sparse_note(r, p);
     own_note();
+    ahead_note(1);
     atomic_store(&r->state[p], PG_NONE);
 }
 // 1 = taken (-> BUSY); 0 with the state found in *st
@@ -281,6 +303,7 @@ static void release_pages(range_t *r, uintptr_t p, uintptr_t q, _Atomic uint64_t
                 atomic_store(&r->state[k], PG_NONE);
             }
             if (count) atomic_fetch_add(count, i - run);
+            ahead_note(i - run);
             open = 0;
         }
         if (i <= q && st == PG_BUSY) release_page(r, i, count);
@@ -462,6 +485,7 @@ void nvn_dirty_close(void) {
             if (page_hash((const void *)(rb(r) + (g_open[k].p << g_shift))) != g_open[k].h) {
                 stamp_page(r, g_open[k].p);
                 sparse_note(r, g_open[k].p);
+                ahead_note(1);
                 changed++;
             }
     }

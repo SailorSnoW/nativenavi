@@ -142,6 +142,31 @@ int main(void) { @autoreleasepool {
     require(landed(&sync, 5000000000ull), "the last submission lands"); P(nvnSyncFinalize)(&sync);
     CHECK(pixels(0, 0, 255), "blue");
 
+    puts("CASE guest writes between a hold's begin and its signal are counted");
+    {
+        uint64_t p0, b0, h0; nvn_dirty_ahead_stats(&p0, &b0, &h0);
+        uint64_t holds0 = g_hold_ahead_holds, holdsw0 = g_hold_ahead_holds_w, ap0 = g_hold_ap;
+        P(nvnEventSignal)(&event, NVN_EVENT_SIGNAL_MODE_WRITE, 0); memset(memory + OUTPUT, 0x5a, BYTES);
+        submit(0, record(&event, red, NULL), &sync);
+        int held = !on || wait_until(^{ return (int)(atomic_load(&g_hold_on) && atomic_load(&g_hold_recs) >= 2); }, 2000);
+        if (on) CHECK(held, "its commands are translated before the signal: held");
+        // the game's CPU writes a tracked page while the frame is parked
+        nvn_dirty_protect(memory + OUTPUT, 64);   // a page left writable is not seen by the protection
+        dm_guest_write_prepare(memory + OUTPUT, 64); memset(memory + OUTPUT, 0xa5, 64);
+        uint64_t p1, b1, h1; nvn_dirty_ahead_stats(&p1, &b1, &h1);
+        if (on) CHECK(p1 > p0 && b1 > b0 && h1 == h0 + 1, "the write made while the hold is open is counted, in the hold's window");
+        else CHECK(p1 == p0 && h1 == h0, "no hold open: the write opens no window and is not counted");
+        P(nvnEventSignal)(&event, NVN_EVENT_SIGNAL_MODE_WRITE, 1);
+        require(landed(&sync, 5000000000ull), "it lands after the signal"); P(nvnSyncFinalize)(&sync);
+        CHECK(pixels(255, 0, 0), "and the held frame still cleared to red");
+        if (on) CHECK(g_hold_ahead_holds == holds0 + 1 && g_hold_ahead_holds_w == holdsw0 + 1 && g_hold_ap > ap0,
+                      "the hold is counted with the guest writes made before its signal");
+        // a write with no hold open is not counted
+        dm_guest_write_prepare(memory + OUTPUT, 64); memset(memory + OUTPUT, 0xa6, 64);
+        uint64_t p2, b2, h2; nvn_dirty_ahead_stats(&p2, &b2, &h2);
+        CHECK(p2 == p1 && h2 == h1, "a write with no hold open is not counted");
+    }
+
     puts("CASE a thread stuck on held work while a crash report is written");   // last: the process does not come back from it
     for (int i = 0; i < 40; i++) P(nvnEventSignal)(&event, NVN_EVENT_SIGNAL_MODE_WRITE, i & 1);
     P(nvnEventSignal)(&event, NVN_EVENT_SIGNAL_MODE_WRITE, 0); memset(memory + OUTPUT, 0x5a, BYTES); forced = g_hold_forced;

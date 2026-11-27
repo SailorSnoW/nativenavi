@@ -155,6 +155,8 @@ static NSMutableArray *g_hold_ops;           // encode thread's
 static pthread_mutex_t g_hold_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_hold_cv = PTHREAD_COND_INITIALIZER;
 static uint64_t g_hold_n, g_hold_ops_n, g_hold_forced, g_hold_drained, g_hold_blocks, g_hold_block_recs, g_hold_ns;
+static uint64_t g_hold_ap_base, g_hold_ab_base;              // the ahead-write counters when the hold began
+static uint64_t g_hold_ap, g_hold_ab, g_hold_ahead_holds, g_hold_ahead_holds_w;   // guest writes between a hold's begin and its signal
 static const char *volatile g_hold_force_why;
 static uint64_t g_rc_ahead_waits;
 static const char HOLD_DRAIN[] = "drain";
@@ -194,7 +196,22 @@ static int hold_check(void) {
         nvn_queue_ahead_refuse(g_hold_word);
         if (!g_hold_forced++) MLOG("[RED] replay ahead: held commands were handed to the GPU before the game's signal (%s); further ones are counted", g_hold_force_why ?: "?");
     }
-    if (g_hold_n % 3000 == 0) MLOG("replay ahead: %llu holds, %.1f queue operations and %.2f ms a hold, %llu forced, %llu ended by a drain of the host's, submit thread stopped %llu times before the signal (%.1f queue operations recorded by then); of them at a condition whose report was in flight %llu", (unsigned long long)g_hold_n, (double)g_hold_ops_n / g_hold_n, g_hold_ns / 1e6 / g_hold_n, (unsigned long long)g_hold_forced, (unsigned long long)g_hold_drained, (unsigned long long)g_hold_blocks, g_hold_blocks ? (double)g_hold_block_recs / g_hold_blocks : 0.0, (unsigned long long)g_rc_ahead_waits);
+    // the hold ends here, with the game's signal: the writes made while it was open are the ones the ahead translation could have missed
+    nvn_dirty_ahead_watch(0);
+    {
+        uint64_t ap, ab, ah;
+        nvn_dirty_ahead_stats(&ap, &ab, &ah);
+        uint64_t dp = ap - g_hold_ap_base, db = ab - g_hold_ab_base;
+        g_hold_ap += dp; g_hold_ab += db; g_hold_ahead_holds++;
+        if (dp) {
+            g_hold_ahead_holds_w++;
+            static _Atomic uint64_t said;
+            if (atomic_fetch_add(&said, 1) < 8)
+                MLOG("replay ahead: %llu guest pages (%.1f MB) written between a hold's begin and its signal; the copies made at translation read them ahead of the signal (%llu of %llu holds so far)",
+                     (unsigned long long)dp, db / 1048576.0, (unsigned long long)g_hold_ahead_holds_w, (unsigned long long)g_hold_ahead_holds);
+        }
+    }
+    if (g_hold_n % 3000 == 0) MLOG("replay ahead: %llu holds, %.1f queue operations and %.2f ms a hold, %llu forced, %llu ended by a drain of the host's, submit thread stopped %llu times before the signal (%.1f queue operations recorded by then); of them at a condition whose report was in flight %llu; guest pages written between a hold's begin and its signal %llu (%.1f MB) in %llu of %llu holds", (unsigned long long)g_hold_n, (double)g_hold_ops_n / g_hold_n, g_hold_ns / 1e6 / g_hold_n, (unsigned long long)g_hold_forced, (unsigned long long)g_hold_drained, (unsigned long long)g_hold_blocks, g_hold_blocks ? (double)g_hold_block_recs / g_hold_blocks : 0.0, (unsigned long long)g_rc_ahead_waits, (unsigned long long)g_hold_ap, g_hold_ab / 1048576.0, (unsigned long long)g_hold_ahead_holds_w, (unsigned long long)g_hold_ahead_holds);
     pthread_mutex_lock(&g_hold_mu);
     atomic_store(&g_hold_stuck, 0);
     g_hold_idle = 0;
@@ -896,6 +913,8 @@ static int hold_begin(volatile uint32_t *word, unsigned mode, uint32_t value, ui
     atomic_store(&g_hold_recs, 0);
     atomic_store(&g_hold_stuck, 0);
     atomic_fetch_add(&g_hold_gen, 1);
+    nvn_dirty_ahead_stats(&g_hold_ap_base, &g_hold_ab_base, NULL);
+    nvn_dirty_ahead_watch(1);   // from here to the signal, count the guest writes the ahead translation could miss
     atomic_store_explicit(&g_hold_on, 1, memory_order_release);
     pthread_mutex_lock(&g_rb_mu);   // the encode thread polls from now, also with nothing recorded
     if (g_rb_sleeping) pthread_cond_signal(&g_rb_work);
