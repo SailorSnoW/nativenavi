@@ -16,6 +16,7 @@ PRACTICE_DIR = 'practice'
 META = {
     'level': r'basic',
     'needs': r'DM_[A-Z0-9_]+=[^;=]+',        # a sub-setting, drawn only while the row that sets <VAR> has that value
+    'test': r'sticks',                        # the Mac settings window draws the controller's sticks with this row's dead zone under it
 }
 
 

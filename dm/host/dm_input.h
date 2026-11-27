@@ -1,6 +1,8 @@
 // Front end (keyboard and controllers) -> nn::hid input state.
 #pragma once
+#include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 // nn::hid::NpadButton bit order (DM_KEYS key names follow it)
 enum {
     DM_BTN_A = 1u << 0, DM_BTN_B = 1u << 1, DM_BTN_X = 1u << 2, DM_BTN_Y = 1u << 3,
@@ -11,6 +13,26 @@ enum {
 };
 #define DM_BTN_SHAKE (1ull << 63)   // not an NpadButton: shakes the six-axis sensor while set
 #define DM_STICK_MAX 32767
+// A round dead zone of `dead` (a share of the full deflection) around the stick's centre, the rest rescaled to start at 0,
+// each axis clamped after, so square gates reach their corners
+static inline void dm_stick_apply(float dead, float x, float y, int32_t *ox, int32_t *oy) {
+    float r = sqrtf(x * x + y * y);
+    if (r <= dead) { *ox = *oy = 0; return; }
+    float k = (r - dead) / (1 - dead) / r;
+    x *= k;
+    y *= k;
+    *ox = (int32_t)((x < -1 ? -1 : x > 1 ? 1 : x) * DM_STICK_MAX);
+    *oy = (int32_t)((y < -1 ? -1 : y > 1 ? 1 : y) * DM_STICK_MAX);
+}
+// DM_PAD_DEADZONE: one round dead zone for every controller's sticks, as a share of the full deflection (0.05 to 0.9).
+// 0, unset or not a number: no override, each input path keeps its own default (raw HID 0.12, GameController none, Switch 2 its calibration)
+static inline float dm_pad_deadzone(void) {
+    const char *e = getenv("DM_PAD_DEADZONE");
+    if (!e) return 0;
+    char *end;
+    double v = strtod(e, &end);
+    return *e && !*end && v > 0 && v < 0.95 ? (float)v : 0;
+}
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 // Player 1 merges controller and keyboard / DM_KEYS input: buttons ORed, each stick axis from the larger deflection.
 // A player whose npad the game does not support feeds player 1.

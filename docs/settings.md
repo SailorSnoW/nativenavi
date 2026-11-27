@@ -4,7 +4,7 @@ The Mac app shows the game's settings in a [window](#the-mac-settings-window) be
 
 - [Tested defaults](#tested-defaults)
 - [Game](#game): [Frame rate](#frame-rate), [Dynamic resolution](#dynamic-resolution), [Render scale](#render-scale), [Console mode](#console-mode), [Screen upscaling](#screen-upscaling), [3D upscaler](#3d-upscaler), [3D upscaler sharpness](#3d-upscaler-sharpness), [Game language](#game-language), [Display mode](#display-mode)
-- [Controls](#controls): [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join), [Switch 2 controllers](#switch-2-controllers), [Microphone](#microphone), [Microphone gain](#microphone-gain)
+- [Controls](#controls): [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join), [Stick dead zone](#stick-dead-zone), [Switch 2 controllers](#switch-2-controllers), [Microphone](#microphone), [Microphone gain](#microphone-gain)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [Practice](#practice): [Practice tools](#practice-tools)
 - [The Mac settings window](#the-mac-settings-window)
@@ -102,6 +102,12 @@ A controller's vibration weaker than this stays off, and the rest is spread over
 ### Press a button to join
 
 Off by default: each controller is a player as soon as it connects, in the order the system lists them. On: a controller becomes a player only when you press one of its buttons, as the lowest player free, so the players choose their order and how many play. That press also reaches the game. When a game asks for more players than have joined, a prompt over the game waits for the others to press a button; B closes it.
+
+### Stick dead zone
+
+A round zone around each stick's centre, from 0 to 50 % of its travel, **0 % by default**. Inside the zone the stick reads as centred, so a stick's rest drift sends nothing; past it the input grows from zero, with no jump at the edge. At 0 % each controller keeps its own dead zone (raw HID pads 12 %, Switch 2 controllers their calibration's; controllers read through macOS's GameController, like a DualSense, had none).
+
+Under the setting the window draws both sticks of the first connected controller: dot = raw stick, ring = the zone, green = the input the game receives. Move a stick in and out of the ring to see when input starts and stops.
 
 ### Switch 2 controllers
 
@@ -224,7 +230,7 @@ Shown in an app that carries the practice tools: the packing script puts them in
 
 ## The Mac settings window
 
-The Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts. The window shows the most used ones first: **Frame rate**, **Console mode**, **Game language**, **Display mode**, **Game rumble**, **Microphone** and, in an app that has them, **Practice tools**. The others are under **Advanced settings**, in the usual sections, with **Reset to tested defaults**. The window remembers whether Advanced settings is open.
+The Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts. The window shows the most used ones first: **Frame rate**, **Console mode**, **Game language**, **Display mode**, **Game rumble**, **Stick dead zone**, **Microphone** and, in an app that has them, **Practice tools**. The others are under **Advanced settings**, in the usual sections, with **Reset to tested defaults**. The window remembers whether Advanced settings is open.
 
 Click **Play** (or press Return) to start the game. **Quit**, ⌘Q or closing the window ends the app without the game. The app remembers your choices, and a game started without the window, from a front end or with the window turned off, uses them too ([Saved choices](frontends.md#saved-choices)). A setting fixed by an `env.txt` or by the program that started the app is shown greyed out.
 

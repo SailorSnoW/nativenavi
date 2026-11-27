@@ -93,15 +93,22 @@ class LauncherSettingsTests(unittest.TestCase):
             listed = settings.build(OOT, tmp, Path(tmp) / 'control.nacp')
         rows = {s['env']: s for s in listed['settings']}
         self.assertEqual(listed['schema'], 1)
-        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_OPMODE', 'DM_LANG', 'DM_FULLSCREEN', 'DM_RUMBLE'])
+        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_OPMODE', 'DM_LANG', 'DM_FULLSCREEN', 'DM_RUMBLE', 'DM_PAD_DEADZONE'])
         self.assertEqual(rows['DM_RUMBLE_GAIN']['needs'], 'DM_RUMBLE=1')
-        self.assertFalse({'level', 'needs'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
+        self.assertFalse({'level', 'needs', 'test'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
+
+    def test_stick_dead_zone_row_carries_the_stick_test(self):   # DM_PAD_DEADZONE: the host reads it as dm_pad_deadzone() (dm_input.h); the window's stick test draws it (test=sticks)
+        s = build(OOT)['DM_PAD_DEADZONE']
+        self.assertEqual((s['kind'], s['section'], s['default'], s['min'], s['max'], s['step'], s['level'], s['test']),
+                         ('range', 'Controls', '0', 0.0, 0.5, 0.01, 'basic', 'sticks'))
+        self.assertIn('dead zone', s['note'])
 
     def test_meta_is_strict(self):
-        self.assertEqual(settings.meta('level=basic; needs=DM_RUMBLE=1', 1), {'level': 'basic', 'needs': 'DM_RUMBLE=1'})
+        self.assertEqual(settings.meta('level=basic; needs=DM_RUMBLE=1; test=sticks', 1), {'level': 'basic', 'needs': 'DM_RUMBLE=1', 'test': 'sticks'})
         self.assertEqual(settings.meta('', 1), {})
         for bad, why in [('colour=red', 'unknown meta key'), ('level', 'unknown meta key'), ('level=basic;level=basic', 'twice'),
-                         ('level=advanced', 'does not match'), ('needs=DM_RUMBLE', 'does not match'), ('needs=rumble=1', 'does not match')]:
+                         ('level=advanced', 'does not match'), ('needs=DM_RUMBLE', 'does not match'), ('needs=rumble=1', 'does not match'),
+                         ('test=axes', 'does not match')]:
             with self.subTest(bad=bad), self.assertRaises(SystemExit) as e:
                 settings.meta(bad, 1)
             self.assertIn(why, str(e.exception))

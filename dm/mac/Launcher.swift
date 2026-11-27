@@ -75,6 +75,7 @@ struct LauncherView: View {
                     ForEach(rows) { SettingRow(s: $0, m: m) }
                 }
                 if rows.contains(where: { $0.env == "DM_MIC" }) && m.values["DM_MIC"] == "1" { MicrophoneDevicePicker() }
+                if let s = rows.first(where: { $0.test == "sticks" }) { StickTestView(setting: s, m: m) }   // a row with meta test=sticks, e.g. DM_PAD_DEADZONE
             }
         }
     }

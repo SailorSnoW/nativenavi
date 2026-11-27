@@ -228,6 +228,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Found on:** Super Mario Odyssey: it reads all 16 history entries per sensor and ignores the count, like its npad history ([History reads fill every requested entry](#history-reads-fill-every-requested-entry)).
 - **Note:** find a game's swing detector by probing the accelerometer value it reads (`DM_PROBE=main:626248@x8+10` in Odyssey 1.4.1).
 
+### A stick's rest drift reads as input on GameController pads
+
+- **Symptom:** a controller at rest drifts a few percent and the game moves (camera, cursor): the sticks feel more sensitive than on a console. Reported on Ocarina of Time's Mac app (macOS 27.2) with a DualSense over Bluetooth.
+- **Cause:** pads read through GameController (`pad_read` in `front_mac.m`) were handed over raw: the axis was only clamped, with no dead zone, while raw HID pads got a round 12 % one (`pad_hid_stick`) and Switch 2 controllers their calibration's (`s2_cal_apply`).
+- **Fix:** `DM_PAD_DEADZONE` sets one round dead zone for every controller's sticks, the deflection rescaled past the edge so there is no jump (`dm_stick_apply` in `dm_input.h`, used by `pad_hid_stick` and `pad_read`); `0`, the default, keeps each path's own. The settings window offers it as **Stick dead zone** (`settings.tsv`, `meta test=sticks`) and draws both sticks with the zone under the row (`dm/mac/LauncherSticks.swift`), applying the same math, to see when input is emitted.
+- **Found on:** Ocarina of Time on a Mac (macOS 27.2), a DualSense over Bluetooth, with the launcher's defaults.
+- **Check:** `t_pad_hid` covers the override, the rescale and the fallback to the built-in dead zone.
+
 ### Switch 2 controllers over Bluetooth LE
 
 - **Symptom:** a Joy-Con 2 or Pro Controller 2 does not appear in the Mac's Bluetooth menu, or as a GameController or HID device; the game sees no controller.

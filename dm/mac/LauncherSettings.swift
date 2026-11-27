@@ -6,6 +6,7 @@ struct Setting: Decodable, Identifiable {
     let section: String?
     let needs: String?     // "<VAR>=<value>": drawn only while that setting has that value
     let level: String?     // "basic": Basic settings; any other or none: Advanced
+    let test: String?      // "sticks": a live stick test under the row (LauncherSticks.swift)
     let options: [[String]]?
     let min, max, step: Double?
     let on, off: String?   // 1 / 0 when not given
@@ -27,7 +28,7 @@ struct Setting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, options, min, max, step, on, off }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, test, options, min, max, step, on, off }
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 

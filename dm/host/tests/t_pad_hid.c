@@ -102,6 +102,21 @@ int main(void) {
     h.axis[PH_X] = 0.13f; h.axis[PH_Y] = 0; pad_hid_sticks(&h, s);
     CHECK(s[0] > 0 && s[0] < DM_STICK_MAX / 50 && s[1] == 0);                // just past the edge: near 0, no jump
     h.has[PH_Z] = 0; h.has[PH_RX] = 1; h.axis[PH_RX] = -1; pad_hid_sticks(&h, s); CHECK(s[2] == -DM_STICK_MAX && s[3] == 0);   // Rx / Ry without Z
+    // DM_PAD_DEADZONE (dm_input.h) overrides the built-in dead zone on every path; 0 or junk: the path's own default
+    CHECK(dm_pad_deadzone() == 0);
+    setenv("DM_PAD_DEADZONE", "0.30", 1);
+    CHECK(dm_pad_deadzone() > 0.29f && dm_pad_deadzone() < 0.31f);
+    h.axis[PH_X] = 0.2f; h.axis[PH_Y] = 0; pad_hid_sticks(&h, s);
+    CHECK(s[0] == 0 && s[1] == 0);                                           // inside the override
+    h.axis[PH_X] = 0.6f; pad_hid_sticks(&h, s);
+    CHECK(s[0] > DM_STICK_MAX / 3 && s[0] < DM_STICK_MAX / 2 && s[1] == 0);  // past it: rescaled from 0
+    setenv("DM_PAD_DEADZONE", "bogus", 1); CHECK(dm_pad_deadzone() == 0);
+    setenv("DM_PAD_DEADZONE", "0", 1); CHECK(dm_pad_deadzone() == 0);
+    unsetenv("DM_PAD_DEADZONE");
+    h.axis[PH_X] = 0.13f; h.axis[PH_Y] = 0; pad_hid_sticks(&h, s);
+    CHECK(s[0] > 0);                                                         // the built-in 0.12 is back
+    int32_t o[2]; dm_stick_apply(0, 0.5f, -2, &o[0], &o[1]);                 // no dead zone: clamped only
+    CHECK(o[0] == DM_STICK_MAX / 2 && o[1] == -DM_STICK_MAX);
     h.has[PH_ACCEL] = 1; h.axis[PH_ACCEL] = -1; CHECK(!(pad_hid_buttons(&h) & DM_BTN_ZR));
     h.axis[PH_ACCEL] = pad_hid_norm(200, 0, 255); CHECK(pad_hid_buttons(&h) & DM_BTN_ZR);
     // The Xbox 360 layout (a virtual 045e:028e pad read as HID, Steam Link's GamePad-N): one-at-a-time presses of a GameSir G8 through Steam Link as macOS

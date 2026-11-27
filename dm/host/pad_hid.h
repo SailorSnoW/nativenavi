@@ -117,13 +117,8 @@ static int pad_hid_hat(long v, long min, long max) { return v >= min && v <= max
 // a round dead zone, the rest rescaled from 0; each axis clamped after, so square gates reach their corners
 #define PAD_HID_DEAD 0.12f
 static void pad_hid_stick(float x, float y, int32_t *ox, int32_t *oy) {
-    float r = sqrtf(x * x + y * y);
-    if (r <= PAD_HID_DEAD) { *ox = *oy = 0; return; }
-    float k = (r - PAD_HID_DEAD) / (1 - PAD_HID_DEAD) / r;
-    x *= k;
-    y *= k;
-    *ox = (int32_t)((x < -1 ? -1 : x > 1 ? 1 : x) * DM_STICK_MAX);
-    *oy = (int32_t)((y < -1 ? -1 : y > 1 ? 1 : y) * DM_STICK_MAX);
+    float dead = dm_pad_deadzone();   // DM_PAD_DEADZONE overrides the built-in dead zone
+    dm_stick_apply(dead > 0 ? dead : PAD_HID_DEAD, x, y, ox, oy);
 }
 
 static uint64_t pad_hid_map_buttons(const pad_hid *h, uint32_t buttons) {

@@ -83,7 +83,7 @@ def min_os(host):   # LC_BUILD_VERSION minos
 
 
 def swift_sources():
-    return [HERE / n for n in ('Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift')]
+    return [HERE / n for n in ('Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift', 'LauncherSticks.swift')]
 
 
 def build_launcher(out, minos, clang, swiftc, sdk):   # no Swift main: -parse-as-library
@@ -91,7 +91,7 @@ def build_launcher(out, minos, clang, swiftc, sdk):   # no Swift main: -parse-as
         obj = Path(t) / 'launcher.o'
         run([clang, '-isysroot', sdk, '-arch', 'arm64', f'-mmacosx-version-min={minos}', '-O2', '-Wall', '-I', HERE.parent / 'host', '-c', '-o', obj, HERE / 'launcher.c'])
         run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-swift-version', '5', '-parse-as-library', '-module-cache-path', Path(t) / 'module-cache',
-             '-o', out, *swift_sources(), obj, '-framework', 'CoreFoundation', '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'AVFAudio', '-framework', 'CoreAudio'])
+             '-o', out, *swift_sources(), obj, '-framework', 'CoreFoundation', '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'AVFAudio', '-framework', 'CoreAudio', '-framework', 'GameController'])
 
 
 def make_icns(jpg, out):

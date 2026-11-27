@@ -142,6 +142,7 @@ class PackReuse(unittest.TestCase):
             'env.txt': b'DM_TEST=1', 'split.tsv': b'split', 'icon.jpg': b'jpeg', 'source/launcher.c': b'launcher',
             'host/romfs_image.h': b'validator', 'tools/romfs.py': b'reader', 'tools/nso_syms.py': b'symbols',
             'source/Launcher.swift': b'window', 'source/LauncherSettings.swift': b'model', 'source/LauncherRow.swift': b'rows',
+            'source/LauncherSticks.swift': b'sticks',
         }
         for n in pack_app.TABLES: files['profile/' + n] = n.encode()
         for n, content in files.items(): (t / n).write_bytes(content)
@@ -234,7 +235,7 @@ class PackReuse(unittest.TestCase):
         names = ['dmhost', 'patched/main.patched.bin', 'patched/main.fixups.tsv', 'patched/main.gates.tsv', 'patched/main.cuts.tsv',
                  'patched/main.obs.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
                  'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'pso/gpu-prewarm-00.mtl4a', 'pso/gpu-prewarm-00.keys', 'pso/prewarm.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
-                 'tools/nso_syms.py', 'source/Launcher.swift', 'source/LauncherSettings.swift', 'source/LauncherRow.swift']
+                 'tools/nso_syms.py', 'source/Launcher.swift', 'source/LauncherSettings.swift', 'source/LauncherRow.swift', 'source/LauncherSticks.swift']
         names += ['profile/' + n for n in pack_app.TABLES]
         for name in names:
             with self.subTest(name=name):
@@ -307,7 +308,8 @@ class PackReuse(unittest.TestCase):
         self.assertIn('-c', c); self.assertIn('-parse-as-library', s)
         self.assertEqual(s[s.index('-o') + 1], str(Path(self.args.out).resolve().with_name('Game.app.partial') / 'Contents/MacOS/nativenavi'))
         self.assertIn(c[c.index('-o') + 1], s)
-        self.assertEqual([Path(x).name for x in s if x.endswith('.swift')], ['Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift'])
+        self.assertEqual([Path(x).name for x in s if x.endswith('.swift')], ['Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift', 'LauncherSticks.swift'])
+        self.assertIn('GameController', s)   # the stick test reads the controller (LauncherSticks.swift)
 
     def test_selected_file_modes_and_file_additions_and_removals_invalidate(self):
         self.pack()
@@ -521,7 +523,7 @@ class PackReuse(unittest.TestCase):
     def test_missing_selected_inputs_fail_before_reuse_or_partial_creation(self):
         self.pack()
         for name in ('dmhost', 'patched/main.fixups.tsv', 'msl/k.metallib', 'romfs/marker', 'pso/prebuilt.tsv', 'env.txt', 'icon.jpg',
-                     'font', 'aoc', 'profile', 'bin/clang', 'bin/swiftc', 'sdk', 'bin/codesign', 'source/launcher.c', 'source/Launcher.swift', 'source/LauncherRow.swift'):
+                     'font', 'aoc', 'profile', 'bin/clang', 'bin/swiftc', 'sdk', 'bin/codesign', 'source/launcher.c', 'source/Launcher.swift', 'source/LauncherRow.swift', 'source/LauncherSticks.swift'):
             with self.subTest(name=name):
                 p = self.tmp / name; hidden = p.with_name(p.name + '.hidden'); p.rename(hidden)
                 try:

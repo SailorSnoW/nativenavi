@@ -322,10 +322,9 @@ static void on_key(NSEvent *e, int down) {
 static pad_slots g_slots;
 static GCController *g_held[DM_PLAYERS];   // kept alive while it holds the slot (the table keys on its pointer)
 static int g_merge, g_kbd_own;
-static int32_t pad_axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX); }
-// a resting stick's drift (under 15%) does not hide the pointer
+// a resting stick's drift (under 15%) does not hide the pointer; nor does deflection a DM_PAD_DEADZONE swallows
 static void pad_set(int p, uint64_t m, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
-    const int32_t dead = DM_STICK_MAX * 15 / 100;
+    const int32_t dead = (int32_t)(fmaxf(0.15f, dm_pad_deadzone()) * DM_STICK_MAX);
     if (m || abs(lx) > dead || abs(ly) > dead || abs(rx) > dead || abs(ry) > dead) cursor_hide_for_input();
     dm_pad_set_player(p, m, lx, ly, rx, ry);
 }
@@ -373,7 +372,11 @@ static void pad_read(GCExtendedGamepad *g) {
     if (cp_poll()) return;
     if (m) merge_rumble_to(NULL);
     dm_haptics_apple_controller(p, g.controller);
-    int32_t st[4] = {pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value)};
+    // GameController's sticks carry no dead zone of their own: DM_PAD_DEADZONE sets one (dm_input.h), else they pass through raw
+    const float gc_dead = dm_pad_deadzone();
+    int32_t st[4];
+    dm_stick_apply(gc_dead, g.leftThumbstick.xAxis.value, g.leftThumbstick.yAxis.value, &st[0], &st[1]);
+    dm_stick_apply(gc_dead, g.rightThumbstick.xAxis.value, g.rightThumbstick.yAxis.value, &st[2], &st[3]);
     if ([g.controller.productCategory isEqualToString:@"Switch Pro Controller"] && !pad_gc_unread(g.controller)) {
         int nz[2] = {pro_gc_stick_nonzero(g.controller, 0), pro_gc_stick_nonzero(g.controller, 1)};
         dm_pro_sticks(p, nz, st);
