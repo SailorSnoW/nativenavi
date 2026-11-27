@@ -1065,7 +1065,7 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, own=False, dlc_roms=
     text = (logs / 'shader_split.log').read_text(errors='replace')
     m = re.search(r'shaders: (\d+) \(', text)
     bad = re.search(r'^\[RED\] (\d+) file\(s\) could not be read.*$', text, re.M)
-    if bad and not own:   # the profile's tables were split from every file: one unreadable now is a reader change
+    if bad and not own and not ALLOW_DAMAGED:   # the profile's tables were split from every file: one unreadable now is a reader change; --allow-damaged still compares every table below
         raise BuildError(f'{bad.group(0).removeprefix("[RED] ")}; the profile\'s tables hold every file\'s shaders (each file in {logs / "shader_split.log"})')
     if bad: say(f'{bad.group(0)}; the build goes without them (each file in {logs / "shader_split.log"})')
     if m and m.group(1) == '0':   # dmsh_build.py would make no library
