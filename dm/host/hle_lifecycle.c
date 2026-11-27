@@ -6,11 +6,13 @@
 #include <unistd.h>
 void hlecount_flush(void);
 void dm_rec_finish(void);
+void dm_fs_temp_empty(void);
 // a pipeline compile can hold the drain for seconds: the archive write runs beside it
 enum { EXIT_DRAIN_MS = 1500, EXIT_LATE_MS = 500 };
 static _Atomic int g_exit_taken;   // one path ends the process: the exit or the deadline
 static void exit_end(void (*then)(void *), void *arg) {
     if (atomic_exchange(&g_exit_taken, 1)) for (;;) pause();
+    dm_fs_temp_empty();   // _exit runs no atexit: the software closes here, and a Switch empties the temporary storage at the close
     if (then) then(arg);   // returns only on failure
     _exit(0);
 }

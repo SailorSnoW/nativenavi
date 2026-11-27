@@ -1170,6 +1170,26 @@ HLE_FORCE("_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", "fsp-srv → close
     if (!hh) return;   // the game closes handle 0 after a failed open too
     dirh_t *h = (dirh_t *)hh; dir_untrack(h); if (h->d) closedir(h->d); free(h->snap); free(h);
 }
+// Horizon's fsp-srv deletes an application's temporary storage when the software closes; a reset is a close and a start again
+// (docs/reference/threads.md#a-reset-ends-every-guest-thread-and-starts-the-game-again), and so is every exit of this process.
+// The folder itself stays: the next MountTemporaryStorage recreates it.
+void dm_fs_temp_empty(void) {
+    char b[1024];
+    const char *dir = envdir("DM_TEMP", "run/platform/temp", b, sizeof b);
+    DIR *d = opendir(dir);
+    if (!d) return;
+    int n = 0, bad = 0;
+    struct dirent *e;
+    while ((e = dir_next(d))) {
+        char p[1280];
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (rm_entry(p)) bad++; else n++;
+    }
+    closedir(d);
+    if (n || bad) LOG("fs: temporary storage %s emptied (%d entries%s), as a Switch does when the software closes", dir, n, bad ? ", some failed" : "");
+}
+__attribute__((constructor)) static void fs_atexit(void) { atexit(dm_fs_temp_empty); }   // a player's quit is exit(0), which runs atexit
+
 // Reset: all open files and directories close and every mount but the RomFS image goes; uncommitted writes are lost, as on Horizon when an application ends.
 void dm_fs_reset(void) {
     pthread_once(&g_txn_lock_once, txn_locks_init);
@@ -1197,6 +1217,7 @@ void dm_fs_reset(void) {
         else nm++;
     }
     g_nmnt = k;
+    dm_fs_temp_empty();   // the software closes and starts again: a Switch empties the temporary storage at the close
     // they were in the game's memory
     pthread_mutex_lock(&g_sdk_h_lock);
     memset(g_sdk_h, 0, sizeof g_sdk_h);
