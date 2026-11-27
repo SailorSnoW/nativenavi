@@ -36,6 +36,8 @@ static AudioDeviceID named_device(const char *want) {
     }
     free(ids); return found;
 }
+void objmap_put_d(const void *k, void *v, void (*d)(void *)) { (void)d; objmap_put(k, v); }
+
 static AudioDeviceID default_output(void) {
     AudioObjectPropertyAddress pa = {kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
     AudioDeviceID d = kAudioObjectUnknown; UInt32 sz = sizeof d; AudioObjectGetPropertyData(kAudioObjectSystemObject, &pa, 0, NULL, &sz, &d); return d;

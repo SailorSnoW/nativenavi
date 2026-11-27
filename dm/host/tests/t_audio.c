@@ -30,6 +30,8 @@ static int drain_signaled(void *out, aout_buf *buffers, int count, int *got, int
     }
     return 1;
 }
+void objmap_put_d(const void *k, void *v, void (*d)(void *)) { (void)d; objmap_put(k, v); }
+
 
 // a stereo device must hear all six channels of a 5.1 buffer, a split inside a block included
 static int test_surround_output(void) {

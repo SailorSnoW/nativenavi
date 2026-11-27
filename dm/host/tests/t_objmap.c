@@ -19,6 +19,10 @@ static const void *key_at(unsigned home, uintptr_t after) {
 }
 static int empty(void) { for (unsigned i = 0; i < OM_SIZE; i++) if (g_om[i].k) return 0; return 1; }
 
+// For the reset test: the destructor counts what it frees
+static int *g_tv1, *g_tv3, freed_n, freed_v1, freed_v3;
+static void dtor(void *v) { freed_n++; if (v == g_tv1) freed_v1++; if (v == g_tv3) freed_v3++; }
+
 int main(void) {
     int v1, v2, v3, v4;
 
@@ -73,6 +77,21 @@ int main(void) {
         assert(objmap_del(ks[d]) == &vs[d]); gone[d] = 1;
         for (int i = 0; i < N; i++) assert(objmap_get(ks[i]) == (gone[i] ? NULL : &vs[i]));
     }
+    assert(empty());
+
+    // A reset runs each entry's destructor once, on its value, then forgets everything (the game's Finalize calls never come)
+    g_tv1 = &v1; g_tv3 = &v3;
+    const void *c = (const void *)0x2000, *d = (const void *)0x3000;
+    objmap_put_d(c, &v1, dtor);
+    objmap_put(d, &v2);   // no destructor: forgotten, not freed
+    objmap_put_d(d, &v3, dtor);   // put again: the entry's destructor is replaced
+    dm_objmap_reset();
+    assert(freed_n == 2 && freed_v1 == 1 && freed_v3 == 1);   // each dtor once, on its entry's latest value
+    assert(objmap_get(c) == NULL && objmap_get(d) == NULL && empty());
+    freed_n = freed_v1 = freed_v3 = 0;
+    objmap_put_d(c, &v1, dtor);
+    dm_objmap_reset();
+    assert(freed_n == 1 && freed_v1 == 1);
     assert(empty());
 
     puts("t_objmap: ok");

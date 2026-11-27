@@ -102,6 +102,8 @@ int dm_pcmout_append(void *k, void *b) {
     if (blocks_n[r] == NBUF) atomic_store(&t_ar->open, 0);
     return 1;
 }
+void objmap_put_d(const void *k, void *v, void (*d)(void *)) { (void)d; objmap_put(k, v); }
+
 // whole device callbacks: 44.1 kHz consumes alternating counts of 48 kHz samples, as CoreAudio does
 static uint64_t next_callback(void) { return (uint64_t)(pace.callbacks + 1) * pace.device_frames * 1000000000ull / pace.rate; }
 static void pace_advance(uint64_t until) {

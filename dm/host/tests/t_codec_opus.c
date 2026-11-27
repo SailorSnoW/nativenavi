@@ -27,6 +27,8 @@ static int fake_init(void *s, int rate, int ch, void *buf, size_t size) {
     g_inits++;
     return 0;
 }
+void objmap_put_d(const void *k, void *v, void (*d)(void *)) { (void)d; objmap_put(k, v); }
+
 static void fake_fini(void *s) { g_last = s; g_finis++; }
 static void fake_reset(void *s) { g_last = s; g_resets++; }
 static int fake_rate(const void *s) { return ((const int *)s)[0]; }

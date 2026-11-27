@@ -212,6 +212,8 @@ static void *guest_start(void *out) {
     dispatch_semaphore_signal(guest_returned);
     return NULL;
 }
+void objmap_put_d(const void *k, void *v, void (*d)(void *)) { (void)d; objmap_put(k, v); }
+
 static void *guest_close(void *out) { au_close(out, NULL); dispatch_semaphore_signal(guest_closed); return NULL; }
 static int signaled(dispatch_semaphore_t s, int seconds) {
     return dispatch_semaphore_wait(s, dispatch_time(DISPATCH_TIME_NOW, seconds * (int64_t)NSEC_PER_SEC)) == 0;

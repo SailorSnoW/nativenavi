@@ -97,6 +97,8 @@ void *objmap_del(const void *key) {
     if (key != map_key) return NULL;
     void *value = map_value; map_key = map_value = NULL; return value;
 }
+void objmap_put_d(const void *k, void *v, void (*d)(void *)) { (void)d; objmap_put(k, v); }
+
 void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stack) {
     (void)fn; (void)arg; (void)prio; (void)stack; starts++; return (void *)1;
 }

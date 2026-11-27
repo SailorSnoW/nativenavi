@@ -138,6 +138,7 @@ extern uint64_t g_t0_ns;
 extern struct dm_flags { int thr, svc, fs, dbg, imports, bootprof; } g_flag;
 void *objmap_get(const void *guest);
 void objmap_put(const void *guest, void *host);
+void objmap_put_d(const void *guest, void *host, void (*dtor)(void *));   // dtor frees host at a reset (dm_objmap_reset)
 void *objmap_del(const void *guest);
 void hle_signal_system_event(void *g);
 void hle_bind_system_event(void *g, int autoclear);   // guest thread only

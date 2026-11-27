@@ -723,6 +723,8 @@ HLE_FORCE("_ZN2nn5audio11OpenAudioInEPNS0_7AudioInEPKcRKNS0_16AudioInParameterE"
 enum { OS_NONE = 0, OS_STOPPED = 1, OS_STARTED = 2, OS_FLOAT = 5, OS_PCM16 = 2 };
 typedef struct { uint8_t key[64]; pthread_mutex_t m; int ch, fmt, cap, queued, nblk, state; } ostream;   // key: the AudioOut's object
 typedef struct { aout_buf b; int frames; int16_t pcm[]; } oblock;
+// reset: the stream's AudioOut is already closed (dm_audio_reset), so only the stream itself goes
+static void os_reset_free(void *v) { ostream *o = v; pthread_mutex_destroy(&o->m); free(o); }
 static ostream *os_of(const void *g) {
     ostream *o = objmap_get(g);
     if (!o) die("OutputStream %p was not opened by the host", g);
@@ -759,7 +761,7 @@ static Result os_open(void *g, void *ev, const int32_t *fmt, int frames, void *l
     uint8_t param[8] = {0}; *(int32_t *)param = RATE; *(uint16_t *)(param + 4) = (uint16_t)ch;
     Result r = au_open_at(o->key, ev, "OutputStream", param, lr, 0);
     if (r) { free(o); return r; }
-    objmap_put(g, o);
+    objmap_put_d(g, o, os_reset_free);   // the AudioOut behind it is closed by dm_audio_reset before the side table is cleared
     return RES_OK;
 }
 HLE_FORCE("_ZN2nn5audio16OpenOutputStreamEPNS0_16OutputStreamTypeEPNS_2os11SystemEventEPvmRKNS0_15AudioDeviceNameERKNS0_12StreamFormatEiiNS_4util10BitFlagSetILi32ENS0_16OutputStreamFlagEEE",
@@ -855,7 +857,7 @@ HLE_FORCE("_ZN2nn5audio15OpenInputStreamEPNS0_15InputStreamTypeEPvmRKNS0_15Audio
     os_format f; memcpy(&f, fmt, sizeof f);
     dm_audio_input_stream *s = dm_audio_input_open(f.format, f.channels, f.rate, frames);
     if (!s) { LOG("audio input: OpenInputStream failed (format=%d channels=%d rate=%d capacity=%d)", f.format, f.channels, f.rate, frames); return RES_FAIL; }
-    objmap_put(g, s);
+    objmap_put_d(g, s, (void (*)(void *))dm_audio_input_close);
     LOG("audio input: OpenInputStream accepted (format=%d channels=%d rate=%d capacity=%d)", f.format, f.channels, f.rate, frames);
     return RES_OK;
 }

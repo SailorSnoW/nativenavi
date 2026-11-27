@@ -5,9 +5,10 @@
 #include <stdatomic.h>
 
 // Linear probing with backward-shift deletion: an empty slot ends every search. Keys are never NULL.
+// dtor frees a host-allocated value at a reset (dm_objmap_reset): the game's own Finalize calls never run then.
 #define OM_SIZE (1u << 18)
 #define OM_MASK (OM_SIZE - 1)
-static struct { const void *k; void *v; } g_om[OM_SIZE];
+static struct { const void *k; void *v; void (*dtor)(void *); } g_om[OM_SIZE];
 static pthread_mutex_t g_om_lock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned om_h(const void *k) {
     uint64_t x = (uint64_t)k;
@@ -27,13 +28,15 @@ void *objmap_get(const void *k) {
     pthread_mutex_unlock(&g_om_lock);
     return r;
 }
-void objmap_put(const void *k, void *v) {
+void objmap_put_d(const void *k, void *v, void (*dtor)(void *)) {
     pthread_mutex_lock(&g_om_lock);
     unsigned i = om_find(k);
     g_om[i].k = k;
     g_om[i].v = v;
+    g_om[i].dtor = dtor;
     pthread_mutex_unlock(&g_om_lock);
 }
+void objmap_put(const void *k, void *v) { objmap_put_d(k, v, NULL); }
 void *objmap_del(const void *k) {
     pthread_mutex_lock(&g_om_lock);
     unsigned i = om_find(k);
@@ -46,6 +49,7 @@ void *objmap_del(const void *k) {
             }
         g_om[i].k = NULL;
         g_om[i].v = NULL;
+        g_om[i].dtor = NULL;
     }
     pthread_mutex_unlock(&g_om_lock);
     return r;
@@ -200,13 +204,21 @@ HLE_FORCE("getenv", "the game profile's game_env answers its names; the SDK's ow
     return orig(name);
 }
 
-// Reset: every key left is the stopped game's.
+// Reset: every key left is the stopped game's. A value with a destructor is freed as its Close would have freed it:
+// the game's threads are stopped without running the guest's destructors, so its Finalize calls never come.
+// The destructors run after the table is cleared and unlocked, so one may use the table itself.
 void dm_objmap_reset(void) {
     pthread_mutex_lock(&g_om_lock);
     unsigned n = 0;
     for (unsigned i = 0; i < OM_SIZE; i++)
         if (g_om[i].k) n++;
+    struct { void *v; void (*dtor)(void *); } *dt = n ? malloc(n * sizeof *dt) : NULL;
+    unsigned m = 0;
+    for (unsigned i = 0; i < OM_SIZE; i++)
+        if (g_om[i].k && g_om[i].dtor) dt[m++] = (__typeof__(*dt)){g_om[i].v, g_om[i].dtor};
     memset(g_om, 0, sizeof g_om);
     pthread_mutex_unlock(&g_om_lock);
-    if (n) LOG("reset: %u host objects of the game's left in the side table, forgotten", n);
+    for (unsigned i = 0; i < m; i++) dt[i].dtor(dt[i].v);
+    free(dt);
+    if (n) LOG("reset: %u host objects of the game's left in the side table, %u of them freed, the rest forgotten", n, m);
 }

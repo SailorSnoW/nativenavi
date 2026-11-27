@@ -81,5 +81,7 @@ int main(void) {
     printf("OutputStream: 100 ms played in %llu ms, %d release events\n", (unsigned long long)ms, atomic_load(&g_sig));
     return 0;
 }
+void objmap_put_d(const void *k, void *v, void (*d)(void *)) { (void)d; objmap_put(k, v); }
+
 
 void dm_audio_device_changed(void) {}   // renderer notification delivery is checked by t_audren_work

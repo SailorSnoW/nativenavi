@@ -75,6 +75,8 @@ static int render(void *out, int count, int with_pcm) {
     }
     return 1;
 }
+void objmap_put_d(const void *k, void *v, void (*d)(void *)) { (void)d; objmap_put(k, v); }
+
 static void *drain_stats(void *unused) { (void)unused; stats_drain(); return NULL; }
 int main(void) {
     setenv("DM_AUDIO", "0", 1); setenv("DM_AUDIO_MUTE", "0", 1);

@@ -17,6 +17,8 @@ HLE_FORCE("_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEiii", "hwopus serv
     size_t (*f)(int, int) = opus_fn("_ZN2nn5codec28GetOpusDecoderWorkBufferSizeEii");
     return f(rate, ch);
 }
+// freed at a reset: the decoder's own allocations are in the guest heap, given back whole there
+static void opus_state_free(void *s) { free(s); }
 HLE_FORCE("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeEiiPvmi", "hwopus service; replaced by the software OpusDecoder", int, h_codec_HwOpusInit,
           void *hw, int rate, int ch, void *buf, size_t size, int option) {
     (void)option;
@@ -24,7 +26,7 @@ HLE_FORCE("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecode
     void *s = objmap_get(hw);
     if (!s) {
         s = calloc(1, SOFT_OPUS_STATE);
-        objmap_put(hw, s);
+        objmap_put_d(hw, s, opus_state_free);
     }
     return f(s, rate, ch, buf, size);
 }

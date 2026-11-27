@@ -221,7 +221,7 @@ static Result ar_open(void **handle, void *ev, const uint8_t *param, void *work,
         LOG("[RED] audren: SDK OpenAudioRenderer failed %#x", r);
         return r;
     }
-    if (owned) objmap_put(handle[0], owned);   // freed by Close after the render thread and the SDK are done
+    if (owned) objmap_put_d(handle[0], owned, free);   // freed by Close after the render thread and the SDK are done; at a reset, plainly
     // A local auto-clear event wakes only its highest-priority waiter: the renderer's event is a kernel event, and the game's object gets a copy of its
     // readable handle (docs/reference/audio.md#the-renderer-event-as-the-service-gives-it-a-kernel-event).
     if (ev && *(int32_t *)(param + P_DEVICE) == 0) {
