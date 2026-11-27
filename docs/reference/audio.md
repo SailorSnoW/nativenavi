@@ -262,7 +262,9 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 
 ### Checking audio without listening
 
-`DM_AUDIO_DUMP=file` writes every PCM block appended to an output as it is (16-bit, 48 kHz; the channel count is the one in that output's `OpenAudioOut` log line, eight for the renderer's output: its six channels and their stereo fold). RMS per second, clipping share, spectral flatness (music ≈ 0.1–0.5, white noise ≈ 0.85) and the strongest FFT peaks (they should land on musical notes) tell real music from noise or silence.
+`DM_AUDIO_DUMP=file` writes every PCM block an output accepts (16-bit, 48 kHz), each output to a file of its own: `file` for `audio #0`, `file.N` for `audio #N`, named by the log's `DM_AUDIO_DUMP: its blocks … go to` line. An `AudioOut` output's blocks are written as they are, in its own channel count; the renderer's DeviceSink output, which carries eight channels (its six and their stereo fold, `DM_AUDIO_SINK_CHANNELS`), is unpacked to the representation of the route it opened on: six channels on a 5.1 route, else the stereo fold, kept across a later route change. A block the full queue refuses is not written, and each file closes with its output. RMS per second, clipping share, spectral flatness (music ≈ 0.1–0.5, white noise ≈ 0.85) and the strongest FFT peaks (they should land on musical notes) tell real music from noise or silence.
+
+- **One file for every output:** all outputs used to go into one file in the order their blocks came; with two outputs, one's blocks read in the other's channel count (found upstream on Divinity: Original Sin 2, a 6-channel Wwise mix interleaved with the renderer's stereo 240-frame blocks, upstream nxnative `2f959ede`). `t_audio` checks two outputs and a DeviceSink output in files of their own, a refused block left out and the stereo fold unpacked; `t_audio_device` a 5.1 DeviceSink dump across a route change.
 
 ### Audio device output volume and names
 

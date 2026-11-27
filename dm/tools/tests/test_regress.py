@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # scripts/regress.py: the parts that need no game, GPU or git revision: the MSL interface reader, the [RED] normalization, the routes, and the comparisons
-import fcntl, importlib.util, json, os, tempfile, time, unittest
+import concurrent.futures as cf, fcntl, importlib.util, json, os, subprocess, tempfile, textwrap, time, unittest
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -949,6 +949,73 @@ class Validated(unittest.TestCase):
             for mode, row in regress.read_validated(f).items():
                 self.assertIn(mode, ('quick', 'full'), f)
                 self.assertTrue(row.get('chain') and row.get('commit') and row.get('date'), f)
+
+
+class HostFor(unittest.TestCase):
+    def make_tree(self, root, codec_val, legacy=False):   # a host whose binary includes a file from outside dm/host, as the codec's
+        hd = root / 'dm/host'; hd.mkdir(parents=True)
+        codec_dir = root / 'dm/third_party/codec'; codec_dir.mkdir(parents=True)
+        (codec_dir / 'codec.c').write_text(f'#define CODEC_VAL "{codec_val}"\n')
+        (hd / 'main.c').write_text('#include <stdio.h>\n#include "../third_party/codec/codec.c"\nint main(void) { printf("%s:%s\\n", CODEC_VAL, GAME_ID); return 0; }\n')
+        if legacy:
+            makefile = textwrap.dedent('''\
+                .PHONY: FORCE dmhost
+                FORCE:
+                dmhost: main.c FORCE
+                \t@sleep 0.15
+                \t@cc -DGAME_ID='"$(GAME)"' main.c -o $@
+            ''')
+        else:
+            makefile = textwrap.dedent('''\
+                HOST_BIN = gen/$(GAME)/dmhost
+                OBJ_DIR = gen/$(GAME)/obj
+                HOST_OBJ = $(OBJ_DIR)/main.c.o
+                $(OBJ_DIR)/%.c.o: %.c
+                \t@mkdir -p $(dir $@)
+                \tcc -MMD -MP -DGAME_ID='"$(GAME)"' -c $< -o $@
+                $(HOST_BIN): $(HOST_OBJ)
+                \t@mkdir -p $(dir $@)
+                \tcc -o $@ $<
+                dmhost: $(HOST_BIN)
+                \t@cmp -s $(HOST_BIN) $@ || cp $(HOST_BIN) $@
+                -include $(HOST_OBJ:.o=.d)
+            ''')
+        (hd / 'Makefile').write_text(makefile)
+
+    def test_included_codec_rebuilds_and_identical_output_is_reused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            t1, t2 = root / 'tree1', root / 'tree2'
+            self.make_tree(t1, 'v1')
+            self.make_tree(t2, 'v2')
+            g = NS(id='0400486024DEC000', env=lambda tree: dict(os.environ, DM_GAME='0400486024DEC000'))
+            with patch.object(regress, 'game_root', return_value=root / 'regress'), patch.object(regress, 'say'):
+                dst1, k1, _ = regress.host_for(NS(path=t1, id='r1'), g, 1)
+                dst2, k2, _ = regress.host_for(NS(path=t2, id='r2'), g, 1)
+                self.assertNotEqual((dst1, k1), (dst2, k2))
+                self.assertEqual(subprocess.check_output([str(dst1)], text=True).strip(), 'v1:0400486024DEC000')
+                self.assertEqual(subprocess.check_output([str(dst2)], text=True).strip(), 'v2:0400486024DEC000')
+                self.assertEqual(regress.host_for(NS(path=t1, id='r1'), g, 1), (dst1, k1, 0))
+                past = time.time() - 5
+                for p in t1.rglob('*'):
+                    if p.is_file(): os.utime(p, (past, past))
+                (t1 / 'dm/third_party/codec/codec.c').write_text('#define CODEC_VAL "v1_updated"\n')
+                dst1_new, k1_new, _ = regress.host_for(NS(path=t1, id='r1'), g, 1)
+                self.assertNotEqual((dst1_new, k1_new), (dst1, k1))
+                self.assertEqual(subprocess.check_output([str(dst1_new)], text=True).strip(), 'v1_updated:0400486024DEC000')
+
+    def test_concurrent_games_of_one_tree_get_their_own_host(self):   # a per-game Makefile and an older revision's single dmhost
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as td:
+                root = Path(td); tree = root / 'tree'
+                self.make_tree(tree, 'shared', legacy=legacy)
+                games = [NS(id=gid, env=lambda t, gid=gid: dict(os.environ, DM_GAME=gid)) for gid in ('0400486024DEC000', '0100000000010000')]
+                with patch.object(regress, 'game_root', side_effect=lambda g, root=root: root / 'regress' / g.id), patch.object(regress, 'say'):
+                    with cf.ThreadPoolExecutor(max_workers=2) as pool:
+                        futs = [pool.submit(regress.host_for, NS(path=tree, id='rev'), g, 1) for g in games]
+                        results = {g.id: fut.result()[0] for g, fut in zip(games, futs)}
+                for gid, exe in results.items():
+                    self.assertEqual(subprocess.check_output([str(exe)], text=True).strip(), f'shared:{gid}')
 
 
 if __name__ == '__main__':

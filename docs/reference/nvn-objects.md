@@ -1073,6 +1073,14 @@ Games read this count as a position in their own command memory and size their h
 - **Found on:** code review of the shared tracker, from a fork's compatibility commit `587d5206` ported through [PR #686](https://github.com/seedds/nxnative/pull/686). No game is known to hit it: a game normally finalizes a pool only after the GPU is done with it.
 - **Check:** `t_dirty_retire_race` retires the pool between protect's lookup and its first page-state exchange, then reads 16 bytes into the pool with `read()`. Without the fix, retirement completes first and the read fails with `EFAULT`; with it, retirement waits for protection, unregisters the pool and the read returns 16. `t_dirty_race` and `t_dirty_slots` cover page-state publication and shared / reused pool slots.
 
+### Missing texture-copy objects crashed pass-dump diagnostics
+
+- **Symptom:** a texture-to-texture or buffer-to-texture copy with a missing recorded texture object crashes when its frame has pass-dump diagnostics on (`DM_NVN_PASSDUMP`).
+- **Cause:** `copy_t2t_enc` (`dm/gfx/nvn/nvn_copy.inc`) evaluated its `PD` line, which reads `c->src->serial` and `c->dst->serial`, before checking `!s || !c->dst`, and `copy_b2t` read `c->tex->serial` in its `!t` `PD` line when `c->tex` was `NULL`. With the pass dump off, those arguments are not evaluated.
+- **Fix:** `copy_t2t_enc` rejects a missing `c->src` or `c->dst`, and `copy_b2t` a missing `c->tex`, on entry, before flushing passes, resolving textures or logging. Valid copies keep the same path.
+- **Found on:** no game; a synthetic regression found upstream ([PR #2158](https://github.com/seedds/nxnative/pull/2158), upstream nxnative `6c3f27a1`). No crash in play is attributed to it.
+- **Check:** `make -C dm/gfx/tests check_t_copy_missing` runs the three missing-object cases of `copy_t2t_enc` and the missing target of `copy_b2t` with `DM_NVN_PASSDUMP=0`, checks that both textures keep their bytes, and that a valid copy after it in the same submission still copies.
+
 ## NVN entry points
 
 ### Sampler builder queries leave renderer state unread

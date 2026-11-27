@@ -559,8 +559,8 @@ static id<MTLTexture> present_raw_src(id<MTLTexture> src) {
 }
 // Aspect ratio kept and centred with black bars; ratios within 1 % take the whole canvas (a game width rounded to a multiple of 8).
 static MTLViewport present_viewport(double pw, double ph, double dw, double dh) {
-    double s = fmin(dw / pw, dh / ph);
-    MTLViewport vp = {floor((dw - pw * s) / 2), floor((dh - ph * s) / 2), round(pw * s), round(ph * s), 0, 1};
+    double s = fmin(dw / pw, dh / ph), w = round(pw * s), h = round(ph * s);   // centred on the rounded size: pw * s can land a hair over the canvas, and floor of half the negative rest gave x = -1
+    MTLViewport vp = {floor((dw - w) / 2), floor((dh - h) / 2), w, h, 0, 1};
     if (fabs((dw / dh) / (pw / ph) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
     return vp;
 }

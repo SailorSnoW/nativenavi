@@ -383,7 +383,8 @@ def pack(a):
             rows = inventory(Path(p))
             return [['.', *as_packed([p, *rows[0][1:]], last.get(p), moved)[1:]]] if Path(p).is_file() and len(rows) == 1 else rows
         romfs_rows = tree(a.romfs)
-        inputs = {'options': vars(a), 'files': [as_packed(file_row(p, True), last.get(str(p)), moved) if p in large else file_row(p) for p in files + sources],
+        commit = source_commit()   # the key and Info.plist's DMCommit name the same checkout
+        inputs = {'options': vars(a), 'source_commit': commit, 'files': [as_packed(file_row(p, True), last.get(str(p)), moved) if p in large else file_row(p) for p in files + sources],
                   'trees': [(p, romfs_rows if p == a.romfs else inventory(Path(p))) for p in (a.romfs, a.aoc) if p and Path(p).exists()],
                   'tools': [[str(c), c.stat().st_mode, c.stat().st_size, c.stat().st_mtime_ns, c.stat().st_ctime_ns, run([c, '--version']).strip()] for c in (clang, swiftc)] + [
                             str(sdk), run(['xcrun', '--sdk', 'macosx', '--show-sdk-version']).strip(),
@@ -457,7 +458,6 @@ def pack(a):
     info['DMModuleFiles'] = [p.name for p in mods]
     if nso_syms.audio_input_capable(mods):
         info['NSMicrophoneUsageDescription'] = f'{a.name} uses the microphone for in-game audio input.'
-    commit = source_commit()
     if commit: info['DMCommit'] = commit
     if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]
     (c / 'Info.plist').write_bytes(plistlib.dumps(info))

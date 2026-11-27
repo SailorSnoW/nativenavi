@@ -35,7 +35,7 @@
 # report.json and report.md go in --out (default <root>/reports/<date-time>-<command>/). Status, worst first: ERROR (the harness could not check it), NEW-FAIL (what worked
 # fails), REGRESSION (new [RED] lines, a screenshot, frame time, memory or prepare time beyond TOL), CHANGED (MSL or numbers differ), PASS; "known": failures the baseline has too.
 # Exit status: 0 = no regression, 1 = NEW-FAIL or REGRESSION in some game, 2 = a harness error.
-import argparse, collections, concurrent.futures as cf, ctypes, datetime, fcntl, hashlib, importlib.util, json, math, os, re, shutil, signal, struct, subprocess, sys, time, traceback
+import argparse, collections, concurrent.futures as cf, ctypes, datetime, fcntl, hashlib, importlib.util, json, math, os, re, shutil, signal, struct, subprocess, sys, threading, time, traceback
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -57,8 +57,6 @@ shader_lib = load_module('shader_lib', REPO / 'dm/tools/shader_lib.py')
 rfs = shader_lib.romfs
 ROOT = Path(os.environ.get('REGRESS_ROOT', ''))
 GAMES = Path(os.environ.get('REGRESS_GAMES', ''))
-HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex')
-RUST_FILES = ('dm/host/rust.mk', 'dm/host/rust/Cargo.toml', 'dm/host/rust/Cargo.lock', 'dm/host/rust/rust-toolchain.toml')
 REWRITER = ('dm/tools/patch_nso.py', 'dm/tools/jump_solver.py', 'dm/tools/nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_syms.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py')
 HEAVY_EXE = {'clang', 'make', 'xcodebuild', 'ld', 'ld64', 'swift-frontend', 'dotnet', 'metal', 'metal-tt', 'air-tt', 'applegpu-nt', 'dmsh_xlate', 'spirv-cross', 'cargo', 'rustc'}   # jobs that skew a measurement
 HEAVY_PY = r'(dmsh_build|shader_split|own_compilers|patch_nso)\.py'
@@ -587,27 +585,33 @@ def build_summary(m):
 
 
 
-def host_for(tree, g, jobs):
-    srcs = [p for d in HOST_DIRS for p in sorted((tree.path / d).iterdir()) if p.is_file() and p.suffix in ('.c', '.m', '.h', '.S', '.inc')]
-    rs = tree.path / 'dm/host/rust/src'
-    srcs += [tree.path / f for f in RUST_FILES if (tree.path / f).is_file()] + (sorted(rs.rglob('*.rs')) if rs.is_dir() else [])
-    r = sh(['make', '-s', f'GAME={g.id}', 'host_msl'], cwd=tree.path / 'dm/host', env=g.env(tree))
-    if r.returncode: raise HarnessError(f'{g.id}: host shader libraries of {tree.id} do not build:\n{r.stdout}{r.stderr}')
-    srcs.append(tree.path / 'dm/host/gen/msl-macosx/host_msl_gen.h')
-    key = digest(srcs + [tree.path / 'dm/host/Makefile', g.profile_dir(tree) / 'game.tsv', tree.path / 'dm/games/game.py'], g.id.encode())[:16]
-    dst = game_root(g) / 'host' / key / 'dmhost'
-    if dst.is_file(): return dst, key, 0
+def host_for(tree, g, jobs):   # make decides what to rebuild (every source, header, codec and the compiler flags); the copy is keyed by the binary it made
     t0 = time.time(); env = g.env(tree); hd = tree.path / 'dm/host'
-    say(f'  {g.id}: building the host of {tree.id}')
+    per_title = f'gen/{g.id}/dmhost'
     log = game_root(g) / 'tmp' / f'host-{tree.id}-{g.id}.log'; log.parent.mkdir(parents=True, exist_ok=True)
-    with open(log, 'w') as f:
-        for target in (['gen/dav1d/libdav1d.a', f'-j{jobs}'], ['dmhost']):
-            r = subprocess.run(['make', f'GAME={g.id}', *target], cwd=hd, env=env, stdout=f, stderr=subprocess.STDOUT)
+    with open(hd / '.regress-host.lock', 'w') as lk:   # one tree's games share its objects
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        target = per_title if sh(['make', '-n', '-s', f'GAME={g.id}', per_title], cwd=hd, env=env).returncode == 0 else 'dmhost'   # an older revision's Makefile has no per-game binary
+        built = hd / target
+        before = (built.stat().st_mtime_ns, built.stat().st_size) if built.is_file() else None
+        say(f'  {g.id}: building the host of {tree.id}')
+        with open(log, 'w') as f:
+            r = subprocess.run(['make', f'GAME={g.id}', f'-j{jobs}', target], cwd=hd, env=env, stdout=f, stderr=subprocess.STDOUT)
             if r.returncode: raise HarnessError(f'{g.id}: the host of {tree.id} does not build (see {log})')
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if sh(['cp', '-c', hd / 'dmhost', dst]).returncode: shutil.copy2(hd / 'dmhost', dst)
-    return dst, key, round(time.time() - t0, 1)
-
+        if not built.is_file(): raise HarnessError(f'{g.id}: make did not produce {target} for {tree.id} (see {log})')
+        after = (built.stat().st_mtime_ns, built.stat().st_size)
+        key = sha256_file(built).hexdigest()[:16]
+        dst = game_root(g) / 'host' / key / 'dmhost'
+        reused_bin = dst.is_file()
+        if not reused_bin:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dst.with_name(f'dmhost.partial.{os.getpid()}.{threading.get_ident()}')
+            try:
+                if sh(['cp', '-c', built, tmp]).returncode: shutil.copy2(built, tmp)
+                os.replace(tmp, dst)
+            except BaseException:
+                tmp.unlink(missing_ok=True); raise
+    return dst, key, 0 if (reused_bin and before == after) else round(time.time() - t0, 1)
 
 def rewriter_key(tree):
     return digest([tree.path / f for f in REWRITER] + sorted((tree.path / 'dm/games').glob('*/patches.py')))[:16]
