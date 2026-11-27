@@ -201,6 +201,17 @@ class PackReuse(unittest.TestCase):
     def signed(self):
         return {Path(c[-1]).name for c in self.commands if '--sign' in c}
 
+    def test_source_identity_invalidates_reuse_and_matches_metadata(self):   # the same files from another commit, or a clean, dirty or non-git checkout
+        info = Path(self.args.out) / 'Contents/Info.plist'
+        with mock.patch.object(pack_app, 'source_commit') as commit:
+            for i, identity in enumerate(('a' * 12, 'b' * 12, 'b' * 12 + '+dirty', None)):
+                with self.subTest(identity=identity):
+                    commit.return_value = identity; commit.reset_mock()
+                    self.assert_repacked(); commit.assert_called_once_with()
+                    if i: self.assertEqual(self.signed(), {'dmhost', Path(self.args.out).name + '.partial'})
+                    self.assertEqual(plistlib.loads(info.read_bytes()).get('DMCommit'), identity)
+                    commit.reset_mock(); self.assert_reused(); commit.assert_called_once_with()
+
     def test_retargeted_input_symlink_repacks(self):
         msl = self.tmp / 'msl'
         for name in ('left.metallib', 'right.metallib'): (msl / name).write_bytes(b'same library')

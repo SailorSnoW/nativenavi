@@ -353,6 +353,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [A reused Mac app names an earlier commit](../../../docs/reference/packing.md#a-reused-mac-app-names-an-earlier-commit): found upstream on this game's app packed after a docs-only commit; the commit is in the pack key now. Resolved.
 - [A 3D texture in a 2D array slot binds a zero texture](../../../docs/reference/rendering.md#a-3d-texture-in-a-2d-array-slot-binds-a-zero-texture): its fog volume, left bound where the wind's simulation reads a 2D array at an area load ([Open](#open)). Resolved.
 - [Held work handed to the GPU while the frame before was still on it](../../../docs/reference/frame-rate.md#held-work-handed-to-the-gpu-while-the-frame-before-was-still-on-it): its frame gate signalled late at area loads on a busy Mac, every hold forced after 200 ms ([Open](#open)). Resolved.
 - [Held work handed to the GPU while a crash report was written](../../../docs/reference/frame-rate.md#held-work-handed-to-the-gpu-while-a-crash-report-was-written): 13 of the 15 `replay ahead` hand-overs in 119 headless runs, all at the run's end ([Open](#open)). Resolved.
