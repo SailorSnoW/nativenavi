@@ -166,6 +166,13 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Fix:** the snapshot gathers every layer's names, then `names_first` sorts them once without case, so that the folders' names that differ only in case take one spelling (the image's first of that case, else the base folder's, else the first folder's: the rule of [the mods folder](#mods-made-for-emulators-do-nothing-or-only-half-of-them-does)), and sorts (name, position) once to keep each name's first, in the order gathered, so the listing is the same as before (the last overlay folder first, then the base, an image base in its table order). Measured on an M4 Pro, a read-only folder of 4-byte files under an empty overlay folder: 10,000 entries 0.19 s → 0.03 s, 38,000 entries 3.23 s → 0.20 s; what is left grows linearly (each name's layer is looked up for its type and size). `t_fs_directory` checks a name in several layers, names differing in case (one name, spelled as the base has it) and the layers' order; `t_fs` the spelling of an image base.
 - **Found on:** a code audit's synthetic measurement (2026-11-13). No game runs with an overlay by default.
 
+### Temporary storage survives a reset or a quit
+
+- **Symptom:** the temporary storage folder (`$DM_TEMP`, what `MountTemporaryStorage` maps) kept its files across a reset (⌘R / `DM_CTL` `reset`) and across a quit of the app, while a Switch's fsp-srv deletes an application's temporary storage when the software closes.
+- **Cause:** the host drops the mount at a reset (`dm_fs_reset`) but only closed its files; nothing emptied the backing folder, and no exit path did either.
+- **Fix:** `dm_fs_temp_empty` in `hle_fs.c` removes the folder's entries (the folder stays, the next mount recreates it). It runs in `dm_fs_reset` (a reset is a close and a start again), in `exit_end` (the SIGTERM graceful exit and the reset's process-relaunch fallback end in `_exit`, which runs no `atexit`), and from an `atexit` registered by a constructor (the player's ⌘Q / window close is `exit(0)`). Verified headless: a marker file and a subfolder placed in `temp/` are gone after a reset, with `fs: temporary storage … emptied (2 entries)` in the log.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#reset) (2026-11-27).
+
 ### Opening a large RomFS image directory allocates a full snapshot per handle
 
 - **Symptom:** `OpenDirectory` on a large `DMROMFS1` RomFS image directory allocates 784 bytes (`sizeof(DirectoryEntry)`) per child up front (28.4 MiB for a 38,000-entry directory) and calls `die` if the allocation fails, even when the next `ReadDirectory` asks for one entry.
