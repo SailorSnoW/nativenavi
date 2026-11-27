@@ -1119,8 +1119,34 @@ static void *tex_mtl_resolve(const tex_t *ct, int *in_storage, id<MTLTexture> __
             v = [b newTextureViewWithPixelFormat:d.pixelFormat textureType:b.textureType levels:NSMakeRange(0, b.mipmapLevelCount) slices:NSMakeRange(0, b.arrayLength) swizzle:b.swizzle];
         // b may have left the sharing table on another thread since the lookup: own_view_put checks that k still names b in the same hold of g_smu.
         if (v && !own_view_put(t->serial, &k, v)) v = nil;
-        if (b && !v) RED_ONCE(175, "texture ser=%llu %ux%u format %#x over the storage of a shared texture of format %lu: no view of it (%s), so it keeps its own and does not see what is written through the other",
+        // A parent placed in a heap cannot be remade with the format-view usage (it would leave its heap, and its aliases with it). This texture is placed in the
+        // same heap at the same offset instead: placement-heap aliasing shares the storage's bytes with the parent without a view (as a storage pair's halves do).
+        id<MTLTexture> ht = nil;
+        if (b && !v && placed) {
+            id<MTLHeap> heap = b.heap;
+            MTLTextureDescriptor *hd = [d copy];
+            hd.allowGPUOptimizedContents = b.allowGPUOptimizedContents;   // aliased bytes are the same only uncompressed (a view of compressed storage is garbage too)
+            MTLSizeAndAlign need = (!b.allowGPUOptimizedContents && heap && !b.heapOffset) ? [g_dev heapTextureSizeAndAlignWithDescriptor:hd] : (MTLSizeAndAlign){0};
+            if (need.size && need.size <= heap.size) ht = [heap newTextureWithDescriptor:hd offset:0];
+            if (ht) {
+                id owner = objc_getAssociatedObject(b, &g_image_heap_owner_key);
+                char *okey = &g_image_heap_owner_key;
+                if (!owner) { owner = objc_getAssociatedObject(b, &g_pair_key); okey = &g_pair_key; }
+                if (owner) objc_setAssociatedObject(ht, okey, owner, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                res_add(ht);
+                static int nh;
+                if (nh++ < 4) MLOG("texture ser=%llu %ux%u format %#x is placed in its storage's heap over the shared texture of format %lu, at its offset (%d so far): they share the storage's bytes without a view",
+                                  (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, (unsigned long)b.pixelFormat, nh);
+            }
+        }
+        if (b && !v && !ht) RED_ONCE(175, "texture ser=%llu %ux%u format %#x over the storage of a shared texture of format %lu: no view of it (%s), so it keeps its own and does not see what is written through the other",
                               (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, (unsigned long)b.pixelFormat, placed ? "its parent, placed in a heap with other textures over the storage, has no format-view usage" : up && (off || b.isSparse) ? "its parent needs the format-view usage, given only on the submit thread and not to a sparse texture" : "Metal made none, or the parent left the sharing table");
+        if (ht) {
+            id<MTLTexture> got = own_alias_publish(t->serial, &ak, ht);   // the parent's entry is held by its serial, so the takeover spares it
+            if (got != ht) defer_obj_release(ht);
+            if (!g_pool_walk) tu_stamp(got, 0);
+            return tex_mtl_result(got, owned);
+        }
         if (v) {
             static int nv;
             if (pfv && nv++ < 4) MLOG("texture ser=%llu %ux%u format %#x is a view of the shared texture over its storage, format %lu (%d so far)",

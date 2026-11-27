@@ -142,13 +142,17 @@ static void separate_storage(pool_t *pool, id<MTLHeap> original) {
     id<MTLTexture> p=tex_mtl(&t[0]), o=tex_mtl(&t[4]), f=tex_mtl(&t[6]);
     CHECK(p.heap && p.heap!=original,"another physical pool gets a separate heap");
     CHECK(o.heap && o.heap!=original && o.heap!=p.heap,"another offset gets a separate heap");
-    CHECK(f.heap && f.heap!=o.heap && f.heap!=original,"another format cannot join an existing heap");
+    CHECK(f.heap==o.heap && !f.parentTexture,"a 32-bit twin of a placed parent joins its heap at the same offset, sharing the storage's bytes without a view (not kept apart)");
+    tex_t t8=image(pool,994008,64,64); t8.off=8<<20; t8.mem=pool->mem+t8.off; t8.d.format=NVN_FORMAT_R8;   // another texel size: no 32-bit twin
+    nvn_tex_layout(&t8.d,&t8.L); mtl_tex_init(&t8);
+    CHECK(tex_mtl(&t8).heap!=o.heap,"a format of another texel size cannot join an existing heap");
     CHECK(f.heap==tex_mtl(&t[7]).heap,"integer images reuse backing when Metal hides atomic usage");
     CHECK(tex_atomic_capable(f) && tex_atomic_capable(tex_mtl(&t[7])),"integer aliases retain shader-atomic capability");
     CHECK(!tex_mtl(&t[2]).heap && !tex_mtl(&t[3]).heap,"CPU-visible resolution families retain their original backing");
     pixels(p,0x18273645); pixels(o,0x29384756); pixels(f,0x3a495867);
     atomic_pixel(f,0x3a495867);
     for (int i=0;i<8;i++) mtl_tex_release(&t[i]);
+    mtl_tex_release(&t8);
     mtl_alias_drop_pool(&other_pool); mtl_alias_drop_pool(&cpu_pool);
 }
 // Two families whose offsets lie in one 64 KB cell of the sharing table's index (alias_index): the owner lookup reads that cell and takes only the entries at its own offset
@@ -183,6 +187,24 @@ static void cross_size_read(void) {
     CHECK(!other && nclear,"another size's writes read back as its texels, misplaced");
     for (int i=0;i<2;i++) mtl_tex_release(&a[i]);
     mtl_alias_drop_pool(&pool); free(mem);
+}
+// A 32-bit twin over a placed parent's storage (Ocarina of Time's 341x192 RGBA8 over an RG11B10F target in a family heap) cannot be a view of it: the parent has no
+// format-view usage and cannot be remade with one without leaving its heap. The twin is placed in the same heap at the same offset, so the two share the bytes.
+static void placed_twin(pool_t *pool, id<MTLTexture> parent, uint32_t seed) {
+    tex_t t=image(pool,994000,parent.width,parent.height);
+    t.d.format=NVN_FORMAT_R32UI;   // a 32-bit integer twin of RGBA8 (pf_storage_twins)
+    nvn_tex_layout(&t.d,&t.L); mtl_tex_init(&t);
+    id<MTLTexture> mt=tex_mtl(&t);
+    CHECK(mt && mt.heap==parent.heap && mt.heapOffset==0,"a 32-bit twin of a placed parent is placed in the same heap at its offset, not kept apart");
+    CHECK(mt && !mt.parentTexture,"it is its own texture, not a view (the parent has no format-view usage)");
+    if (mt && mt.heap==parent.heap) {
+        pixels(parent,seed);   // writes through the parent, as a render pass would
+        id<MTLBuffer> out=read_image(mt); uint32_t *p=out.contents; int valid=out.length==parent.width*parent.height*4;
+        for (NSUInteger i=0;i<out.length/4;i++) valid &= p[i]==(seed^(uint32_t)i);
+        CHECK(valid,"the twin placed in the heap reads the bytes written through the parent (same 32-bit texels, reinterpreted)");
+        res_remove(out);
+    }
+    mtl_tex_release(&t);
 }
 int main(void) { @autoreleasepool {
     mtl_init(); __weak id<MTLHeap> weak_heap; void *mem=NULL;
@@ -221,6 +243,7 @@ int main(void) { @autoreleasepool {
     same_cell(&pool);
     fragment_copy(small,0x76543210);
     indirect_pixels(small,0x76543210);   // writes to other pools, offsets and formats left it intact
+    placed_twin(&pool,small,0x51525354);
     atomic_colour(&pool);
     depth_planes(&pool);
     cross_size_read();
