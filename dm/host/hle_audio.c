@@ -40,6 +40,7 @@ typedef struct {
     _Atomic uint64_t under_n, under_b; // empty-queue callbacks / zero-filled bytes
     uint64_t st_calls, st_count, st_qsum, st_u0, st_ub0; uint32_t st_fmin, st_fmax;   // callback-owned
     audio_stats st_report; _Atomic int st_pending; // consumed by the watchdog or Close under g_aos_lock
+    FILE *dump; int dump_tried, dump_ch;           // DM_AUDIO_DUMP: this output's file, opened at its first accepted block (audio_dump)
     _Atomic uint64_t cb_n;
     uint64_t wd_n, wd_t;               // under g_aos_lock
     int stalled, retry_ms; uint64_t retry_at;   // the silent sink stands in; the AudioUnit is retried at retry_at, backing off
@@ -442,6 +443,7 @@ static void aout_free(aout *a) {
     if (a->au) au_dispose(a->au);
     dispatch_release(a->notify_sem);
     if (a->rel_sem) dispatch_release(a->rel_sem);
+    if (a->dump) fclose(a->dump);
     pthread_mutex_destroy(&a->m); free(a);
 }
 // A HAL start can block for seconds: the silent sink plays meanwhile; Stop / suspend cancel without waiting, Close leaves the output to this worker.
@@ -586,6 +588,8 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
     LOG("audio #%d OpenAudioOut %s channels %d %s%s (call site %s)", a->id, name ? name : "(default)", ch, use_au ? "real output" : "silent sink", ev ? "" : ", no release event (the game polls)", site(lr, sb, sizeof sb));
     // the helper is joined before readers can find this output; outside g_aos_lock: joining can yield the guest core
     if (use_au) au_open(a);
+    // before publication: a DeviceSink dump keeps the opening route's channels (its 6, or its stereo fold) across a route change
+    a->dump_ch = a->sink_pcm ? (a->au && a->dev_ch == 6 ? 6 : 2) : a->ch;
     objmap_put(g, a);
     pthread_mutex_lock(&g_aos_lock);
     int slot = -1; for (int i = 0; i < AOMAX; i++) if (!g_aos[i]) { slot = i; break; }
@@ -645,6 +649,7 @@ static void au_close(void *g, void *lr) {
     atomic_store_explicit(&a->notify_run, 0, memory_order_release);
     dispatch_semaphore_signal(a->notify_sem);
     pthread_join(a->notify_th, NULL);
+    if (a->dump) { fclose(a->dump); a->dump = NULL; }
     audio_report report;
     pthread_mutex_lock(&g_aos_lock);
     for (int i = 0; i < AOMAX; i++) if (g_aos[i] == a) g_aos[i] = NULL;
@@ -657,16 +662,40 @@ static void au_close(void *g, void *lr) {
     if (!in_flight) aout_free(a);
     au_info(g, ch, STATE_STOPPED);
 }
+// DM_AUDIO_DUMP=<file>: each block an output accepts (16-bit, 48 kHz, dump_ch channels), output #0 to <file>, #N to <file>.<N>; a DeviceSink block's
+// eight channels (six and their stereo fold) unpacked to the representation latched at open. Under a->m, before q_tail publishes the block.
+static void audio_dump(aout *a, const aout_buf *b) {
+    if (!a->dump_tried) {
+        a->dump_tried = 1; const char *e = getenv("DM_AUDIO_DUMP"); char p[1024];
+        if (e && *e) {
+            int n = a->id ? snprintf(p, sizeof p, "%s.%d", e, a->id) : snprintf(p, sizeof p, "%s", e);
+            if (n < 0 || (size_t)n >= sizeof p) LOG("[RED] DM_AUDIO_DUMP path too long for audio #%d", a->id);
+            else if (!(a->dump = fopen(p, "wb"))) LOG("[RED] DM_AUDIO_DUMP cannot open %s", p);
+            else LOG("audio #%d DM_AUDIO_DUMP: its blocks (%d channels, 16-bit, 48 kHz) go to %s", a->id, a->dump_ch, p);
+        }
+    }
+    if (!a->dump || !b || !b->ptr || !b->size) return;
+    if (!a->sink_pcm) { fwrite(b->ptr, 1, (size_t)b->size, a->dump); return; }
+    enum { BLOCK = 128 };
+    const unsigned ch = a->dump_ch == 6 ? 6 : 2, off = ch == 6 ? 0 : 6;
+    const int16_t *src = b->ptr;
+    size_t frames = (size_t)b->size / (sizeof *src * DM_AUDIO_SINK_CHANNELS);
+    int16_t buf[BLOCK * 6];
+    while (frames) {
+        size_t n = frames < BLOCK ? frames : BLOCK;
+        for (size_t i = 0; i < n; i++)
+            memcpy(buf + i * ch, src + i * DM_AUDIO_SINK_CHANNELS + off, ch * sizeof *buf);
+        fwrite(buf, sizeof *buf, n * ch, a->dump);
+        src += n * DM_AUDIO_SINK_CHANNELS; frames -= n;
+    }
+}
 static unsigned h_au_Append(void *g, aout_buf *b) {
     aout *a = ao(g);
-    // DM_AUDIO_DUMP=<file>: every appended block as is (16-bit, 48 kHz, the channel count OpenAudioOut logs)
-    { static FILE *df; static int on = -1; if (on < 0) { const char *e = getenv("DM_AUDIO_DUMP"); on = e != NULL; if (on && !(df = fopen(e, "wb"))) LOG("[RED] DM_AUDIO_DUMP cannot open %s", e); }
-      if (df && b && b->ptr && b->size) fwrite(b->ptr, 1, (size_t)b->size, df); }
     pthread_mutex_lock(&a->m);
     uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_relaxed);
     uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_acquire);
     int ok = qt - qh < QMAX;
-    if (ok) { a->q[qt & (QMAX - 1)] = b; atomic_store_explicit(&a->q_tail, qt + 1, memory_order_release); }
+    if (ok) { audio_dump(a, b); a->q[qt & (QMAX - 1)] = b; atomic_store_explicit(&a->q_tail, qt + 1, memory_order_release); }
     pthread_mutex_unlock(&a->m);
     return ok;
 }
