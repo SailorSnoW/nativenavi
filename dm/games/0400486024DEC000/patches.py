@@ -52,10 +52,11 @@ def frame_step_v0(ctx):
 # returns the best level under the threshold (+0x10, 83 = about 16.4 ms). This game's cost on Apple GPUs hardly follows the resolution, so that model held the controller
 # at its floor for good.
 # The stub replaces the level function. With DM_DYNAMIC_RESOLUTION 0 (state +0x40 0, the default) it returns 0: full resolution. With 1 it climbs on the load measured at
-# each level, with no model of how the cost grows: one level down when the load (+0x8) has been over the threshold for 8 calls in a row, and that level is marked as not
-# fitting; one level up when the load fits and the level above was never measured, fitted when it was last measured, or was measured more than 600 calls ago; else the
-# current level (+0x174). Nothing is decided or recorded until a level has held 8 calls: the load is read a few frames late. The 8 calls over in a row keep a single slow
-# frame, or the first frames at a new size, from marking a level that fits. The game's counters still pace the steps; its level count (+0x1a0) is the floor.
+# each level, with no model of how the cost grows: after 8 calls in a row over the threshold at the current level, one level down only when the level below was measured
+# cheaper than this one (its recorded load below the load just recorded for this level); otherwise one level back up (at 0, stay). One level up when the load fits and the
+# level above was never measured, fitted when last measured, or was measured more than 600 calls ago; else the current level (+0x174). Nothing is decided or recorded until
+# a level has held 8 calls: the load is read a few frames late. The 8 calls over in a row keep a single slow frame, or the first frames at a new size, from marking a level
+# that fits. The game's counters still pace the steps; its level count (+0x1a0) bounds the levels (the floor is count-1).
 # The memory is in the state page: +0x200 calls, +0x204 the last call's level, +0x208 calls at it, +0x20c calls over in a row, +0x210 the load measured at each level
 # (16 floats), +0x250 the call it was measured at (0 = never).
 # The threshold is the game's at 60 fps (LoadThreshold +0xc, or its override +0x14, plus the mode's offset: 83 docked, 105 handheld), scaled by 60 / the host's target
@@ -69,9 +70,11 @@ drs_controller = (   # x0 the controller, x16 the state page (the ADRP before it
     0x5282710a, 0x1ac90949, 0x1e230122, 0x1e227821, 0xbd400800,                                       # at most 5000 / target fps; then the load
     0xb9417402, 0xb941a003, 0x7100005f, 0x1a9fa042, 0x528001e9, 0x6b09005f,                           # level (0..15), count
     0x1a89d042, 0xb9420204, 0x11000484, 0xb9020204, 0xb9420605, 0xb9420a06, 0x6b0200bf, 0x1a8617e6,   # calls + 1; calls at this level
-    0xb9020602, 0xb9020a06, 0x35000046, 0xb9020e1f, 0x91084207, 0x91094208, 0x710020df, 0x5400040b,   # a new level: none over; under 8 calls: stay
-    0x1e212000, 0x540001ad, 0xb9420e0b, 0x1100056b, 0xb9020e0b, 0x7100217f, 0x5400032b,               # over: under 8 in a row, stay
-    0xbc2258e0, 0xb8225904, 0x51000469, 0x1100044a, 0x6b09015f, 0x1a89d140, 0xd65f03c0,               # 8 in a row: record it, down one (to the floor)
+    0xb9020602, 0xb9020a06, 0x35000046, 0xb9020e1f, 0x91084207, 0x91094208, 0x710020df, 0x5400054b,   # a new level: none over; under 8 calls: stay
+    0x1e212000, 0x540002ed, 0xb9420e0b, 0x1100056b, 0xb9020e0b, 0x7100217f, 0x5400046b,               # over: under 8 in a row, stay
+    0xbc2258e0, 0xb8225904, 0x1100044a, 0x51000469, 0x6b09015f, 0x54000108,                           # 8 in a row: record this level; the level below vs the floor
+    0xb86a590b, 0x340000cb, 0xbc6a58e2, 0x1e202040, 0x5400006a, 0x2a0a03e0, 0xd65f03c0,               # its record never measured or not cheaper: climb back; else down one
+    0x5100044a, 0x7100045f, 0x1a9fa140, 0xd65f03c0,                                                   # climb back one (at 0: stay)
     0xb9020e1f, 0xbc2258e0, 0xb8225904, 0x34000182, 0x51000449, 0xb869590a, 0x340000ea, 0x4b0a008a,   # fits: record it; at 0 stay; the level above's record
     0x7109615f, 0x54000088, 0xbc6958e2, 0x1e212040, 0x540000aa, 0x2a0903e0, 0xd65f03c0,               # never, stale or fitting: up one
     0x2a1f03e0, 0xd65f03c0, 0x2a0203e0, 0xd65f03c0)                                                   # 0; or stay
@@ -234,9 +237,9 @@ BINDING = [
     {'what': 'frame ratio from the host\'s step, or from the measured frame time when that is longer', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate',
      'why': "the game's own frame-ratio division, found by its function's fingerprint on any build that keeps the function",
      'checked': 'v131072 main: one function with this fingerprint, the site and its free registers read by disassembly (2026-11-08); the stub executed with and without a measured time (test_oot_real_speed.py, 2026-11-10); v0 main: one function with its fingerprint (main+0x6b5900), the same code with other registers for its globals, the division at +0x108, s0 dead after it and no x16 / x17, by disassembly (2026-11-24)'},
-    {'what': 'dynamic resolution: full size, or a climb on the load measured at each level', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
+    {'what': 'dynamic resolution: full size, or a climb on the load measured at each level, down only to a level measured cheaper than the current one', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
      'why': "the game's own dynamic-resolution level function and update, found by their functions' fingerprints on any build that keeps both; switchable (DM_DYNAMIC_RESOLUTION)",
-     'checked': 'v131072 main: one function with each fingerprint (the level function a leaf, x2..x11 / x16 / x17 / s0..s2 free), its callers, the update and the controller fields read by disassembly, the fields read in play (2026-11-08); the climb run natively against a model of the update and in play to full size (2026-11-09); the threshold at 60 and 30 fps, docked and handheld, run natively in test_ocarina_drs.py (2026-11-23), in play at 30 fps on an M2 Air (upstream PR #1954, 2026-11-16); v0 main: the level function (main+0x7e8920) and the update (main+0x7e7de0) the same code over the same controller fields, only the addresses of their constants moved, by disassembly (2026-11-24)'},
+     'checked': 'v131072 main: one function with each fingerprint (the level function a leaf, x2..x11 / x16 / x17 / s0..s2 free), its callers, the update and the controller fields read by disassembly, the fields read in play (2026-11-08); the climb run natively against a model of the update and in play to full size (2026-11-09); the threshold at 60 and 30 fps, docked and handheld, run natively in test_ocarina_drs.py (2026-11-23), in play at 30 fps on an M2 Air (upstream PR #1954, 2026-11-16); the step-down rule (down only to a level measured cheaper, otherwise back up) run natively in test_ocarina_drs.py (2026-11-27); v0 main: the level function (main+0x7e8920) and the update (main+0x7e7de0) the same code over the same controller fields, only the addresses of their constants moved, by disassembly (2026-11-24)'},
     {'what': 'render scale: the 3D views at a fraction of the game\'s own size (DM_RENDER_SCALE)', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
      'why': "the game's own view-size update (its test of the dynamic-resolution status and its scale store), found by its function's fingerprint on any build that keeps it; the level function's stub above holds level 0 under a scale",
      'checked': 'v131072 main: one function with this fingerprint (main+0x31d3200, 0xfc8 bytes, one caller main+0x31c00cc); the status ubfx at +0xce4, the store at +0xd48 (the only float store to #0xe5c in main; s0 computed from the update\'s w0 at +0xd34, never reread from +0xe5c) and the size loop clearing bit 3 of +0xe2c read by disassembly (2026-11-09, 2026-11-23); guard, status and store stubs executed natively on ARM64 in test_ocarina_drs.py; v0 main: main+0x317be20 (0x1000 bytes), the status ubfx at +0xcd4, the store at +0xd38 to the scale at +0xe54 (its flags at +0xe28), s0 reloaded from +0xe54 before any read, by disassembly (2026-11-24)'},

@@ -194,15 +194,49 @@ int main(void) {
     assert(call_drs(ctrl, state) == 0);
     assert(get_u32(state, 0x200) == 0);
 
-    // 2. 60 fps target: threshold stays 83.0; load 90 steps down after 8 over-budget frames.
+    // 2. 60 fps target: threshold stays 83.0; load 90 over for 8 calls records level 0 and stays there: level 1 was
+    //    never measured cheaper (no record), so the controller climbs back (at 0: stays) instead of stepping down.
     init_ctrl(ctrl, 90.0f, 83.0f, 0, 10);
     init_state(state, 60.0f, 1);
     int r = -1;
     for (int i = 0; i < 14; i++) { r = call_drs(ctrl, state); assert(r == 0); }   // 7 settling + 7 over
     r = call_drs(ctrl, state);
-    assert(r == 1);
+    assert(r == 0);
     assert(get_f32(state, 0x210) == 90.0f);
+
+    // 2b. Level 1 measured cheaper (70 < 90): 8 over at level 0 steps down to 1.
+    init_ctrl(ctrl, 90.0f, 83.0f, 0, 10);
+    init_state(state, 60.0f, 1);
+    set_f32(state, 0x210 + 4, 70.0f);   // load[1]
+    set_u32(state, 0x250 + 4, 5);       // call[1]
+    for (int i = 0; i < 14; i++) { assert(call_drs(ctrl, state) == 0); }
+    assert(call_drs(ctrl, state) == 1);
+
+    // 2c. Level 1 measured not cheaper (95 >= 90): stays at 0.
+    init_ctrl(ctrl, 90.0f, 83.0f, 0, 10);
+    init_state(state, 60.0f, 1);
+    set_f32(state, 0x210 + 4, 95.0f);
+    set_u32(state, 0x250 + 4, 5);
+    for (int i = 0; i < 15; i++) { assert(call_drs(ctrl, state) == 0); }
+
+    // 2d. At level 2, level 3 never measured: climbs back to 1 (new level: the 16th call decides).
+    init_ctrl(ctrl, 90.0f, 83.0f, 2, 10);
+    init_state(state, 60.0f, 1);
+    for (int i = 0; i < 15; i++) { assert(call_drs(ctrl, state) == 2); }
+    assert(call_drs(ctrl, state) == 1);
+
+    // 2e. At level 2, level 3 measured cheaper (80 < 90): steps down to 3.
+    init_ctrl(ctrl, 90.0f, 83.0f, 2, 10);
+    init_state(state, 60.0f, 1);
+    set_f32(state, 0x210 + 12, 80.0f);  // load[3]
+    set_u32(state, 0x250 + 12, 5);      // call[3]
+    for (int i = 0; i < 15; i++) { assert(call_drs(ctrl, state) == 2); }
+    assert(call_drs(ctrl, state) == 3);
+
     // At level 1 with load 80 (fits 83): stays at 1 while level 0's 90 is fresh, climbs after 600 calls.
+    init_ctrl(ctrl, 90.0f, 83.0f, 0, 10);
+    init_state(state, 60.0f, 1);
+    for (int i = 0; i < 15; i++) { assert(call_drs(ctrl, state) == 0); }   // records load[0] = 90 at the 15th
     set_u32(ctrl, 0x174, 1);
     set_f32(ctrl, 0x08, 80.0f);
     for (int i = 0; i < 600; i++) { r = call_drs(ctrl, state); assert(r == 1); }
@@ -220,38 +254,39 @@ int main(void) {
     for (int i = 0; i < 8; i++) { assert(call_drs(ctrl, state) == 2); }
     assert(call_drs(ctrl, state) == 1);
 
-    // 30 fps target: load 170 (> 166) steps down after 8 over-budget calls, clamped at floor (count - 1 = 9).
+    // 30 fps target: load 170 (> 166) over for 8 calls records level 0 and stays there (level 1 never measured cheaper).
     init_ctrl(ctrl, 170.0f, 83.0f, 0, 10);
     init_state(state, 30.0f, 1);
     for (int i = 0; i < 14; i++) { assert(call_drs(ctrl, state) == 0); }
-    assert(call_drs(ctrl, state) == 1);
+    assert(call_drs(ctrl, state) == 0);
+    assert(get_f32(state, 0x210) == 170.0f);
     // Level 1 fits at 150 (< 166), stays at 1 while level 0's 170 (>= 166) is fresh.
     set_u32(ctrl, 0x174, 1);
     set_f32(ctrl, 0x08, 150.0f);
     for (int i = 0; i < 20; i++) { assert(call_drs(ctrl, state) == 1); }
 
+    // At the floor (9) with the load over for 8 calls: no level below, so it climbs back to 8.
     init_ctrl(ctrl, 170.0f, 83.0f, 9, 10);
     init_state(state, 30.0f, 1);
-    for (int i = 0; i < 30; i++) { assert(call_drs(ctrl, state) == 9); }
+    for (int i = 0; i < 15; i++) { assert(call_drs(ctrl, state) == 9); }
+    assert(call_drs(ctrl, state) == 8);
 
-    // 3b. Handheld mode's threshold, 105 (21 ms): held to one frame of the target rate, 83.3 at 60 fps (load 90 steps down) and 166.7 at 30 (105 x 2 = 210 is more)
+    // 3b. Handheld mode's threshold, 105 (21 ms): held to one frame of the target rate, 83.3 at 60 fps (load 90 over, stays at 0:
+    //     level 1 never measured cheaper) and 166.7 at 30 (105 x 2 = 210 is more)
     init_ctrl(ctrl, 90.0f, 105.0f, 0, 10);
     init_state(state, 60.0f, 1);
-    for (int i = 0; i < 14; i++) { assert(call_drs(ctrl, state) == 0); }
-    assert(call_drs(ctrl, state) == 1);
+    for (int i = 0; i < 15; i++) { assert(call_drs(ctrl, state) == 0); }
     init_ctrl(ctrl, 170.0f, 105.0f, 0, 10);
     init_state(state, 30.0f, 1);
-    for (int i = 0; i < 14; i++) { assert(call_drs(ctrl, state) == 0); }
-    assert(call_drs(ctrl, state) == 1);
+    for (int i = 0; i < 15; i++) { assert(call_drs(ctrl, state) == 0); }
     init_ctrl(ctrl, 160.0f, 105.0f, 0, 10);
     init_state(state, 30.0f, 1);
     for (int i = 0; i < 40; i++) { assert(call_drs(ctrl, state) == 0); }
 
-    // 4. Target 0 (game's own frame step): threshold stays 83.0, no divide-by-zero.
+    // 4. Target 0 (game's own frame step): threshold stays 83.0, no divide-by-zero; load 100 over stays at 0 (nothing measured cheaper).
     init_ctrl(ctrl, 100.0f, 83.0f, 0, 10);
     init_state(state, 0.0f, 1);
-    for (int i = 0; i < 14; i++) { assert(call_drs(ctrl, state) == 0); }
-    assert(call_drs(ctrl, state) == 1);
+    for (int i = 0; i < 15; i++) { assert(call_drs(ctrl, state) == 0); }
 
     // 5. Render scale guard in dynamic_resolution: scale in (0, 1) forces level 0 even with DRS on.
     init_ctrl(ctrl, 200.0f, 83.0f, 3, 10);
