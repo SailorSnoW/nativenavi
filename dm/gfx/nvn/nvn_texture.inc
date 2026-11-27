@@ -948,21 +948,47 @@ static id<MTLBuffer> up_big_src(uint64_t addr, uint64_t len, uint64_t *off, int 
     return buf;
 }
 // Only the images with a page written since the stamp are read (each layer's level has a byte range of its own). A byte each (level * layers + layer); NULL: read whole.
+// full_out (a byte each too) marks the images whose every page was written: those are read whole, the others only at their written pages (see pkg_pgmap).
 static int g_partial_upload_on = -1;
-static uint8_t *pkg_written(const tex_t *t, const void *span, uint64_t since, unsigned levels, unsigned layers, unsigned *nup) {
+static uint8_t *pkg_written(const tex_t *t, const void *span, uint64_t since, unsigned levels, unsigned layers, unsigned *nup, uint8_t **full_out, unsigned *nfull_out) {
     if (g_partial_upload_on < 0) { const char *e = getenv("DM_NVN_PARTIAL_UPLOAD"); g_partial_upload_on = !e || atoi(e); }
     if (!g_partial_upload_on) return NULL;
     nvn_texlayout L; nvn_tex_layout(&t->d, &L);
     if (!span || !levels || levels > 16 || levels > t->d.levels || !L.layer_size || L.size != t->L.size || L.layer_size != t->L.layer_size || (uint64_t)layers * L.layer_size != L.size) return NULL;
     uint8_t *need = calloc((size_t)levels * layers, 1); if (!need) return NULL;
+    uint8_t *full = calloc((size_t)levels * layers, 1); if (!full) { free(need); return NULL; }
     uint64_t lo[17]; for (unsigned l = 0; l <= levels; l++) lo[l] = l < t->d.levels ? nvn_tex_level_offset(&t->d, l) : L.layer_size;
-    *nup = 0;
+    uintptr_t pg = (uintptr_t)getpagesize();
+    *nup = 0; *nfull_out = 0;
     for (unsigned y = 0; y < layers; y++) {
         const uint8_t *m = (const uint8_t *)t->mem + (uint64_t)y * L.layer_size;
         if (!nvn_dirty_since_span(span, m, L.layer_size, since)) continue;
         for (unsigned l = 0; l < levels; l++) if (lo[l + 1] <= lo[l] || nvn_dirty_since_span(span, m + lo[l], lo[l + 1] - lo[l], since)) { need[l * layers + y] = 1; ++*nup; }
     }
+    for (unsigned y = 0; y < layers; y++)
+        for (unsigned l = 0; l < levels; l++) {
+            uintptr_t a = (uintptr_t)t->mem + (uint64_t)y * L.layer_size + lo[l], e = (uintptr_t)t->mem + (uint64_t)y * L.layer_size + lo[l + 1];
+            int all = 1;
+            for (uintptr_t p = a & ~(pg - 1); p < e && all; p += pg) if (!nvn_dirty_since_span(span, (const void *)p, pg, since)) all = 0;
+            if (all) { full[l * layers + y] = 1; ++*nfull_out; }
+        }
+    *full_out = full;
     return need;
+}
+// One byte per host page of the storage, 1 where a write since the stamp unprotected it: what a partial re-upload reads (nvn_deswizzle_written)
+static uint8_t *pkg_pgmap(const tex_t *t, const void *span, uint64_t since, uintptr_t *base, unsigned *n) {
+    uintptr_t pg = (uintptr_t)getpagesize(), a = (uintptr_t)t->mem, e = a + t->L.size, p0 = a & ~(pg - 1);
+    unsigned np = (unsigned)((e - p0 + pg - 1) / pg);
+    uint8_t *m = calloc(np ? np : 1, 1);
+    if (!m) return NULL;
+    for (unsigned i = 0; i < np; i++) {
+        uintptr_t lo = p0 + (uintptr_t)i * pg, hi = p0 + (uintptr_t)(i + 1) * pg;
+        if (lo < a) lo = a;
+        if (hi > e) hi = e;
+        if (hi > lo && nvn_dirty_since_span(span, (const void *)lo, hi - lo, since)) m[i] = 1;
+    }
+    *base = p0; *n = np;
+    return m;
 }
 // GPU uploads express this dependency through queue order instead
 static int tex_cpu_wait(const tex_t *t) {
@@ -1001,12 +1027,12 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
     unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;   // a cube array's depth counts layer-faces
     // taken after the stamp and the protect: a write from here on faults and is found at the next look
-    uint8_t *need = NULL; unsigned nimg = (unsigned)d.mipmapLevelCount * layers, nup = 0;
+    uint8_t *need = NULL, *full = NULL; unsigned nimg = (unsigned)d.mipmapLevelCount * layers, nup = 0, nfull = 0;
     if (prev && prev != mt && stamp && !sparse && !linear && bpb && d.sampleCount <= 1 && prev.pixelFormat == mt.pixelFormat && prev.textureType == mt.textureType && prev.sampleCount == mt.sampleCount
         && prev.width == mt.width && prev.height == mt.height && prev.depth == mt.depth && prev.arrayLength == mt.arrayLength && prev.mipmapLevelCount == mt.mipmapLevelCount)
-        need = pkg_written(t, span, since, (unsigned)d.mipmapLevelCount, layers, &nup);
-    if (need && nup == nimg) { free(need); need = NULL; }
-    if (need && taken) *taken = nimg - nup;
+        need = pkg_written(t, span, since, (unsigned)d.mipmapLevelCount, layers, &nup, &full, &nfull);
+    if (need && nfull == nimg) { free(need); free(full); need = full = NULL; }   // every image fully written: read whole, copy nothing
+    if (need && taken) *taken = nimg - nfull;   // an image not fully written holds pages copied from the texture it replaces
     size_t total = 0;
     for (unsigned l = 0; l < d.mipmapLevelCount; l++) {
         uint32_t w, h, z; tex_lsize(t, l, &w, &h, &z);
@@ -1074,13 +1100,41 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
         if (enc_ok) {
             [g_up_texs addObject:mt];
             if (!g_cb) up_flush();
-            free(need);
+            free(need); free(full);
             return mt;
         }
         g_nup_blits = nb0;   // the encoded deswizzle only writes the staging area and is harmless; this texture takes the CPU path below
         if (!g_cb) up_flush();
         if (mb) RED_ONCE(41, "GPU deswizzle does not support format %#x target %d; falling back to the CPU", t->d.format, t->d.target);
         else RED_ONCE(19, "could not retain a texture source in the new upload batch; falling back to the CPU");
+    }
+
+    // A partially written image taken the CPU path is read only at its written pages (a single-image texture was read whole at every re-upload before, the
+    // 3072x2096 BC5 of Ocarina of Time's castle town among them): the runs of written 16-byte pieces are computed once here and copied below, and their
+    // unwritten neighbours come from the texture being replaced. On the GPU path the GPU reads the whole image, which is cheap there.
+    int part_ok = need && !use_gpu && !linear && !rb_shift && !sparse && bpb;
+    uint8_t *pgmap = NULL; uintptr_t pgbase = 0; unsigned pgn = 0;
+    nvn_dwr_t *pruns = NULL; unsigned npruns = 0, prcap = 0;
+    unsigned *pstart = NULL, *pcnt = NULL;
+    if (part_ok) {
+        pgmap = pkg_pgmap(t, span, since, &pgbase, &pgn);
+        pstart = calloc(nimg, sizeof *pstart); pcnt = calloc(nimg, sizeof *pcnt);
+        if (!pgmap || !pstart || !pcnt) { free(pgmap); pgmap = NULL; free(pstart); pstart = NULL; free(pcnt); pcnt = NULL; }
+    }
+    if (pgmap) {
+        for (unsigned l = 0; l < d.mipmapLevelCount; l++) {
+            uint32_t w, h, z; tex_lsize(t, l, &w, &h, &z);
+            if (z != 1) continue;   // a 3D level's slices are read whole
+            for (unsigned y = 0; y < layers; y++) {
+                unsigned idx = l * layers + y;
+                if (!need[idx] || full[idx]) continue;
+                unsigned s0 = npruns; uint64_t nb = 0;
+                if (!nvn_deswizzle_written(&t->d, l, y, t->mem, 0, pgmap, pgbase, pgn, NULL, 0, &pruns, &npruns, &prcap, &nb)) {
+                    pstart[idx] = s0; pcnt[idx] = npruns - s0;
+                    g_bp_up_bytes += nb - (uint64_t)((size_t)((w + bw - 1) / bw) * bpb * ((h + bh - 1) / bh) * z);   // total counted the whole image above
+                }
+            }
+        }
     }
 
     // unmapped pages as 0: reading a mip tail's host alias at a 4 KB offset stopped the host with SIGBUS
@@ -1104,7 +1158,23 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
         uint32_t w, h, z; tex_lsize(t, l, &w, &h, &z);
         size_t pitch = (size_t)((w + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh;
         for (unsigned y = 0; y < layers; y++) {
-            if (need && !need[l * layers + y]) { up_copy_add(prev, MTLSizeMake(w, h, z), mt, y, l); continue; }
+            unsigned idx = l * layers + y;
+            if (need && !need[idx]) { up_copy_add(prev, MTLSizeMake(w, h, z), mt, y, l); continue; }
+            if (pcnt && pcnt[idx]) {   // partially written image: only its written pages are read from guest memory
+                up_copy_add(prev, MTLSizeMake(w, h, z), mt, y, l);   // the pieces no write touched come from the texture being replaced
+                if (nvn_deswizzle_runs_copy(&t->d, l, y, src, 0, pruns + pstart[idx], pcnt[idx], (uint8_t *)stg.contents + off, pitch)) { RED_ONCE(9, "deswizzle failed format %#x target %d", t->d.format, t->d.target); break; }
+                for (unsigned r = 0; r < pcnt[idx]; r++) {
+                    nvn_dwr_t *R = &pruns[pstart[idx] + r];
+                    size_t jb = (size_t)R->j0 * 16, wb = (size_t)R->n * 16;
+                    if (jb + wb > pitch) wb = pitch - jb;   // the row's tail piece
+                    up_blit_add_at(stg, off + ((size_t)R->z * rows + R->y) * pitch + jb, pitch, pitch * rows,
+                                   MTLSizeMake((NSUInteger)(wb / (size_t)bpb * (size_t)bw), (NSUInteger)bh, 1), mt, y, l,
+                                   MTLOriginMake((NSUInteger)(jb / (size_t)bpb * (size_t)bw), (NSUInteger)(R->y * bh), 0));
+                    if (r == 0) g_up_blits[g_nup_blits - 1].bar = 1;   // the runs follow the copy from the texture being replaced
+                }
+                off += pitch * rows * z;
+                continue;
+            }
             if (linear) {   // one 2D level: rows of the storage's stride, the pitch GetStorageSize counts
                 size_t srow = tex_linear_row(t);
                 if (l || y || z != 1 || srow < pitch || srow * rows > t->L.size) { RED_ONCE(153, "linear texture upload: %ux%u format %#x target %d levels %u is not one 2D level of rows (stride %zu)", t->d.width, t->d.height, t->d.format, t->d.target, t->d.levels, srow); break; }
@@ -1118,7 +1188,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
             off += pitch * rows * z;
         }
     }
-    free(part); free(need);
+    free(part); free(need); free(full); free(pgmap); free(pruns); free(pstart); free(pcnt);
     up_flush();
     return mt;
 }

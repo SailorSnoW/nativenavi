@@ -18,6 +18,7 @@ typedef struct {
     unsigned levels, layers, bpb, bw, bh; int d3;
     size_t bytes, *at, *len; uint64_t *lo, *hi;   // per image (level * layers + layer): its place in the linear reference, and its byte range in the storage
     uint8_t *expected, *written; unsigned fill;
+    uint8_t *wpg; uintptr_t wpg_base; unsigned wpg_n;   // host pages of the pool written by write_image / write_some
 } fix_t;
 static unsigned img(const fix_t *f, unsigned l, unsigned a) { return l * f->layers + a; }
 static void geom(const fix_t *f, unsigned l, unsigned *w, unsigned *h, unsigned *z, size_t *pitch, size_t *rows) {
@@ -46,12 +47,18 @@ static fix_t *make(int target, NVNformat format, unsigned w, unsigned h, unsigne
     f->pool = (pool_t){.magic = MAGIC('P','O','O','L'), .mem = f->mem, .size = f->poolsize, .flags = NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     f->t.pool = &f->pool; f->t.mem = (uint8_t *)f->mem + source_offset;
     mtl_pool_add(f->mem, f->poolsize); nvn_dirty_add_range(f->mem, f->poolsize);
+    f->wpg_base = (uintptr_t)f->mem & ~(pg - 1); f->wpg_n = (unsigned)(f->poolsize / pg);
+    f->wpg = calloc(f->wpg_n, 1);
     f->expected = malloc(f->bytes);
     return f;
 }
 static void drop(fix_t *f) {
     mtl_tex_release(&f->t); mtl_drain(); mtl_alias_drop_pool(&f->pool); nvn_dirty_remove_range(f->mem); mtl_pool_del(f->mem); mtl_drain();
-    free(f->mem); free(f->expected); free(f->at); free(f->len); free(f->lo); free(f->hi); free(f->written); free(f);
+    free(f->mem); free(f->expected); free(f->at); free(f->len); free(f->lo); free(f->hi); free(f->written); free(f->wpg); free(f);
+}
+static void mark_pages(fix_t *f, uintptr_t a, uintptr_t e) {   // the pool's host pages [a, e)
+    uintptr_t pg = (uintptr_t)getpagesize();
+    for (uintptr_t p = a & ~(pg - 1); p < e; p += pg) { unsigned k = (unsigned)((p - f->wpg_base) / pg); if (k < f->wpg_n) f->wpg[k] = 1; }
 }
 // The game writes one image: new bytes in the reference, swizzled into the storage, its pages counted as written
 static void write_image(fix_t *f, unsigned l, unsigned a) {
@@ -59,7 +66,39 @@ static void write_image(fix_t *f, unsigned l, unsigned a) {
     uint8_t *p = f->expected + f->at[i]; unsigned k = ++f->fill;
     for (size_t b = 0; b < f->len[i]; b++) p[b] = (uint8_t)(b * 131u + (b >> 8) * 17u + a * 29u + l * 71u + k * 83u);
     dm_guest_write_prepare((uint8_t *)f->t.mem + f->lo[i], f->hi[i] - f->lo[i]);
+    mark_pages(f, (uintptr_t)f->t.mem + f->lo[i], (uintptr_t)f->t.mem + f->hi[i]);
     CHECK(!nvn_swizzle(&f->t.d, l, a, p, (uint32_t)pitch, f->t.mem), "reference swizzle succeeds");
+    f->written[i] = 1;
+}
+// The game writes only host pages [pg0, pg1) of one image: the pieces whose source page lies there get new bytes, in the reference and in the storage
+static void write_some(fix_t *f, unsigned l, unsigned a, unsigned pg0, unsigned pg1) {
+    unsigned i = img(f, l, a), w, h, z; size_t pitch, rows; geom(f, l, &w, &h, &z, &pitch, &rows);
+    uint8_t *lin = malloc(f->len[i]), *sw = malloc(f->hi[i] ? (size_t)(f->hi[i]) : 1);   // sw is laid out as the storage: the image sits at f->lo[i]
+    unsigned k = ++f->fill;
+    for (size_t b = 0; b < f->len[i]; b++) lin[b] = (uint8_t)(b * 131u + (b >> 8) * 17u + a * 29u + l * 71u + k * 83u);
+    CHECK(!nvn_swizzle(&f->t.d, l, a, lin, (uint32_t)pitch, sw), "reference swizzle succeeds");   // sw is the storage: the image sits at f->lo[i] in it
+    uintptr_t pg = (uintptr_t)getpagesize();
+    uint8_t *st = (uint8_t *)f->t.mem + f->lo[i];
+    uintptr_t wa = (uintptr_t)st + (uint64_t)pg0 * pg, we = (uintptr_t)st + (uint64_t)pg1 * pg;
+    if (wa < (uintptr_t)st) wa = (uintptr_t)st;
+    if (we > (uintptr_t)st + f->len[i]) we = (uintptr_t)st + f->len[i];
+    if (we > wa) { dm_guest_write_prepare((void *)wa, we - wa); mark_pages(f, wa, we); }
+    uint32_t lb = nvn_tex_level_gobs(&f->t.d, l) * 64; if (lb < pitch) lb = (uint32_t)pitch;
+    unsigned th, td; nvn_tex_level_tiles(&f->t.d, l, &th, &td);
+    size_t nfull = pitch >> 4, tail = pitch & 15;
+    uintptr_t stp = (uintptr_t)st & ~(pg - 1);   // pages are counted from the image's first host page
+    for (uint32_t y = 0; y < rows; y++)
+        for (uint32_t j = 0; j < nfull + (tail ? 1 : 0); j++) {
+            size_t n = j == nfull ? tail : 16;
+            uint64_t so = nvn_bl_offset(j * 16, y, 0, lb, (uint32_t)rows, th, td, f->t.d.gob_order);
+            uintptr_t pa = (uintptr_t)st + so;
+            unsigned pk = (unsigned)((pa - stp) / pg);
+            if (pk >= pg0 && pk < pg1 && pk < f->wpg_n) {
+                memcpy(st + so, sw + f->lo[i] + so, n);
+                memcpy(f->expected + f->at[i] + (size_t)y * pitch + (size_t)j * 16, lin + (size_t)y * pitch + (size_t)j * 16, n);
+            }
+        }
+    free(lin); free(sw);
     f->written[i] = 1;
 }
 typedef struct { fix_t *f; unsigned l, a; } wr_t;
@@ -67,13 +106,32 @@ static void *wr_main(void *p) { wr_t *w = p; write_image(w->f, w->l, w->a); retu
 static void elsewhere(fix_t *f, unsigned l, unsigned a) { wr_t w = {f, l, a}; pthread_t th; pthread_create(&th, NULL, wr_main, &w); pthread_join(th, NULL); }
 static void *beside_main(void *p) { fix_t *f = p; dm_guest_write_prepare(f->mem, 16); memset(f->mem, 0x5a, 16); return NULL; }
 static id<MTLTexture> by_id(int tid) { os_unfair_lock_lock(&g_rmu); id<MTLTexture> v = tex_by_id(tid); os_unfair_lock_unlock(&g_rmu); return v; }
-// The images a look reads from guest memory after those writes: every one with a byte in a host page a written image has a byte in
+// The bytes a look reads from guest memory after those writes: on the CPU path only the pieces whose source host page was written (the GPU path reads every
+// written image whole); an image with no page written is copied from the texture it replaces
 static size_t expect_read(fix_t *f, unsigned *count) {
-    uintptr_t pg = (uintptr_t)getpagesize(), base = (uintptr_t)f->t.mem; size_t n = 0; unsigned c = 0, ni = f->levels * f->layers;
-    for (unsigned i = 0; i < ni; i++) { int hit = 0;
-        for (unsigned j = 0; j < ni && !hit; j++) hit = f->written[j] && ((base + f->lo[i]) & ~(pg - 1)) <= ((base + f->hi[j] - 1) & ~(pg - 1)) && ((base + f->lo[j]) & ~(pg - 1)) <= ((base + f->hi[i] - 1) & ~(pg - 1));
-        if (hit) { n += f->len[i]; c++; } }
-    memset(f->written, 0, ni); *count = c;
+    uintptr_t pg = (uintptr_t)getpagesize(); size_t n = 0; unsigned c = 0, ni = f->levels * f->layers;
+    int part = !g_nvn_deswz_gpu && !rb_packed_shift(f->t.d.format);   // the CPU deswizzle path takes the written pages only
+    for (unsigned i = 0; i < ni; i++) {
+        uintptr_t a = (uintptr_t)f->t.mem + f->lo[i], e = (uintptr_t)f->t.mem + f->hi[i];
+        int need = 0;
+        for (uintptr_t p = a & ~(pg - 1); p < e; p += pg) { unsigned k = (unsigned)((p - f->wpg_base) / pg); if (k < f->wpg_n && f->wpg[k]) { need = 1; break; } }
+        if (!need) continue;
+        c++;
+        unsigned l = i / f->layers, w, h, z; size_t pitch, rows; geom(f, l, &w, &h, &z, &pitch, &rows);
+        if (!part || z != 1) { n += f->len[i]; continue; }   // read whole: the GPU path, a packed 16-bit format, or a 3D level
+        uint32_t lb = nvn_tex_level_gobs(&f->t.d, l) * 64; if (lb < pitch) lb = (uint32_t)pitch;
+        unsigned th, td; nvn_tex_level_tiles(&f->t.d, l, &th, &td);
+        uint8_t *st = (uint8_t *)f->t.mem + f->lo[i];
+        size_t nfull = pitch >> 4, tail = pitch & 15;
+        for (uint32_t yy = 0; yy < rows; yy++)
+            for (uint32_t j = 0; j < nfull + (tail ? 1 : 0); j++) {
+                size_t nn = j == nfull ? tail : 16;
+                uint64_t so = nvn_bl_offset(j * 16, yy, 0, lb, (uint32_t)rows, th, td, f->t.d.gob_order);
+                unsigned k = (unsigned)(((uintptr_t)st + so - f->wpg_base) / pg);
+                if (k < f->wpg_n && f->wpg[k]) n += nn;
+            }
+    }
+    memset(f->written, 0, ni); memset(f->wpg, 0, f->wpg_n); *count = c;
     return n;
 }
 static int content_ok(fix_t *f, id<MTLTexture> image) {
@@ -91,18 +149,23 @@ static int content_ok(fix_t *f, id<MTLTexture> image) {
     if (sh) for (unsigned l = 0; l < f->levels; l++) for (unsigned a = 0; a < f->layers; a++) { unsigned w, h, z; size_t pitch, rows; geom(f, l, &w, &h, &z, &pitch, &rows);
         rb_swap_rows((uint8_t *)rb.contents + 256 + f->at[img(f, l, a)], pitch, rows, z, pitch, pitch * rows, sh); }
     int ok = !memcmp((uint8_t *)rb.contents + 256, f->expected, f->bytes);
-    if (!ok) for (unsigned i = 0; i < f->levels * f->layers; i++) if (memcmp((uint8_t *)rb.contents + 256 + f->at[i], f->expected + f->at[i], f->len[i])) fprintf(stderr, "  %s: level %u layer %u differs\n", g_case, i / f->layers, i % f->layers);
+    if (!ok) for (unsigned i = 0; i < f->levels * f->layers; i++) if (memcmp((uint8_t *)rb.contents + 256 + f->at[i], f->expected + f->at[i], f->len[i])) {
+        uint8_t *g = (uint8_t *)rb.contents + 256 + f->at[i], *e = f->expected + f->at[i];
+        size_t d = 0; while (d < f->len[i] && g[d] == e[d]) d++;
+        fprintf(stderr, "  %s: image %u (level %u layer %u, len %zu at %zu) differs at byte %zu of %zu (got %#x want %#x)\n", g_case, i, i / f->layers, i % f->layers, f->len[i], f->at[i], d, f->len[i], g[d], e[d]);
+    }
     return ok;
 }
 // One look in a submission of its own. whole: every image is expected read from guest memory
+static size_t g_last_want;
 static id<MTLTexture> look(fix_t *f, int whole, const char *what) {
-    unsigned n; size_t want = expect_read(f, &n); uint64_t b0 = mtl_upload_bytes(), r0 = g_pkg_reuploads;
+    unsigned n; size_t want = expect_read(f, &n); g_last_want = want; uint64_t b0 = mtl_upload_bytes(), r0 = g_pkg_reuploads;
     mtl_sub_begin(); id<MTLTexture> image = tex_mtl(&f->t); finish();
     char label[160];
     snprintf(label, sizeof label, "%s: resolves", what); CHECK(image != nil, label);
     snprintf(label, sizeof label, "%s: read %llu bytes from guest memory, expected %zu of %zu", what, (unsigned long long)(mtl_upload_bytes() - b0), whole ? f->bytes : want, f->bytes);
     CHECK(mtl_upload_bytes() - b0 == (whole ? f->bytes : want), label);
-    if (!whole) { snprintf(label, sizeof label, "%s: fewer than all images written", what); CHECK(n < f->levels * f->layers, label); }
+    if (!whole && f->levels * f->layers > 1) { snprintf(label, sizeof label, "%s: fewer than all images written", what); CHECK(n < f->levels * f->layers, label); }
     snprintf(label, sizeof label, "%s: counted as one re-upload", what); CHECK(g_pkg_reuploads == r0 + 1 || (whole && g_pkg_reuploads == r0), label);
     snprintf(label, sizeof label, "%s: every image holds the reference", what); CHECK(image && content_ok(f, image), label);
     return image;
@@ -197,24 +260,59 @@ static void cost(void) {
                f->t.L.size / 1048576.0, 2 * i + 1, i ? "s" : "", ms[i][0][0], ms[i][0][1], ms[i][1][0], ms[i][1][1]);
     drop(f);
 }
+// A texture written page by page inside one image (the 3072x2096 BC5 of the game's castle town is a single image): on the CPU path only the written pages'
+// pieces are read from guest memory, the rest is copied from the texture being replaced
+static void run_pages(const char *name, int target, NVNformat format, unsigned w, unsigned h, unsigned depth, unsigned levels, size_t source_offset) {
+    g_case = name; g_direct_upload_on = 0;
+    fix_t *f = make(target, format, w, h, depth, levels, source_offset);
+    for (unsigned l = 0; l < levels; l++) for (unsigned a = 0; a < f->layers; a++) write_image(f, l, a);
+    id<MTLTexture> first = look(f, 1, "first upload");
+    unsigned l = 0, a = f->layers > 1 ? f->layers / 2 : 0, i = img(f, l, a);
+    uintptr_t pg = (uintptr_t)getpagesize();
+    uintptr_t stp = ((uintptr_t)f->t.mem + f->lo[i]) & ~(pg - 1);
+    unsigned npi = (unsigned)((((uintptr_t)f->t.mem + f->lo[i]) + f->len[i] - 1 - stp) / pg) + 1;   // host pages of the image
+    unsigned p0 = 1, p1 = npi < 3 ? npi : 3;   // not the image's first page, which data before the texture may share
+    write_some(f, l, a, p0, p1);
+    id<MTLTexture> second = look(f, 0, "pages inside one image written");
+    CHECK(second != first, "the texture in-flight draws read is not written");
+    if (!g_nvn_deswz_gpu) CHECK(g_last_want > 0 && g_last_want < f->len[i], "only the written pages' pieces are read, not the whole image");
+    if (p1 < npi) {
+        unsigned p2 = npi < p1 + 2 ? npi : p1 + 2;
+        write_some(f, l, a, p1, p2);
+        id<MTLTexture> third = look(f, 0, "other pages of the image written");
+        CHECK(content_ok(f, third), "the partial reads and the copies hold the reference");
+    }
+    if (f->levels > 1) { write_some(f, levels - 1, 0, 0, 1); look(f, 0, "a page of the last level written"); }
+    drop(f);
+}
 int main(void) { @autoreleasepool {
     mtl_init();
-    for (int direct = 0; direct < 2; direct++) {
-        run("R16 array", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_R16, 256, 192, 8, 1, 0, direct);
-        run("R16 array beside other data", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_R16, 256, 192, 8, 1, 4096, direct);
-        run("RGBA8 array with levels", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGBA8, 200, 120, 5, 6, 0, direct);
-        run("RGBA16F array with levels", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGBA16F, 64, 64, 12, 4, 4096, direct);
-        run("BC5 array", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGTC2_UNORM, 512, 256, 3, 1, 0, direct);
-        run("BC7 array with levels", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_BPTC_UNORM, 256, 256, 3, 5, 4096, direct);
-        run("BC7 2D with levels", NVN_TEXTURE_TARGET_2D, NVN_FORMAT_BPTC_UNORM, 1024, 512, 1, 8, 0, direct);
-        run("RGBA8 cube with levels", NVN_TEXTURE_TARGET_CUBEMAP, NVN_FORMAT_RGBA8, 128, 128, 1, 5, 0, direct);
-        run("RGBA8 cube array", NVN_TEXTURE_TARGET_CUBEMAP_ARRAY, NVN_FORMAT_RGBA8, 64, 64, 12, 3, 0, direct);
-        run("RGBA8 3D with levels", NVN_TEXTURE_TARGET_3D, NVN_FORMAT_RGBA8, 64, 64, 32, 4, 0, direct);
-        run("RGB565 array", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGB565, 256, 128, 4, 1, 0, direct);
-        // A 1D array is one row a layer: uploaded as height rows a layer, it is refused by validation and writes past each slice without it
-        run("R16F 1D array", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_R16F, 512, 64, 1, 1, 0, direct);
-        run("RGBA8 1D array with levels", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_RGBA8, 256, 8, 1, 4, 4096, direct);
+    int gpu0 = g_nvn_deswz_gpu;
+    for (int gpu = 1; gpu >= 0; gpu--) {
+        g_nvn_deswz_gpu = gpu;   // 0: every upload takes the CPU deswizzle, where the written pages are read one by one
+        for (int direct = 0; direct < 2; direct++) {
+            if (!gpu && direct) continue;
+            run("R16 array", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_R16, 256, 192, 8, 1, 0, direct);
+            run("R16 array beside other data", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_R16, 256, 192, 8, 1, 4096, direct);
+            run("RGBA8 array with levels", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGBA8, 200, 120, 5, 6, 0, direct);
+            run("RGBA16F array with levels", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGBA16F, 64, 64, 12, 4, 4096, direct);
+            run("BC5 array", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGTC2_UNORM, 512, 256, 3, 1, 0, direct);
+            run("BC7 array with levels", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_BPTC_UNORM, 256, 256, 3, 5, 4096, direct);
+            run("BC7 2D with levels", NVN_TEXTURE_TARGET_2D, NVN_FORMAT_BPTC_UNORM, 1024, 512, 1, 8, 0, direct);
+            run("RGBA8 cube with levels", NVN_TEXTURE_TARGET_CUBEMAP, NVN_FORMAT_RGBA8, 128, 128, 1, 5, 0, direct);
+            run("RGBA8 cube array", NVN_TEXTURE_TARGET_CUBEMAP_ARRAY, NVN_FORMAT_RGBA8, 64, 64, 12, 3, 0, direct);
+            run("RGBA8 3D with levels", NVN_TEXTURE_TARGET_3D, NVN_FORMAT_RGBA8, 64, 64, 32, 4, 0, direct);
+            run("RGB565 array", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGB565, 256, 128, 4, 1, 0, direct);
+            // A 1D array is one row a layer: uploaded as height rows a layer, it is refused by validation and writes past each slice without it
+            run("R16F 1D array", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_R16F, 512, 64, 1, 1, 0, direct);
+            run("RGBA8 1D array with levels", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_RGBA8, 256, 8, 1, 4, 4096, direct);
+        }
+        run_pages("BC5 2D single image", NVN_TEXTURE_TARGET_2D, NVN_FORMAT_RGTC2_UNORM, 512, 352, 1, 1, 0);
+        run_pages("BC5 2D single image beside other data", NVN_TEXTURE_TARGET_2D, NVN_FORMAT_RGTC2_UNORM, 512, 352, 1, 1, 4096);
+        run_pages("RGBA8 2D with levels", NVN_TEXTURE_TARGET_2D, NVN_FORMAT_RGBA8, 200, 120, 1, 4, 0);
+        run_pages("BC7 2D single image", NVN_TEXTURE_TARGET_2D, NVN_FORMAT_BPTC_UNORM, 640, 480, 1, 1, 4096);
     }
+    g_nvn_deswz_gpu = gpu0;
     cost();
     printf("t_partial_upload: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }
