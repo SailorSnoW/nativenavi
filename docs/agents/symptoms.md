@@ -195,6 +195,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 ## Threads
 
 - TSan reports races when guest threads first yield, sleep briefly or enter a rewritten spin wait together; a thread could see `DM_YIELD_BACKOFF`'s default cap before its own value was parsed. → [Concurrent first use of scheduler settings](../reference/threads.md#concurrent-first-use-of-scheduler-settings)
+- a malformed `DM_YIELD_BACKOFF` could overflow a signed multiplication (a UBSan abort), turn the back-off off without saying so, or make long `SleepThread` calls count as polling waits; a valid cap of 1 s or more passed `tv_nsec >= 1,000,000,000` to `nanosleep` (`EINVAL`), a busy loop instead of a sleep. → [Validating yield back-off durations](../reference/threads.md#validating-yield-back-off-durations)
 - TSan reports `thread_main` writing `host_work` while `thr_runnable` reads it during a same-core yield (`t_notify_sched`, issue #411). → [Publishing a new thread's scheduler fields](../reference/threads.md#publishing-a-new-threads-scheduler-fields)
 - a parent returns from `StartThread` before a newly runnable higher-priority child pinned to its core finishes its work (deterministic regression, not attributed to a game failure). → [Starting a higher-priority thread on the caller's core](../reference/threads.md#starting-a-higher-priority-thread-on-the-callers-core)
 - per-core job queues never drained. → [Core mask changes move the ideal core into the new mask](../reference/threads.md#core-mask-changes-move-the-ideal-core-into-the-new-mask)

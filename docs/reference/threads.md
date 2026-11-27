@@ -12,6 +12,14 @@ Guest threads, their synchronization and how the host schedules them. Each entry
 - **Check:** `make -C dm/host/tests scheduler-config-tsan`: eight workers through `yield_backoff_cap`, `yield_backoff_ns`, `thr_yield` and `dm_spin_wait` at once, for the default, custom, off and empty settings.
 - **Found on:** a code audit upstream (upstream nxnative `557f1954`, PR #2031); no game failure is known. Ocarina of Time reaches `dm_spin_wait` through 73 spin gates (66 in `main`, 7 in `sdk`).
 
+### Validating yield back-off durations
+
+- **Symptom:** a malformed `DM_YIELD_BACKOFF` could overflow a signed multiplication (a UBSan abort), turn the back-off off without saying so, or make long `SleepThread` calls count as polling waits; a valid cap of 1 s or more passed `tv_nsec >= 1,000,000,000` to `nanosleep` (`EINVAL`), a busy loop instead of a sleep.
+- **Cause:** `yield_spin_init` (`hle_thread.c`) read it with unchecked `atoll(...) * 1000`, which takes negative values and trailing garbage and can overflow, and `yield_backoff_cap` cast a negative cap to a huge `uint64_t`. `backoff_sleep` put the whole duration in `tv_nsec`.
+- **Fix:** `yield_spin_init` parses the whole `<cap>[:<start>]` through `strtoll` (`backoff_us`): nonnegative whole microseconds up to `INT64_MAX / 1000`, spaces allowed; anything else logs and keeps the default `250:2000`. `backoff_sleep` splits the duration into `tv_sec` and `tv_nsec`, as `sleep_precise` does. The default cap (250 µs) never reached either case: neither the profile nor the launcher sets the switch.
+- **Check:** `make -C dm/host/tests scheduler-config` (and `scheduler-config-tsan`): 19 valid and invalid settings, the `SleepThread` fallback on a negative value, and the `timespec` of 1.25 s and 10 s caps, in fresh processes and with eight workers at once.
+- **Found on:** a code audit upstream (PR #2231, upstream nxnative `dbfe1d81`); no game failure is known.
+
 ### Publishing a new thread's scheduler fields
 
 - **Symptom:** TSan reports `thread_main` writing `host_work` while `thr_runnable` reads it during a same-core yield (`t_notify_sched`, issue #411).

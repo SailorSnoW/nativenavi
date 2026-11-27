@@ -363,5 +363,5 @@ DM_WINDOW_SCREEN	diagnostic	`builtin` or `=<index>` (Mac, with `DM_WINDOW`): ope
 DM_WINDOW_TOP	diagnostic	`1` (Mac, with `DM_WINDOW`) orders the game window in front without activating it and keeps it above other apps' windows, so a covered window does not slow the run; `regress.py` sets it
 DM_XUSB	switch	`0` stops reading wired Xbox 360 pads over USB that macOS has no driver for, such as a PDP Xbox 360 pad (`pad_gip_mac.h`, `pad_xusb.h`); Mac only
 DM_XUSB_LOG	diagnostic	`1` logs each decoded state change of a wired Xbox 360 pad read over USB (`pad_gip_mac.h`); Mac only
-DM_YIELD_BACKOFF	switch	`0` turns off the yield back-off; `=<cap µs>[:<start µs>]` sets its sleep cap and the run of yields after which it starts (default 250:2000)
+DM_YIELD_BACKOFF	switch	`0` turns off the yield back-off; `=<cap µs>[:<start µs>]` sets its sleep cap and the run of yields after which it starts (default 250:2000); each field takes nonnegative whole microseconds up to `INT64_MAX/1000`, and an invalid value gives the whole default
 DM_YIELD_CLOCK	diagnostic	Clock-reading yield loops: 0 uses ordinary yield backoff, 1 backs off from the start, 2 also sleeps to the predicted end (default)

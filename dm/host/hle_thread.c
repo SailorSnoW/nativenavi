@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include "dm.h"
 #include <errno.h>
+#include <ctype.h>
 #include <sched.h>
 #include <signal.h>
 #include <sys/mman.h>
@@ -905,15 +906,29 @@ static int64_t g_bo_cap = 250000, g_bo_start = 2000000;
 static int g_yield_clock = 2;   // DM_YIELD_CLOCK: 0 plain yields, 1 back off from the start, 2 (default) also sleep to the predicted end
 static int g_spin_on = 1;       // DM_SPIN=0: spin waits do not yield or sleep
 static uint64_t g_spin_poll_ns = 2000000;   // DM_SPIN_POLL µs
+// Nonnegative microseconds that fit in nanoseconds; spaces around them allowed, the caller checks what follows
+static int backoff_us(const char *text, const char **end, int64_t *ns) {
+    const char *p = text;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p == '-') return 0;
+    char *tail; int saved_errno = errno; errno = 0;
+    long long us = strtoll(p, &tail, 10); int err = errno; errno = saved_errno;
+    if (tail == p || err || us < 0 || us > INT64_MAX / 1000) return 0;
+    while (isspace((unsigned char)*tail)) tail++;
+    *end = tail; *ns = (int64_t)us * 1000; return 1;
+}
 static void yield_spin_init(void) {
     const char *e = getenv("DM_YIELD_BACKOFF");
     g_bo_cap = 250000; g_bo_start = 2000000;
+    int bo_custom = 0;
     if (e && *e) {
-        g_bo_cap = atoll(e) * 1000;
-        const char *c = strchr(e, ':');
-        if (c) g_bo_start = atoll(c + 1) * 1000;
+        int64_t cap, start = 2000000; const char *end;
+        int valid = backoff_us(e, &end, &cap);
+        if (valid && *end == ':') valid = backoff_us(end + 1, &end, &start);
+        if (valid && !*end) { g_bo_cap = cap; g_bo_start = start; bo_custom = 1; }
+        else LOG("DM_YIELD_BACKOFF: invalid value; using default 250:2000 microseconds");
     }
-    if (!g_bo_cap) LOG("DM_YIELD_BACKOFF=0: no back-off on repeated yields (plain sched_yield spin)"); else if (e && *e) LOG("DM_YIELD_BACKOFF: back off after %lld µs of repeated yields, sleeping at most %lld µs at a time", (long long)(g_bo_start / 1000), (long long)(g_bo_cap / 1000));
+    if (!g_bo_cap) LOG("DM_YIELD_BACKOFF=0: no back-off on repeated yields (plain sched_yield spin)"); else if (bo_custom) LOG("DM_YIELD_BACKOFF: back off after %lld µs of repeated yields, sleeping at most %lld µs at a time", (long long)(g_bo_start / 1000), (long long)(g_bo_cap / 1000));
     e = getenv("DM_YIELD_CLOCK");
     g_yield_clock = e && *e ? atoi(e) : 2;
     if (g_yield_clock != 2) LOG("DM_YIELD_CLOCK=%d: yield loops that read the clock %s", g_yield_clock, g_yield_clock ? "back off from their start, with no sleep to a predicted end" : "back off after the start, as other yields");
@@ -931,7 +946,7 @@ static uint64_t yield_backoff_ns(uint64_t run_ns, int clock) {
     return s < (uint64_t)g_bo_cap ? s : (uint64_t)g_bo_cap;
 }
 static void sleep_precise(uint64_t dl);
-static void backoff_sleep(thr_t *me, uint64_t bo) { me->nbackoff++; me->sleeping = 1; struct timespec ts = {0, (long)bo}; nanosleep(&ts, 0); me->sleeping = 0; }
+static void backoff_sleep(thr_t *me, uint64_t bo) { me->nbackoff++; me->sleeping = 1; struct timespec ts = {(time_t)(bo / 1000000000ull), (long)(bo % 1000000000ull)}; nanosleep(&ts, 0); me->sleeping = 0; }
 static void yield_for(thr_t *me, uint64_t run_ns, int clock) {
     uint64_t bo = yield_backoff_ns(run_ns, clock);
     if (bo) backoff_sleep(me, bo); else sched_yield();
