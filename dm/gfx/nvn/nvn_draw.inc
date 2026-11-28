@@ -498,9 +498,9 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         if (pr->sh[0]) vconv_bind(en, pr->sh[0], S.rast_discard, dw, di);
     }
     g_kd_force = kd_draw(pr, dw, di);
+    // Binding a view can upgrade its texture through blit(), which ends the pass: the fragment stage is then bound in the next pass only, and drawing on the ended encoder crashes in the driver.
     if (pr->sh[0]) encode_args(en, pr->sh[0], pr->sh[0]->stage == 4 ? 4 : 0, 1);
-    if (pr->sh[1] && !S.rast_discard) encode_args(en, pr->sh[1], 1, 0);
-    // Binding a view can upgrade its texture through blit(), which ends the pass: drawing on the ended encoder crashes in the driver.
+    if (g_enc == en && pr->sh[1] && !S.rast_discard) encode_args(en, pr->sh[1], 1, 0);
     if (g_enc != en) {
         static int again; if (again) { RED_ONCE(130, "binding a draw's arguments ended its render pass twice; draw skipped"); return; }
         PD("M %llu binding the draw's arguments ended the render pass (texture upgrade); encoded again", g_stat_pass);
