@@ -118,11 +118,34 @@ Python standard library; LZ4 is loaded when decoding NSO files.
 | `nix develop .#miri` | the nightly with Miri that `flake.lock` pins | `cargo miri test` |
 | `nix develop .#fuzz` | Python 3.14 with `fuzz.txt`, and atheris built with LLVM's clang | `dm/tools/fuzz` |
 
-`tools.txt` lists the packages the tools import. The coverage and lint shells install it beside their own list, as CI's jobs do, so the tests and pyright see the same versions as the default shell. CI installs these lists on Python 3.14 (`setup-python`), and the same Rust through rustup.
+`tools.txt` lists the packages the tools import, `tests.txt` what only their tests import ([Running the tests](#running-the-tests)). The coverage and lint shells install `tools.txt` beside their own list, as CI's jobs do, so the tests and pyright see the same versions as the default shell. CI installs these lists on Python 3.14 (`setup-python`), and the same Rust through rustup.
 
 With direnv, `.envrc` loads the default shell in every shell that enters the checkout. nix-direnv caches that shell. Run `direnv allow` once, after reading the file. A checkout's own additions go in `.envrc.local`, which `.envrc` sources and git ignores. For one command, use `nix develop -c <command>`, or `nix develop .#lint -c python3 dm/tools/lint_python.py`.
 
 Outside a shell, a command takes Apple's `/usr/bin/python3` (3.9.6 with Xcode 27.2). The graphics tests' Python steps then stop at a `TypeError` on `str | None`: that is the interpreter, not the code.
+
+## Running the tests
+
+`python3 scripts/test.py` builds and runs the repository's tests on this Mac: builds in parallel, each test under a timeout (300 s; a test that passes it is killed with its children and fails), the Mac woken and kept awake ([Tests of the audio device fail on a Mac in dark wake](reference/audio.md#tests-of-the-audio-device-fail-on-a-mac-in-dark-wake)). It ends with a table of the suites and, for each failing test, the path of its output and its last lines. Exit status 0: every test passed; 1: a test failed or timed out; 2: a test could not be started.
+
+| Suite | What it runs | Measured on an M2 Pro, 2026-11-28 |
+|---|---|---|
+| `host` | every test of the `run` recipe of `dm/host/tests`, each a job of its own, one at a time | 85 tests, 22 s |
+| `tex` | `make -C dm/gfx/tex/tests run` | 1 s |
+| `rust` | `cargo test` in `dm/host/rust` | 2 s |
+| `gfx` | the graphics tests' run list on the GPU, four at once; the tests that measure time (the Makefile's `SERIAL_TESTS`) one at a time after the others | 199 tests: 84 s to build, 154 s to run |
+| `pygpu` | the Python tests' Metal and GPU cases: every test file that names `DMSH_TEST_METAL` or `DMSH_TEST_GPU`, with both set, one file at a time | 17 files, about a minute |
+| `python` | every `test_*.py` of `dm/tools/tests` and `dm/gfx/tests`, each file in an interpreter of its own, as CI's `tools` job runs them | about 150 files, 60 s |
+| `docs` | `dm/tools/tests/test_docs.py` alone | under a second |
+| `game` | `scripts/regress.py check --quick` ([The regression harness](#the-regression-harness)), with `REGRESS_ROOT` and `REGRESS_GAMES` or `REGRESS_BUILD` set | a game run |
+
+Without a suite it runs all of them but `docs` (part of `python`) and `game`. `--changed [REV]` runs only the suites that the files changed since `REV` need (default: the merge base with `main`; uncommitted and untracked files count), by the `RULES` table at the top of the script: a change to `dm/host` needs `host`, `gfx` and `python`, one to the documentation `docs` alone, a path no rule names everything. `--list` prints the choice and stops. `-j N` sets the parallel builds and Python files (default: the performance cores), `--gpu-jobs N` the graphics tests run at once, `--logs DIR` keeps every test's output, and `--lock FILE` (or `DM_MEASURE_LOCK`) holds `bench.py`'s measuring lock for the run, so tests and a benchmark wait for each other.
+
+The graphics tests (`dm/gfx/tests/Makefile`) link the sources they share, compiled once into `obj/`, and compile at `OPT`, `-O0` by default: a test that includes `nvn_mtl.m` compiles in a quarter of the time `-O1` takes. `--opt 2` (`make OPT=-O2 run`) is the host's own level, for the run before a commit: the suite passes at both. A test that depends on the optimizer pins its level in the Makefile (`OPT_t_pool_retire`: ARC without the optimizer keeps a buffer alive past the test's weak reference). A change of `OPT` rebuilds everything. `make run` there still runs the whole list one test at a time, with the Python tests' GPU cases (`check_py_gpu`; `pygpu_<file>` runs one file's).
+
+`.github/requirements/tests.txt` pins what only the tests import (unicorn, which runs the rewriter's blocks: those tests skip without it). The default and coverage shells and CI's `tools` and `coverage` jobs install it with `tools.txt`; the packing script and the launcher install `tools.txt` alone.
+
+`--coverage` measures instead of a plain run (`host`, `tex`, `gfx`, `python`; in `nix develop .#coverage`): each suite's coverage build, then `dm/tools/coverage_report.py`'s summary with the 15 files that have the most lines no test runs (`--holes`). The graphics tests' GPU run is measured only here (`make -C dm/gfx/tests coverage`, into `coverage.lcov` there): CI has no GPU.
 
 ## Continuous integration
 
@@ -206,7 +229,9 @@ python3 dm/tools/coverage_report.py --host dm/host/tests/build/cov/coverage.lcov
     --textures dm/gfx/tex/tests/cov/coverage.lcov --python coverage.json --base main
 ```
 
-GPU regression tests run locally with `make -C dm/gfx/tests GAME=<id> run`:
+`python3 scripts/test.py --coverage` runs these and the graphics tests' GPU run in one command ([Running the tests](#running-the-tests)).
+
+GPU regression tests run locally with `python3 scripts/test.py gfx pygpu` (`make -C dm/gfx/tests run`):
 GitHub's macOS runners are virtual Macs without Metal 4.
 
 `.github/workflows/lint-python.yml` lints `scripts/` and the Python tools under

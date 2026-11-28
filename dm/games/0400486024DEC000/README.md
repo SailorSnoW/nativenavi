@@ -378,6 +378,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 ## Found on this game
 
 - [A query of a free alias page read the whole bitmap](../../../docs/reference/memory.md#a-query-of-a-free-alias-page-read-the-whole-bitmap): found by timing the host tests, where `t_svc_memory` took 89 s over its five builds; the game's own gain is not measured. Resolved.
+- [Tests of the audio device fail on a Mac in dark wake](../../../docs/reference/audio.md#tests-of-the-audio-device-fail-on-a-mac-in-dark-wake): `t_audio` failing three times out of three in an unattended run on the M2 Pro; the test runner wakes the Mac fully first. Resolved.
 - [A reused Mac app names an earlier commit](../../../docs/reference/packing.md#a-reused-mac-app-names-an-earlier-commit): found upstream on this game's app packed after a docs-only commit; the commit is in the pack key now. Resolved.
 - [A 3D texture in a 2D array slot binds a zero texture](../../../docs/reference/rendering.md#a-3d-texture-in-a-2d-array-slot-binds-a-zero-texture): its fog volume, left bound where the wind's simulation reads a 2D array at an area load ([Open](#open)). Resolved.
 - [Held work handed to the GPU while the frame before was still on it](../../../docs/reference/frame-rate.md#held-work-handed-to-the-gpu-while-the-frame-before-was-still-on-it): its frame gate signalled late at area loads on a busy Mac, every hold forced after 200 ms ([Open](#open)). Resolved.

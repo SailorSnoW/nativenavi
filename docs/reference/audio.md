@@ -338,6 +338,13 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 - **Found on:** Metro 2033 Redux (SDK 8.2.0, 4A Engine).
 - **Check:** `t_audio`'s buffer-layout case hands the device callback an object written at the SDK's own offsets, its `next` linked and its data size 4 bytes short of its capacity: the callback must play exactly the data size from the data pointer, release the buffer and leave `next` alone. Under the 24-byte layout it would read `next` as the data.
 
+### Tests of the audio device fail on a Mac in dark wake
+
+- **Symptom:** `t_audio` fails its last case with `device stall: … AudioUnit restarted and calling back again=0 … ✗` after `[RED] audio #N: no device callback after start; continuing on the silent sink`, three runs out of three, with the audio code unchanged; the graphics tests that wait on the display link (`t_link_latch_cb`) run into their 120 s alarm. It happens in runs started with nobody at the Mac (an agent's, a remote session's), and not once somebody touches it.
+- **Cause:** a Mac that woke by itself for maintenance is in a dark wake: `pmset -g systemstate` lists `CPU Network` without `Graphics Audio`. Core Audio starts an output there without ever calling it back, and no display link ticks. `caffeinate -i` (or `-d`) keeps that state from ending; it does not leave it.
+- **Fix:** `scripts/test.py` declares user activity first (`caffeinate -u`, which brings the Mac to a full wake and lights the display), then holds the system and the display awake for the run. A run made by hand in that state needs the same: `caffeinate -u -t 2`, then the tests under `caffeinate -dis`.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md)'s tests on an M2 Pro, macOS 27.2, 2026-11-28: after `caffeinate -u` the capabilities read `CPU Graphics Audio Network` and the same `t_audio` binary passed.
+
 ## Output channels
 
 The output route decides how many channels the device takes: six when Core Audio maps 5.1's front pair, center and surround pair onto the device's outputs through its preferred speaker layout (`dm_audio_output_channels`, `hle_audio.c`), otherwise stereo. Games read it from `GetActiveAudioDeviceChannelCountForOutput`, and each output AudioUnit follows it. The in-process renderer queues both its six channels and its original stereo fold (`hle_audren.c`).

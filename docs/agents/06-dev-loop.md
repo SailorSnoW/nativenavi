@@ -64,20 +64,19 @@ The workflows in `.github/workflows` run on GitHub (`SailorSnoW/nativenavi`, a p
 - `lint-python.yml` and `lint-c.yml`: the ratchets of `dm/tools/lint_python.py` and `dm/tools/lint_c.py`; `lint-actions.yml`: actionlint over the workflows.
 - `fuzz.yml` fuzzes the file parsers weekly and on a push that changes one, from synthetic seeds; a change to a parser in `romfs.py`, `nacp.py`, `nso.py` or `shader_split.py` can run its harness locally (`dm/tools/fuzz/fuzz_<parser>.py --time 300`).
 
-GitHub's Macs have no Metal 4 and no game files, so these stay local in any case: `make -C dm/gfx/tests run` (the Metal graphics tests), the translator tests with `DMSH_TEST_METAL=1` / `DMSH_TEST_GPU=1`, and everything `regress.py` does.
+GitHub's Macs have no Metal 4 and no game files, so these stay local in any case: the Metal graphics tests and the translator tests' Metal and GPU cases (`python3 scripts/test.py gfx pygpu`), and everything `regress.py` does.
 
 ## 6. Before you commit
 
 A change is one local commit per verified stage, made when the user asks, and pushed only when asked ([AGENTS.md](../../AGENTS.md)). What to check, by what the change touches (the largest that applies):
 
 - **Docs only:** `python3 -m unittest dm/tools/tests/test_docs.py`; after a change to `docs/reference`, `python3 dm/tools/docs_symptoms.py`.
-- **A Python tool or script** (`scripts/`, the tools under `dm/`): the Python tests, each file on its own as CI runs them (`for f in dm/tools/tests/test_*.py dm/gfx/tests/test_*.py; do python3 -m unittest "$f"; done`), and the lint ratchet, ruff and pyright with no new finding: `<venv>/bin/python3 dm/tools/lint_python.py`, from a venv with `.github/requirements/lint.txt` installed ([Continuous integration](../development.md#continuous-integration)). The system Python has neither tool, and the check stops at a `[RED]` line there: that is not a pass. A generated page (`docs_*.py`) is compared on a clean checkout, so it must not read untracked or git-ignored files such as `dm/host/gen`.
+- **A Python tool or script** (`scripts/`, the tools under `dm/`): the Python tests, each file on its own as CI runs them (`python3 scripts/test.py python`), and the lint ratchet, ruff and pyright with no new finding: `<venv>/bin/python3 dm/tools/lint_python.py`, from a venv with `.github/requirements/lint.txt` installed ([Continuous integration](../development.md#continuous-integration)). The system Python has neither tool, and the check stops at a `[RED]` line there: that is not a pass. A generated page (`docs_*.py`) is compared on a clean checkout, so it must not read untracked or git-ignored files such as `dm/host/gen`.
 - **The profile or the note** (`dm/games/0400486024DEC000/`): the Python tests; a full shader build after a change to the profile's shader inputs; the game on the Mac along its route, with `scripts/bench.py` numbers when the change is about speed; the finding in the game's note ([AGENTS.md](../../AGENTS.md)).
 - **The host, the chain or the tools** (`dm/host`, `dm/gfx`, `dm/tools`, `dm/gfx/tools`, `scripts`): everything above, then
   - the host build, `make -C dm/host dmhost`;
   - after a change to the Rust library (`dm/host/rust`), its tests, lints and Miri there ([Rust in the host](../development.md#rust-in-the-host));
-  - the host tests, `make -C dm/host/tests run`;
-  - the graphics tests, `make -C dm/gfx/tests run` (they need this Mac's GPU);
+  - the host, graphics and Python tests, `python3 scripts/test.py` (the graphics ones need this Mac's GPU; `--opt 2` builds them at the host's optimization, `--changed` runs only the suites the change needs: [Running the tests](../development.md#running-the-tests));
   - `dmsh_chain.py --header` after a chain change;
   - `python3 scripts/regress.py check` (`--quick` while iterating, the full run before the commit), and a run of the game.
 

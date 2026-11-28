@@ -129,19 +129,9 @@ jobs:
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1
         run: brew install spirv-tools
+      # Each file in an interpreter of its own, three at a time, with the profile and the translator the tests need in their environment (scripts/test.py)
       - name: Run the test files
-        env:
-          DM_GAME: ${{ env.GAME }}   # test_tbdr_budget runs a tool that needs a profile
-          DMSH_TEST_XLATE: ${{ github.workspace }}/dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate
-        run: |
-          mkdir -p logs
-          failed=0
-          for f in dm/tools/tests/test_*.py dm/gfx/tests/test_*.py; do
-            echo "::group::$f"
-            python -m unittest -v "$f" 2>&1 | tee "logs/$(basename "$f").log" || { echo "::error::$f failed"; failed=1; }
-            echo "::endgroup::"
-          done
-          exit $failed
+        run: python scripts/test.py python -j3 --logs logs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
