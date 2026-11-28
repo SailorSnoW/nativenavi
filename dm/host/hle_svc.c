@@ -145,9 +145,13 @@ static int64_t alias_unmapped(uint64_t off, uint64_t n) {
 }
 
 static uint64_t alias_mask(unsigned n) { return n == 64 ? UINT64_MAX : (UINT64_C(1) << n) - 1; }
+// A free run ends at `end` once it passes g_alias_hw: MapPhysicalMemory raises that mark before it sets a bit, so no page above it is mapped and the rest of the
+// 64 GB bitmap is not read (docs/reference/memory.md#a-query-of-a-free-alias-page-read-the-whole-bitmap)
 static uint64_t alias_run_end(uint64_t p, uint64_t end, int mapped) {
-    for (uint64_t first = p + 1; first < end;) {
-        unsigned shift = first & 63, n = (unsigned)(end - first < 64 - shift ? end - first : 64 - shift);
+    uint64_t stop = end, hw = (atomic_load(&g_alias_hw) + 0xFFF) >> 12;
+    if (!mapped && hw < stop) stop = hw;
+    for (uint64_t first = p + 1; first < stop;) {
+        unsigned shift = first & 63, n = (unsigned)(stop - first < 64 - shift ? stop - first : 64 - shift);
         uint64_t bits = atomic_load(&g_alias_bits[first >> 6]);
         uint64_t different = (mapped ? ~bits : bits) & (alias_mask(n) << shift);
         if (different) return (first & ~UINT64_C(63)) + __builtin_ctzll(different);

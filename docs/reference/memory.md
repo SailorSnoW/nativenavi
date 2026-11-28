@@ -173,6 +173,14 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Found on:** Monster Jam Steel Titans 2 (`010051B0131F0000`, 1.0.2), in [PR #1616](https://github.com/seedds/nxnative/pull/1616): the 2 MB pool holding Unreal's forward light data ring is unmapped and mapped again at frame 6, and its light-grid compute shaders read stale light counts (`0xff000000`); about ten other pools of that game go through the same. The PR followed the pages in the graphics layer instead. Open: this fix was not run on that game (no profile or game files here), so how the game takes the refusal is unknown. If it aborts, it never unmaps a live pool on hardware, and the host's list of live pools is wrong further up.
 - **Check:** `t_svc_memory` `device_shared_refused`: an unmap over any page of a registered range fails and leaves the pages, the mapped total and the bytes as they were; ranges beside or touching it still map and unmap; a range registered twice stays shared until both registrations go; a heap shrink over it fails, one that leaves it below the new end works.
 
+### A query of a free alias page read the whole bitmap
+
+- **Symptom:** `svcQueryMemory` of an unmapped page of the alias region takes milliseconds instead of microseconds, as does the start of each `svcMapPhysicalMemory` over free pages; `t_svc_memory`, which queries such pages many thousands of times, took about 89 s over its five builds (the plain one, 16 KiB pages, no map limit, ThreadSanitizer, the real dirty tracker).
+- **Cause:** the alias region is one bit a 4 KiB page over at least 64 GB (`g_alias_bits`, 2 MB of words). `alias_run_end` looked for the end of a free run by reading words until the next set bit, which for the pages above everything mapped is the end of the bitmap: up to 262,144 words a call.
+- **Fix:** `hle_svc.c` `alias_run_end` stops a free run's search at the high-water mark `g_alias_hw` and reports the region's end from there. `svcMapPhysicalMemory` raises that mark before it sets a bit and only a reset lowers it (with the bitmap cleared), so no page above it is mapped. A mapped run's search is unchanged: it ends at the first clear bit.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md)'s host tests, 2026-11-28, by timing them; no measurement of the game itself.
+- **Check:** `t_svc_memory`'s queries give the same runs as before in all five builds, each now in under a second.
+
 ### `GetInfo(UserExceptionContextAddress)` returns a real buffer
 
 - **Symptom:** a write through a null pointer at +0x1c0 during startup.
