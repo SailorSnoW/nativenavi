@@ -137,8 +137,8 @@ def _write_part(files, part, on_progress=None, share=None):
     romfs.Image(part)   # as the host's check: nothing is published that a reader refuses
 
 
-def pack(lib, say=print):
-    """Returns whether an image now stands for the library"""
+def pack(lib, say=print, on_progress=None):
+    """Returns whether an image now stands for the library. on_progress: write's, called only when a folder is written"""
     folder, image = folder_of(lib), image_of(lib)
     try:
         before = _names(folder) if os.path.isdir(folder) else None
@@ -153,8 +153,7 @@ def pack(lib, say=print):
                 if name not in files:
                     files[name] = os.path.join(image, name)
                     share[name] = old.entry(k)[:2]
-        if share: write(files, image, share=share)
-        else: write(files, image)
+        write(files, image, **{k: v for k, v in (('on_progress', on_progress), ('share', share)) if v})
         if _names(folder) != before:   # a build wrote to it meanwhile: the folder is the newer one
             say(f'{folder} changed while it was packed: it stays a folder')
             return True

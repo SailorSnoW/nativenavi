@@ -1102,13 +1102,16 @@ class Script(unittest.TestCase):
                 Path(cmd[-1]).write_bytes(b'bases for ' + cmd[5].encode()); return
             if str(cmd[1]).endswith('dm/games/settings.py'):
                 self.settings_env = env; Path(cmd[-1]).write_text('{}'); return
-            if not on_line:
+            if str(cmd[1]).endswith('pso_offline.py'):
                 o = Path(cmd[cmd.index('--out') + 1]); o.mkdir(parents=True, exist_ok=True)
                 if kw.get('pso_fail'):
                     self.assertFalse(fatal); (o / 'applegpu_g14s.mtl4a.partial').write_bytes(b'half'); return 1
                 if not kw.get('no_bases'):
                     for gpu in cmd[cmd.index('--gpu') + 1].split(','): (o / f'{gpu if gpu.startswith("applegpu_") else "applegpu_" + gpu}.mtl4a').write_bytes(b'arch')
+                for ln in kw.get('pso_lines', ()):
+                    assert on_line is not None; on_line(ln)
                 return
+            assert on_line is not None
             (out / 'Contents/MacOS').mkdir(parents=True); (out / 'Contents/MacOS/dmhost').write_bytes(b'x')
             on_line('step: launcher and host (clones of the game files)')
             on_line(f'app: {out}')
@@ -1156,6 +1159,10 @@ class Script(unittest.TestCase):
                          {'--game': '01008CF01BAAC000', '--msl': str(tmp / 'shader/cache/b-0123456789ab'), '--out': str(tmp / 'pso/mac'), '--work': str(tmp / 'pso/mac-work'),
                           '--gpu': 'applegpu_g14s'})
         self.assertFalse(any('does not name this Mac' in m for m in self.said))
+        o, _ = self.pack_cmd(work=tmp, pso_lines=['pso_offline: applegpu_g14s: batch 1/1: 10 bases, compiling or checking cache', 'pso_offline: applegpu_g14s: batch 1/1: ready (compiled)',
+                                                  'pso_offline: applegpu_g14s: merging 1 batches'])
+        self.assertIn(mock.call(step='applegpu_g14s: compiling', done=1, total=1, unit='batches'), self.prog.set.call_args_list)
+        self.assertIn(mock.call(step='applegpu_g14s: merging 1 batches (metal-pack)'), self.prog.set.call_args_list)
         o, _ = self.pack_cmd(work=tmp, gpus='g16s')
         self.assertEqual(o['--pso'], str(tmp / 'pso/mac'))
         self.assertTrue(any('does not name this Mac\'s GPU (applegpu_g14s)' in m for m in self.said))

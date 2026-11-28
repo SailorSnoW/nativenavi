@@ -59,6 +59,54 @@ class Json(unittest.TestCase):
         self.assertFalse(es[8]['ok'])
         self.assertIn('Pokémon', self.out.getvalue())   # not escaped
 
+    def test_pipeline_archive_batches(self):   # pso_offline.py's lines count on the stage's line; compute batches finish in any order
+        self.prog.stage('Pipeline archive', step='applegpu_g14s (metal-tt)')
+        lines = nsp.PsoLines()
+        for line in ('pso_offline: 2 pairs: 2 bases',
+                     'pso_offline: applegpu_g14s: batch 1/3: 1000 bases, compiling or checking cache',
+                     'pso_offline: applegpu_g14s: batch 1/3: ready (compiled)',
+                     'pso_offline: applegpu_g14s: batch 2/3: 1000 bases, compiling or checking cache',
+                     'pso_offline: applegpu_g14s: batch 3/3: ready (reused)'):
+            lines(line); self.now += 1
+        lines('pso_offline: applegpu_g14s: merging 3 batches')
+        es = [e for e in self.events() if e['ev'] in ('step', 'progress')]
+        self.assertEqual([(e['done'], e['total'], e['unit']) for e in es if e['ev'] == 'progress' and e['step'] == 'applegpu_g14s: compiling'], [(0, 3, 'batches'), (1, 3, 'batches'), (2, 3, 'batches')])
+        self.assertEqual([e['step'] for e in es if e['ev'] == 'step'], ['applegpu_g14s: compiling', 'applegpu_g14s: merging 3 batches (metal-pack)'])
+
+    def build_shaders(self, t, run, regressions=None):
+        sh, logs = t / 'sh', t / 'logs'; logs.mkdir(exist_ok=True)
+        g = mock.Mock(); g.dir = t; g.id = '0400486024DEC000'; g.table.side_effect = lambda n: t / n
+        with mock.patch.object(nsp, 'chain_of', return_value='NEW'), mock.patch.object(nsp, 'run', run), mock.patch.object(nsp, 'fingerprint', return_value='K'), mock.patch.object(nsp, 'reused', return_value=None), \
+             mock.patch.object(nsp, 'chain_files', return_value=[]), mock.patch.object(nsp, 'translator_key', return_value='x'), mock.patch.object(nsp, 'shader_profile_key', return_value='p'), \
+             mock.patch.object(nsp, 'toolchain', return_value=()), mock.patch.object(nsp, 'chain_tables', return_value=True), mock.patch.object(nsp, 'stale_shaders', return_value=None), \
+             mock.patch.object(nsp, 'shader_regressions', side_effect=regressions), mock.patch.object(nsp, 'prune_stale_chains'), mock.patch.object(nsp, 'prune_shader_cache'):
+            nsp.build_shaders('py', t, sh, t / 'xlate', {'WORK': str(t)}, logs, g, 'P')
+
+    def test_the_shader_stage_ends_after_its_tail(self):   # the regression check, the pruning and a folder's pack are on its line; a regression fails it, never after a green end
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            def image(cmd, log, env=None, cwd=None, on_line=None):   # dmsh_build.py writes the image itself
+                log.write_text('shaders 2: ok 2\nshader cache: hit 1\n')
+                nsp.shader_lib.write({'k_b.metallib': b'lib', 'inputs.tsv': b'game\t0400486024DEC000\ninputs\ta\n'}, str(t / 'sh/cache/b-NEW.img'))
+            self.build_shaders(t, image)
+            self.assertEqual([e['step'] for e in self.events('step')], ['checking the inputs', 'checking for regressions', 'pruning old libraries and cache entries'])
+            ends = self.events('stage_end')
+            self.assertEqual([(e['ok'], e['summary']) for e in ends], [(True, '2 of 2 shaders ready (1 from the cache)')])
+            self.out.seek(0); self.out.truncate(0)
+            def folder(cmd, log, env=None, cwd=None, on_line=None):   # a stopped build's folder, packed at the end
+                log.write_text('shaders 1: ok 1\n')
+                d = t / 'sh/cache/b-NEW'; d.mkdir(parents=True, exist_ok=True)
+                (d / 'k_b.metallib').write_bytes(b'lib'); (d / 'inputs.tsv').write_text('game\t0400486024DEC000\ninputs\ta\n')
+            self.build_shaders(t, folder)
+            self.assertEqual([(e['done'], e['total'], e['unit']) for e in self.events('progress') if e['step'] == 'writing the library image'][-1], (2, 2, 'files'))
+            evs = [(e['ev'], e.get('step')) for e in self.events() if e['ev'] in ('step', 'stage_end')]
+            self.assertEqual(evs[-2:], [('step', 'writing the library image'), ('stage_end', None)])
+            self.out.seek(0); self.out.truncate(0)
+            with self.assertRaisesRegex(nsp.BuildError, 'regressed'): self.build_shaders(t, image, nsp.BuildError('regressed'))
+            self.assertEqual(self.events('stage_end'), [])
+            self.prog.close(ok=False)
+            self.assertEqual([e['ok'] for e in self.events('stage_end')], [False])
+
     def test_count_held_back(self):
         self.prog.stage('rewrite', done=0, total=3, unit='modules')
         self.now += 1; self.prog.set(done=1)

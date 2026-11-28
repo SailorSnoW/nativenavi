@@ -177,6 +177,14 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game) v131072 on an M3 Max, in nxnative ([PR #2684](https://github.com/seedds/nxnative/pull/2684)).
 - **Check:** `test_shader_lib.py` (`test_write_reports_progress`), `test_nsp_mac.py` (`test_shader_watch_follows_the_steps_after_the_compile`), `test_shader_toolchain_cache.py` (`BuildProgress`: the throttle, a new step, the last shader's count).
 
+### The pipeline archive stage shows only its time
+
+- **Symptom:** the `Pipeline archive` stage of a Mac app build, 18:06 for this game's 4.2 GB archive on 2026-11-27, shows nothing but its elapsed time in Terminal and NativeNavi; the `Mac shaders` stage ended green before its regression check, which could still stop the build, and before the pruning and the pack of a stopped build's folder.
+- **Cause:** `mac_pso` read none of `pso_offline.py`'s output, which names each batch as it starts and ends and the merge; `build_shaders` ended the stage as soon as it had read the compile's counts.
+- **Fix:** `PsoLines` turns `<arch>: batch i/n: ready (…)` lines into the stage's count (`<arch>: compiling`, unit `batches`; the ready lines are counted, since compute batches finish in any order) and `<arch>: merging n batches` into a step. `build_shaders` keeps its stage open through `checking for regressions` and `pruning old libraries and cache entries` and ends it last; `shader_lib.pack` reports `writing the library image` when it writes a folder (`on_progress`). The `progress` event is as it was, with another unit, so the front ends need no change (upstream nxnative c6cfe86b).
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), its NativeNavi build of 2026-11-27 (`build_app_14495341b2c9.log`).
+- **Check:** `test_nsp_progress.py` (`test_pipeline_archive_batches`, `test_the_shader_stage_ends_after_its_tail`), `test_shader_lib.py` (`test_pack_reports_progress_only_when_writing`), `test_nsp_mac_app.py` (`test_pso_archive`).
+
 ### Cache recovery races a parallel shader reader
 
 - **Symptom:** a shader build stops with an uncaught `KeyError` in `Store._reader` while the damaged compile cache is being recreated.

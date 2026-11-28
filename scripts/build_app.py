@@ -1241,7 +1241,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key, seen=None):
     note = reused(kf, key)
     # a missing or stale chain table is made from the last build's outputs; without them the step runs again
     if shader_lib.has_library(libs) and note is not None and (seen or chain_tables(py, repo, sh, env, logs, g, chain)):
-        if not seen: prune_stale_chains(sh, chain); prune_shader_cache(sh, chain); shader_lib.pack(libs, say)
+        if not seen: prune_stale_chains(sh, chain); prune_shader_cache(sh, chain); pack_library(libs)
         PROG.end(f'{note}, reused (inputs unchanged)'); return out
     rmtree(kf)
     if seen: rmtree(out)   # its keys are in partial-keys.txt
@@ -1272,19 +1272,34 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key, seen=None):
     if own := re.search(r'^note: (built with this Mac\'s compilers.*)$', t, re.M): say(own.group(1))
     if lost := re.search(r'^\[RED\] lost without failing: .*$', t, re.M): say(f'{lost.group(0)}; each is named in {log}, and the build goes on: a shader the game never reaches costs nothing')
     m, c = re.search(r'shaders (\d+): ok (\d+)', t), re.search(r'shader cache: hit (\d+)', t)
-    note = ''
+    note = summary = ''
     if m:
         total, ok = int(m.group(1)), int(m.group(2))
         failed = f'; {total - ok:,} failed, reasons at the end of {log}' if ok < total else ''
         note = f'{ok:,} of {total:,} shaders ready{failed}'
-        PROG.end(f'{ok:,} of {total:,} shaders ready' + (f' ({int(c.group(1)):,} from the cache)' if c else '') + failed)
-    else: PROG.end()
-    if not seen: shader_regressions(py, repo, sh / 'cache', chain, logs)   # before the key: a stopped build is checked again on the next run
+        summary = f'{ok:,} of {total:,} shaders ready' + (f' ({int(c.group(1)):,} from the cache)' if c else '') + failed
+    # the stage stays open to the end: a regression stops it as failed, never after a green end
+    if not seen:
+        PROG.set(step='checking for regressions')
+        shader_regressions(py, repo, sh / 'cache', chain, logs)   # before the key: a stopped build is checked again on the next run
     kf.write_text(f'{key}\n{note}\n')
     if not seen:   # last: a build that stopped before here keeps the old libraries and cache entries
-        prune_stale_chains(sh, chain); prune_shader_cache(sh, chain); shader_lib.pack(libs, say)
+        PROG.set(step='pruning old libraries and cache entries')
+        prune_stale_chains(sh, chain); prune_shader_cache(sh, chain); pack_library(libs)
         rmtree(sh / 'partial')
+    PROG.end(summary)
     return out
+
+
+def pack_library(libs):   # a folder a stopped or partial build left, into the image
+    last = 0.0
+    def on_progress(done, total, size):
+        nonlocal last
+        now = time.monotonic()
+        if done and done < total and now - last < 0.5: return
+        last = now
+        PROG.set(step='writing the library image', done=done, total=total, unit='files', note=amount(size, 'B') if size else '')
+    shader_lib.pack(libs, say, on_progress=on_progress)
 
 
 def check_metal(py, repo, env):
@@ -1528,6 +1543,23 @@ def mac_gpu_arch(work, env, logs):
     return arch
 
 
+class PsoLines:
+    """pso_offline.py's batches as the stage's count, from its "<arch>: batch i/n: ready (…)" lines (counted: compute batches finish in any order), then its "<arch>: merging n batches" line"""
+    BATCH = re.compile(r'^pso_offline: (\w+): batch \d+/(\d+): (ready)?')
+    MERGE = re.compile(r'^pso_offline: (\w+): merging (\d+) batches')
+
+    def __init__(self): self.ready, self.started = collections.Counter(), set()
+
+    def __call__(self, line):
+        if m := self.BATCH.match(line):
+            arch, total = m.group(1), int(m.group(2))
+            if m.group(3): self.ready[arch] += 1
+            elif arch in self.started: return   # another batch begun: the count has not moved
+            self.started.add(arch)
+            PROG.set(step=f'{arch}: compiling', done=self.ready[arch], total=total, unit='batches')
+        elif m := self.MERGE.match(line): PROG.set(step=f'{m.group(1)}: merging {int(m.group(2)):,} batches (metal-pack)')
+
+
 def mac_pso(py, repo, work, lib, g, gpus, env, logs):
     if gpus == 'none': say('pipeline archive: none (--gpu none): the app builds the pipeline bases on its first start'); return None
     if gpus and not re.fullmatch(r'(applegpu_)?g\w+(,(applegpu_)?g\w+)*', gpus): raise BuildError(f'--gpu / PSO_GPUS takes GPU architectures such as g14s, or none: {gpus}')
@@ -1543,7 +1575,7 @@ def mac_pso(py, repo, work, lib, g, gpus, env, logs):
     cmd = [py, repo / 'dm/gfx/tools/pso_offline.py', '--game', g.id, '--msl', lib, '--out', out, '--work', work / 'pso/mac-work', '--gpu', arch]
     if not g.table('pso_pairs.tsv').is_file() and (work / 'shader/pso_pairs.tsv').is_file():
         cmd += ['--pairs', g.table('shader_pairs.tsv'), '--pairs', work / 'shader/pso_pairs.tsv']
-    if run(cmd, logs / 'pso_offline_mac.log', env=env, fatal=False):   # optional: the app builds the bases on its first start without it
+    if run(cmd, logs / 'pso_offline_mac.log', env=env, fatal=False, on_line=PsoLines()):   # optional: the app builds the bases on its first start without it
         shutil.rmtree(out, ignore_errors=True)
         PROG.end('failed, the app is packed without one', warn=True)
         say(f'[RED] pipeline archive: pso_offline.py failed (see {logs / "pso_offline_mac.log"}); the app is packed without one and builds its pipeline bases on its first start (--gpu none skips this step)')
