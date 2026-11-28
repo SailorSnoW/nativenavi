@@ -973,7 +973,7 @@ static void cp_buttons(int *a, int *b) {
         *b |= g.buttonB.isPressed;
     }
     for (hid_pad *d = g_hidpads; d; d = d->next) {
-        uint64_t m = d->twin && hidpad_is_pro(d) ? d->pro_m : pad_hid_buttons(&d->st);
+        uint64_t m = hidpad_full(d) ? d->pro_m : pad_hid_buttons(&d->st);
         *a |= !!(m & DM_BTN_A);
         *b |= !!(m & DM_BTN_B);
     }
