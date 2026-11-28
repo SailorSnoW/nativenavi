@@ -112,7 +112,7 @@ Python standard library; LZ4 is loaded when decoding NSO files.
 
 | Shell | What it has | For |
 |---|---|---|
-| `nix develop` (`default`) | Python 3.14 with `tools.txt`; the Rust that `rust-toolchain.toml` names, with clippy and rustfmt; Microsoft's .NET SDK 10 (`sdk_10_0-bin`); zstd; SPIRV-Tools | building, the packing script, the host, graphics and Python tests, the Rust checks |
+| `nix develop` (`default`) | Python 3.14 with `tools.txt` and `tests.txt`; the Rust that `rust-toolchain.toml` names, with clippy and rustfmt; Microsoft's .NET SDK 10 (`sdk_10_0-bin`); zstd; SPIRV-Tools | building, the packing script, the host, graphics and Python tests, the Rust checks |
 | `nix develop .#coverage` | the same, with `coverage.txt` added | the coverage job's commands |
 | `nix develop .#lint` | Python 3.14 with `lint.txt` and `tools.txt`; Node.js for pyright; LLVM's release as `LLVM` (`lint-c.yml`'s `LLVM_VERSION`) | `lint_python.py`, `lint_c.py` |
 | `nix develop .#miri` | the nightly with Miri that `flake.lock` pins | `cargo miri test` |
@@ -199,7 +199,7 @@ minutes on an Apple-silicon Mac, most of it the tool tests):
 ```sh
 make -C dm/host/tests GAME=0400486024DEC000 -j8 coverage
 make -C dm/gfx/tex/tests coverage
-python3 -m pip install -r .github/requirements/coverage.txt -r .github/requirements/tools.txt   # in a venv, or nix develop .#coverage
+python3 -m pip install -r .github/requirements/coverage.txt -r .github/requirements/tools.txt -r .github/requirements/tests.txt   # in a venv, or nix develop .#coverage
 DM_GAME=0400486024DEC000 python3 -m coverage run -m unittest discover -s dm/tools/tests
 python3 -m coverage combine && python3 -m coverage json   # writes coverage.json
 python3 dm/tools/coverage_report.py --host dm/host/tests/build/cov/coverage.lcov \

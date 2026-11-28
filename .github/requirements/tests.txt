@@ -1,0 +1,4 @@
+# What only the tests import, pinned: unicorn runs the rewriter's blocks (dm/tools/tests/test_x18_*.py, test_oot_real_speed.py), which skip without it.
+# Installed with tools.txt, the packages the tools import; the packing script and the launcher's installer take tools.txt alone:
+#   python3 -m pip install -r .github/requirements/tools.txt -r .github/requirements/tests.txt
+unicorn==2.1.4

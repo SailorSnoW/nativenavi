@@ -30,7 +30,8 @@ class Flake(unittest.TestCase):
 
     def test_ci_jobs_install_what_a_shell_installs(self):   # each job's pip install is one shell's lists, so the shell has the job's packages and versions
         shells = {m[1]: frozenset(re.findall(r'"([^"]+)"', m[2])) for m in re.finditer(r'shell "(\w+)" \{.*?requirements = \[([^\]]*)\]', self.flake, re.S)}
-        self.assertEqual(shells.get('coverage'), {'coverage.txt', 'tools.txt'}, 'the coverage shell installs the tools\' packages with coverage.py')
+        self.assertEqual(shells.get('default'), {'tools.txt', 'tests.txt'}, 'the default shell installs what the tools and their tests import')
+        self.assertEqual(shells.get('coverage'), {'coverage.txt', 'tools.txt', 'tests.txt'}, 'the coverage shell installs the default shell\'s packages with coverage.py')
         self.assertEqual(shells.get('lint'), {'lint.txt', 'tools.txt'}, 'the lint shell installs the tools\' packages, which pyright resolves')
         installs = {frozenset(re.findall(r'-r \.github/requirements/(\S+\.txt)', line)) for wf in sorted((REPO / '.github/workflows').glob('*.yml'))
                     for line in wf.read_text().splitlines() if 'pip install' in line and '-r .github/requirements/' in line}
@@ -40,7 +41,7 @@ class Flake(unittest.TestCase):
     def test_envrc_loads_the_flake(self):   # direnv: the default shell, reloaded when a file it reads changes
         envrc = (REPO / '.envrc').read_text()
         self.assertRegex(envrc, r'(?m)^use flake$')
-        for f in ('dm/nix/shell_hook.sh', 'dm/host/rust/rust-toolchain.toml', '.github/requirements/tools.txt'):
+        for f in ('dm/nix/shell_hook.sh', 'dm/host/rust/rust-toolchain.toml', '.github/requirements/tools.txt', '.github/requirements/tests.txt'):
             self.assertIn(f, envrc, f'.envrc does not watch {f}, which the default shell reads')
             self.assertTrue((REPO / f).is_file(), f)
 

@@ -115,9 +115,11 @@ jobs:
         with:
           python-version: '3.14'
           cache: pip
-          cache-dependency-path: .github/requirements/tools.txt
-      - name: Install the Python packages the tools import
-        run: python -m pip install -r .github/requirements/tools.txt
+          cache-dependency-path: |
+            .github/requirements/tools.txt
+            .github/requirements/tests.txt
+      - name: Install the Python packages the tools and their tests import
+        run: python -m pip install -r .github/requirements/tools.txt -r .github/requirements/tests.txt
       # The translator tests run the committed translator on synthetic shaders, then spirv-val and spirv-cross; their Metal compile (DMSH_TEST_METAL=1)
       # and GPU run (DMSH_TEST_GPU=1) stay local.
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
@@ -164,8 +166,9 @@ jobs:
           cache-dependency-path: |
             .github/requirements/coverage.txt
             .github/requirements/tools.txt
-      - name: Install coverage.py and the packages the tools import
-        run: python -m pip install -r .github/requirements/coverage.txt -r .github/requirements/tools.txt
+            .github/requirements/tests.txt
+      - name: Install coverage.py and the packages the tools and their tests import
+        run: python -m pip install -r .github/requirements/coverage.txt -r .github/requirements/tools.txt -r .github/requirements/tests.txt
       - uses: ./.github/actions/rust
       - name: Host unit tests (dm/host/tests), llvm-cov
         continue-on-error: true

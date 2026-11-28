@@ -1,4 +1,4 @@
 # The coverage job's tool (.github/workflows/tests.yml, coverage job; pyproject.toml's [tool.coverage.run]), pinned so its numbers do not move with a new release.
-# Installed with tools.txt, the packages the tools import (as the tool-test job installs them), so the tests that need them run under coverage too:
-#   python3 -m pip install -r .github/requirements/coverage.txt -r .github/requirements/tools.txt
+# Installed with tools.txt and tests.txt, the packages the tools and their tests import (as the tool-test job installs them), so the tests that need them run under coverage too:
+#   python3 -m pip install -r .github/requirements/coverage.txt -r .github/requirements/tools.txt -r .github/requirements/tests.txt
 coverage==7.17.0

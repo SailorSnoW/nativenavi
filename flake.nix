@@ -114,7 +114,10 @@
         {
           default = shell "default" {
             tools = build;
-            requirements = [ "tools.txt" ];
+            requirements = [
+              "tools.txt"
+              "tests.txt"
+            ];
             env = dotnetRoot;
           };
 
@@ -124,6 +127,7 @@
             requirements = [
               "coverage.txt"
               "tools.txt"
+              "tests.txt"
             ];
             env = dotnetRoot;
           };
