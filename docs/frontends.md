@@ -74,18 +74,18 @@ When moving, backing up or restoring an app's local saves, preserve the registry
 
 ## Saved choices
 
-The app keeps the player's choices in its own preferences domain, its bundle ID (`CFBundleIdentifier` in `Info.plist`, `org.nativenavi.<title ID>` unless the app was packed with another): one string per setting, under the key `launcher.<env>` (`launcher.DM_FPS_TARGET` = `"30"`). The app's settings window keeps them there, and its launcher (`dm/mac/launcher.c`) reads them at every start, so a start from Finder or the Dock without the window has them too. A front end writes the same keys (`CFPreferencesSetAppValue` with the app's bundle ID, or `defaults write org.nativenavi.<title ID> launcher.DM_FPS_TARGET -string 30`): there is one set of choices, and every view of it agrees.
+The app keeps the player's choices in its own preferences domain, its bundle ID (`CFBundleIdentifier` in `Info.plist`, `org.nativenavi.<title ID>` unless the app was packed with another): one string per setting, under the key `launcher.<env>` (`launcher.DM_FPS_TARGET` = `"30"`). The app's settings window keeps them there, and its launcher (`dm/mac/Launcher.swift`) reads them at every start, so a start from Finder or the Dock without the window has them too. A front end writes the same keys (`CFPreferencesSetAppValue` with the app's bundle ID, or `defaults write org.nativenavi.<title ID> launcher.DM_FPS_TARGET -string 30`): there is one set of choices, and every view of it agrees.
 
 - **Only choices that differ from the tested default are kept.** A setting the player left at its default follows the defaults of a later build. Remove a key when the player picks the default again. For "Reset to tested defaults", remove the keys of the settings the player can change; the app's own window does that when Play applies the defaults, and keeps the saved choice of a setting fixed for this start.
-- **Checked when read.** The launcher uses a saved value only when this build still offers it: one of a `choice`'s options, a `toggle`'s `on` or `off`, or a number from a `range`'s `min` to `max`. It checks against the app's own list, which the packer copies into `Info.plist` as `DMSettings`. Any other value, a value that is not a string, or a key no setting has is ignored; it stays saved until the settings window's Play replaces it with the player's choice. So a rebuild that stops offering a value falls back to its tested default.
+- **Checked when read.** The launcher uses a saved value only when this build still offers it: one of a `choice`'s options, a `toggle`'s `on` or `off`, or a number from a `range`'s `min` to `max`. It checks against the app's own list, `Contents/Resources/dm/launcher.json`, with the window or without. Any other value, a value that is not a string, or a key no setting has is ignored; it stays saved until the settings window's Play replaces it with the player's choice. So a rebuild that stops offering a value falls back to its tested default.
 - **The order**, the first that sets a variable wins:
   1. the launch environment (a front end's launch overrides, a terminal);
   2. the player's `env.txt` (`~/Library/Application Support/NativeNavi/<title ID>/env.txt`);
   3. the bundle's `dm/env.txt`;
   4. saved choices;
-  5. the tested defaults (the host's own, from the game's profile).
+  5. the tested defaults: `launcher.json`'s, then the host's own for a variable no setting names.
 - **Launch overrides are temporary.** A front end that starts the game with a variable in its environment overrides the saved choice for that start only. It writes the store only when the player means to keep the choice.
-- **`DM_SAVED_CHOICES=0`** (in the environment or an `env.txt`) starts with the tested defaults and leaves the saved choices as they are. **`DM_LAUNCHER=0`** only skips the settings window: the saved choices still apply.
+- **`DM_SAVED_CHOICES=0`** (in the environment or an `env.txt`) starts with the tested defaults and leaves the saved choices as they are. **`DM_LAUNCHER=0`** only skips the settings window: the saved choices and `launcher.json`'s defaults still apply, in the same order, and nothing is saved.
 - **A sandboxed front end** cannot write another app's preferences domain; this store is for front ends outside the App Sandbox.
 
 ## Mods

@@ -422,6 +422,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     }
     // The pipeline also depends on whether a bound sampler has a border colour twin (pso_key.border); binding a sampler does not mark it dirty, so the draw compares it.
     static int cur_border; int border = prog_border(pr);
+    static uint32_t cur_early; uint32_t early = pso_early(pr->sh[1]);   // the depth state and DM_NVN_EARLY_DEPTH's phase do not mark it dirty either
+    if (early != cur_early) { cur_early = early; g_pso_dirty = 1; }
     static id<MTLRenderPipelineState> cur_ps; static NvProg *cur_pr; static uint64_t cur_ps_pass; static int cur_pull;
     if (g_fb_tseq == g_draw_seq && g_fb_tfn) { g_pso_lmap = g_fb_tlmap; g_pso_fsfn = g_fb_tfn; g_pso_fz = g_fb_tdesc; g_pso_dirty = 1; }
     if (g_mtk.on) { cur_ps = mtk_pso(pr); cur_pull = 0; cur_pr = nil; if (!cur_ps) { g_mtk.miss = 1; return; } }
@@ -498,9 +500,9 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         if (pr->sh[0]) vconv_bind(en, pr->sh[0], S.rast_discard, dw, di);
     }
     g_kd_force = kd_draw(pr, dw, di);
+    // Binding a view can upgrade its texture through blit(), which ends the pass: the fragment stage is then bound in the next pass only, and drawing on the ended encoder crashes in the driver.
     if (pr->sh[0]) encode_args(en, pr->sh[0], pr->sh[0]->stage == 4 ? 4 : 0, 1);
-    if (pr->sh[1] && !S.rast_discard) encode_args(en, pr->sh[1], 1, 0);
-    // Binding a view can upgrade its texture through blit(), which ends the pass: drawing on the ended encoder crashes in the driver.
+    if (g_enc == en && pr->sh[1] && !S.rast_discard) encode_args(en, pr->sh[1], 1, 0);
     if (g_enc != en) {
         static int again; if (again) { RED_ONCE(130, "binding a draw's arguments ended its render pass twice; draw skipped"); return; }
         PD("M %llu binding the draw's arguments ended the render pass (texture upgrade); encoded again", g_stat_pass);

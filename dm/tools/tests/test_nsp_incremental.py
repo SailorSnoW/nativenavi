@@ -1,6 +1,7 @@
 """build_app.py's reuse across builds of a derived profile and of the registered one. Real fingerprints and mock tool runs; no game files or Xcode needed."""
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -298,8 +299,8 @@ class SplitShaders(Base):
         cm = mock.patch.object(nsp, 'run', self.split); cm.__enter__(); self.addCleanup(cm.__exit__, None, None, None)
 
     def split(self, cmd, log, env=None, cwd=None, on_line=None):   # shader_split.py: the package and the four tables, deterministic for the same rows
-        self.splits += 1; self.last_cmd = cmd; out = Path(cmd[4]); out.mkdir(parents=True); (out / 'main.bin').write_bytes(self.rows.encode())
-        for n, t in zip(self.NAMES, cmd[5:]): Path(t).write_text(self.table(n))
+        self.splits += 1; self.last_cmd = cmd; out = Path(cmd[5]); out.mkdir(parents=True); (out / 'main.bin').write_bytes(self.rows.encode())
+        for n, t in zip(self.NAMES, cmd[6:]): Path(t).write_text(self.table(n))
         Path(log).write_text(self.log)
 
     def table(self, n): return self.tables[n] if hasattr(self, 'tables') else f'# split header\n{n}\t{self.rows}\n'
@@ -358,9 +359,9 @@ class SplitShaders(Base):
         dlc = self.tmp / 'work/aoc/7'; dlc.mkdir(parents=True)
         asset = dlc / 'shader.archive'; asset.write_bytes(b'new shader')
         self.go(g, dlc_roms=[dlc]); self.assertEqual(self.splits, 2)
-        self.assertEqual(self.last_cmd[-1], str(dlc))
+        self.assertEqual(json.loads(self.last_cmd[-1]), [str(dlc)])
         # Extra content has no main: the base RomFS/main pairing remains unchanged.
-        self.assertEqual(self.last_cmd[2:4], [str(self.ex / 'RomFS'), str(self.ex / 'ExeFS/main')])
+        self.assertEqual([json.loads(arg) for arg in self.last_cmd[3:5]], [[str(self.ex / 'RomFS')], [str(self.ex / 'ExeFS/main')]])
         self.go(g, dlc_roms=[dlc]); self.assertEqual(self.splits, 2)
         asset.write_bytes(b'updated DLC shader')
         self.go(g, dlc_roms=[dlc]); self.assertEqual(self.splits, 3)

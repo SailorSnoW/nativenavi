@@ -795,6 +795,14 @@ The replay of NVN on Metal (`dm/gfx/nvn/nvn_mtl.m`). Each entry: symptom, cause,
 - **Check:** `make -C dm/gfx/tests GAME=<id> run`. With `DM_AB=300 DM_NVN_FB_TEXU=ab` (an A/B switch used for the measurement, not part of the change) on the battle map, in-process over 16 phases: passes 126.5 → 93.5 a frame, attachment traffic 603 / 784 → 239 / 420 MB load / store, frame time p50 18.9 → 17.3 ms (MacBook Pro M1 Pro). Screenshots of the same frames with the rule off and on differ only where the fog and effects animate; the decals draw the same.
 - **Found on:** Fire Emblem Fortune's Weave.
 
+### A pool table kept the ID of a retired texture view
+
+- **Symptom:** after a texture is finalized, a pool table of the current generation still names the resource ID of a view its descriptor no longer has: a stale or freed descriptor for the shaders that read the pool. In Cyberpunk 2077 a depth-feedback snapshot could not resolve that ID and fell back to ending the pass at each depth write.
+- **Cause:** `mtl_tex_release` (`nvn_storage.inc`) calls `serial_del`, which notes the serial, before `treg_retire_serial` (`nvn_descpool.inc`) takes `g_rmu` to drop the descriptors' views. A replay in between (the encoding thread, or a replay ahead of the game thread) takes the note while the descriptors still look live, so its table does not list them as transient, and no later note makes it take them again.
+- **Fix:** `treg_retire_serial` notes the serial once more after dropping the views, under `g_rmu`. The next walk takes those IDs again and lists the views made for its submission as transient.
+- **Check:** `make -C dm/gfx/tests check_t_pool_notes` replays between `serial_del` and the retirement, checks the retirement's note, and that the next two submissions take the ID again.
+- **Found on:** Cyberpunk 2077, upstream nxnative `ab44edab`. The window is there on [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), which finalizes registered textures in play while the encoding thread and the replay ahead run beside its Finalize; no symptom of it has been seen here.
+
 ### Pool shaders taken as depth readers
 
 - **Symptom:** a game that reads textures through a pool runs slower than its draws explain, with passes of one draw each on the same targets. A pass dump (`DM_NVN_PASSDUMP`) shows `SetRenderTargets` going on in the open pass and the pass ending anyway. Ocarina of Time in Kokiri Forest: two frames of four had 219 passes, 127 of them on the 128x128 reflection probe's cube faces, and frame times of 15, 15, 18, 18.5 ms in a cycle.

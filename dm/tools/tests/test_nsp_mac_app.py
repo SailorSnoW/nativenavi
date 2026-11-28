@@ -750,7 +750,7 @@ class App(unittest.TestCase):
         self.assertEqual((p['CFBundleExecutable'], p['CFBundleName'], p['CFBundleIdentifier'], p['CFBundleShortVersionString']), ('nativenavi', 'Game: Test', 'org.nativenavi.01008cf01baac000', '1.0.1'))
         self.assertEqual((p['DMTitleID'], p['DMLanguage'], p['DMRomfsMarker'], p['CFBundleIconFile']), (TID, 'fr', 'region_common/audio/edward.bfsar', 'AppIcon'))
         self.assertIs(p['LSSupportsGameMode'], False)   # macOS's Game Mode holds the GPU at its lowest clock (frame-rate.md)
-        self.assertEqual(p['DMSettings'], [])
+        self.assertNotIn('DMSettings', p)   # the launcher reads launcher.json itself
         self.assertRegex(p['DMCommit'], r'^[0-9a-f]{12}(\+dirty)?$')
         self.assertEqual(p['DMChain'], '0123456789ab')
 
@@ -781,12 +781,14 @@ class App(unittest.TestCase):
             self.assertEqual(pack_app.info_plist(a, '14.0', None)['DMLanguage'], 'fr')
 
     def test_saved_choices(self):
-        """launcher.<VAR> in the app's preferences domain: used from Finder or the Dock, after the launch environment and both env.txt files; DM_SAVED_CHOICES=0 ignores them"""
+        """launcher.<VAR> in the app's preferences domain, then launcher.json's defaults, on a start without the window as with it: after the launch environment and both env.txt files;
+        DM_SAVED_CHOICES=0 ignores them, and nothing is saved"""
         domain = f'org.nativenavi.test.{uuid.uuid4().hex}'   # never a real game's domain
         listed = {'schema': 1, 'game': TID, 'settings': [
             {'env': 'DM_FPS_TARGET', 'kind': 'choice', 'section': 'Game', 'label': 'Frame rate', 'note': '', 'default': '60', 'options': [['30', '30 fps'], ['60', '60 fps']]},
             {'env': 'DM_RUMBLE_GAIN', 'kind': 'range', 'section': 'Game', 'label': 'Rumble strength', 'note': '', 'default': '1.0', 'min': 0.5, 'max': 1.0, 'step': 0.05},
             {'env': 'DM_FPS_HOLD', 'kind': 'toggle', 'section': 'Performance', 'label': 'Hold', 'note': '', 'default': 'on', 'on': 'on', 'off': 'off'},
+            {'env': 'DM_PSO_MTL4', 'kind': 'toggle', 'section': 'Performance', 'label': 'Metal 4', 'note': '', 'default': '1'},
             {'env': 'DM_LANG', 'kind': 'choice', 'section': 'Game', 'label': 'Language', 'note': '', 'default': 'fr', 'options': [['fr', 'French'], ['ja', 'Japanese']]},
             {'env': 'DM_BOTH', 'kind': 'choice', 'section': 'Game', 'label': 'Both', 'note': '', 'default': 'bundle', 'options': [['bundle', 'b'], ['player', 'p'], ['saved', 's']]},
             {'env': 'DM_BAKED', 'kind': 'toggle', 'section': 'Game', 'label': 'Baked', 'note': '', 'default': '1', 'on': '1', 'off': '0'}]}
@@ -806,33 +808,37 @@ class App(unittest.TestCase):
         def save(key, *value): subprocess.run(['defaults', 'write', domain, f'launcher.{key}', *value], check=True)
         try:
             app = pack('Saved', listed)
-            self.assertEqual(plistlib.loads((app / 'Contents/Info.plist').read_bytes())['DMSettings'][:3],
-                             [{'env': 'DM_FPS_TARGET', 'values': ['30', '60']}, {'env': 'DM_RUMBLE_GAIN', 'min': 0.5, 'max': 1.0}, {'env': 'DM_FPS_HOLD', 'values': ['on', 'off']}])
             for key, value in [('DM_FPS_TARGET', '30'), ('DM_RUMBLE_GAIN', '0.75'), ('DM_FPS_HOLD', 'maybe'), ('DM_LANG', 'ja'), ('DM_BOTH', 'saved'), ('DM_BAKED', '0')]: save(key, '-string', value)
             save('DM_OPMODE', '-string', '0')
             r = run(app)
-            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RUMBLE_GAIN'], r.get('DM_FPS_HOLD')), ('30', '0.75', None))
+            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RUMBLE_GAIN'], r['DM_FPS_HOLD'], r['DM_PSO_MTL4']), ('30', '0.75', 'on', '1'))   # a value the toggle never takes: its default
             self.assertEqual(r['DM_LANG'], 'ja')
             self.assertEqual((r['DM_BOTH'], r['DM_BAKED']), ('player', '1'))
             self.assertNotIn('DM_OPMODE', r)
             self.assertEqual((r['DM_ENV_FILE_KEYS'], r['DM_ENV_LAUNCH_KEYS']), ('DM_BOTH DM_BAKED', ''))
-            r = run(app, DM_FPS_TARGET='60', DM_RUMBLE_GAIN='0.5')
-            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RUMBLE_GAIN']), ('60', '0.5'))
-            self.assertEqual(r['DM_ENV_LAUNCH_KEYS'], 'DM_FPS_TARGET DM_RUMBLE_GAIN')
+            self.assertNotEqual(subprocess.run(['defaults', 'read', domain, 'launcher.DM_PSO_MTL4'], capture_output=True).returncode, 0)   # a default is not saved
+            r = run(app, DM_FPS_TARGET='60', DM_RUMBLE_GAIN='0.5', DM_PSO_MTL4='0')
+            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RUMBLE_GAIN'], r['DM_PSO_MTL4']), ('60', '0.5', '0'))
+            self.assertEqual(r['DM_ENV_LAUNCH_KEYS'], 'DM_FPS_TARGET DM_RUMBLE_GAIN DM_PSO_MTL4')
             r = run(app, args=['--no-launcher'], DM_LAUNCHER='1')
-            self.assertEqual(r['DM_FPS_TARGET'], '30')
+            self.assertEqual((r['DM_FPS_TARGET'], r['DM_PSO_MTL4']), ('30', '1'))
             self.assertEqual(subprocess.run(['defaults', 'read', domain, 'launcher.DM_FPS_TARGET'], capture_output=True, text=True).stdout.strip(), '30')
+            subprocess.run(['defaults', 'write', domain, 'window.show', '-bool', 'false'], check=True)
+            r = run(app, DM_LAUNCHER='1')   # "Show this window at launch" off
+            self.assertEqual((r['DM_FPS_TARGET'], r['DM_PSO_MTL4']), ('30', '1'))
+            subprocess.run(['defaults', 'delete', domain, 'window.show'], check=True)
             r = run(app, DM_SAVED_CHOICES='0')
-            self.assertEqual((r.get('DM_FPS_TARGET'), r.get('DM_RUMBLE_GAIN'), r['DM_LANG']), (None, None, 'fr'))
-            save('DM_RUMBLE_GAIN', '-float', '0.75')
-            self.assertNotIn('DM_RUMBLE_GAIN', run(app))
+            self.assertEqual((r['DM_FPS_TARGET'], r['DM_RUMBLE_GAIN'], r['DM_LANG']), ('60', '1.0', 'fr'))
+            self.assertEqual(subprocess.run(['defaults', 'read', domain, 'launcher.DM_FPS_TARGET'], capture_output=True, text=True).stdout.strip(), '30')
+            save('DM_RUMBLE_GAIN', '-float', '0.75')   # not a string
+            self.assertEqual(run(app)['DM_RUMBLE_GAIN'], '1.0')
             save('DM_RUMBLE_GAIN', '-string', ' 0.75')
-            self.assertNotIn('DM_RUMBLE_GAIN', run(app))
-            save('DM_RUMBLE_GAIN', '-string', '0x1p-1')   # hex, which neither side takes (Setting.accepts)
-            self.assertNotIn('DM_RUMBLE_GAIN', run(app))
+            self.assertEqual(run(app)['DM_RUMBLE_GAIN'], '1.0')
+            save('DM_RUMBLE_GAIN', '-string', '0x1p-1')   # hex (Setting.accepts)
+            self.assertEqual(run(app)['DM_RUMBLE_GAIN'], '1.0')
             listed['settings'][0]['options'] = [['60', '60 fps']]; listed['settings'][0]['default'] = '60'
             r = run(pack('Rebuilt', listed))
-            self.assertEqual((r.get('DM_FPS_TARGET'), r['DM_LANG']), (None, 'ja'))
+            self.assertEqual((r['DM_FPS_TARGET'], r['DM_LANG']), ('60', 'ja'))   # the new build's default; the other saved choices still hold
             self.assertIn('saved choice DM_FPS_TARGET=30 ignored', (self.tmp / f'home/Library/Logs/NativeNavi/{TID}.log').read_text())
         finally:
             subprocess.run(['defaults', 'delete', domain], capture_output=True)
@@ -1102,13 +1108,16 @@ class Script(unittest.TestCase):
                 Path(cmd[-1]).write_bytes(b'bases for ' + cmd[5].encode()); return
             if str(cmd[1]).endswith('dm/games/settings.py'):
                 self.settings_env = env; Path(cmd[-1]).write_text('{}'); return
-            if not on_line:
+            if str(cmd[1]).endswith('pso_offline.py'):
                 o = Path(cmd[cmd.index('--out') + 1]); o.mkdir(parents=True, exist_ok=True)
                 if kw.get('pso_fail'):
                     self.assertFalse(fatal); (o / 'applegpu_g14s.mtl4a.partial').write_bytes(b'half'); return 1
                 if not kw.get('no_bases'):
                     for gpu in cmd[cmd.index('--gpu') + 1].split(','): (o / f'{gpu if gpu.startswith("applegpu_") else "applegpu_" + gpu}.mtl4a').write_bytes(b'arch')
+                for ln in kw.get('pso_lines', ()):
+                    assert on_line is not None; on_line(ln)
                 return
+            assert on_line is not None
             (out / 'Contents/MacOS').mkdir(parents=True); (out / 'Contents/MacOS/dmhost').write_bytes(b'x')
             on_line('step: launcher and host (clones of the game files)')
             on_line(f'app: {out}')
@@ -1156,6 +1165,10 @@ class Script(unittest.TestCase):
                          {'--game': '01008CF01BAAC000', '--msl': str(tmp / 'shader/cache/b-0123456789ab'), '--out': str(tmp / 'pso/mac'), '--work': str(tmp / 'pso/mac-work'),
                           '--gpu': 'applegpu_g14s'})
         self.assertFalse(any('does not name this Mac' in m for m in self.said))
+        o, _ = self.pack_cmd(work=tmp, pso_lines=['pso_offline: applegpu_g14s: batch 1/1: 10 bases, compiling or checking cache', 'pso_offline: applegpu_g14s: batch 1/1: ready (compiled)',
+                                                  'pso_offline: applegpu_g14s: merging 1 batches'])
+        self.assertIn(mock.call(step='applegpu_g14s: compiling', done=1, total=1, unit='batches'), self.prog.set.call_args_list)
+        self.assertIn(mock.call(step='applegpu_g14s: merging 1 batches (metal-pack)'), self.prog.set.call_args_list)
         o, _ = self.pack_cmd(work=tmp, gpus='g16s')
         self.assertEqual(o['--pso'], str(tmp / 'pso/mac'))
         self.assertTrue(any('does not name this Mac\'s GPU (applegpu_g14s)' in m for m in self.said))

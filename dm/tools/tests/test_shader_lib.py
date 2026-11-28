@@ -45,6 +45,16 @@ class Base(unittest.TestCase):
 
 
 class States(Base):
+    def test_pack_reports_progress_only_when_writing(self):   # build_app.py's count while it packs a folder a stopped build left
+        self.folder(k_b__metallib=b'lib', k_c__metallib=b'lib2')
+        events = []
+        self.assertTrue(shader_lib.pack(self.lib, self.said.append, on_progress=lambda d, t, b: events.append((d, t))))
+        self.assertEqual(events, [(0, 3), (1, 3), (2, 3), (3, 3)])
+        events.clear()
+        with mock.patch.object(shader_lib.romfs, 'Image', side_effect=AssertionError('the image was opened')):
+            self.assertTrue(shader_lib.pack(self.lib, self.said.append, on_progress=lambda d, t, b: events.append((d, t))))
+        self.assertEqual(events, [])
+
     def test_failed_write_removes_part_and_keeps_existing_image(self):
         self.image.write_bytes(b'old image')
         def full(): raise OSError(errno.ENOSPC, 'No space left on device')

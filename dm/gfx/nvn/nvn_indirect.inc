@@ -360,7 +360,7 @@ static int fsm_encode(id<MTL4RenderCommandEncoder> en, NvProg *pr, const p_draw 
     if (bind_vbufs(en, &pr->sh[0]->rf) >= 0) return 0;
     vconv_bind(en, pr->sh[0], S.rast_discard, dw, di);
     encode_args(en, pr->sh[0], pr->sh[0]->stage == 4 ? 4 : 0, 1);
-    encode_args(en, pr->sh[1], 1, 0);
+    if ((id)g_enc == (id)en) encode_args(en, pr->sh[1], 1, 0);
     if ((id)g_enc != (id)en) return -1;   // binding upgraded a texture, which ended the pass
     if (pr->sh[1]->has_bz) bz_bind(en, NULL);
     g_stat_draw++;

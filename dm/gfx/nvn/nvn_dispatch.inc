@@ -19,20 +19,14 @@ static void warm_claim(void) {
     for (WarmItem *item in items) {
         if (!g_shcache) g_shcache = [NSMutableDictionary dictionary];
         if (item->kind == 0) {
-            if (!g_shcache[item->key]) {
-                g_shcache[item->key] = item->shader; g_warm_claim_shaders++;
-                if (item->record) {
-                    pso_record("S\t%s\t%d\n", item->key.UTF8String, item->shader->stage);
-                    pso_user_record("S\t%s\t%d\n", item->key.UTF8String, item->shader->stage);
-                }
-            }
+            if (!g_shcache[item->key]) { g_shcache[item->key] = item->shader; g_warm_claim_shaders++; }
         } else if (item->kind == 1 || item->kind == 3) {
             NvShader *vs = g_shcache[item->vs_key], *fs = item->fs_key.length ? g_shcache[item->fs_key] : nil;
-            if (!vs) { vs = item->vs; g_shcache[item->vs_key] = vs; }
-            if (item->fs_key.length && !fs) { fs = item->fs; g_shcache[item->fs_key] = fs; }
+            if (!vs) { vs = item->vs; g_shcache[item->vs_key] = vs; g_warm_claim_shaders++; }
+            if (item->fs_key.length && !fs) { fs = item->fs; g_shcache[item->fs_key] = fs; g_warm_claim_shaders++; }
             if (item->kind == 3) {
                 NvShader *ts = item->ts_key ? g_shcache[item->ts_key] : nil;
-                if (item->ts_key && !ts) { ts = item->ts; g_shcache[item->ts_key] = ts; }
+                if (item->ts_key && !ts) { ts = item->ts; g_shcache[item->ts_key] = ts; g_warm_claim_shaders++; }
                 if (warm_mesh_shader_equal(vs, item->vs) && warm_mesh_shader_equal(fs, item->fs) && warm_mesh_shader_equal(ts, item->ts)) mtk_claim(&item->pso, ts, vs, fs, item->object);
                 else MLOG("native mesh prewarm: live shader variant differs, recompile if required (%s)", vs->key);
             } else {
@@ -42,14 +36,25 @@ static void warm_claim(void) {
             }
         } else {
             NvShader *cs = g_shcache[item->key];
-            if (!cs) { cs = item->shader; g_shcache[item->key] = cs; }
+            if (!cs) { cs = item->shader; g_shcache[item->key] = cs; g_warm_claim_shaders++; }
             cps_key key = {(__bridge const void *)cs, (uintptr_t)item->cps_off};
             if (!hm_get_id(&g_cps, &key)) { hm_put_id(&g_cps, &key, item->object); g_warm_claim_cps++; }
         }
     }
 }
-// A program's libraries load in the background when the game makes it; the next submission takes them (warm_claim).
+// A program's libraries load in the background when the game makes it; the next submission takes them (warm_claim). On queues of their own: behind pp_bg_queue's
+// utility-QoS pipeline compiles, a library would come after the draw that needs it.
 static _Atomic uint64_t g_progpf_loaded;
+static dispatch_queue_t progpf_queue(void) {
+    static dispatch_queue_t q[4]; static int n; static _Atomic unsigned rr; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        int pc = 0; size_t sz = sizeof pc;
+        if (sysctlbyname("hw.perflevel0.physicalcpu", &pc, &sz, NULL, 0) || pc < 2) pc = 2;
+        n = pc / 2 > 4 ? 4 : pc / 2;
+        for (int i = 0; i < n; i++) q[i] = dispatch_queue_create("dm.nvn.prog-prefetch", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
+    });
+    return q[atomic_fetch_add(&rr, 1) % (unsigned)n];
+}
 static int prefetch_on(void) {
     static int v = -1;
     if (v < 0) { const char *e = getenv("DM_NVN_PREFETCH"); v = !(e && !strcmp(e, "0")); }
@@ -66,12 +71,12 @@ void mtl_prog_prefetch(const prog_t *cp) {
         if (st < 0) continue;   // not in the package: a built-in kernel
         NSString *pc = [k stringByAppendingString:@"_b"];
         if (!progpf_first(pc)) continue;
-        dispatch_async(pp_bg_queue(), ^{ @autoreleasepool {
+        dispatch_async(progpf_queue(), ^{ @autoreleasepool {
             NvShader *sh = shader_load(pc, st);
             if (!sh) return;
             if (st == 0 && sh->has_pull && hybrid_on()) pull_load(sh);
             WarmItem *item = [WarmItem new];
-            item->kind = 0; item->record = 1; item->key = pc; item->shader = sh;
+            item->kind = 0; item->key = pc; item->shader = sh;
             warm_enqueue(item);
             if (!g_progpf_loaded++) MLOG("shader prefetch at program creation: first library %s loaded in the background (DM_NVN_PREFETCH=0 turns it off)", pc.UTF8String);
         } });

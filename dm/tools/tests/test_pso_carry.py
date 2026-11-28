@@ -56,17 +56,18 @@ class Carry(unittest.TestCase):
 
     def test_rows(self):
         km = pc.key_map(smap(OLD), smap(NEW))
-        lines = ['# a comment\n', f'S\t{k(3)}_b\t0\n', f'S\t{k(8)}_b\t0\n', f'C\t{k(11)}_b\n', f'S\t{k(1)}_b\t0\n',
+        lines = ['# a comment\n', f'S\t{k(3)}_b\t0\n', f'C\t{k(8)}_b\n', f'C\t{k(11)}_b\n', f'C\t{k(10)}_b\n',
                  f'R\t{skey_hex(k(3), k(4))}\n',      # carried, a pair of the new files
                  f'R\t{skey_hex(k(3), k(2))}\n',      # carried, not a pair of the new files: left out
                  f'R\t{skey_hex(k(1), k(2))}\n',      # the same keys: kept as it is
-                 f'M\t-\t{skey_hex(k(7), k(6))}\n', f'S\t{k(3)}_b\t0\n']
+                 f'M\t-\t{skey_hex(k(7), k(6))}\n', f'C\t{k(11)}_b\n']
         rows, st = pc.carry(lines, km, {(k(103), k(104)), (k(107), k(106))})
-        self.assertEqual(rows[:3], [f'S\t{k(103)}_b\t0', f'C\t{k(112)}_b', f'S\t{k(1)}_b\t0'])
-        self.assertEqual(rows[3], f'R\t{skey_hex(k(103), k(104))}')
-        self.assertEqual(rows[4], f'R\t{skey_hex(k(1), k(2))}')
-        self.assertEqual(rows[5], f'M\t-\t{skey_hex(k(107), k(106))}')
-        self.assertEqual(len(rows), 6)                                     # the duplicate S row once
+        self.assertEqual(rows[:2], [f'C\t{k(112)}_b', f'C\t{k(10)}_b'])
+        self.assertEqual(rows[2], f'R\t{skey_hex(k(103), k(104))}')
+        self.assertEqual(rows[3], f'R\t{skey_hex(k(1), k(2))}')
+        self.assertEqual(rows[4], f'M\t-\t{skey_hex(k(107), k(106))}')
+        self.assertEqual(len(rows), 5)                                     # the S row left out, the duplicate C row once
+        self.assertNotIn(('S', 'all'), st)
         self.assertEqual((st['R', 'all'], st['R', 'carried'], st['R', 'kept']), (3, 1, 1))
 
     def test_file(self):
@@ -74,13 +75,13 @@ class Carry(unittest.TestCase):
             p = Path(t)
             for name, rows in (('from.tsv', OLD), ('to.tsv', NEW)):
                 (p / name).write_text('# map\npackage\tindex\tstage\tdm_ctl_sha16\tsource\n' + ''.join(f'x.bin\t0\t{st}\t{key}\t{src}\n' for key, st, src in rows))
-            (p / 'list.tsv').write_text(f'# recorded on v131072\nS\t{k(3)}_b\t0\nS\t{k(999)}_b\t0\n')
+            (p / 'list.tsv').write_text(f'# recorded on v131072\nC\t{k(11)}_b\nC\t{k(999)}_b\nS\t{k(3)}_b\t0\n')
             (p / 'pairs.tsv').write_text('# pairs\n')
             note = pc.carry_file(str(p / 'from.tsv'), str(p / 'to.tsv'), str(p / 'list.tsv'), str(p / 'out.tsv'), [str(p / 'pairs.tsv'), str(p / 'missing.tsv')], 'the test')
             self.assertIn('1 of 2 rows (0 with the same keys, 1 carried', note)
             out = (p / 'out.tsv').read_text().splitlines()
             self.assertTrue(out[0].startswith('# Prewarm seed list carried by dm/tools/pso_carry.py from the test'))
-            self.assertEqual(out[1:], ['# recorded on v131072', f'S\t{k(103)}_b\t0'])
+            self.assertEqual(out[1:], ['# recorded on v131072', f'C\t{k(112)}_b'])
 
 
 V_OLD = [(k(30), 'vertex', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var0'), (k(31), 'pixel', '/Effect/static.vsetb.byml.zs#BNSH@0x1000#var0'),   # anchors: the same keys

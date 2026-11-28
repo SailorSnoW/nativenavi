@@ -10,8 +10,10 @@ typedef struct {
     uint8_t lmap[8]; const void *fsfn;
     uint32_t atest, logic;   // 1 = alpha test / logic op (fragment from <key>_bx); added fields go last so an older prewarm row reads them as 0
     va_st attr_hi[16];       // NVN2's attributes 16 to 31
-    uint32_t border, border_spare;   // 1 = a bound sampler has a twin: shaders keep their border colour corrections; border_spare pads to 8 bytes
+    uint32_t border, early_read_only;   // border: 1 = a bound sampler has a twin: shaders keep their border colour corrections. early_read_only (in what was padding,
+                                        // 0 in older rows): PSO_EARLY_RO, the early-test entry of a fragment that discards (read-only depth); PSO_EARLY_OFF, DM_NVN_EARLY_DEPTH=0
 } pso_key;
+enum { PSO_EARLY_RO = 1, PSO_EARLY_OFF = 2 };
 static inline va_st pso_key_attr(const pso_key *k, int a) { return a < 16 ? k->attr[a] : k->attr_hi[a - 16]; }
 
 typedef struct {
@@ -54,7 +56,7 @@ static inline int pso_hex_digit(char c) {
 
 static inline int pso_skey_parse(const char *hex, pso_skey *out) {
     // shorter rows predate border, attr_hi or atest / logic: those stay 0
-    size_t n = sizeof *out * 2, old2 = n - 2 * (sizeof out->k.border + sizeof out->k.border_spare), old1 = old2 - 2 * sizeof out->k.attr_hi,
+    size_t n = sizeof *out * 2, old2 = n - 2 * (sizeof out->k.border + sizeof out->k.early_read_only), old1 = old2 - 2 * sizeof out->k.attr_hi,
            old = old1 - 2 * (sizeof out->k.atest + sizeof out->k.logic);
     if (!hex || (strlen(hex) != n && strlen(hex) != old2 && strlen(hex) != old1 && strlen(hex) != old)) return -1;
     if (strlen(hex) != n) { n = strlen(hex); memset(out, 0, sizeof *out); }

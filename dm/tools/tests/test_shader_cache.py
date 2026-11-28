@@ -433,7 +433,7 @@ class Writers(Base):
     def test_a_full_drive_fails_the_whole_batch(self):   # SQLite ends the transaction itself on SQLITE_FULL: an earlier write must not be lost while a later one lands outside the batch
         self.store.put('before', b'0'); self.full_after(2)
         with self.store.batch():
-            self.store.put('a', b'small'); self.store.put('b', b'x' * 200000); self.store.put('c', b'small too')
+            self.store.put('a', b'small'); self.store.put('b', os.urandom(200000)); self.store.put('c', b'small too')
         self.assertTrue(self.store.full); self.assertEqual(self.store.names(''), {'before'})
         self.assertEqual(len([m for m in self.said if m.startswith('[RED]')]), 1)
         self.store.put('d', b'1'); self.assertFalse(self.store.has('d'))   # the build goes on without the cache
@@ -528,7 +528,8 @@ class Prune(Base):
         for d in (D1, D2): self.shader(d, now - 100)
         self.shader(D3, now + 100); self.store.put('shader/notadigest/mac/x', b'k', now - 100); self.store.put('metallib/mac/m.metallib', b'L' + D2.encode(), now - 100)
         before = self.blobs()
-        self.assertEqual(self.store.prune_shaders({D1}, now), (1, 640))   # the source's bytes, not the library's
+        stored = self.store.db.execute('SELECT length(b.payload) FROM entry e JOIN blob b ON b.id=e.blob WHERE e.name=?', (f'shader/{D2}/mac/k_b.metal',)).fetchone()[0]
+        self.assertEqual(self.store.prune_shaders({D1}, now), (1, stored))   # the source's stored bytes, not the library's
         self.assertEqual({n.split('/')[1] for n in self.store.names('shader/')}, {D1, D3, 'notadigest'})
         self.assertEqual(self.blobs(), before - 1)   # D2's source; its library's bytes stay under metallib/
         self.assertEqual(self.store.get('metallib/mac/m.metallib'), b'L' + D2.encode())
@@ -589,6 +590,160 @@ class Generations(unittest.TestCase):   # one file per chain: a build writes its
         s = shader_cache.Store(self.d / 'regress/cas.db', readonly=self.d); self.addCleanup(s.close)
         self.assertEqual((s.get('metallib/mac/m.metallib'), s.get('variant/v/x')), (b'B', b'v'))
         self.assertEqual(s._run('SELECT count(*) FROM entry')[0][0], 0)
+
+
+def _make_v1(path, entries, when=100.0):
+    """A raw compile cache as written before compression: blob(id, hash, data)"""
+    with contextlib.closing(sqlite3.connect(path)) as db:
+        db.execute('PRAGMA page_size=16384'); db.execute('PRAGMA auto_vacuum=INCREMENTAL')
+        db.execute('CREATE TABLE blob(id INTEGER PRIMARY KEY, hash BLOB UNIQUE NOT NULL, data BLOB NOT NULL)')
+        db.execute('CREATE TABLE entry(name TEXT PRIMARY KEY, blob INTEGER NOT NULL, mtime REAL NOT NULL) WITHOUT ROWID')
+        for name, data in entries.items():
+            h = hashlib.blake2b(data, digest_size=16).digest()
+            row = db.execute('SELECT id FROM blob WHERE hash=?', (h,)).fetchone()
+            bid = row[0] if row else db.execute('INSERT INTO blob(hash, data) VALUES(?, ?)', (h, data)).lastrowid
+            db.execute('INSERT OR REPLACE INTO entry(name, blob, mtime) VALUES(?, ?, ?)', (name, bid, when))
+        db.commit()
+
+
+def _rows(path):   # every blob and entry of a file, read without the module
+    with contextlib.closing(sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True)) as db:
+        return db.execute('SELECT * FROM blob ORDER BY id').fetchall(), db.execute('SELECT * FROM entry ORDER BY name').fetchall()
+
+
+@unittest.skipIf(shader_cache.zstd is None, 'no zstd module (Python 3.14 or backports.zstd)')
+class Compression(Base):
+    def codecs(self, store): return {n: (c, n2) for n, c, n2 in store.db.execute('SELECT e.name, b.codec, length(b.payload) FROM entry e JOIN blob b ON b.id=e.blob')}
+
+    def test_compressed_when_smaller(self):   # short or incompressible bytes stay raw
+        text, rand, tiny = b'kernel void main0() { /* shader source */ }\n' * 1000, os.urandom(4096), b'short'
+        self.store.put('text', text); self.store.put('rand', rand); self.store.put('tiny', tiny)
+        self.assertEqual((self.store.get('text'), self.store.get('rand'), self.store.get('tiny')), (text, rand, tiny))
+        rows = self.codecs(self.store)
+        self.assertEqual(rows['text'][0], shader_cache.ZSTD); self.assertLess(rows['text'][1], len(text) // 10)
+        self.assertEqual((rows['rand'], rows['tiny']), ((shader_cache.RAW, len(rand)), (shader_cache.RAW, len(tiny))))
+
+    def test_a_checkout_from_before_fails_closed(self):
+        self.store.put('metallib/mac/a.metallib', b'library' * 500)
+        with self.assertRaisesRegex(sqlite3.OperationalError, 'no such column'):
+            self.store.db.execute('SELECT b.data FROM entry e JOIN blob b ON b.id=e.blob WHERE e.name=?', ('metallib/mac/a.metallib',))
+
+    def test_a_raw_file_stays_raw_and_a_new_chain_takes_it_compressed(self):   # the player's cas-<chain>.db from before: read, written raw in place, never migrated
+        d = self.root / 'gen'; d.mkdir()
+        lib, src, rand = b'compiled metal library ' * 400, b'#include <metal_stdlib>\n' * 300, os.urandom(3000)
+        cur, new = '14495341b2c9', 'aaaaaaaaaaaa'
+        v1 = d / f'cas-{cur}.db'
+        _make_v1(v1, {'metallib/mac/m.metallib': lib, f'shader/{D1}/mac/k_b.metal': src, 'metallib/mac/r.metallib': rand})
+        blobs, entries = _rows(v1)
+        s = shader_cache.for_chain(d, cur, self.said.append); self.addCleanup(s.close)
+        self.assertFalse(s.v2)
+        self.assertEqual((s.get('metallib/mac/m.metallib'), s.get(f'shader/{D1}/mac/k_b.metal')), (lib, src))
+        s.put('metallib/mac/n.metallib', lib + b'new'); s.put('metallib/mac/m2.metallib', lib)   # a new blob, and one it holds
+        self.assertEqual(s.prune_shaders(set(), time.time() + 10), (1, len(src)))
+        s.close()
+        after_blobs, after_entries = _rows(v1)
+        with contextlib.closing(sqlite3.connect(v1)) as db: self.assertEqual({c[1] for c in db.execute('PRAGMA table_info(blob)')}, {'id', 'hash', 'data'})
+        self.assertEqual([b for b in after_blobs if b[0] in {r[0] for r in blobs}], [b for b in blobs if b[2] != src])   # what it held is as it was
+        self.assertEqual(after_blobs[-1][2], lib + b'new')
+        self.assertEqual(len(after_entries), len(entries) + 1)
+        before = v1.read_bytes()
+        n = shader_cache.for_chain(d, new, self.said.append); self.addCleanup(n.close)
+        self.assertTrue(n.v2)
+        self.assertEqual((n.get('metallib/mac/m.metallib'), n.get('metallib/mac/r.metallib')), (lib, rand))
+        n.put('tiny', b'x')
+        rows = self.codecs(n)
+        self.assertEqual((rows['metallib/mac/m.metallib'][0], rows['metallib/mac/r.metallib'][0], rows['tiny'][0]), (shader_cache.ZSTD, shader_cache.RAW, shader_cache.RAW))
+        self.assertLess(rows['metallib/mac/m.metallib'][1], len(lib) // 10)
+        n.close()
+        self.assertEqual(v1.read_bytes(), before)   # read as an older generation, never written
+        ro = shader_cache._ReadOnly([d / f'cas-{new}.db', v1], self.said.append); self.addCleanup(ro.close)   # a v2 file and a v1 file in one list (regress.py's --readonly folder)
+        self.assertEqual((ro.get('metallib/mac/m.metallib'), ro.get('metallib/mac/n.metallib')), (lib, lib + b'new'))
+        self.assertEqual(v1.read_bytes(), before)
+        self.assertFalse([m for m in self.said if m.startswith('[RED]')])
+
+    def test_a_v2_blob_is_copied_as_it_is(self):   # into a newer chain's file, without compressing it again; into a v1 file, raw
+        d = self.root / 'gen'; d.mkdir(); lib = b'compiled metal library ' * 400
+        a = shader_cache.for_chain(d, 'aaaaaaaaaaaa'); a.put('metallib/mac/m.metallib', lib); a.close()
+        b = shader_cache.for_chain(d, 'bbbbbbbbbbbb'); self.addCleanup(b.close)
+        with mock.patch.object(shader_cache, '_encode', side_effect=AssertionError('compressed again')): self.assertEqual(b.get('metallib/mac/m.metallib'), lib)
+        self.assertEqual(self.codecs(b)['metallib/mac/m.metallib'][0], shader_cache.ZSTD)
+        _make_v1(d / 'cas-cccccccccccc.db', {})
+        c = shader_cache.Store(d / 'cas-cccccccccccc.db', older=[d / 'cas-bbbbbbbbbbbb.db']); self.addCleanup(c.close)
+        self.assertEqual(c.get('metallib/mac/m.metallib'), lib)
+        self.assertEqual(c.db.execute('SELECT data FROM blob').fetchall(), [(lib,)])
+
+    def test_a_damaged_frame_makes_the_file_anew_and_a_read_only_one_is_dropped(self):
+        payload = b'shader source ' * 500
+        self.store.put('metallib/mac/a.metallib', payload)
+        self.store.db.execute('UPDATE blob SET payload=?', (b'not a valid zstd frame',))
+        self.assertIsNone(self.store.get('metallib/mac/a.metallib'))
+        self.assertTrue(any('[RED]' in m for m in self.said))
+        self.store.put('metallib/mac/a.metallib', payload); self.assertEqual(self.store.get('metallib/mac/a.metallib'), payload)
+        good = self.root / 'good.db'; sg = shader_cache.Store(good); sg.put('metallib/mac/a.metallib', b'from good'); sg.close()
+        bad = self.root / 'bad.db'; sb = shader_cache.Store(bad); sb.put('metallib/mac/a.metallib', payload); sb.db.execute('UPDATE blob SET payload=?', (b'corrupt',)); sb.close()
+        before = bad.read_bytes()
+        ro = shader_cache._ReadOnly([bad, good], self.said.append); self.addCleanup(ro.close)
+        self.assertEqual(ro.get('metallib/mac/a.metallib'), b'from good'); self.assertEqual(bad.read_bytes(), before)
+        fresh = shader_cache.Store(self.root / 'fresh.db', self.said.append, older=[bad, good]); self.addCleanup(fresh.close)
+        self.assertEqual(fresh.get('metallib/mac/a.metallib'), b'from good')
+        self.assertEqual(fresh.get('metallib/mac/a.metallib'), b'from good')   # it copied the good one, not the damaged one
+
+    def test_no_zstd_module_or_an_unknown_codec_leaves_the_file(self):   # a Python before 3.14 without backports.zstd
+        payload = b'precious shader ' * 500
+        self.store.put('keep', payload); self.store.close()
+        with mock.patch.object(shader_cache, 'zstd', None):
+            s = shader_cache.Store(self.path, self.said.append); self.addCleanup(s.close)
+            with self.assertRaisesRegex(RuntimeError, 'backports.zstd'): s.get('keep')
+            self.assertEqual(s.db.execute('SELECT count(*) FROM blob').fetchone()[0], 1)
+            s.close()
+            raw = shader_cache.Store(self.root / 'no_zstd.db', self.said.append); self.addCleanup(raw.close)
+            raw.put('raw', payload); self.assertEqual(raw.get('raw'), payload)
+            self.assertEqual(raw.db.execute('SELECT codec FROM blob').fetchone()[0], shader_cache.RAW)
+        s = shader_cache.Store(self.path, self.said.append); self.addCleanup(s.close)
+        self.assertEqual(s.get('keep'), payload)
+        s.db.execute('UPDATE blob SET codec=99')
+        with self.assertRaisesRegex(RuntimeError, 'codec 99'): s.get('keep')
+        self.assertEqual(s.db.execute('SELECT count(*) FROM blob').fetchone()[0], 1)
+
+    def test_a_worker_hands_a_damaged_frame_to_the_owner(self):
+        import multiprocessing
+        global SERVED
+        payload = b'worker shader ' * 500
+        self.store.put('metallib/mac/bad.metallib', payload); self.store.db.execute('UPDATE blob SET payload=?', (b'bad zstd',))
+        SERVED = shader_cache.Served(self.store, 1)
+        p = multiprocessing.get_context('fork').Process(target=_worker_with_damaged_frame, args=(payload,))
+        p.start(); SERVED.start(); p.join(20)
+        self.assertEqual(p.exitcode, 0)
+        self.assertEqual(self.store.get('metallib/mac/ok.metallib'), payload)
+        self.assertEqual(self.codecs(self.store)['metallib/mac/ok.metallib'][0], shader_cache.ZSTD)   # compressed in the worker
+        self.assertTrue(any('[RED]' in m for m in self.said))
+
+    def test_a_worker_writes_a_raw_file_raw(self):   # dmsh_build.py's workers on the player's file from before
+        import multiprocessing
+        global SERVED
+        v1 = self.root / 'v1.db'; lib = b'compiled metal library ' * 400
+        _make_v1(v1, {'metallib/mac/m.metallib': lib})
+        s = shader_cache.Store(v1, self.said.append); self.addCleanup(s.close)
+        SERVED = shader_cache.Served(s, 1)
+        p = multiprocessing.get_context('fork').Process(target=_worker_on_raw_file, args=(lib,))
+        p.start(); SERVED.start(); p.join(20)
+        self.assertEqual(p.exitcode, 0)
+        self.assertEqual(s.db.execute('SELECT data FROM blob ORDER BY id').fetchall(), [(lib,), (lib + b'new',)])
+
+
+def _worker_on_raw_file(lib):
+    assert SERVED is not None; remote = SERVED.worker()
+    assert not remote.v2 and remote.get('metallib/mac/m.metallib') == lib
+    remote.put('metallib/mac/n.metallib', lib + b'new'); remote.put('metallib/mac/m2.metallib', lib)
+    assert remote.get('metallib/mac/n.metallib') == lib + b'new' and remote.get('metallib/mac/m2.metallib') == lib
+
+
+def _worker_with_damaged_frame(payload):
+    assert SERVED is not None; remote = SERVED.worker()
+    assert remote.get('metallib/mac/bad.metallib') is None
+    remote.put('metallib/mac/ok.metallib', payload); assert remote.get('metallib/mac/ok.metallib') == payload
+    remote.put('metallib/mac/ok2.metallib', payload)   # linked by its digest
+    assert remote.blob_ids('metallib/mac/ok')['metallib/mac/ok.metallib'] == remote.blob_ids('metallib/mac/ok')['metallib/mac/ok2.metallib']
 
 
 if __name__ == '__main__': unittest.main()

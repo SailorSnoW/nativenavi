@@ -233,7 +233,6 @@ static void shader_prefetch_rest(void) {
         NvShader *o = res[i];
         if ((id)o == NSNull.null) continue;
         g_shcache[keys[i]] = o; got++; progpf_first(keys[i]);
-        pso_record("S\t%s\t%d\n", keys[i].UTF8String, stages[i].intValue); pso_user_record("S\t%s\t%d\n", keys[i].UTF8String, stages[i].intValue);
     }
     uint64_t dt = bp_now() - t0;
     g_bp_lib_n += got; g_bp_lib_ns += dt; g_pf_n += got; g_pf_ns += dt;

@@ -96,9 +96,12 @@ static void treg_unlink(int id_) {
 static void treg_retire_serial(uint64_t ser) {
     // Finalize retires the API object, not the descriptor's metadata: cached views go now, or streamed uploads stay pinned in IDs never reused.
     os_unfair_lock_lock(&g_rmu);
-    for (int n = (int)(uintptr_t)nvn_hm_get(&g_treg_serial, &ser); n; n = g_treg[n - 1].next) {
+    int head = (int)(uintptr_t)nvn_hm_get(&g_treg_serial, &ser);
+    for (int n = head; n; n = g_treg[n - 1].next) {
         treg_t *r = &g_treg[n - 1]; r->retired = 1; treg_drop_views(r);
     }
+    // a replay (enc_thread, replay_ahead) can take serial_del's note before this: without one more, its table keeps the IDs as live, never listed as transient
+    if (head) own_note(ser);
     os_unfair_lock_unlock(&g_rmu);
 }
 static void treg_finish_submission(void) {

@@ -402,6 +402,10 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
         if (lf) d.fragmentFunction = lf;
         else if (fsfn) RED_ONCE(136, "logic operation not applied to a specialized fragment (readable-tile merge or diagnostic) of %s", fs->key);
     }
+    // main0 alone: with an alpha test, alpha-to-coverage or a logic operation the fragment decides which samples update
+    if (fs && fs->early_fn && d.fragmentFunction == fs->fn && !merged && !fsfn && !k->a2c && !k->atest && !k->logic && (k->dfmt || k->sfmt) &&
+        k->early_read_only != PSO_EARLY_OFF && (!fs->early_read_only || k->early_read_only == PSO_EARLY_RO))
+        d.fragmentFunction = fs->early_fn;
     if (vs && k->fsfn == DISCARD_MARK) { d.fragmentFunction = nil; d.rasterizationEnabled = NO; }
     d.rasterSampleCount = k->samples ? k->samples : 1;
     d.alphaToCoverageEnabled = k->a2c;

@@ -4,6 +4,7 @@ Source labels also order package records, so a change from last to first
 representatives needs verified profile maps, even for equal code.
 All inputs here are synthetic.
 """
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -12,10 +13,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/tools/fuzz'))
+sys.path.insert(0, str(REPO / 'dm/games'))
 import fuzz_shader_split as fz  # noqa: E402
+import game  # noqa: E402
+spec = importlib.util.spec_from_file_location('build_app', REPO / 'scripts/build_app.py')
+assert spec and spec.loader
+nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
 ss, bnsh = fz.ss, fz.bnsh_of
 
@@ -55,14 +62,14 @@ class Representatives(unittest.TestCase):
         self.main = self.root / 'main'
         self.main.write_bytes(nso(b''))
 
+    def env(self, workers=1):
+        return dict(os.environ, DM_GAME='0400486024DEC000', J=str(workers), DM_UE_SHADERS=str(self.root / 'ue_shaders'), DM_GLSLC_CAPTURE=str(self.root / 'glslc_capture'))
+
     def split(self, workers=1, versions=()):
         out = [self.root / name for name in ('pkg', 'map.tsv', 'facts.tsv', 'pairs.tsv', 'pso.tsv')]
         roms = ','.join(str(r) for r, _ in [(self.rom, self.main), *versions])
         mains = ','.join(str(m) for _, m in [(self.rom, self.main), *versions])
-        result = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', roms, mains, *out],
-                                capture_output=True, text=True,
-                                env=dict(os.environ, DM_GAME='0400486024DEC000', J=str(workers),
-                                         DM_UE_SHADERS=str(self.root / 'ue_shaders'), DM_GLSLC_CAPTURE=str(self.root / 'glslc_capture')))
+        result = subprocess.run([sys.executable, REPO / 'dm/gfx/tools/shader_split.py', roms, mains, *out], capture_output=True, text=True, env=self.env(workers))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('[RED]', result.stdout + result.stderr)
         rows = [line.split('\t') for line in out[1].read_text().splitlines()
@@ -126,6 +133,27 @@ class Representatives(unittest.TestCase):
             ss.skey(*a): ('vs_main.bin', 1, 'vertex', 'main#BNSH@0x0#var1', *a),
             ss.skey(*c): ('vs_main.bin', 2, 'vertex', 'main@v327680#BNSH@0x80#var2', *c),
         })
+
+    def test_packing_splits_base_update_and_dlc_under_a_path_with_commas(self):   # build_app.py passes the path lists as JSON (--json-paths)
+        root = self.root / 'Game, with spaces'
+        roms = [root / version / 'RomFS' for version in ('v0', 'v65536')]
+        mains = [rom.parent / 'main' for rom in roms]
+        dlc = root / 'aoc/7'
+        for path in (*roms, dlc): path.mkdir(parents=True)
+        for main in mains: main.write_bytes(nso(b''))
+        ctl, code = fz.VS
+        expected = {}
+        for i, (folder, prefix) in enumerate(zip((*roms, dlc), ('', '/v65536', '/aoc/7'))):
+            shader = code[:-1] + bytes([code[-1] ^ i])
+            (folder / 'one.bnsh').write_bytes(bnsh([[(8, ctl, shader)]])[0])
+            expected[ss.skey(ctl, shader)] = f'{prefix}/one.bnsh#BNSH@0x0#var0'
+        profile = root / 'profile'; profile.mkdir()
+        (profile / 'game.tsv').write_text('modules\tmain\n')
+        (root / 'logs').mkdir()
+        with mock.patch.object(nsp, 'PROG'):
+            nsp.split_shaders(sys.executable, REPO, roms, mains, root / 'pkg', self.env(), root / 'logs', game.Game(profile), own=True, dlc_roms=[dlc])
+        rows = nsp.data_rows((profile / 'shader_map.tsv').read_bytes())
+        self.assertEqual(dict(line.decode().split('\t')[3:] for line in rows if not line.startswith(b'package\t')), expected)
 
 
 if __name__ == '__main__':

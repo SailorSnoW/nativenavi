@@ -35,6 +35,35 @@ fragment main0_out main0(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[b
 
 
 class PoolArrays(unittest.TestCase):
+    def test_device_array_accessor_allows_an_optional_early_entry(self):   # SPIRV-Cross defines it whether or not a device array is made
+        accessor = '''template<typename T, size_t Num>
+struct spvUnsafeArray
+{
+    T elements[Num];
+    device T& operator [] (size_t pos) device
+    {
+        return elements[pos];
+    }
+};
+'''
+        base = NS['pool_arrays'](accessor + MSL)
+        self.assertNotIn('early_fragment_tests', base)
+        self.assertEqual(NS['pool_early_variant'](base), 'standard')
+        self.assertEqual(NS['pool_early_variant'](base + '\n    const device uint* input [[id(15)]];'), 'standard')
+        self.assertEqual(NS['pool_early_variant'](base + '\n    discard_fragment();'), 'read_only')
+        self.assertIsNone(NS['pool_early_variant'](NS['pool_arrays'](MSL)))   # early tests already
+        self.assertIsNone(NS['pool_early_variant'](accessor + MSL))   # no mark
+        for effect in ('device uint* output [[id(15)]];', 'img.write(float4(1), at);',
+                       '*reinterpret_cast<device uint*>(address) = 1;', 'float z [[depth(any)]];', 'uint mask [[sample_mask]];'):
+            with self.subTest(effect=effect):
+                self.assertIsNone(NS['pool_early_variant'](base + '\n    ' + effect))
+                self.assertIsNone(NS['pool_early_variant'](base + '\n    discard_fragment();\n    ' + effect))
+
+    def test_a_discard_keeps_the_tests_late_and_takes_the_read_only_entry(self):
+        out = NS['pool_arrays'](MSL.replace('uv);\n', 'uv);\n    if (a.w < 0.5) discard_fragment();\n'))
+        self.assertNotIn('early_fragment_tests', out)
+        self.assertEqual(NS['pool_early_variant'](out), 'read_only')
+
     def test_rewrite(self):
         out = NS['pool_arrays'](MSL)
         self.assertIn('struct spvPool_fp_t2d_cb0_40000000\n{\n    uint n;\n    ulong seen;\n    array<texture2d<float>, 1> e;\n};', out)

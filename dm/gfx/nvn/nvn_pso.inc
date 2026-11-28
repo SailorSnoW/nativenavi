@@ -260,6 +260,15 @@ static int pso_blend_live(const pso_key *k, NvShader *fs, int merged) {
 static inline int pso_off(const pso_key *k, NvShader *fs, int merged) {
     return (k->border ? 0 : FN_OFF_BORDER) | (fs && fs->has_bz && !pso_blend_live(k, fs, merged) ? FN_OFF_BLEND : 0);
 }
+// DM_NVN_EARLY_DEPTH=0 (measurement): shaders with an early-test entry keep main0. A phase of its own key, so DM_AB gives each phase its pipelines
+static int early_on(void) { static int m = -1; if (m < 0) m = sw_mode("DM_NVN_EARLY_DEPTH", 1); return sw_on(m); }
+// pso_key.early_read_only from the draw's state. Early tests count a discarded fragment in an occlusion query and apply its depth and stencil writes, so a shader
+// that discards takes them only with a depth test that can reject, no depth write, no stencil test and no query the game reads
+static inline uint32_t pso_early(NvShader *fs) {
+    if (!fs || !fs->early_fn) return 0;
+    if (!early_on()) return PSO_EARLY_OFF;
+    return fs->early_read_only && S.ds.dt && !S.ds.dw && S.ds.df != NVN_DEPTH_FUNC_ALWAYS && !S.ds.st && !(g_vis_counting && g_vis_need) ? PSO_EARLY_RO : 0;
+}
 // a merged pass's lmap and specialized function are filled in by pso_get
 static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t cfmt[8], uint32_t dfmt, uint32_t sfmt, uint32_t samples, int lmap) {
     memset(k, 0, sizeof *k);
@@ -268,6 +277,8 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
     k->blend_en = S.color.blend_en; k->chmask = S.chmask.mask; k->a2c = S.ms.a2c; k->atest = atest_key(fs, cfmt, lmap ? g_pso_lmap : NULL);
     for (int i = 0; i < 8; i++) if (k->cfmt[i] || lmap) k->blend[i] = S.blend[i];
     k->logic = lop_key(k, fs, lmap);
+    k->early_read_only = pso_early(fs);
+    if (k->early_read_only == PSO_EARLY_RO && (lmap || !dfmt || k->a2c || k->atest || k->logic)) k->early_read_only = 0;
     k->border = border_need(vs, vs->stage) || border_need(fs, 1);   // as prog_border, which the draw compares
     const nvn_refl *rf = &vs->rf;
     for (int v = 0; v < rf->nv; v++) {
@@ -397,6 +408,7 @@ static void demand_record(const pso_key *k, NvShader *vs, NvShader *fs) {
     char shex[sizeof sk * 2 + 1];
     pso_skey_from(k, vs, fs, 0, NULL, &sk);
     pso_skey_hex(&sk, shex);
+    pso_record("R\t%s\n", shex);
     pso_user_record("R\t%s\n", shex);
 }
 static int pso_pend_demand(const pso_key *k, NvShader *vs, NvShader *fs) {

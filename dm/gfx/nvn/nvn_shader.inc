@@ -120,7 +120,8 @@ static void shmap_read(void) {
 
 // A *_state is 0 untried, 1 loaded, 2 failed
 @interface NvShader : NSObject { @public
-    id<MTLFunction> fn, discard_fn, fn_d;   // fn_d: the dual-source entry point
+    id<MTLFunction> fn, discard_fn, fn_d, early_fn;   // fn_d: the dual-source entry point; early_fn: main0 with early tests (dmsh_reflect.py pool_early_variant)
+    int early_read_only;   // early_fn only while depth is read-only: the shader discards
     // u_name: the typed-output entry point, in <key>_bx when u_side; ufn: it specialized per pipeline (typed_fn)
     NSString *u_name; id<MTLLibrary> ulib; NSMutableDictionary *ufn; int u_side, ulib_state, u_alpha, u_logic;
     id<MTLLibrary> xlib; int xlib_state;
@@ -160,7 +161,7 @@ typedef struct { int8_t fx[32]; uint8_t fbmask, lmap[8]; } bf_key;
 @implementation NvProg @end
 // pso's are raw pointers, and the background's dictionary goes with its task
 @interface WarmItem : NSObject { @public
-    int kind, record, pull, cps_off;
+    int kind, pull, cps_off;
     NSString *key, *vs_key, *fs_key, *ts_key;
     NvShader *shader, *vs, *fs, *ts;
     pso_key pso; id<MTLFunction> fsfn; id object;
@@ -228,7 +229,7 @@ static void pso_record(const char *fmt, ...) {
     if (!f) return;
     va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap); fflush(f);
 }
-// The user manifest: the shaders and pipelines this Mac used, prewarmed at the next start with the seed.
+// The user manifest: the pipelines this Mac built on the spot, prewarmed at the next start with the seed.
 static NSString *pso_user_path(void) {
     const char *u = getenv("DM_PSO_USER"), *save = getenv("DM_SAVE");
     if (u && *u) return @(u);
@@ -348,15 +349,15 @@ static os_unfair_lock g_fn_dev_lock = OS_UNFAIR_LOCK_INIT;
 @interface FnDev : NSObject { @public id<MTLFunction> fn; } @end
 @implementation FnDev @end
 static NSMapTable *g_fn_dev;
-// KosmicKrisp's KK_WORKAROUND_3 (dmsh_metalwa.py, dm_mwa3_fc): the GPU compiler below macOS 27 speculates simd_ballot out of divergent branches (Apple FB20113490).
-// It follows the running OS, as pso_offline.py host_constants does for the archive's macOS (docs/reference/shaders.md, A ballot under divergent control flow sees every lane)
+// KosmicKrisp's KK_WORKAROUND_3 (dmsh_metalwa.py, dm_mwa3_fc), for the GPU compiler below macOS 27 that speculates simd_ballot out of divergent branches (Apple FB20113490).
+// Off unless DM_NVN_METALWA=1: on, it corrupted this game on macOS 26.7.3 (issue #3405). pso_offline.py host_constants matches (docs/reference/shaders.md,
+// A ballot under divergent control flow sees every lane)
 static int mwa_on(void) {
     static int v; static dispatch_once_t once;
     dispatch_once(&once, ^{
         const char *e = getenv("DM_NVN_METALWA");
-        int on = ![[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){27, 0, 0}];
-        if (e && *e) on = strcmp(e, "0") != 0;
-        if (!on || (e && *e)) MLOG("Metal compiler workaround KK3: %s (%s)", on ? "on" : "off", e && *e ? "DM_NVN_METALWA" : "macOS 27 or later");
+        int on = (e && *e) ? strcmp(e, "0") != 0 : 0;
+        if (e && *e) MLOG("Metal compiler workaround KK3: %s (DM_NVN_METALWA)", on ? "on" : "off");
         v = on;
     });
     return v;
@@ -575,6 +576,13 @@ static NvShader *shader_load(NSString *pc, int stage) {
         if (o->arg_len != (NSUInteger)(8 * (max_aid + 1)) || (o->arg_len & 7) || max_aid >= NVN_REFL_MAXARG)
             MDIE("shader %s has an unexpected argument buffer layout: encodedLength=%lu maxAid=%d", o->key, (unsigned long)o->arg_len, max_aid);
     }
+    if (stage == 1 && [j[@"entry_early"] isKindOfClass:NSString.class]) {
+        NSError *ee = nil; id<MTLFunction> early = fn_load(lib, j[@"entry_early"], &ee);
+        if (early && (!o->rf.nb || [early newArgumentEncoderWithBufferIndex:o->rf.abi].encodedLength == o->arg_len)) {
+            o->early_fn = early; o->early_read_only = [j[@"early_read_only"] boolValue];
+        } else MLOG("[RED] shader %s: no early depth entry point %s (%s): its draws test depth after the shader", pc.UTF8String, [j[@"entry_early"] UTF8String],
+                    ee ? ee.localizedDescription.UTF8String : early ? "another argument buffer layout" : "not in its library");
+    }
     if (o->rf.has_c1) c1_store(o);
     NSString *ext = g_cb_ext[[pc hasSuffix:@"_b"] ? [pc substringToIndex:pc.length - 2] : pc];
     for (NSString *f in [ext componentsSeparatedByString:@" "]) {
@@ -613,8 +621,6 @@ static NvShader *shader_get(NSString *pc, int stage) {
     if (!o) return nil;
     progpf_first(pc);
     g_shcache[pc] = o;
-    pso_record("S\t%s\t%d\n", pc.UTF8String, stage);
-    pso_user_record("S\t%s\t%d\n", pc.UTF8String, stage);
     g_bp_lib_n++; g_bp_lib_ns += bp_now() - bt;
     return o;
 }

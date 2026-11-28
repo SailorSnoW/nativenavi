@@ -930,7 +930,7 @@ static long arch_harvest_wait(dispatch_time_t until) {
     dispatch_async(arch_harvest_q(), mark);
     return dispatch_block_wait(mark, until);
 }
-// only a function whose constants are all the host's (pso_offline.py host_constants, the split pass) is looked up and captured; others are built from fn_dev's specialization
+// only a function whose constants are all the host's (pso_offline.py HOST_CONSTANTS, the split pass) is looked up and captured; others are built from fn_dev's specialization
 static int fd_host_fc(MTL4FunctionDescriptor *fd) {
     if (![fd isKindOfClass:MTL4SpecializedFunctionDescriptor.class]) return 0;
     MTL4FunctionDescriptor *ld = ((MTL4SpecializedFunctionDescriptor *)fd).functionDescriptor;

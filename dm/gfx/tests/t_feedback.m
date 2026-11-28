@@ -987,6 +987,39 @@ static void pending_clear_case(NvProg *pr) {
     mtl_tex_release(&source);
     printf("snapshot after a waiting clear: %s\n", before == failed ? "PASS" : "FAIL");
 }
+// pso_early's gates, pso_key_fill and pso_desc's choice of main0_early (docs/reference/shaders.md#texture-read-tracking-delayed-depth-rejection)
+static void early_depth_case(id<MTLLibrary> lib) {
+    NvShader *vs = [NvShader new], *fs = [NvShader new];
+    fs->stage = 1; strcpy(fs->key, "early"); fs->fn = [lib newFunctionWithName:@"f"]; fs->early_fn = [lib newFunctionWithName:@"fm1"]; fs->early_read_only = 1;
+    __typeof__(S.ds) saved = S.ds; int saved_counting = g_vis_counting, saved_need = g_vis_need;
+    S.ds.dt = 1; S.ds.dw = 0; S.ds.df = NVN_DEPTH_FUNC_LESS; S.ds.st = 0; g_vis_counting = 0; g_vis_need = 1;
+    CHECK(pso_early(fs) == PSO_EARLY_RO, "a shader that discards tests read-only depth early");
+    S.ds.dw = 1; CHECK(!pso_early(fs), "not before a depth write");
+    S.ds.dw = 0; S.ds.st = 1; CHECK(!pso_early(fs), "nor before a stencil test");
+    S.ds.st = 0; S.ds.df = NVN_DEPTH_FUNC_ALWAYS; CHECK(!pso_early(fs), "nor with a depth test that cannot reject");
+    S.ds.df = NVN_DEPTH_FUNC_LESS; g_vis_counting = 1; CHECK(!pso_early(fs), "nor while the game reads an occlusion query's count");
+    g_vis_need = 0; CHECK(pso_early(fs) == PSO_EARLY_RO, "a query nobody reads does not stop it");
+    NvShader *plain = [NvShader new]; plain->stage = 1; plain->fn = fs->fn;
+    CHECK(!pso_early(plain), "a shader without the entry keeps its key");
+    uint32_t cf[8] = {MTLPixelFormatRGBA8Unorm};
+    pso_key k; pso_key_fill(&k, vs, fs, cf, MTLPixelFormatDepth32Float, 0, 1, 0);
+    CHECK(k.early_read_only == PSO_EARLY_RO, "the draw's key holds it");
+    pso_key_fill(&k, vs, fs, cf, 0, 0, 1, 0);
+    CHECK(k.early_read_only == 0, "but not without a depth attachment");
+    memset(&k, 0, sizeof k); k.dfmt = MTLPixelFormatDepth32Float; k.early_read_only = PSO_EARLY_RO;
+    CHECK(pso_desc(&k, nil, fs, nil, 0).fragmentFunction == fs->early_fn, "a read-only key takes main0_early");
+    k.early_read_only = 0;
+    CHECK(pso_desc(&k, nil, fs, nil, 0).fragmentFunction == fs->fn, "a shader that discards keeps main0 while depth is written");
+    fs->early_read_only = 0;
+    CHECK(pso_desc(&k, nil, fs, nil, 0).fragmentFunction == fs->early_fn, "one that does not discard takes it with any depth state");
+    k.early_read_only = PSO_EARLY_OFF;
+    CHECK(pso_desc(&k, nil, fs, nil, 0).fragmentFunction == fs->fn, "DM_NVN_EARLY_DEPTH=0 keeps main0");
+    k.early_read_only = 0; k.a2c = 1;
+    CHECK(pso_desc(&k, nil, fs, nil, 0).fragmentFunction == fs->fn, "alpha-to-coverage keeps main0");
+    k.a2c = 0; k.dfmt = 0;
+    CHECK(pso_desc(&k, nil, fs, nil, 0).fragmentFunction == fs->fn, "and so does a pass without depth or stencil");
+    S.ds = saved; g_vis_counting = saved_counting; g_vis_need = saved_need;
+}
 int main(int argc, char **argv) { @autoreleasepool {
     setenv("DM_NVN_GPU_TS", "segment", 1);
     mtl_init(); NSError *error = nil;
@@ -1008,6 +1041,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         options:nil error:&error];
     CHECK(lib != nil, "synthetic shader compiles");
     if (!lib) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 1; }
+    early_depth_case(lib);
     NvProg *pr = [NvProg new]; NvShader *fs = [NvShader new]; pr->sh[1] = fs;
     fs->stage = 1; strcpy(fs->key, "0123456789abcdef"); fs->fn = [lib newFunctionWithName:@"f"];
     fs->ae = [fs->fn newArgumentEncoderWithBufferIndex:0]; fs->arg_len = fs->ae.encodedLength;

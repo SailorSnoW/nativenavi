@@ -78,9 +78,7 @@ class Functions(unittest.TestCase):
             self.assertEqual(po.functions(p), {'main0': True, 'main0_u': True, 'vs': False})
             self.assertEqual(po.HOST_CONSTANTS['dm_border_off'], (216, True))   # DMSH_BORDER_FC, as pre_fn sets it
             self.assertEqual(po.HOST_CONSTANTS['dm_blend_off'], (217, False))   # DMSH_BLEND_OFF_FC: false in the pair archive so hybrid stand-ins serve every blend state
-            self.assertEqual(po.HOST_CONSTANTS['dm_mwa3_fc'], (220, True))   # DMSH_MWA_FC: by the archive's macOS (host_constants), as mwa_on takes the running one's
-            self.assertEqual(po.host_constants('27.0')['dm_mwa3_fc'], (220, False))
-            self.assertEqual(po.host_constants('26.6')['dm_mwa3_fc'], (220, True))
+            self.assertEqual(po.HOST_CONSTANTS['dm_mwa3_fc'], (220, False))   # DMSH_MWA_FC: false, as mwa_on leaves it without DM_NVN_METALWA=1 (issue #3405)
 
     @unittest.skipUnless(shutil.which('xcrun'), 'needs the Metal compiler')
     def test_a_real_library(self):
@@ -122,6 +120,14 @@ class Plan(unittest.TestCase):
         self.assertEqual(left, {'reflection': 2, 'mesh': 1, 'stage inputs': 1, 'library': 1, 'primitive ID': 1, 'entry': 1})
         bases, _, _ = po.plan(self.d, CHAIN, pairs[:2], True)
         self.assertEqual(bases, [('pull_bp', 'main0_z', 'fs_b', 'main0'), ('plain_b', 'main0_z', 'fs_b', 'main0')])
+
+    def test_fragment_early_depth_keeps_both_pipeline_bases(self):
+        self.shader('vs', {}, {'_b': [('main0', False)]})
+        self.shader('fs', {'entry_early': 'main0_early'}, {'_b': [('main0', False), ('main0_early', False)]})
+        self.shader('fsc', {'entry_early': 'main0_early'}, {'_b': [('main0', False), ('main0_early', ('dm_ndsr_p1',))]})   # a constant the host does not set: main0 alone
+        bases, rest, _ = po.plan(self.d, CHAIN, [('vs', 'fs'), ('vs', 'fsc')], False)
+        self.assertEqual(bases, [('vs_b', 'main0', 'fs_b', 'main0'), ('vs_b', 'main0', 'fs_b', 'main0_early'), ('vs_b', 'main0', 'fsc_b', 'main0')])
+        self.assertEqual(rest, [])
 
     def test_vertex_entry_is_the_name_the_reflection_gives_the_library(self):   # side_entry, as shader_load and pre_desc take it
         own = {'entry': 'main0', 'entry_z': 'main0_z'}
@@ -252,14 +258,11 @@ class Compute(unittest.TestCase):
         self.shader('kbs', {'stage': 'cs'}, {'_b': [('main0', ('dm_border_off', 'spvLinearTextureAlignmentOverride'))]})
         pipes, left = po.plan_compute(self.d, CHAIN, ['kb_b', 'km_b', 'kbm_b', 'kbs_b'])
         self.assertEqual(pipes, [('kb_b', 'main0'), ('km_b', 'main0'), ('kbm_b', 'main0')]); self.assertEqual(left['constants'], 1)
-        j27 = po.script(self.d, [], pipes, po.host_constants('27.0'))
-        self.assertEqual(j27['pipeline_descriptors']['compute_pipeline_descriptors'],
+        j = po.script(self.d, [], pipes)
+        self.assertEqual(j['pipeline_descriptors']['compute_pipeline_descriptors'],
                          [{'compute_function_descriptor': 'fnd:kb_b.main0.host'}, {'compute_function_descriptor': 'fnd:km_b.main0.host'}, {'compute_function_descriptor': 'fnd:kbm_b.main0.host'}])
-        specs = {x['label']: [(c['id']['data'], c['value']['data']) for c in x['constant_values']] for x in j27['function_descriptors']['specialized_function_descriptors']}
+        specs = {x['label']: [(c['id']['data'], c['value']['data']) for c in x['constant_values']] for x in j['function_descriptors']['specialized_function_descriptors']}
         self.assertEqual(specs, {'kb_b.main0.host': [(216, True)], 'km_b.main0.host': [(220, False)], 'kbm_b.main0.host': [(216, True), (220, False)]})
-        j26 = po.script(self.d, [], [('km_b', 'main0')], po.host_constants('26.6'))
-        self.assertEqual(j26['function_descriptors']['specialized_function_descriptors'][0]['constant_values'],
-                         [{'id_type': 'FunctionConstantIndex', 'id': {'data': 220}, 'value_type': 'ConstantBool', 'value': {'data': True}}])
 
     def test_a_kernel_in_two_passes_gets_both(self):   # dmsh_ndsr.py's split: passes 0 and 1 as split_pipes looks them up (FN_SPLIT0 / FN_SPLIT1)
         split = {'fc': po.abi.SPLIT_FC, 'buffer': po.abi.SPLIT_SLOT, 'words': 8}
@@ -493,8 +496,8 @@ class Build(BuildCase):
         self.main('--depth', 'gl')
         self.assertEqual(len(self.calls), 2)
         original = po.script
-        def changed(lib_dir, bases, computes=(), constants_map=None):
-            config = original(lib_dir, bases, computes, constants_map)
+        def changed(lib_dir, bases, computes=()):
+            config = original(lib_dir, bases, computes)
             config['pipeline_descriptors']['render_pipeline_descriptors'][0]['raster_sample_count'] = 4
             return config
         with mock.patch.object(po, 'script', changed):
