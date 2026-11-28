@@ -76,6 +76,7 @@ run: $(B)/t_mods $(B)/t_presence $(B)/t_mii $(B)/t_net_eventfd $(B)/t_motion $(B
 	$(B)/t_front_present
 	TMPDIR="$(abspath $(B))" $(B)/t_mods $(QUIET)
 	$(B)/t_symbols
+	$(B)/t_loader
 	$(B)/t_server_environment
 run: $(B)/t_sync_wait
 $(B)/t_sync_wait: t_sync_wait.c t_condvar_stub.c ../hle_thread.c ../hle_os.c ../hle.h ../dm.h $(GAME_H) | $(B)
@@ -95,6 +96,12 @@ $(B)/t_symbols: t_symbols.c ../hle.c ../loader.c ../hle.h ../dm.h $(GAME_H) | $(
 .PHONY: symbols
 symbols: $(B)/t_symbols
 	$(B)/t_symbols
+run: $(B)/t_loader
+$(B)/t_loader: t_loader.c ../hle.c ../loader.c ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-deprecated-declarations -I.. $(GINC) -o $@ t_loader.c
+.PHONY: loader
+loader: $(B)/t_loader
+	$(B)/t_loader
 run: $(B)/t_system_event
 run: $(B)/t_audren_work
 # hle_audren.c's Rust half: the host's static library, by the rule the host's build uses (../rust.mk)
