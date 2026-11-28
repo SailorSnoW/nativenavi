@@ -178,10 +178,12 @@ def plan(lib_dir, chain, pairs, zero):
         if any(c not in HOST_CONSTANTS for c in vf[ventry] + ff[fentry]):
             rest.append((vk, fk))
             continue
-        b = (vl, ventry, fl, fentry)
-        if b not in seen:
-            seen.add(b)
-            bases.append(b)
+        early = fj.get('entry_early')   # its draws with early tests (nvn_pso_desc.inc) take that base
+        for entry in [fentry] + ([early] if early in ff and all(c in HOST_CONSTANTS for c in ff[early]) else []):
+            b = (vl, ventry, fl, entry)
+            if b not in seen:
+                seen.add(b)
+                bases.append(b)
     return bases, rest, left
 
 

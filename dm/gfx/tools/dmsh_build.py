@@ -742,10 +742,14 @@ def finish(key, w, j, c1):
         open(msl, 'w').write(full)
     fu = dmsh_entry.fs_uint(src) if j['stage'] == 'ps' else None
     fd = dmsh_entry.fs_dual(src) if j['stage'] == 'ps' and key in DUAL_WANT else None
-    shared = dmsh_side.shared_body(src) if fu or fd else None
-    if shared:
+    early = j['stage'] == 'ps' and dmsh_reflect.pool_early_variant(src)   # main0 with early tests beside it (docs/reference/shaders.md#texture-read-tracking-delayed-depth-rejection)
+    shared = dmsh_side.shared_body(src) if fu or fd or early else None
+    early_src = ''
+    if shared and early and (m0 := dmsh_side.entry(src, 'main0')) and not m0['attr']:
+        early_src = dmsh_side.calling({**m0, 'attr': '[[early_fragment_tests]] '}, 'main0_early', m0['ret'], 'return out;')
+    if shared and (fu or fd or early_src):
         plain = src
-        open(msl, 'w').write(shared + (fu or '') + (fd or ''))
+        open(msl, 'w').write(shared + (fu or '') + (fd or '') + early_src)
     else: fu = fd = None
     try: binds = dmsh_reflect.reflect(key, mesh['kind'] if mesh else j['stage'], src, res)   # before the compile: the readable-tile version needs the texture slots
     except ValueError as e: return 'reflection failed', str(e)[:160], None
@@ -757,10 +761,10 @@ def finish(key, w, j, c1):
         return {}, False
     try: side, cut = compile_libraries()
     except subprocess.CalledProcessError as e:
-        if not fu and not fd: return 'metal failed', str(e)[:160], None
-        lost = [name for name, extra in (('integer output', fu), ('dual source', fd)) if extra]   # kept in the reflection, as a cache hit compiles nothing
+        if not fu and not fd and not early_src: return 'metal failed', str(e)[:160], None
+        lost = [name for name, extra in (('integer output', fu), ('dual source', fd), ('pool early depth', early_src)) if extra]   # kept in the reflection, as a cache hit compiles nothing
         open(msl, 'w').write(plain)   # extras: a library that does not build with them is built without
-        fu = fd = None
+        fu = fd = None; early_src = ''
         try: side, cut = compile_libraries()
         except subprocess.CalledProcessError as e: return 'metal failed', str(e)[:160], None
     clone(msl, os.path.join(out, key + '_b.metal'))
@@ -773,7 +777,8 @@ def finish(key, w, j, c1):
             **({'mesh_spill': 1} if mesh and mesh.get('spill') else {}),
             'entry': entry.group(2) if entry else 'main0', 'msl_entry_kind': entry.group(1) if entry else None, **({'entry_z': 'main0_z'} if j['stage'] == 'vs' else {}),
             **({'entry_discard': 'main0_discard'} if discard else {}),
-            **({'entry_u': 'main0_u', **{f'entry_u_{k}': True for k, v in dmsh_entry.typed_ops(fu).items() if v}} if fu else {}), **({'entry_d': 'main0_d'} if fd else {}), **({'blend_zero': True} if blend0 else {}), **({'entries_lost': lost} if lost else {}),
+            **({'entry_u': 'main0_u', **{f'entry_u_{k}': True for k, v in dmsh_entry.typed_ops(fu).items() if v}} if fu else {}), **({'entry_d': 'main0_d'} if fd else {}), **({'entry_early': 'main0_early', **({'early_read_only': True} if early == 'read_only' else {})} if early_src else {}),
+            **({'blend_zero': True} if blend0 else {}), **({'entries_lost': lost} if lost else {}),
             **({'first_store': [{'reg': next(b['reg'] for b in binds if b['msl_name'] == n), 'word': w, 'value': v} for n, w, v in first]} if first else {}),
             **({'tg_spill': spill} if spill else {}),
             **({'tg_fence': dict(zip(('fence', 'barrier'), tgf))} if any(tgf) else {}),

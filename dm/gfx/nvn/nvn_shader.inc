@@ -120,7 +120,8 @@ static void shmap_read(void) {
 
 // A *_state is 0 untried, 1 loaded, 2 failed
 @interface NvShader : NSObject { @public
-    id<MTLFunction> fn, discard_fn, fn_d;   // fn_d: the dual-source entry point
+    id<MTLFunction> fn, discard_fn, fn_d, early_fn;   // fn_d: the dual-source entry point; early_fn: main0 with early tests (dmsh_reflect.py pool_early_variant)
+    int early_read_only;   // early_fn only while depth is read-only: the shader discards
     // u_name: the typed-output entry point, in <key>_bx when u_side; ufn: it specialized per pipeline (typed_fn)
     NSString *u_name; id<MTLLibrary> ulib; NSMutableDictionary *ufn; int u_side, ulib_state, u_alpha, u_logic;
     id<MTLLibrary> xlib; int xlib_state;
@@ -574,6 +575,13 @@ static NvShader *shader_load(NSString *pc, int stage) {
         o->arg_len = o->ae.encodedLength;
         if (o->arg_len != (NSUInteger)(8 * (max_aid + 1)) || (o->arg_len & 7) || max_aid >= NVN_REFL_MAXARG)
             MDIE("shader %s has an unexpected argument buffer layout: encodedLength=%lu maxAid=%d", o->key, (unsigned long)o->arg_len, max_aid);
+    }
+    if (stage == 1 && [j[@"entry_early"] isKindOfClass:NSString.class]) {
+        NSError *ee = nil; id<MTLFunction> early = fn_load(lib, j[@"entry_early"], &ee);
+        if (early && (!o->rf.nb || [early newArgumentEncoderWithBufferIndex:o->rf.abi].encodedLength == o->arg_len)) {
+            o->early_fn = early; o->early_read_only = [j[@"early_read_only"] boolValue];
+        } else MLOG("[RED] shader %s: no early depth entry point %s (%s): its draws test depth after the shader", pc.UTF8String, [j[@"entry_early"] UTF8String],
+                    ee ? ee.localizedDescription.UTF8String : early ? "another argument buffer layout" : "not in its library");
     }
     if (o->rf.has_c1) c1_store(o);
     NSString *ext = g_cb_ext[[pc hasSuffix:@"_b"] ? [pc substringToIndex:pc.length - 2] : pc];

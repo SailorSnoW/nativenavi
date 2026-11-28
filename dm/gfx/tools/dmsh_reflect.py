@@ -376,9 +376,23 @@ def pool_arrays(src):
     # The mark stores to memory, so Metal would test depth late (an EQUAL pass fails along contours); the mark is the host's, so the test stays early
     # unless the shader discards or writes depth
     own = src.replace(POOL_MARK, '')
-    if marked and not re.search(r'\bdiscard_fragment\b|\[\[\s*depth\(|\[\[\s*sample_mask\s*\]\]|\[\[\s*stencil\s*\]\]|\.write\(|\batomic_\w+_explicit\b|^\s*device\s', own, re.M):
+    if marked and not _DISCARD.search(own) and not _POOL_WRITES.search(own):
         src = re.sub(r'^(?<!\]\] )fragment\s', '[[early_fragment_tests]] fragment ', src, flags=re.M)
     return src
+
+_DISCARD = re.compile(r'\bdiscard_fragment\b')
+_POOL_WRITES = re.compile(r'\[\[\s*depth\(|\[\[\s*sample_mask\s*\]\]|\[\[\s*stencil\s*\]\]|\.write\(|\batomic_\w+_explicit\b|^\s*device\s', re.M)
+# SPIRV-Cross's spvUnsafeArray defines it whether or not the shader makes a device array of it
+_ARRAY_DEVICE_ACCESSOR = re.compile(r'^ +device T& operator \[\] \(size_t pos\) device\n *\{\n *return elements\[pos\];\n *\}', re.M)
+
+def pool_early_variant(src):
+    """A pixel shader pool_arrays left with late tests although its only store is the mark → 'read_only' when it discards (early tests only while depth is
+    read-only: nvn_pso.inc pso_early), 'standard' when the array accessor alone kept them late; None otherwise"""
+    if POOL_MARK not in src or '[[early_fragment_tests]]' in src: return None
+    own, removed = _ARRAY_DEVICE_ACCESSOR.subn('', src.replace(POOL_MARK, '').replace(BUFFER_POOL_READ, ''))
+    if _POOL_WRITES.search(own) or re.search(r'\bdevice\b', re.sub(r'\bconst\s+device\b', '', own)): return None
+    if _DISCARD.search(own): return 'read_only'
+    return 'standard' if removed else None
 
 def reflect(key, stage, msl, res):
     """kind (as nvn_refl.h) + NVN slot + argument buffer member index"""

@@ -83,9 +83,9 @@ def calling(e, name, ret, tail):
 
 def unit(msl) -> tuple[str | None, dict]:
     # main0_u holds its own alpha test and logic operation, so main0 gets no _l beside it; main0's _a stays: it has no constant, so the common alpha-tested
-    # draw needs no specialization
+    # draw needs no specialization. main0_early gets neither: the host takes it only for draws without them
     typed = bool(re.search(r'\bfragment\s+main0_out_u\s+main0_u\s*\(', msl))
-    try: es = entries(msl, skip=('main0_u',))
+    try: es = entries(msl, skip=('main0_u', 'main0_early'))
     except ValueError as e: return None, {'why': str(e)}
     if not es or es[0]['name'] != 'main0': return None, {'why': 'no fragment entry point main0'}
     no_alpha, no_logic = dmsh_alpha.refused(msl), dmsh_logic.refused(msl)

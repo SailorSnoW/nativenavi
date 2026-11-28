@@ -422,6 +422,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     }
     // The pipeline also depends on whether a bound sampler has a border colour twin (pso_key.border); binding a sampler does not mark it dirty, so the draw compares it.
     static int cur_border; int border = prog_border(pr);
+    static uint32_t cur_early; uint32_t early = pso_early(pr->sh[1]);   // the depth state and DM_NVN_EARLY_DEPTH's phase do not mark it dirty either
+    if (early != cur_early) { cur_early = early; g_pso_dirty = 1; }
     static id<MTLRenderPipelineState> cur_ps; static NvProg *cur_pr; static uint64_t cur_ps_pass; static int cur_pull;
     if (g_fb_tseq == g_draw_seq && g_fb_tfn) { g_pso_lmap = g_fb_tlmap; g_pso_fsfn = g_fb_tfn; g_pso_fz = g_fb_tdesc; g_pso_dirty = 1; }
     if (g_mtk.on) { cur_ps = mtk_pso(pr); cur_pull = 0; cur_pr = nil; if (!cur_ps) { g_mtk.miss = 1; return; } }
