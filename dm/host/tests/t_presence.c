@@ -163,7 +163,7 @@ static void test_activity(void) {
     CHECK(!strcmp(a.details, "Forêt Kokiri") && !a.state[0] && a.start == 5, "nothing but the place read: no state, the session's start");
     char json[800];
     activity q = {.details = "A \"quoted\" \\ name", .state = "", .start = 7};
-    CHECK(activity_json(&q, 42, 3, json, sizeof json) && !strcmp(json, "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":42,\"activity\":{\"name\":\"The Legend of Zelda: Ocarina of Time\",\"type\":0,\"details\":\"A \\\"quoted\\\" \\\\ name\",\"timestamps\":{\"start\":7000},\"assets\":{\"large_image\":\"oot\",\"large_text\":\"The Legend of Zelda: Ocarina of Time\"}}},\"nonce\":\"3\"}"),
+    CHECK(activity_json(&q, 42, 3, json, sizeof json) && !strcmp(json, "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":42,\"activity\":{\"name\":\"The Legend of Zelda: Ocarina of Time\",\"type\":0,\"details\":\"A \\\"quoted\\\" \\\\ name\",\"timestamps\":{\"start\":7000},\"assets\":{\"large_image\":\"oot\",\"large_text\":\"with NativeNavi\"}}},\"nonce\":\"3\"}"),
           "SET_ACTIVITY's JSON: escapes, no empty state, milliseconds, the profile's image with the game's name");
     CHECK(!activity_json(&q, 42, 3, json, 60), "a JSON that does not fit is refused");
 }

@@ -17,6 +17,7 @@ enum { OP_HANDSHAKE, OP_FRAME, OP_CLOSE, OP_PING, OP_PONG };
 #define RETRY_S 15
 #define REFUSED_RETRY_S 300   // a refused application ID does not become valid by asking again
 #define SEP " · "
+#define HOVER_TEXT "with NativeNavi"   // the activity's name is already the game's
 
 // ---- the game's place names in the game's language (places.tsv: an ID, then a column per language code) ----
 #define MAX_PLACES 256
@@ -139,7 +140,7 @@ static int activity_json(const activity *a, int pid, unsigned nonce, char *b, si
     json_str(b, n, a->details);
     if (a->state[0]) { cat(b, n, ",\"state\":"); json_str(b, n, a->state); }
     cat(b, n, ",\"timestamps\":{\"start\":%lld}", (long long)a->start * 1000);
-    if (*DM_GAME_DISCORD_IMAGE) { cat(b, n, ",\"assets\":{\"large_image\":"); json_str(b, n, DM_GAME_DISCORD_IMAGE); cat(b, n, ",\"large_text\":"); json_str(b, n, DM_GAME_NAME); cat(b, n, "}"); }
+    if (*DM_GAME_DISCORD_IMAGE) { cat(b, n, ",\"assets\":{\"large_image\":"); json_str(b, n, DM_GAME_DISCORD_IMAGE); cat(b, n, ",\"large_text\":"); json_str(b, n, HOVER_TEXT); cat(b, n, "}"); }
     cat(b, n, "}},\"nonce\":\"%u\"}", nonce);
     return strlen(b) + 1 < n;
 }
