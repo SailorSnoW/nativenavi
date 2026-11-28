@@ -23,7 +23,7 @@ module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t *g_mod; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
-void hlecount_flush(void) {} void dm_rec_finish(void) {} void dm_audio_suspend(int on) { (void)on; }
+void hlecount_flush(void) {} void dm_rec_finish(void) {} void dm_audio_suspend(int on) { (void)on; } void dm_fs_temp_empty(void) {}
 static int checks, failed;
 // the next program of a hand-over (--exec-seed) starts only after the archive's write: it notes the file in exec.txt
 static void exec_then(void *dir) {
