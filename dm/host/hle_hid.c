@@ -742,7 +742,7 @@ static void motion_set_to(live_motion *m, int p, const float acc[3], const float
     else if (t - m->last_ns > MOTION_REST_GAP_NS) motion_rest_break(&m->rest);
     if (m->last_ns && t <= m->last_ns) { pthread_mutex_unlock(&m->mu); return; }
     float dt = m->last_ns && t > m->last_ns ? (float)((double)(t - m->last_ns) / 1e9) : 0;
-    // GameController reports the gyro with its rest offset: learned at rest and taken off (motion_rest); HID sources come corrected.
+    // GameController reports the gyro with its rest offset: learned at rest and taken off (motion_rest); HID sources come corrected (motion_pro.h, pad_jc1.h, s2_rest).
     float rc[3]; if (!hid) { motion_rest_update(&m->rest, acc, rot, (double)t / 1e9); motion_rest_apply(&m->rest, rot, (double)t / 1e9, rc); rot = rc; }
     motion_update(&m->st, hid ? &identity : &g_motion_map, acc, rot, dt, g_motion_gain);
     if (g_motion_log && !p && t - m->logged > 1000000000ull) {
