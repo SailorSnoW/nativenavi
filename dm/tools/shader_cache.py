@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
-# The shader build's compile cache: one SQLite file per chain version, <cache folder>/cas-<chain>.db, entries read and written whole by name, bytes stored once by hash.
+# The shader build's compile cache: one SQLite file per chain version, <cache folder>/cas-<chain>.db, entries read and written whole by name, bytes stored once by hash,
+# as a Zstandard frame when that is smaller.
 # A build writes only its chain's file; Metal compiles reused from older ones are copied in (for_chain).
 # Only saves work: a damaged file is made anew, a full drive is one [RED] line. Not part of the translation chain: it decides no output.
 import contextlib, fcntl, hashlib, json, multiprocessing, os, re, sqlite3, threading, time
 from pathlib import Path
 
-SCHEMA = ('CREATE TABLE IF NOT EXISTS blob(id INTEGER PRIMARY KEY, hash BLOB UNIQUE NOT NULL, data BLOB NOT NULL)',
+try: from compression import zstd
+except ImportError:
+    try: from backports import zstd   # pyright: ignore[reportMissingImports]  # before Python 3.14
+    except ImportError: zstd = None
+
+# v2: (codec, payload), where v1 had raw data. A checkout from before fails on "no such column: b.data" instead of reading a frame as a library.
+# A v1 file stays v1, read and written raw in place; a new chain's file is v2 and takes v1's blobs compressed.
+SCHEMA = ('CREATE TABLE IF NOT EXISTS blob(id INTEGER PRIMARY KEY, hash BLOB UNIQUE NOT NULL, codec INTEGER NOT NULL, payload BLOB NOT NULL)',
           'CREATE TABLE IF NOT EXISTS entry(name TEXT PRIMARY KEY, blob INTEGER NOT NULL, mtime REAL NOT NULL) WITHOUT ROWID')
+RAW, ZSTD, ZSTD_LEVEL, ZSTD_MIN = 0, 1, 1, 64
+_TLS = threading.local()   # a compressor per thread
 SHADER_ENTRY = re.compile(r'shader/([0-9a-f]{64})/')
 WAIT = 600   # seconds another process's write may hold this one up
 _DAMAGED = ('malformed', 'not a database', 'disk image')
@@ -14,6 +24,32 @@ DBMOVED = 1032
 READ_ONLY = None   # set only by --run
 GENERATION = re.compile(r'cas-([0-9a-f]{12})\.db')
 LEGACY = 'cas.db'   # every chain's entries, from before generations
+
+
+def _encode(data):   # (codec, payload): raw when short, incompressible or without zstd
+    if zstd is None or len(data) < ZSTD_MIN: return RAW, data
+    comp = getattr(_TLS, 'zstd', None)
+    if comp is None: comp = _TLS.zstd = zstd.ZstdCompressor(level=ZSTD_LEVEL)
+    packed = comp.compress(data, mode=zstd.ZstdCompressor.FLUSH_FRAME)
+    return (ZSTD, packed) if len(packed) < len(data) else (RAW, data)
+
+
+def _decode(codec, payload):
+    if codec == RAW: return bytes(payload)
+    if codec != ZSTD: raise RuntimeError(f'unsupported shader compile cache blob codec {codec}')
+    if zstd is None: raise RuntimeError('reading a compressed shader compile cache needs Python 3.14+ or backports.zstd (pip install backports.zstd)')
+    return zstd.decompress(payload)
+
+
+def _bad_frame(e): return zstd is not None and isinstance(e, zstd.ZstdError)
+
+
+def _blob_cols(db, schema='main'): return {r[1] for r in db.execute(f'PRAGMA {schema}.table_info(blob)')}
+
+
+def _get_sql(v2, with_hash=False):
+    cols = ('b.hash, b.codec, b.payload' if with_hash else 'b.codec, b.payload') if v2 else ('b.hash, 0, b.data' if with_hash else '0, b.data')
+    return f'SELECT {cols} FROM entry e JOIN blob b ON b.id=e.blob WHERE e.name=?'
 
 
 def generations(folder):
@@ -31,14 +67,23 @@ def generations(folder):
 class _ReadOnly:
     """mode=ro sees a writer's committed WAL and never migrates, repairs or writes. An older generation serves only its Metal compiles."""
     def __init__(self, paths, say, prefixes=('shader/', 'variant/', 'metallib/')):
-        self.say, self.lock, self.prefixes, self.dbs = say, threading.RLock(), prefixes, []
+        self.say, self.lock, self.prefixes, self.dbs, self._v2 = say, threading.RLock(), prefixes, [], {}
         for p in map(os.fspath, paths):
             if not os.path.isfile(p): continue
-            try: self.dbs.append((p, sqlite3.connect(Path(p).resolve().as_uri() + '?mode=ro', uri=True, timeout=WAIT, check_same_thread=False, isolation_level=None)))
-            except sqlite3.Error as e: self.say(f'[RED] the read-only shader cache {p} cannot be read and is ignored: {e}')
+            db = None
+            try:
+                db = sqlite3.connect(Path(p).resolve().as_uri() + '?mode=ro', uri=True, timeout=WAIT, check_same_thread=False, isolation_level=None)
+                cols = _blob_cols(db)
+                self._v2[db] = True if 'payload' in cols else False if 'data' in cols else None   # None: no table yet
+                self.dbs.append((p, db))
+            except sqlite3.Error as e:
+                if db is not None:
+                    with contextlib.suppress(sqlite3.Error): db.close()
+                self.say(f'[RED] the read-only shader cache {p} cannot be read and is ignored: {e}')
 
     def _failed(self, i, e):
         p, db = self.dbs.pop(i)
+        self._v2.pop(db, None)
         self.say(f'[RED] the read-only shader cache {p} cannot be read and is ignored: {e}')
         with contextlib.suppress(sqlite3.Error): db.close()
 
@@ -55,11 +100,55 @@ class _ReadOnly:
                 i += 1
                 yield rows
 
+    def _fetch(self, name, seen):   # (row, db, v2) from the first file not in seen that holds name, or (None, None, False)
+        with self.lock:
+            i = 0
+            while i < len(self.dbs):
+                db = self.dbs[i][1]
+                if db in seen:
+                    i += 1
+                    continue
+                seen.add(db)
+                try:
+                    v2 = self._v2.get(db)
+                    if v2 is None:
+                        cols = _blob_cols(db)
+                        v2 = 'data' not in cols
+                        if cols: self._v2[db] = v2
+                    rows = db.execute(_get_sql(v2, True), (name,)).fetchall()
+                except sqlite3.Error as e:
+                    self._failed(i, e)
+                    continue
+                if rows: return rows[0], db, v2
+                i += 1
+        return None, None, False
+
+    def get_blob(self, name):   # (hash, codec, payload, from_v2), not decoded, or None
+        if not self.shared(name): return None
+        row, _, v2 = self._fetch(name, set())
+        return (bytes(row[0]), row[1], bytes(row[2]), v2) if row is not None else None
+
+    def get_verified_blob(self, name):   # (hash, codec, payload, from_v2, data) once it decodes; a file whose blob does not is dropped and the next one asked
+        if not self.shared(name): return None
+        seen = set()
+        while True:
+            row, db, v2 = self._fetch(name, seen)
+            if row is None: return None
+            digest, codec, payload = bytes(row[0]), row[1], bytes(row[2])
+            try: data = _decode(codec, payload)
+            except Exception as e:
+                if not (isinstance(e, RuntimeError) or _bad_frame(e)): raise
+                with self.lock:
+                    for i, (_, d) in enumerate(self.dbs):
+                        if d is db:
+                            self._failed(i, e)
+                            break
+                continue
+            return digest, codec, payload, v2, data
+
     def get(self, name):
-        if self.shared(name):
-            for rows in self._each('SELECT b.data FROM entry e JOIN blob b ON b.id=e.blob WHERE e.name=?', name):
-                if rows: return bytes(rows[0][0])
-        return None
+        got = self.get_verified_blob(name)
+        return got[4] if got is not None else None
 
     def has(self, name): return self.shared(name) and any(rows for rows in self._each('SELECT 1 FROM entry WHERE name=?', name))
 
@@ -70,7 +159,7 @@ class _ReadOnly:
         with self.lock:
             for _, db in self.dbs:
                 with contextlib.suppress(sqlite3.Error): db.close()
-            self.dbs = []
+            self.dbs, self._v2 = [], {}
 
 
 class _Files:
@@ -99,7 +188,7 @@ class Store(_Files):
         """readonly: read, never copied (regress.py's fallback to the player's); older: earlier generations, copied in when read"""
         self.path, self.say = os.fspath(path), say
         self.lock = threading.RLock()   # one connection for dmsh_build.py's threads: a read or write is cheap next to a compile
-        self.readers, self.wal, self.opener = {}, False, threading.get_ident()   # other threads read through their own read-only connections (_reader)
+        self.readers, self.wal, self.opener, self.v2 = {}, False, threading.get_ident(), True   # other threads read through their own read-only connections (_reader)
         self.full = False   # after a failed write (a full drive) no write is tried, and its batch is rolled back
         self.outer = False   # SQLite may end the transaction itself on a failed write, so its own flag cannot tell
         source = readonly if readonly is not None else READ_ONLY
@@ -140,10 +229,11 @@ class Store(_Files):
         # WAL: readers in other processes do not wait for the writer, and a commit needs no fsync. A drive without shared memory stays on the unsynced rollback journal.
         self.wal = self.db.execute('PRAGMA journal_mode=WAL').fetchone()[0].lower() == 'wal'
         self.db.execute('PRAGMA synchronous=NORMAL' if self.wal else 'PRAGMA synchronous=OFF')
-        for s in SCHEMA: self.db.execute(s)
+        self.v2 = 'data' not in _blob_cols(self.db)
+        for s in SCHEMA if self.v2 else SCHEMA[1:]: self.db.execute(s)
 
-    def _damage(self, e):
-        if not any(w in str(e) for w in _DAMAGED): return False
+    def _damage(self, e, force=False):
+        if not force and not any(w in str(e) for w in _DAMAGED): return False
         self.say(f'[RED] the shader compile cache {self.path} is damaged, and is made anew: {e}')
         self._close_readers()
         with contextlib.suppress(sqlite3.Error): self.db.close()
@@ -179,18 +269,38 @@ class Store(_Files):
         finally:
             if reader: reader[1].release()   # before a failed query takes self.lock again through _run
 
-    def get(self, name):
-        """One an older generation holds is copied into this file first, so it stays when that generation goes"""
-        sql, rows = 'SELECT b.data FROM entry e JOIN blob b ON b.id=e.blob WHERE e.name=?', None
+    def _local(self, name):   # (codec, payload) of this file alone, or None
+        rows = None
         with self._reader() as db:
             if db is not None:
-                try: rows = db.execute(sql, (name,)).fetchall()
+                try: rows = db.execute(_get_sql(self.v2), (name,)).fetchall()
                 except sqlite3.Error: pass   # asked again on the one connection, which also finds a damaged file
-        if rows is None: rows = self._run(sql, name)
-        if rows: return bytes(rows[0][0])
-        if self.older and (data := self.older.get(name)) is not None:
-            self.put(name, data)
-            return data
+        if rows is None: rows = self._run(_get_sql(self.v2), name)
+        return (rows[0][0], bytes(rows[0][1])) if rows else None
+
+    def _adopt_older(self, name):
+        """(codec, payload, data) of an older generation's entry, copied into this file first so it stays when that generation goes; a v2 blob is copied as it is"""
+        if not self.older or (got := self.older.get_verified_blob(name)) is None: return None
+        digest, codec, payload, from_v2, data = got
+        if not self.v2: codec, payload = RAW, data
+        elif not from_v2: codec, payload = _encode(data)
+        self.put_blob(name, digest, codec, payload)
+        return codec, payload, data
+
+    def get_raw(self, name):   # (codec, payload), not decoded: a worker decodes it (Remote)
+        if (raw := self._local(name)) is not None: return raw
+        if (adopted := self._adopt_older(name)) is not None: return adopted[:2]
+        if self.readonly and (got := self.readonly.get_blob(name)) is not None: return got[1], got[2]
+        return None
+
+    def get(self, name):
+        if (raw := self._local(name)) is not None:
+            try: return _decode(*raw)
+            except Exception as e:
+                if not _bad_frame(e): raise   # a missing zstd module or an unknown codec leaves the file as it is
+                with self.lock: self._damage(e, force=True)
+                return None
+        if (adopted := self._adopt_older(name)) is not None: return adopted[2]
         return self.readonly.get(name) if self.readonly else None
 
     def names(self, prefix):
@@ -202,15 +312,49 @@ class Store(_Files):
     def blob_ids(self, prefix):   # {name: blob id} of this file's entries under prefix: dmsh_build.py's staged outputs, which share a blob when their bytes are the same
         return dict(self._run('SELECT name, blob FROM entry WHERE name>=? AND name<?', prefix, prefix + '\U0010ffff'))
 
+    def put_link(self, name, digest, when=None):
+        """Points name at the blob of that digest: False when this file has none and the bytes must come (put_blob)"""
+        if self.full: return True
+        with self.lock:
+            try:
+                row = self.db.execute('SELECT id FROM blob WHERE hash=?', (digest,)).fetchone()
+                if not row: return False
+                with self.batch(): self.db.execute('INSERT OR REPLACE INTO entry(name, blob, mtime) VALUES(?, ?, ?)', (name, row[0], time.time() if when is None else when))
+                return True
+            except sqlite3.OperationalError as e:
+                self._unwritable(e)
+                return True
+            except sqlite3.DatabaseError as e:
+                if not self._damage(e): raise
+                return False
+
+    def put_blob(self, name, digest, codec, payload, when=None):   # put of bytes already hashed and encoded
+        self._put(name, digest, when, lambda: (codec, payload))
+
     def put(self, name, data, when=None):
         """A full drive is one [RED] line: the build goes on without the cache, and this write's batch is rolled back"""
         if self.full: return   # SQLite may have rolled the failed batch back already
-        digest = hashlib.blake2b(data, digest_size=16).digest()
+        digest, encoded = hashlib.blake2b(data, digest_size=16).digest(), None
+        if self.v2 and not self.outer:
+            # compressed before the lock, so that dmsh_build.py's threads compress at once
+            with self._reader() as db:
+                if db is not None:
+                    try:
+                        if not db.execute('SELECT 1 FROM blob WHERE hash=?', (digest,)).fetchone(): encoded = _encode(data)
+                    except sqlite3.Error: pass
+        self._put(name, digest, when, lambda: (encoded or _encode(data)) if self.v2 else (RAW, data))
+
+    def _put(self, name, digest, when, encoded):   # encoded() is asked only when this file has no blob of that digest
+        if self.full: return
         with self.lock:
             try:
                 with self.batch():
                     row = self.db.execute('SELECT id FROM blob WHERE hash=?', (digest,)).fetchone()
-                    blob = row[0] if row else self.db.execute('INSERT INTO blob(hash, data) VALUES(?, ?)', (digest, data)).lastrowid
+                    if row: blob = row[0]
+                    else:
+                        codec, payload = encoded()
+                        if self.v2: blob = self.db.execute('INSERT INTO blob(hash, codec, payload) VALUES(?, ?, ?)', (digest, codec, payload)).lastrowid
+                        else: blob = self.db.execute('INSERT INTO blob(hash, data) VALUES(?, ?)', (digest, _decode(codec, payload))).lastrowid
                     self.db.execute('INSERT OR REPLACE INTO entry(name, blob, mtime) VALUES(?, ?, ?)', (name, blob, time.time() if when is None else when))
             except sqlite3.OperationalError as e: self._unwritable(e)
             except sqlite3.DatabaseError as e:
@@ -260,9 +404,9 @@ class Store(_Files):
             names.setdefault(d, []).append(name)
         gone = [d for d in newest if d not in keep and newest[d] < since]
         if not gone: return 0, 0
-        size = {}
+        size, col = {}, 'payload' if self.v2 else 'data'   # the bytes stored, compressed or not
         for d in gone:
-            size[d] = sum(n for name, n in self._run('SELECT e.name, length(b.data) FROM entry e JOIN blob b ON b.id=e.blob WHERE e.name>=? AND e.name<?', f'shader/{d}/', f'shader/{d}0')
+            size[d] = sum(n for name, n in self._run(f'SELECT e.name, length(b.{col}) FROM entry e JOIN blob b ON b.id=e.blob WHERE e.name>=? AND e.name<?', f'shader/{d}/', f'shader/{d}0')
                           if not name.endswith('.metallib'))
         with self.lock, self.batch():
             self.db.executemany('DELETE FROM entry WHERE name=?', ((n,) for d in gone for n in names[d]))
@@ -309,7 +453,7 @@ class Store(_Files):
         with self.batch(): self.db.execute('DELETE FROM blob WHERE id NOT IN (SELECT blob FROM entry)')
         self._run('PRAGMA incremental_vacuum')
         self._run('PRAGMA wal_checkpoint(TRUNCATE)')
-        rows = self._run('SELECT e.name,e.blob,e.mtime,length(b.data) FROM entry e JOIN blob b ON b.id=e.blob')
+        rows = self._run(f'SELECT e.name,e.blob,e.mtime,length(b.{"payload" if self.v2 else "data"}) FROM entry e JOIN blob b ON b.id=e.blob')
         groups, refs, sizes = {}, {}, {}
         for name, blob, when, size in rows:
             parts = name.split('/')
@@ -373,7 +517,7 @@ class Served:
     """Forked workers must not open the file: Apple's SQLite calls os_signpost at open, which in a fork of a process that opened one reads the parent's logging
     state (SIGSEGV in _os_log_preferences_refresh). So every call goes through a pipe to a thread here, on the one connection; a worker's batch is rolled back when it dies.
     Made before the fork; start() once every worker is forked; worker() in each worker gives its store."""
-    OPS = ('get', 'has', 'names', 'blob_ids', 'put', 'delete_prefix')
+    OPS = ('get', 'get_raw', 'has', 'names', 'blob_ids', 'put', 'put_link', 'put_blob', 'delete_prefix')
 
     def __init__(self, store, n):
         ctx = multiprocessing.get_context('fork')
@@ -391,7 +535,7 @@ class Served:
         for j, (here, there) in enumerate(self.pipes):
             here.close()
             if j != i: there.close()
-        return Remote(self.pipes[i][1])
+        return Remote(self.pipes[i][1], self.store.v2)
 
     def _serve(self, conn):
         try:
@@ -423,7 +567,8 @@ class Served:
 
 
 class Remote(_Files):
-    def __init__(self, conn): self.conn, self.lock, self.inside, self.full = conn, threading.RLock(), False, False
+    """Hashes, compresses and decompresses in the worker: a blob the file holds is linked by its digest, without its bytes"""
+    def __init__(self, conn, v2=True): self.conn, self.v2, self.lock, self.inside, self.full = conn, v2, threading.RLock(), False, False
 
     def _call(self, op, *args):
         with self.lock:
@@ -432,11 +577,24 @@ class Remote(_Files):
         if not ok: raise value
         return value
 
-    def get(self, name): return self._call('get', name)
+    def get(self, name):
+        if (raw := self._call('get_raw', name)) is None: return None
+        try: return _decode(*raw)
+        except Exception as e:
+            if _bad_frame(e): return self._call('get', name)   # the process that opened the file makes it anew, or drops the read-only one
+            raise
+
     def has(self, name): return self._call('has', name)
     def names(self, prefix): return self._call('names', prefix)
     def blob_ids(self, prefix): return self._call('blob_ids', prefix)
-    def put(self, name, data, when=None): self._call('put', name, data, when)
+
+    def put(self, name, data, when=None):
+        if self.full: return
+        digest = hashlib.blake2b(data, digest_size=16).digest()
+        if self._call('put_link', name, digest, when): return
+        codec, payload = _encode(data) if self.v2 else (RAW, data)
+        self._call('put_blob', name, digest, codec, payload, when)
+
     def delete_prefix(self, prefix): self._call('delete_prefix', prefix)
 
     @contextlib.contextmanager
@@ -513,7 +671,7 @@ def main():
     s = Store(sys.argv[1])
     kinds = {}
     for name, in s._run('SELECT name FROM entry'): kinds[name.split('/', 1)[0]] = kinds.get(name.split('/', 1)[0], 0) + 1
-    print(json.dumps({'entries': kinds, 'blobs': s._run('SELECT count(*) FROM blob')[0][0], 'bytes': os.path.getsize(sys.argv[1])}))
+    print(json.dumps({'entries': kinds, 'blobs': s._run('SELECT count(*) FROM blob')[0][0], 'bytes': os.path.getsize(sys.argv[1]), 'codec': 'zstd' if s.v2 else 'raw'}))
     s.close()
 
 
