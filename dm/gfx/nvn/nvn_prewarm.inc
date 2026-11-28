@@ -392,8 +392,8 @@ static NSString *warm_key(const char *s, size_t n) {
     size_t z = strnlen(s, n);
     return [[NSString alloc] initWithBytes:s length:z encoding:NSUTF8StringEncoding];
 }
-// Prewarm tasks: a shader (S), a compute pipeline (C), a shader pair's render pipelines (R, sharing bases: one worker), a mesh pipeline (M), in list order.
-// Only one worker prepares a key; a failed warm load stays NSNull for this prewarm only.
+// Prewarm tasks: a compute pipeline (C), a shader pair's render pipelines (R, sharing bases: one worker), a mesh pipeline (M), in list order. Each loads its own
+// shaders, so an older list's S rows are skipped. Only one worker prepares a key; a failed warm load stays NSNull for this prewarm only.
 @interface WarmTask : NSObject { @public int kind, stage; NSString *key, *vkey, *fkey, *tkey; NSMutableArray<NSData *> *rs; } @end
 @implementation WarmTask @end
 static NSMutableDictionary *g_warm_dict; static os_unfair_lock g_warm_dict_lock = OS_UNFAIR_LOCK_INIT;
@@ -430,6 +430,7 @@ static NvShader *warm_shader(NSString *key, int stage) {
     os_unfair_lock_unlock(&g_warm_dict_lock);
     NvShader *n = shader_load(key, stage);
     if (n && n->stage == 0 && n->has_pull && hybrid_on()) pull_load(n);
+    if (n) g_warm_shaders++;
     os_unfair_lock_lock(&g_warm_dict_lock);
     g_warm_dict[key] = n ?: (id)NSNull.null;
     load->shader = n;
@@ -449,7 +450,6 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
     NSMutableArray<WarmTask *> *tasks = [NSMutableArray array]; NSMutableDictionary<NSString *, WarmTask *> *pairs = [NSMutableDictionary dictionary];
     NSMutableSet<NSString *> *seen = [NSMutableSet set], *stale = [NSMutableSet set]; long n = 0;
     NSMutableSet<NSData *> *seen_k = [NSMutableSet set];
-    NSMutableSet<NSString *> *seen_shader = [NSMutableSet set];
     NSMutableDictionary<NSString *, NSMutableSet<NSData *> *> *seen_mesh = [NSMutableDictionary dictionary];   // by task key: not a set of NSArray (pre_pair_key)
     for (NSString *path in paths) {
         NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -461,13 +461,9 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
             [seen addObject:line];
             NSArray<NSString *> *c = [line componentsSeparatedByString:@"\t"];
             WarmTask *t = nil;
-            if (([c[0] isEqualToString:@"S"] && c.count >= 3) || ([c[0] isEqualToString:@"C"] && c.count >= 2)) {
-                if (!c[1].length || warm_stale(c[1], stale)) continue;
-                int shader = [c[0] isEqualToString:@"S"];
-                int stage = stage_of(warm_map_stage(c[1]));   // NVN2 task / mesh 6 / 7 occupy host slots 3 / 4, as in the live loader
-                if (stage < 0 || (!shader && stage != 5) || (shader && [seen_shader containsObject:c[1]])) continue;
-                if (shader) [seen_shader addObject:c[1]];
-                t = [WarmTask new]; t->kind = shader ? 0 : 2; t->key = c[1]; t->stage = stage; [tasks addObject:t];
+            if ([c[0] isEqualToString:@"C"] && c.count >= 2) {
+                if (!c[1].length || warm_stale(c[1], stale) || stage_of(warm_map_stage(c[1])) != 5) continue;
+                t = [WarmTask new]; t->kind = 2; t->key = c[1]; t->stage = 5; [tasks addObject:t];
             } else if ([c[0] isEqualToString:@"R"] && c.count >= 2) {
                 pso_skey sk; if (pso_skey_parse(c[1].UTF8String, &sk)) continue;
                 NSData *kd = [NSData dataWithBytes:&sk length:sizeof sk]; if ([seen_k containsObject:kd]) continue;
@@ -515,11 +511,6 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
 }
 static void warm_task(WarmTask *t) {
     @autoreleasepool {
-        if (t->kind == 0) {
-            NvShader *sh = warm_shader(t->key, t->stage);
-            if (sh) { WarmItem *item = [WarmItem new]; item->kind = 0; item->key = t->key; item->shader = sh; warm_enqueue(item); g_warm_shaders++; }
-            g_warm_done++; return;
-        }
         if (t->kind == 2) {
             NvShader *cs = warm_shader(t->key, 5); NSError *e = nil; id ps = cs ? cps_new_b(cs->fn, 1, &e) : nil;
             if (cs && !ps) MLOG("[RED] background compute pipeline creation failed: %s", e.localizedDescription.UTF8String);
@@ -752,8 +743,7 @@ static NSArray<NSString *> *warm_paths(const char *e) {
 }
 // The lists' R, C and M pipelines captured into the archive, nothing kept: the same descriptors as a run (no specialization, none is archived). Returns the lines.
 static long pre_warm_lists(NSArray<NSString *> *paths, int threads) {
-    warm_load_begin(); long lines = 0; NSMutableArray<WarmTask *> *tasks = [NSMutableArray array];
-    for (WarmTask *t in warm_parse(paths, &lines)) if (t->kind) [tasks addObject:t]; else lines--;
+    warm_load_begin(); long lines = 0; NSArray<WarmTask *> *tasks = warm_parse(paths, &lines);
     MLOG("pipeline prebuild: %ld prewarm lines of %s in %lu tasks, %d workers", lines, [paths componentsJoinedByString:@" and "].UTF8String, (unsigned long)tasks.count, threads);
     uint64_t t0 = bp_now(), built0 = g_pb_built, arch0 = g_pb_archived; __block _Atomic long next = 0; long n = (long)tasks.count;
     dispatch_group_t g = dispatch_group_create();

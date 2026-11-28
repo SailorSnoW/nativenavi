@@ -160,7 +160,7 @@ typedef struct { int8_t fx[32]; uint8_t fbmask, lmap[8]; } bf_key;
 @implementation NvProg @end
 // pso's are raw pointers, and the background's dictionary goes with its task
 @interface WarmItem : NSObject { @public
-    int kind, record, pull, cps_off;
+    int kind, pull, cps_off;
     NSString *key, *vs_key, *fs_key, *ts_key;
     NvShader *shader, *vs, *fs, *ts;
     pso_key pso; id<MTLFunction> fsfn; id object;
@@ -228,7 +228,7 @@ static void pso_record(const char *fmt, ...) {
     if (!f) return;
     va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap); fflush(f);
 }
-// The user manifest: the shaders and pipelines this Mac used, prewarmed at the next start with the seed.
+// The user manifest: the pipelines this Mac built on the spot, prewarmed at the next start with the seed.
 static NSString *pso_user_path(void) {
     const char *u = getenv("DM_PSO_USER"), *save = getenv("DM_SAVE");
     if (u && *u) return @(u);
@@ -613,8 +613,6 @@ static NvShader *shader_get(NSString *pc, int stage) {
     if (!o) return nil;
     progpf_first(pc);
     g_shcache[pc] = o;
-    pso_record("S\t%s\t%d\n", pc.UTF8String, stage);
-    pso_user_record("S\t%s\t%d\n", pc.UTF8String, stage);
     g_bp_lib_n++; g_bp_lib_ns += bp_now() - bt;
     return o;
 }

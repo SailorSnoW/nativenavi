@@ -397,6 +397,7 @@ static void demand_record(const pso_key *k, NvShader *vs, NvShader *fs) {
     char shex[sizeof sk * 2 + 1];
     pso_skey_from(k, vs, fs, 0, NULL, &sk);
     pso_skey_hex(&sk, shex);
+    pso_record("R\t%s\n", shex);
     pso_user_record("R\t%s\n", shex);
 }
 static int pso_pend_demand(const pso_key *k, NvShader *vs, NvShader *fs) {

@@ -1826,7 +1826,7 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 
 - **Symptom:** a manifest contains native mesh rows, but the game still logs `task / mesh pipeline: … required at frame` for the same pipelines after preparation.
 - **Cause:** a shader row could carry NVN2's task/mesh stage numbers (6/7), while the host uses slots 3/4. The prewarm workers cache a shader by name, so the first worker could publish the raw stage even for a later request from a valid mesh row. A draw using that shader could write stage 7 into its own mesh row; the next launch then rejected that row.
-- **Fix:** load standalone shader rows using the stage in the current game's shader map, as the live loader does. Read a stored stage 7 as 4 only in a mesh row; the map, task, fragment and render-state checks still apply. Prepare one library per shader name and one pipeline per normalized mesh state and task shader. The render test exercises raw and host stage numbers together and checks both the first demand and its rendered pixels.
+- **Fix:** load standalone shader rows using the stage in the current game's shader map, as the live loader does. Read a stored stage 7 as 4 only in a mesh row; the map, task, fragment and render-state checks still apply. Prepare one library per shader name and one pipeline per normalized mesh state and task shader. Since upstream nxnative 28d41fc9 the prewarm loads no shader row at all: each pipeline row loads its own shaders. The render test exercises raw and host stage numbers together and checks both the first demand and its rendered pixels.
 - **Found on:** Mario Kart World.
 
 ### Native mesh pipelines compiled at their first draw

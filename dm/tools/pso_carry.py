@@ -202,9 +202,11 @@ def carry(manifest_lines, km, pairs):
     for ln in manifest_lines:
         if not ln.strip() or ln.startswith('#'): continue
         c = ln.rstrip('\n').split('\t')
-        kind = c[0]; st[kind, 'all'] += 1
+        kind = c[0]
+        if kind == 'S': continue   # a shader alone: the host prewarms no S row
+        st[kind, 'all'] += 1
         names = []
-        if kind in ('S', 'C') and len(c) >= 2: names = [c[1]]
+        if kind == 'C' and len(c) >= 2: names = [c[1]]
         elif kind == 'R' and len(c) >= 2: names = [_field(c[1], 0), _field(c[1], 1)]
         elif kind == 'M' and len(c) == 3: names = [_field(c[2], 0), _field(c[2], 1)] + ([] if c[1] == '-' else [c[1]])
         else: continue
@@ -213,7 +215,7 @@ def carry(manifest_lines, km, pairs):
         if len(got) != len(names) or not got[0]: continue
         same = got == names
         if kind in ('R', 'M') and names[1] and not same and (got[0][:16], got[1][:16]) not in pairs: continue
-        if kind in ('S', 'C'): c[1] = got[0]
+        if kind == 'C': c[1] = got[0]
         elif kind == 'R': c[1] = _put(_put(c[1], 0, got[0]), 1, got[1])
         else:
             c[2] = _put(_put(c[2], 0, got[0]), 1, got[1])
@@ -240,7 +242,7 @@ def carry_file(from_map, to_map, from_manifest, out_manifest, pair_paths, origin
     total = sum(n for (k, w), n in st.items() if w == 'all')
     kept = sum(n for (k, w), n in st.items() if w == 'kept')
     moved = sum(n for (k, w), n in st.items() if w == 'carried')
-    by = ', '.join(f'{k} {st[k, "kept"] + st[k, "carried"]:,} of {st[k, "all"]:,}' for k in 'SRCM' if st[k, 'all'])
+    by = ', '.join(f'{k} {st[k, "kept"] + st[k, "carried"]:,} of {st[k, "all"]:,}' for k in 'RCM' if st[k, 'all'])
     note = (f'{kept + moved:,} of {total:,} rows ({kept:,} with the same keys, {moved:,} carried to this version\'s keys; {by}'
             + (f'; {len(vsetb):,} effect-set (vsetb) keys found again by their variation\'s anchored place' if vsetb else '')
             + (f'; {len(found):,} shader archive keys found again by their program\'s options' if programs and romfs else '') + ')')
