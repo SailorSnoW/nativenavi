@@ -22,7 +22,7 @@ struct Setting: Decodable, Identifiable {
         switch kind {
         case "choice": return options?.contains { $0[0] == v } ?? false
         case "range":
-            guard !v.contains(where: { $0 == "x" || $0 == "X" }), let n = Double(v), n.isFinite, let lo = min, let hi = max else { return false }   // no hex: launcher.c's check agrees
+            guard !v.contains(where: { $0 == "x" || $0 == "X" }), let n = Double(v), n.isFinite, let lo = min, let hi = max else { return false }   // no hex
             return n >= lo && n <= hi
         case "toggle": return v == onValue || v == offValue
         default: return true
@@ -50,9 +50,17 @@ final class LauncherModel: ObservableObject {
         ignoreSaved = env["DM_SAVED_CHOICES"] == "0"
         if ignoreSaved { fputs("launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n", stderr) }
         for s in settings {
-            if fixed.contains(s.env), let v = env[s.env] { values[s.env] = v; continue }
-            let saved = ignoreSaved ? nil : defaults.object(forKey: "launcher." + s.env) as? String   // as launcher.c reads it: string(forKey:) turns a number into a string
-            values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def
+            let raw = ignoreSaved ? nil : defaults.object(forKey: "launcher." + s.env)
+            if fixed.contains(s.env), let v = env[s.env] {
+                values[s.env] = v
+                if let saved = raw as? String { fputs("launcher: saved choice \(s.env)=\(saved) not used: \(s.env)=\(v) is set (\(fromLaunch.contains(s.env) ? "launch environment" : "env file"))\n", stderr) }
+                continue
+            }
+            values[s.env] = s.def
+            guard let raw else { continue }
+            if let saved = raw as? String, s.accepts(saved) { values[s.env] = saved }   // not string(forKey:), which turns a number into a string
+            else if let saved = raw as? String { fputs("launcher: saved choice \(s.env)=\(saved) ignored: this build does not offer it\n", stderr) }
+            else { fputs("launcher: saved choice for \(s.env) ignored: not a string\n", stderr) }
         }
     }
 
@@ -76,17 +84,18 @@ final class LauncherModel: ObservableObject {
         fputs("launcher: settings reset to the game's defaults\n", stderr)
     }
 
-    // Only a choice that differs from the default is stored, so a setting left at its default follows a later build's defaults
-    func apply() {
+    // Every setting goes into the environment, on every start. persist (Play): only a choice that differs from the default is stored, so a setting left at its default follows a
+    // later build's defaults; without the window nothing is stored
+    func apply(persist: Bool) {
         for s in settings {
             let v = values[s.env] ?? s.def
             if fixed.contains(s.env) {
                 fputs("launcher: \(s.env) kept at \(v) (\(fromLaunch.contains(s.env) ? "launch environment" : "env file"))\n", stderr)
                 continue
             }
-            store(s, v)
+            if persist { store(s, v) }
             setenv(s.env, v, 1)
-            fputs("launcher: \(s.env)=\(v)\(s.isDefault(v) ? "" : " (changed)")\n", stderr)
+            fputs("launcher: \(s.env)=\(v)\(s.isDefault(v) ? "" : persist ? " (changed)" : " (saved choice)")\n", stderr)
         }
     }
     private func store(_ s: Setting, _ v: String) {

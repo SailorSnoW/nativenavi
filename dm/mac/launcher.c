@@ -3,7 +3,6 @@
 // Sources of the environment, in order: docs/frontends.md#saved-choices.
 #include <CoreFoundation/CoreFoundation.h>
 #include <copyfile.h>
-#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -20,11 +19,11 @@
 #include "romfs_image.h"
 
 extern char **environ;
-int dm_mac_launcher(void);   // 1 = Play, 0 = quit, 2 = no window (apply the saved choices here)
+void dm_mac_record_launch_keys(void);   // Launcher.swift: DM_ENV_LAUNCH_KEYS
+int dm_mac_launcher(int show_window);   // Launcher.swift: 1 = start the game, the settings in the environment; 0 = quit
 int dm_mac_microphone_consent(void);
 static pid_t g_child;
 static char *g_file_keys;
-static char *g_launch_keys;
 
 static void add_key(char **list, const char *k) {
     char *s;
@@ -141,52 +140,6 @@ static void env_file(const char *path) {   // a variable already set stays
     fclose(f);
 }
 
-static int saved_accepted(CFDictionaryRef rule, CFStringRef v, const char *s) {
-    CFTypeRef values = CFDictionaryGetValue(rule, CFSTR("values"));
-    if (values && CFGetTypeID(values) == CFArrayGetTypeID()) {
-        for (CFIndex i = 0; i < CFArrayGetCount(values); i++) {
-            CFTypeRef o = CFArrayGetValueAtIndex(values, i);
-            if (CFGetTypeID(o) == CFStringGetTypeID() && CFStringCompare(o, v, 0) == kCFCompareEqualTo) return 1;
-        }
-        return 0;
-    }
-    CFTypeRef lo = CFDictionaryGetValue(rule, CFSTR("min")), hi = CFDictionaryGetValue(rule, CFSTR("max")); double l, h;
-    if (!lo || !hi || CFGetTypeID(lo) != CFNumberGetTypeID() || CFGetTypeID(hi) != CFNumberGetTypeID()) return 0;
-    CFNumberGetValue(lo, kCFNumberDoubleType, &l); CFNumberGetValue(hi, kCFNumberDoubleType, &h);
-    char *end; double x = strtod(s, &end);
-    return *s && !isspace((unsigned char)*s) && !strpbrk(s, "xX") && !*end && x == x && x >= l && x <= h;   // as Setting.accepts (LauncherSettings.swift): no leading space, no hex, no NaN
-}
-
-static CFArrayRef setting_rules(void) {
-    CFBundleRef b = CFBundleGetMainBundle(); if (!b) return NULL;
-    CFTypeRef rules = CFBundleGetValueForInfoDictionaryKey(b, CFSTR("DMSettings"));
-    return rules && CFGetTypeID(rules) == CFArrayGetTypeID() ? rules : NULL;
-}
-
-static int rule_env(CFTypeRef rule, char *env, size_t n) {
-    if (CFGetTypeID(rule) != CFDictionaryGetTypeID()) return 0;
-    CFTypeRef e = CFDictionaryGetValue(rule, CFSTR("env"));
-    return e && CFGetTypeID(e) == CFStringGetTypeID() && CFStringGetCString(e, env, (CFIndex)n, kCFStringEncodingUTF8);
-}
-
-static void saved_choices(void) {   // a variable already set keeps its value
-    CFArrayRef rules = setting_rules(); CFStringRef domain = CFBundleGetIdentifier(CFBundleGetMainBundle());
-    if (!rules || !domain) return;
-    if (env_is("DM_SAVED_CHOICES", "0")) { fprintf(stderr, "launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n"); return; }
-    for (CFIndex i = 0; i < CFArrayGetCount(rules); i++) {
-        CFTypeRef rule = CFArrayGetValueAtIndex(rules, i); char env[128], s[256];
-        if (!rule_env(rule, env, sizeof env)) continue;
-        CFStringRef key = CFStringCreateWithFormat(NULL, NULL, CFSTR("launcher.%s"), env);
-        CFPropertyListRef v = CFPreferencesCopyAppValue(key, domain); CFRelease(key);
-        if (!v) continue;
-        if (CFGetTypeID(v) != CFStringGetTypeID() || !CFStringGetCString(v, s, sizeof s, kCFStringEncodingUTF8)) fprintf(stderr, "launcher: saved choice for %s ignored: not a string of at most %zu bytes\n", env, sizeof s - 1);
-        else if (!saved_accepted(rule, v, s)) fprintf(stderr, "launcher: saved choice %s=%s ignored: this build does not offer it\n", env, s);
-        else if (getenv(env)) fprintf(stderr, "launcher: saved choice %s=%s not used: %s=%s is set (environment or env.txt)\n", env, s, env, getenv(env));
-        else { setenv(env, s, 0); fprintf(stderr, "launcher: env %s=%s (saved choice)\n", env, s); }
-        CFRelease(v);
-    }
-}
-
 // a denial turns capture off for this run only
 static void microphone_at_launch(void) {
     if (!env_is("DM_MIC", "1")) return;
@@ -246,24 +199,16 @@ int main(int argc, char **argv) {
     fprintf(stderr, "launcher: %s (%s), host %s\n", name, id, host);
     take_nxnative(home, id, sup);   // before anything makes the folder
     mkdirs(save); mkdirs(temp);
-    CFArrayRef rules = setting_rules();
-    for (CFIndex i = 0; rules && i < CFArrayGetCount(rules); i++) {
-        char env[128];
-        if (rule_env(CFArrayGetValueAtIndex(rules, i), env, sizeof env) && getenv(env)) add_key(&g_launch_keys, env);
-    }
+    dm_mac_record_launch_keys();
     snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p);
     snprintf(p, sizeof p, "%s/env.txt", dm); env_file(p);
     setenv("DM_ENV_FILE_KEYS", g_file_keys ? g_file_keys : "", 1);
-    setenv("DM_ENV_LAUNCH_KEYS", g_launch_keys ? g_launch_keys : "", 1);
     free(g_file_keys);
-    free(g_launch_keys);
     setenv("DM_SAVE", save, 0);   // before the window, which the host is started from
     int window = !env_is("DM_LAUNCHER", "0");
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--no-launcher")) window = 0;
     if (!window) fprintf(stderr, "launcher: no settings window (DM_LAUNCHER=0 or --no-launcher)\n");
-    int shown = window ? dm_mac_launcher() : 2;
-    if (!shown) return 0;
-    if (shown == 2) saved_choices();
+    if (!dm_mac_launcher(window)) return 0;
     microphone_at_launch();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_TEMP", temp, 0);
     snprintf(p, sizeof p, "%s/Library/Application Support/NativeNavi/system", home); setenv("DM_SYSTEM_DIR", p, 0);

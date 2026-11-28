@@ -265,24 +265,49 @@ public func dmMacMicrophoneConsent() -> Int32 {
     return 0
 }
 
-// 1: Play, 0: quit, 2: no window (launcher.c applies the saved choices)
+private var loadedSettings: [Setting]??
+
+private func launcherSettings() -> [Setting]? {
+    if let loaded = loadedSettings { return loaded }
+    var settings: [Setting]?
+    if let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) {
+        settings = (try? JSONDecoder().decode(SettingsFile.self, from: data))?.settings
+        if settings == nil { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr) }
+    }
+    loadedSettings = .some(settings)
+    return settings
+}
+
+// before launcher.c reads the env files: the settings the launch environment set, which stay as they are
+@_cdecl("dm_mac_record_launch_keys")
+public func dmMacRecordLaunchKeys() {
+    let keys = (launcherSettings() ?? []).map(\.env).filter { getenv($0) != nil }
+    setenv("DM_ENV_LAUNCH_KEYS", keys.joined(separator: " "), 1)
+}
+
+// 1: start the game, the settings in the environment; 0: quit. Without the window (showWindow 0: DM_LAUNCHER=0 or --no-launcher; or "Show this window at launch" off)
+// the same saved choices and launcher.json defaults go into the environment, nothing saved, and AppKit is not started
 @_cdecl("dm_mac_launcher")
-public func dmMacLauncher() -> Int32 {
-    guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return 2 }
-    guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return 2 }
+public func dmMacLauncher(_ showWindow: Int32) -> Int32 {
+    guard let settings = launcherSettings(), !settings.isEmpty else { return 1 }
+    if showWindow == 0 {
+        LauncherModel(settings).apply(persist: false)
+        return 1
+    }
     if (UserDefaults.standard.object(forKey: "window.show") as? Bool) == false && !NSEvent.modifierFlags.contains(.option) {
         fputs("launcher: settings window off (hold Option at launch to show it)\n", stderr)
-        return 2
+        LauncherModel(settings).apply(persist: false)
+        return 1
     }
-    let model = LauncherModel(file.settings)
+    let model = LauncherModel(settings)
     let app = NSApplication.shared, launcher = Launcher(model)
     app.setActivationPolicy(.regular)
     app.delegate = launcher
-    fputs("launcher: \(file.settings.count) settings shown\n", stderr)
+    fputs("launcher: \(settings.count) settings shown\n", stderr)
     app.run()
     CATransaction.flush()
     app.setActivationPolicy(.prohibited)
     guard launcher.play else { fputs("launcher: quit without starting the game\n", stderr); return 0 }
-    model.apply()
+    model.apply(persist: true)
     return 1
 }
