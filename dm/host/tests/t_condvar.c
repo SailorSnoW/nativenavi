@@ -51,12 +51,17 @@ static void *waiter(void *a) {
 }
 int main(void) {
     pthread_t w, rd; pthread_create(&rd, NULL, reader, NULL); pthread_create(&w, NULL, waiter, NULL);
-    struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += 10;
+#ifdef DM_TEST_CV_OLD_ORDER
+    enum { WAIT_S = 2 };   // the negative control waits the whole time: a wakeup, if one came, would come within microseconds
+#else
+    enum { WAIT_S = 10 };
+#endif
+    struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += WAIT_S;
     pthread_mutex_lock(&g_m); while (!g_wdone) if (pthread_cond_timedwait(&g_c, &g_m, &dl)) break; int done = g_wdone; pthread_mutex_unlock(&g_m);
 #ifdef DM_TEST_CV_OLD_ORDER
     // Negative control: the old order always loses the wakeup (R reads key 0 and does not send 0x1D, and nobody wakes W after it is queued)
     int ok = !done && atomic_load(&g_rstate) == 3;
-    printf("%s old-order negative control: W %s, R state %d (expected: W not woken, R finishes without sending 0x1D)\n", ok ? "✓" : "✗", done ? "woken" : "not woken in 10 s", atomic_load(&g_rstate));
+    printf("%s old-order negative control: W %s, R state %d (expected: W not woken, R finishes without sending 0x1D)\n", ok ? "✓" : "✗", done ? "woken" : "not woken in 2 s", atomic_load(&g_rstate));
     printf(ok ? "all passed: 1/1\n" : "FAILED: the negative control did not detect the lost wakeup (the criterion is useless)\n");
 #else
     int ok = done && g_wret == 0 && g_wlock_after == g_wtag && atomic_load(&g_key) == 0;
