@@ -377,6 +377,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [A coverage build counted calls inside naked functions](../../../docs/reference/services.md#a-coverage-build-counted-calls-inside-naked-functions): the game aborted at its 26th frame under a host built for coverage, its telemetry send's result never written. Resolved.
 - [A query of a free alias page read the whole bitmap](../../../docs/reference/memory.md#a-query-of-a-free-alias-page-read-the-whole-bitmap): found by timing the host tests, where `t_svc_memory` took 89 s over its five builds; the game's own gain is not measured. Resolved.
 - [Tests of the audio device fail on a Mac in dark wake](../../../docs/reference/audio.md#tests-of-the-audio-device-fail-on-a-mac-in-dark-wake): `t_audio` failing three times out of three in an unattended run on the M2 Pro; the test runner wakes the Mac fully first. Resolved.
 - [A reused Mac app names an earlier commit](../../../docs/reference/packing.md#a-reused-mac-app-names-an-earlier-commit): found upstream on this game's app packed after a docs-only commit; the commit is in the pack key now. Resolved.

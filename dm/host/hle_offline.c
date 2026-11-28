@@ -5,7 +5,7 @@
 HLE_FORCE("_ZN2nn5prepo10PlayReport4SaveERKNS_7account3UidE", "telemetry report save (user); nothing is sent, reports success", Result, h_prepo_SaveU, void *self, const void *uid) { (void)self; (void)uid; return RES_OK; }
 HLE_FORCE("_ZN2nn5prepo10PlayReport4SaveEv", "telemetry report save; nothing is sent, reports success", Result, h_prepo_Save, void *self) { (void)self; return RES_OK; }
 // x8 is the hidden result pointer, which no C return type names. A null AsyncContext is the SDK's default: signaled event, result 0.
-__attribute__((naked)) static void h_prepo_Send(void) { __asm__("str xzr, [x8]\n    ret"); }
+__attribute__((DM_NAKED)) static void h_prepo_Send(void) { __asm__("str xzr, [x8]\n    ret"); }
 DM_REGISTER("swforce", hle_force_ent, hle_force_h_prepo_Send, {"_ZN2nn5prepo10PlayReport4SendERKNS_7account3UidE", (void *)h_prepo_Send, "telemetry report send; nothing is sent, a default context completes at once with success"});
 HLE_FORCE("_ZN2nn5prepo27AddInternetConnectionStatusEPNS0_10PlayReportEPKcS4_S4_", "telemetry internet connection status: no service connection, nothing added, reports success", Result, h_prepo_AddNet, void *rep, const char *a, const char *b, const char *c) { (void)rep; (void)a; (void)b; (void)c; return RES_OK; }
 HLE_FORCE("_ZN2nn5prepo28RequestImmediateTransmissionEv", "telemetry immediate upload; nothing is sent, reports success", Result, h_prepo_Tx, void) { return RES_OK; }

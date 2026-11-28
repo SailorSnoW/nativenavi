@@ -47,9 +47,12 @@ typedef struct { const char *name; void *fn; const char *why; } hle_force_ent;
     static ret cname(__VA_ARGS__);                                                                \
     DM_REGISTER("swforce", hle_force_ent, hle_force_##cname, {mangled, (void *)cname, why}); \
     static ret cname(__VA_ARGS__)
+// A naked function is its assembly alone: a coverage build would count its calls first, through x8 and x9, which carry the caller's result pointer and arguments
+// (docs/reference/services.md#a-coverage-build-counted-calls-inside-naked-functions)
+#define DM_NAKED naked, no_profile_instrument_function
 // Weak pass-through for programs without hle_bigstack.c (unit tests).
-__attribute__((weak, naked, visibility("hidden"))) void dm_bigstack_enter(void) { __asm__ volatile("br x16"); }
-__attribute__((weak, naked, visibility("hidden"))) void dm_bigstack_enter_n(void) { __asm__ volatile("br x16"); }
+__attribute__((weak, DM_NAKED, visibility("hidden"))) void dm_bigstack_enter(void) { __asm__ volatile("br x16"); }
+__attribute__((weak, DM_NAKED, visibility("hidden"))) void dm_bigstack_enter_n(void) { __asm__ volatile("br x16"); }
 // Pass __builtin_return_address(0) from a HLE_FORCE implementation.
 void *dm_bigstack_caller(void *ra);
 __attribute__((weak, visibility("hidden"))) void *dm_bigstack_caller(void *ra) { return ra; }

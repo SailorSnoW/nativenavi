@@ -736,6 +736,13 @@ Most service calls can be found before they crash, before the first boot or the 
 
 ## Accounts, network, shop and parental controls
 
+### A coverage build counted calls inside naked functions
+
+- **Symptom:** a host built with `-fprofile-instr-generate` (`make -C dm/host cov-host`) runs the game to its 26th frame, then `game called nn::diag abort: Result 0x52bb9040, call site sdk+0x5a9250` on the thread `OptimizeChangeBanc`, the result's value another one at each run (the low half of a guest address). The plain host runs the same files without it.
+- **Cause:** `h_prepo_Send` (`hle_offline.c`) is a naked function, `str xzr, [x8]; ret`: `nn::prepo::PlayReport::Send` returns its result through the hidden pointer in `x8`. clang's coverage instrumentation counts a naked function's calls like any other's, with `adrp x8, counter; ldr x9, [x8]; add x9, x9, #1; str x9, [x8]` before the body: the body then zeroed the counter, and the game read its result from memory nothing had written.
+- **Fix:** `hle.h` `DM_NAKED` (`naked, no_profile_instrument_function`) on every naked function of the host: `h_prepo_Send` and the weak `dm_bigstack_enter` pass-throughs the unit tests link, whose `br x16` forwards a handler's arguments. A new naked function takes it too.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) 1.0.0 on an M2 Pro, 2026-11-28, by linking instrumented and plain objects of the host in halves until `hle_offline.c` alone reproduced it, then its disassembly.
+
 ### Account and friends calls found in the imports
 
 - **Symptom:** undefined `nn::account::` / `nn::friends::` imports with no hook, found from the import list ([Listing a game's unhooked imports before they are met](#listing-a-games-unhooked-imports-before-they-are-met)) before they were met.
