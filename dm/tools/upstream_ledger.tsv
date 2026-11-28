@@ -322,19 +322,268 @@ f56fddeb94db	2026-11-26	docs	be63a90	docs/ocarina: record #2777 M1 Max GPU hang 
 f90ba1de2136	2026-11-26	skip	-	packing/shaders: read Fenrir NSGZ shader records (PR #3236)	chain change for Sega's NSGZ records: 0 in 1.0.0's 26.2 GB RomFS
 fa4df544cd3e	2026-11-26	deferred	-	gfx/nvn: snapshot uncompressed alias writer entries across sync	with 8ddd5c3f and cea11c7d
 ff6b20dbff4b	2026-11-26	skip	-	opengl/shaders: lower variable texel offsets via overloaded GLSL helpers	OpenGL removed
+004fce5b62a3	2026-11-27	skip	-	game: Assassin's Creed® Ⅲ Remastered adds prewarm seeds	another game's prewarm seed list
+00ef88cd0f4a	2026-11-27	skip	-	game: Splatoon Raiders adds prewarm seeds	another game's prewarm seed list
+01134c233baf	2026-11-27	skip	-	rewriter/jump_solver: track provably local fixed stack slots	the game's jump tables do not need it, and accepting fewer targets could widen a halfword table
+01e8d3cda260	2026-11-27	ported	00b208d	tests/nvn: allow 1 or more adopted files in t_pso_stall prebuild check	test only: the same flush race at nvn_prewarm.inc
+044805078426	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+05a370349b86	2026-11-27	skip	-	game: Pokémon Shining Pearl adds prewarm seeds	another game's prewarm seed list
+0735f800cc13	2026-11-27	skip	-	game/0100D2D0190A4000: add prewarm seeds	another game's prewarm seed list
+074d3f643be8	2026-11-27	skip	-	game: Paper Mario: The Thousand-Year Door adds prewarm seeds	another game's prewarm seed list
+0a57ea236f69	2026-11-27	skip	-	game: The Legend of Zelda: Breath of the Wild adds prewarm seeds	another game's prewarm seed list
+0adf5bbc6cb7	2026-11-27	partial	a3869f0	gfx/nvn: extend slice merging to MRT/3D targets and add level-grouped replay (PR #3374)	only td_dump's row stride (DM_NVN_TEXRAW); the game has no MRT array / 3D target for the slice merge
+0af81b4cf01e	2026-11-27	skip	-	game: The Legend of Zelda: Tears of the Kingdom adds prewarm seeds	another game's prewarm seed list
+0e587d88097c	2026-11-27	skip	-	game: Unicorn Overlord (Asia) adds prewarm seeds	another game's prewarm seed list
+0eca5ad4b460	2026-11-27	skip	-	game: Need For Speed™ Hot Pursuit Remastered adds prewarm seeds	another game's prewarm seed list
+0fc0fc65b3fc	2026-11-27	skip	-	games/010095E018944000: add Atelier Ryza 3 profile (PR #3367)	another game's profile; its shared doc hunks are Found-on links or code removed here
+15f1f15ffe53	2026-11-27	skip	-	games/0100CCF012E9A000: add ENDER LILIES profile (PR #1054)	another game's profile; its shared doc hunks are Found-on links or code removed here
+186374d9cf4a	2026-11-27	ported	d4c604b	host/input: make passive Pro stick probe lazy and drop all-zero IMU blocks (#3364)	the Pro stick probe asks GameController only at the 150 ms hold; all-zero IMU blocks dropped (a dead sensor expires after 300 ms); untested on a real Pro here
+18b8e4a99916	2026-11-27	skip	-	game: FINAL FANTASY RESONANCE adds prewarm seeds	another game's prewarm seed list
+1947c0df15e2	2026-11-27	ported	6316843	host/input: open each Mac raw HID pad independently	each raw HID pad opened on its own (found on this game upstream); impact_map.tsv hunk dropped (removed here)
+1a1cab4fc4bb	2026-11-27	skip	-	game: Kirby Star Allies adds prewarm seeds	another game's prewarm seed list
+1a636be90f55	2026-11-27	skip	-	host/hid: answer six-axis unaltered passthrough	the game imports no six-axis passthrough call
+1b51e53aa4ad	2026-11-27	skip	-	games/01002620102C6000: add BioShock 2 Remastered profile (PR #3261)	another game's profile; its shared doc hunks are Found-on links or code removed here
+1c99c126f96d	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+2001c1bff134	2026-11-27	skip	-	games/010081A00EE62000: add Boomerang Fu profile (PR #2154)	another game's profile; its shared doc hunks are Found-on links or code removed here
+21d90a869981	2026-11-27	skip	-	game: Hollow Knight adds prewarm seeds	another game's prewarm seed list
+263ada685e10	2026-11-27	skip	-	game: Super Mario Party Jamboree adds prewarm seeds	another game's prewarm seed list
+27f765ad332a	2026-11-27	skip	-	games/01009A9012022000: add Atelier Ryza 2 profile (PR #3366)	another game's profile; its shared doc hunks are Found-on links or code removed here
+2904b61e8f87	2026-11-27	skip	-	docs/env: list DM_PREWARM_UPLOAD_URL in env_switches.tsv	env row of ab8ba46f (skipped)
+291ecbccbd02	2026-11-27	skip	-	game: Nintendo Switch Sports Resort adds prewarm seeds	another game's prewarm seed list
+2b5b41f82255	2026-11-27	skip	-	games/0400FF500E34A001: add Xenoblade Chronicles: Definitive Edition Switch 2 profile (PR #3137)	another game's profile; its shared doc hunks are Found-on links or code removed here
+2bc609e00c80	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+2d0773f413e8	2026-11-27	skip	-	ci/audio: make the device watchdog test deterministic	its test calls au_watchdog_output (e30aca5e, an import-gap commit not here)
 2daf825bcf8d	2026-11-27	no-op	-	host/time: report the host IANA time zone as device location name (PR #1989)	GetDeviceLocationName removed (not imported); this host never reads the snapshot's location
+2dbd223c446e	2026-11-27	skip	-	game: Advance Wars 1+2 adds prewarm seeds	another game's prewarm seed list
 2f959ede5f1e	2026-11-27	ported	54ebad2	host/audio: write DM_AUDIO_DUMP per output and unpack DeviceSink PCM	DM_AUDIO_DUMP: one file per output, DeviceSink's 8-channel blocks unpacked to stereo or 5.1 (diagnostic)
+305ae18ed3aa	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+30ffe58b2b6f	2026-11-27	deferred	-	gfx/nvn: avoid recursive g_rmu lock in fam_set_valid	fam_set_valid exists only on port/deferred-families, which already avoids the recursive g_rmu by trylock; a locking change only, the families' submission cost (args_dirty_all) untouched
+31a528b35d0e	2026-11-27	partial	8eb2cba	tools/tests: add pool-table STG cases and bind sblen in test_global_memory (PR #3015)	the four STG cases; the sblen binding answers 48781edc (skipped)
+327f4bcd4ecb	2026-11-27	ported	b71c109	host/motion: learn and subtract resting gyro bias in passive HID decoders (#3364)	rest gyro offset learned on passive HID pads (Pro, DS4, 8BitDo, twin USB Pro): the note's DS4 drift at rest; untested on a real pad (the player's DualSense goes through GameController)
+34155e30836f	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+34a7b06a96d9	2026-11-27	skip	-	game: Paper Mario: The Thousand-Year Door adds prewarm seeds	another game's prewarm seed list
+35c3c59738c9	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
 35fea5c2ee78	2026-11-27	skip	-	packing/multi-program: discover and pack sibling programs provisionally	the game is one program: pack_nup refuses several, hle_oe has no ExecuteProgram
+3659656c94c1	2026-11-27	skip	-	game: Pokémon: Let's Go, Pikachu! adds prewarm seeds	another game's prewarm seed list
+36ae90d7e588	2026-11-27	skip	-	tools/ue_cvar: find UTF-8 Unreal console-variable names (PR #1200)	ue_cvar.py (Unreal) removed here
+38088bd2c4b4	2026-11-27	skip	-	game: Pokémon: Let's Go, Eevee! targets 60 fps	another game's frame rate rule
+389738fa60c0	2026-11-27	skip	-	game: ULTRA STREET FIGHTER II: The Final Challengers adds prewarm seeds	another game's prewarm seed list
+38bf6f583335	2026-11-27	skip	-	game: Super Mario Bros. Wonder adds prewarm seeds	another game's prewarm seed list
+39b27cb21915	2026-11-27	skip	-	game: The Legend of Zelda: Link's Awakening adds prewarm seeds	another game's prewarm seed list
+3a515a78e37a	2026-11-27	skip	-	game: The Legend of Zelda: Link's Awakening adds prewarm seeds	another game's prewarm seed list
+3dbc8295c06f	2026-11-27	skip	-	game/pikachu: target 60 fps with matched timing functions	a data-check hook for function-matched cuts that no OoT rule needs; the rest is Pokemon Let's Go
 401c7b09cee2	2026-11-27	deferred	-	gfx/nvn: scan only addressable texels in stale-float init check	with d75a2157; needs 99224562's g_segments row table, not in this tree
+409d1dd01495	2026-11-27	skip	-	game: The Legend of Zelda: Tears of the Kingdom adds prewarm seeds	another game's prewarm seed list
+41c5c8328d63	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+42be93bf4605	2026-11-27	skip	-	game: EA SPORTS FC 27 adds prewarm seeds	another game's prewarm seed list
+432a8bd48d2d	2026-11-27	skip	-	packing/mac-app: unify prebake into pso_offline and guard empty PSO dirs	the fork has its own prewarm code in pso_offline and the game always has bases
+442c4409f151	2026-11-27	skip	-	game: Pokémon Legends: Z-A adds prewarm seeds	another game's prewarm seed list
+45cb9ddb384d	2026-11-27	skip	-	games/010025801CEA8000: add stitch. profile (PR #3393)	another game's profile; its shared doc hunks are Found-on links or code removed here
+46a83712033c	2026-11-27	skip	-	games: migrate 21 Unity profiles from reduced app_pool to stdalloc_cap	Unity profiles' memory keys
+479e440b3653	2026-11-27	no-op	-	ios/input: wire Switch 2 Bluetooth controllers on iPhone and iPad (PR #1900)	DM_SW2 already shown on every platform here (settings.tsv); the rest is iOS
+4ac27258727c	2026-11-27	skip	-	game: Nintendo Switch Sports Resort adds prewarm seeds	another game's prewarm seed list
+4b6150a76604	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+4d62497cbc53	2026-11-27	deferred	-	nvn/archive: batch and parallelize pipeline archive writes during prebuild and prepare	builds on f539b2dc (not here); every new base arms the 10 s timer flush here, so its batching would not engage (prebake 432.9 s, writes 105.8 s); needs a fork-only tool change first
+4fd1560b9f90	2026-11-27	skip	-	game: Need For Speed™ Hot Pursuit Remastered adds prewarm seeds	another game's prewarm seed list
+504a7c627770	2026-11-27	skip	-	game: Yoshi and the Mysterious Book adds prewarm seeds	another game's prewarm seed list
+50b9b6615999	2026-11-27	no-op	-	games/0400486024DEC000: frame step and dynamic resolution on 1.0.0 (PR #3319)	this tree's v0 rule (1a39596) has the same fingerprints and +0x108 site, and render scale on v0 too
+5185f824753a	2026-11-27	skip	-	game: Paper Mario adds more prewarm seeds	another game's prewarm seed list
+56d340099b65	2026-11-27	partial	df1df00	game: Ocarina of Time adds more prewarm seeds	R and M rows only, with 8c7660df
+5738389764b5	2026-11-27	skip	-	game: Cuphead adds prewarm seeds	another game's prewarm seed list
+58c30cd370d4	2026-11-27	partial	9b4eb6e,c0b7c9a	packing/shaders: preserve commas in source paths	path lists as JSON; no build_ipa hunk
+5b39c840b289	2026-11-27	skip	-	game: Nintendo Switch Sports Resort adds prewarm seeds	another game's prewarm seed list
+5cf87e305aa1	2026-11-27	no-op	-	gfx/nvn: rate-limit present interval change logs and summarize per 300 frames (PR #2126)	the game never changes its present interval: no such line in the player's 18.7 MB log or 348 run logs
+5fa41f315895	2026-11-27	ported	cdf8e04	packing/shader_cache: compress compile-cache blobs inline with Zstandard	a new chain's compile cache: 3.78 GB for chain 401e0eebe72f against 9.62 GB raw for 14495341b2c9 (this Mac)
 60f0fe506dd5	2026-11-27	skip	-	host/fs: preserve save capacity records in sync and enforce fallback limit	save_sync removed; builds on 325b9973 (skip); the game imports no GetSaveDataSize* / Extend*
+61ba3350de7d	2026-11-27	skip	-	game: Splatoon Raiders adds prewarm seeds	another game's prewarm seed list
 6234610ceeaa	2026-11-27	skip	-	host/offline: answer BLE GATT notification-path and disconnect calls offline (PR #2363)	hle_offline.c has no BLE section; the game imports no nn::bluetooth
+624a78a78a4a	2026-11-27	skip	-	game: EA SPORTS FC 27 adds prewarm seeds	another game's prewarm seed list
+6401094cb445	2026-11-27	skip	-	game: Nintendo Switch Sports Resort adds prewarm seeds	another game's prewarm seed list
+649c6d765506	2026-11-27	skip	-	games/0100CF5010FEC000: add Bayonetta Origins profile (PR #2338)	another game's profile; its shared doc hunks are Found-on links or code removed here
+6633c78510e5	2026-11-27	skip	-	game: Baba Is You adds prewarm seeds	another game's prewarm seed list
+66bd371b5b77	2026-11-27	skip	-	game: Hyrule Warriors: Age of Calamity adds prewarm seeds	another game's prewarm seed list
+67e108e699e2	2026-11-27	skip	-	game: The Legend of Zelda: Tears of the Kingdom adds prewarm seeds	another game's prewarm seed list
+6896c0c50cda	2026-11-27	no-op	-	gfx/nvn: track dirty writes on cached sparse texture IDs	the game's only virtual pool is mapped whole at its first MapVirtual: no sparse pool
+68a8ac492f5c	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+6bc9a5f5fd2d	2026-11-27	skip	-	game: Donkey Kong Bananza adds prewarm seeds	another game's prewarm seed list
 6c3f27a1d8e1	2026-11-27	ported	7aa0c1a	gfx/nvn: reject missing texture-copy objects before pass-dump logging (PR #2158)	DM_NVN_PASSDUMP's line read a missing copy texture's serial (segfault in t_copy_missing without the fix)
+6d5bb9217c4e	2026-11-27	skip	-	game: Super Mario Bros. Wonder adds prewarm seeds	another game's prewarm seed list
+6f054c88f9f4	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+704ffe5ff8fb	2026-11-27	skip	-	game: The Legend of Zelda: Tears of the Kingdom adds prewarm seeds	another game's prewarm seed list
+7127e74bcef0	2026-11-27	partial	af5570e	tools/prewarm: import inbox seed lists	a local tool: plain files, no inbox, no --push, no geometry rows
+715a9403be04	2026-11-27	skip	-	packing/cra: validate CRA member sizes and bounds before decoding	CRA decoding is not in this tree's shader_split.py
+729a1b11f80a	2026-11-27	skip	-	game: Pokémon Legends: Z-A adds prewarm seeds	another game's prewarm seed list
+72eae304035d	2026-11-27	skip	-	game: Diablo II: Resurrected adds prewarm seeds	another game's prewarm seed list
+732f50193261	2026-11-27	skip	-	game: 13 Sentinels: Aegis Rim (Asia) adds prewarm seeds	another game's prewarm seed list
+748d63f34267	2026-11-27	skip	-	game: Pokémon: Let's Go, Eevee! adds prewarm seeds	another game's prewarm seed list
+7620c7b94dbb	2026-11-27	skip	-	game: Pokemon Pokopia adds prewarm seeds	another game's prewarm seed list
+76f8d31286f1	2026-11-27	skip	-	game: The Legend of Zelda: Echoes of Wisdom adds prewarm seeds	another game's prewarm seed list
+77ad2cc7008a	2026-11-27	skip	-	game: add Pokémon Shining Pearl 1.3.0	another game's profile; its shared doc hunks are Found-on links or code removed here
+7894f0e24b28	2026-11-27	skip	-	game: Kirby and the Forgotten Land adds prewarm seeds	another game's prewarm seed list
+7b2344db1722	2026-11-27	skip	-	game: Hades II adds prewarm seeds	another game's prewarm seed list
+7cf637e1fcf8	2026-11-27	partial	00af85c	host/launcher: share defaults resolution across windowed and direct launch paths	Mac part; DMSettings gone from Info.plist
+7d1a744e1697	2026-11-27	skip	-	game: Cuphead adds prewarm seeds	another game's prewarm seed list
+7dc4e93b4ab5	2026-11-27	skip	-	game: The Legend of Zelda: Breath of the Wild adds prewarm seeds	another game's prewarm seed list
+7e6df4dbc4fa	2026-11-27	skip	-	game: Pokémon Legends: Z-A adds prewarm seeds	another game's prewarm seed list
+80f27491457d	2026-11-27	skip	-	tools/prewarm: clean up captures with no importable rows	inbox capture cleanup: the local tool reads plain files and deletes nothing
+816889e5d7fc	2026-11-27	no-op	-	gfx/nvn: skip empty direct draws and zero-byte buffer copies before pool lookup (PR #3407)	0 of 4,049,796 dumped draws have count 0 and the game never calls CopyBufferToBuffer
+8386a7b32531	2026-11-27	skip	-	game: Unicorn Overlord adds prewarm seeds	another game's prewarm seed list
+84731b3798b9	2026-11-27	skip	-	game: default Thronebreaker to 60 fps	another game's frame rate rule
+847f634b3ca6	2026-11-27	skip	-	packing/extract: fail on an unpatched sparse base HtmlDocument NCA (PR #1769)	NSP / sparse HtmlDocument extraction, removed here
 85219dd1dfd1	2026-11-27	skip	-	tools/regress: cover supplemental GL shaders on mixed NVN+GL builds	GL in regress.py: OpenGL removed
+87a4f82f3bca	2026-11-27	skip	-	game: The Legend of Zelda: Tears of the Kingdom adds prewarm seeds	another game's prewarm seed list
+883bdf0fde13	2026-11-27	skip	-	game: Splatoon Raiders adds prewarm seeds	another game's prewarm seed list
+89d717a2d543	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+8b80c5d583c2	2026-11-27	skip	-	ios/launcher: present cloud-save folder picker directly with fileImporter	iOS removed
+8bd55038c8f5	2026-11-27	skip	-	game: Donkey Kong Bananza adds prewarm seeds	another game's prewarm seed list
+8c7660dfe179	2026-11-27	partial	df1df00	games/0400486024DEC000: merge 7,058 prewarm rows from discussion #3291	R and M rows only (C rows redundant: every compute shader is prewarmed); 1,624 new rows of 1.1.1, 1,603 carried to 1.0.0
+8cc3a8a348d4	2026-11-27	skip	-	game: Tears of the Kingdom adds prewarm seeds	another game's prewarm seed list
+8d212ca7feab	2026-11-27	skip	-	game: The Legend of Zelda: Breath of the Wild adds prewarm seeds	another game's prewarm seed list
+8e38d3e03e0b	2026-11-27	skip	-	game: Star Fox adds prewarm seeds	another game's prewarm seed list
+8eeaf99caaee	2026-11-27	skip	-	game: Minecraft Dungeons II adds prewarm seeds	another game's prewarm seed list
+91f737e11e1c	2026-11-27	skip	-	game: Pokémon Legends: Z-A adds prewarm seeds	another game's prewarm seed list
+923ba5713d20	2026-11-27	skip	-	games/010036F01AE9E000: add Pentiment profile (PR #2028)	another game's profile; its shared doc hunks are Found-on links or code removed here
+92ad99960138	2026-11-27	skip	-	game: Pokémon: Let's Go, Eevee! runs on the shared host	another game's profile; its shared doc hunks are Found-on links or code removed here
 92cc26f0ac5f	2026-11-27	skip	-	game/alien-isolation: default to 60 fps	another game
+93133c069ec5	2026-11-27	skip	-	game: Yoshi and the Mysterious Book adds prewarm seeds	another game's prewarm seed list
+9458c06f152a	2026-11-27	skip	-	game: TRIANGLE STRATEGY adds prewarm seeds	another game's prewarm seed list
+946213b3c313	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+94d8a054c077	2026-11-27	skip	-	game: DRAGON BALL XENOVERSE 2 FOR NINTENDO SWITCH adds prewarm seeds	another game's prewarm seed list
+95a9510c63cd	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
 96b0cc329ea6	2026-11-27	skip	-	host/hid: let the right stick drive motion controls on Mac (PR #2968)	gyro aiming is optional in OoT and the stick aims; the mode takes the camera stick; built on the phone path and cheats menu removed here
 96f1f0766344	2026-11-27	skip	-	game/alien-isolation: register Switch update 1.1.5	another game
+99856a4ee754	2026-11-27	skip	-	game: L.A. Noire adds prewarm seeds	another game's prewarm seed list
+9a211312142d	2026-11-27	ported	1cd78d4	host/input: read hidpad_full buttons in controller prompt	a full-mode HID pad answers the controller prompt
+9a763d973a40	2026-11-27	skip	-	game: FINAL FANTASY RESONANCE (Asian release) adds prewarm seeds	another game's prewarm seed list
+9f2282d41c2a	2026-11-27	skip	-	game: Dragon Ball Xenoverse 2 uses native 60 fps timing	another game's frame rate rule
+9f2b4a282b4d	2026-11-27	skip	-	game: It Takes Two adds prewarm seeds	another game's prewarm seed list
+9fd5bbef929c	2026-11-27	no-op	-	nvn/tests: widen the depth-plane coordinate before adding	test of 0adf5bbc's level-grouped replay, not taken
+a0207da5ad56	2026-11-27	skip	-	game: default Pokémon Shining Pearl to 60 fps	another game's frame rate rule
+a2412f2a840a	2026-11-27	skip	-	game/0400453019AA8001: add prewarm seeds	another game's prewarm seed list
+a383253aebfe	2026-11-27	skip	-	host/oe: handle the SDK gameplay recording work buffer	the game imports no gameplay recording API
+a56b77d963c4	2026-11-27	skip	-	game: bring up Pokémon: Let’s Go, Pikachu! 1.0.2	another game's profile; its shared doc hunks are Found-on links or code removed here
+a58c10bbd593	2026-11-27	skip	-	game: Kirby Star Allies adds more prewarm seeds	another game's prewarm seed list
+a5c8dc25011c	2026-11-27	skip	-	game: Unicorn Overlord adds prewarm seeds	another game's prewarm seed list
+a7aea546a6af	2026-11-27	skip	-	games/010065301A2E0000: add Star Ocean: The Second Story R profile (PR #3078)	another game's profile; its shared doc hunks are Found-on links or code removed here
+a7df99f84352	2026-11-27	no-op	-	chain/spirv: preserve per-location interpolation on indexed fragment inputs (PR #3408)	the 4 OoT pixel shaders that index inputs give every location the same interpolation: no MSL change
+a8e2a97e8bcb	2026-11-27	skip	-	game: Persona 5 Royal adds prewarm seeds	another game's prewarm seed list
+aa8658fcfbe2	2026-11-27	skip	-	game: Assassin's Creed® Ⅲ Remastered adds prewarm seeds	another game's prewarm seed list
+ab308c96c526	2026-11-27	skip	-	ci: use the Mac packer source list in the launcher test	iOS packer source list in a removed launcher test
+ab44edaba85a	2026-11-27	ported	c2bffe1	gfx/nvn: invalidate pool tables when registered views retire	the retire window exists here with enc_thread / replay_ahead; no symptom seen
+ab52234f61ca	2026-11-27	skip	-	games/010023301E41C000: add Fate/stay night REMASTERED profile (PR #3161)	another game's profile; its shared doc hunks are Found-on links or code removed here
+ab8ba46ffbd9	2026-11-27	skip	-	packing/prewarm: upload changed prewarm lists automatically	uploads the player's pso_user.tsv to upstream's Google Apps Script, on by default: a privacy cost for another project's lists
+af89c2480a3b	2026-11-27	skip	-	game: Fire Emblem: Three Houses adds prewarm seeds	another game's prewarm seed list
+afd401e26677	2026-11-27	skip	-	games/010055700CEA8000: add SD GUNDAM G GENERATION CROSS RAYS profile (PR #1052)	another game's profile; its shared doc hunks are Found-on links or code removed here
+b1c8a98d93a1	2026-11-27	skip	-	game: Hyrule Warriors: Definitive Edition adds prewarm seeds	another game's prewarm seed list
+b1ef1be1c1b5	2026-11-27	skip	-	game: Donkey Kong Bananza adds prewarm seeds	another game's prewarm seed list
+b22cac7a6cd2	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
 b2743d11be3b	2026-11-27	no-op	-	ci/checks: restore the lint ratchets and tool tests	its code hunks are on code this tree lacks (nvn_acq_ref, rop_f16_probe, ga_rmtree_fd); the rest upstream's own lint baselines and tests of removed code
+b4aa8c1a4c8e	2026-11-27	skip	-	game: FINAL FANTASY RESONANCE adds prewarm seeds	another game's prewarm seed list
+b66ac34deb5a	2026-11-27	skip	-	game: Nintendo Switch Sports Resort adds prewarm seeds	another game's prewarm seed list
+b7d6c5bdcdf0	2026-11-27	skip	-	opengl: add 11 OpenGL 4.5 direct state access entry points	OpenGL removed
+b84f3eb59f5c	2026-11-27	skip	-	game: FINAL FANTASY RESONANCE adds prewarm seeds	another game's prewarm seed list
+b89fa803f027	2026-11-27	skip	-	tools/prewarm: delete fully imported inbox captures	inbox capture deletion: the local tool reads plain files and deletes nothing
+b8a4fe2f0c17	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+b910e3a99df6	2026-11-27	skip	-	game: Super Mario Bros. Wonder adds prewarm seeds	another game's prewarm seed list
+ba367c10139a	2026-11-27	skip	-	games/0100F9600E746000: add ESP Ra.De. Ψ profile (PR #1950)	another game's profile; its shared doc hunks are Found-on links or code removed here
+bd1195b58aec	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+bf3a10abf752	2026-11-27	skip	-	game: OCTOPATH TRAVELER 0 adds prewarm seeds	another game's prewarm seed list
+c264119cfdd5	2026-11-27	skip	-	tools/rewriter: track masked ranges on jump-solver roots (PR #3406)	the game's jump tables (93/94 sites in main) do not reach the solver's failing shapes
+c48caaea60c1	2026-11-27	skip	-	game: Donkey Kong Bananza adds more prewarm seeds	another game's prewarm seed list
+c4e3ef3a16c3	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+c543d65ae0cd	2026-11-27	skip	-	games/0100EA300DE6E000: add Réussir : Code de la route profile (PR #1000)	another game's profile; its shared doc hunks are Found-on links or code removed here
+c5cb0d883019	2026-11-27	skip	-	game: Hades II adds prewarm seeds	another game's prewarm seed list
+c6cfe86b3099	2026-11-27	partial	a0d74bf	packing/progress: keep shader stage open through tail and report PSO batches (PR #1691)	archive batch counts and the shader stage's tail; the IPA parts dropped
+ca4b49393fd2	2026-11-27	skip	-	game: Hollow Knight: Silksong adds prewarm seeds	another game's prewarm seed list
+cdeda51021f3	2026-11-27	skip	-	game: FINAL FANTASY RESONANCE adds prewarm seeds	another game's prewarm seed list
+ce02afbf24b6	2026-11-27	skip	-	game: Donkey Kong Bananza adds prewarm seeds	another game's prewarm seed list
+cfdae4aa4647	2026-11-27	partial	2ecd58b	host/input: set GameController player lights on Mac and iOS (#2747)	Mac part: GameController player lights; iOS dropped
+cfe002da89ee	2026-11-27	skip	-	game: Captain Toad adds compatible prewarm seeds	another game's prewarm seed list
+d0122edf4923	2026-11-27	skip	-	game: Thronebreaker: The Witcher Tales adds prewarm seeds	another game's prewarm seed list
+d0ae53a4730d	2026-11-27	skip	-	packing/shaders: read uncompressed .pkdswitch members (stored == 0)	.pkdswitch reading is not in this tree's shader_split.py
+d2a2a43d7e17	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds from 1.8.0	another game's prewarm seed list
 d3e951d67092	2026-11-27	skip	-	packing/dump: read extracted Control NCA metadata and Ounce Acd_1 identity (PR #1562)	pack_dump removed; taking the name from the packed version's NACP first changes nothing here
+d3ef1873d088	2026-11-27	skip	-	game: Super Mario Odyssey adds prewarm seeds	another game's prewarm seed list
+d59373df92dc	2026-11-27	skip	-	game: The Legend of Zelda: Breath of the Wild adds prewarm seeds	another game's prewarm seed list
+d5b3c2d9e48c	2026-11-27	skip	-	game: Orbitals adds prewarm seeds	another game's prewarm seed list
+d67a69af13dc	2026-11-27	skip	-	game: port Dragon Ball Xenoverse 2	Dragon Ball Xenoverse 2's shader formats, not in this tree
+d83dfa6460e4	2026-11-27	skip	-	game: Splatoon 2 boots and renders the Mac aiming tutorial	another game's profile; its shared doc hunks are Found-on links or code removed here
+da83e3353f46	2026-11-27	skip	-	game: FINAL FANTASY XII THE ZODIAC AGE adds prewarm seeds	another game's prewarm seed list
+dbc26c7f7320	2026-11-27	skip	-	games/0100052004384000: add Axiom Verge 1.0.3 profile (PR #1214)	another game's profile; its shared doc hunks are Found-on links or code removed here
 dbfe1d8141b2	2026-11-27	ported	bc23489	host/threads: validate DM_YIELD_BACKOFF and normalize backoff sleep timespec (PR #2231)	hardening: a DM_YIELD_BACKOFF of 1 s or more gave nanosleep EINVAL and a busy loop; unreachable with the default 250 us
+dc8710ec53ac	2026-11-27	partial	df1df00	game: Ocarina of Time adds more prewarm pipelines	R and M rows only, with 8c7660df
+dc9c2374b4bb	2026-11-27	skip	-	gfx/nvn: keep render passes across vertex-only barriers and leading-target subsets (PR #3374)	the game has no vertex-only barrier after writes nor a leading-target subset; its ORDER_INDIRECT_DATA split would end the main pass once a frame here
+def4aca69cb8	2026-11-27	no-op	-	nvn/upscaler: draw same-encoding NDSR variants with MetalFX and add DM_UPSCALER=ab (PR #2340, #3399)	MetalFX stays opt-in (DM_UPSCALER=game); none of the game's 18 NDSR networks passes the new same-encoding check
+e0869bffbdfd	2026-11-27	skip	-	game: OCTOPATH TRAVELER II adds prewarm seeds	another game's prewarm seed list
+e1bcd58c9aff	2026-11-27	docs	808e6c0	docs/ocarina: record post-8ecae8c41 M1/M2 #2909 follow-ups and bisect plan	the M1 / M2 #2909 follow-ups in the hang bullet
+e1fbe4747b83	2026-11-27	skip	-	games/0100354017668000: add A Little to the Left profile (PR #2661)	another game's profile; its shared doc hunks are Found-on links or code removed here
+e4ac99842844	2026-11-27	skip	-	games/010016E004796000: add Bridge Constructor Portal profile (PR #2662)	another game's profile; its shared doc hunks are Found-on links or code removed here
+e644d15eed7b	2026-11-27	skip	-	game: Pokémon Legends: Z-A adds prewarm seeds	another game's prewarm seed list
+e864b1e9e9d6	2026-11-27	skip	-	game: Kirby and the Forgotten Land adds prewarm seeds	another game's prewarm seed list
 e8f9c8381d70	2026-11-27	skip	-	packing/shaders: fingerprint DLC roots separately and require shader tables in cache	DLC image identity and GL / VK stamps: the game's NUP has no DLC, the fork no GL / VK
+e9cbda1d44e4	2026-11-27	skip	-	game: Hades II adds prewarm seeds	another game's prewarm seed list
+f3efb37547ed	2026-11-27	skip	-	tools/prewarm: import geometry pairs	geometry pairs: the game has no geometry stage
+f5f82f9653e9	2026-11-27	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+f7f128a42946	2026-11-27	ported	1de8fcb,c0b7c9a	gfx/shaders: keep dm_mwa_ballot always_inline and default KK3 off (#3405)	KK3 off by default and the helper always inline (#3405, found on this game on macOS 26.7.3 upstream); no change on macOS 27; untested on macOS 26
+fab073b140f4	2026-11-27	no-op	-	packing/shaders: read SARC byte order and agl fallback archives	the game's split is clean (42,816 shaders, no red line)
 fbee094552a4	2026-11-27	skip	-	opengl: retain bound buffers across deletion and track EGL surfaces	OpenGL removed
+fc2a15d034a6	2026-11-27	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+fed937db8ae5	2026-11-27	skip	-	packing/shader_split: decode Yaz0 in batches of whole groups (PR #3295)	the game's RomFS is zstd with dictionaries: no Yaz0 shader archives
+ffe0d357b489	2026-11-27	skip	-	game: add provisional Thronebreaker 1.0.2 support	another game; its threads.md hunk is a Found-on link
+019ca69225ed	2026-11-28	skip	-	game: Pokemon Pokopia adds prewarm seeds	another game's prewarm seed list
+0431a0e550f8	2026-11-28	skip	-	game: Outer Wilds adds prewarm seeds	another game's prewarm seed list
+04be4be6478f	2026-11-28	skip	-	game: Donkey Kong Bananza adds prewarm seeds	another game's prewarm seed list
+10c5d44cea34	2026-11-28	skip	-	game: Super Mario Odyssey adds prewarm seeds	another game's prewarm seed list
+150a18c66db1	2026-11-28	skip	-	game: Donkey Kong Bananza adds prewarm seeds	another game's prewarm seed list
+16b2da9b1afa	2026-11-28	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+183c4563da4f	2026-11-28	skip	-	game: Splatoon 2 adds prewarm seeds	another game's prewarm seed list
+1a54371cf7c0	2026-11-28	partial	fa6723d,08c5d9b,c0b7c9a	gfx/nvn: bring Cyberpunk 2077 to Mac gameplay	the encoder-ended guards and the early-depth entry (1,066 shaders; no read-only draw in the Spirit Temple, unmeasured); its QueryDisplayCurrentRefreshRate is the 2-argument overload the game does not import; the rest is Cyberpunk's (REDengine caches, bindless image pool, push blocks, sparse, DLSS)
+21b16f59079e	2026-11-28	skip	-	tools/prewarm: keep inbox captures with missing shaders	inbox captures with missing shaders: the local tool has no inbox
+28d41fc9d2a8	2026-11-28	ported	5becfbb,af5570e	nvn/prewarm: stop recording and prewarming standalone S rows	prepare 11.35 -> 6.4-6.6 s before the first frame (60,918 -> 27,534 lines, this Mac, 1.0.0); no extra library loads at the scene load
+3316717391a7	2026-11-28	skip	-	game: Mario Kart 8 Deluxe adds prewarm seeds	another game's prewarm seed list
+3c38476080ff	2026-11-28	skip	-	game: Orbitals adds prewarm seeds	another game's prewarm seed list
+3d6b4975bccb	2026-11-28	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+4031aa56d05c	2026-11-28	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+40df4d9a15c1	2026-11-28	skip	-	game: Super Mario Bros. Wonder adds prewarm seeds	another game's prewarm seed list
+44b2912f5308	2026-11-28	skip	-	game: Mario Tennis Fever adds prewarm seeds	another game's prewarm seed list
+4666610e0322	2026-11-28	skip	-	gfx/gl: list named block members as active uniforms, add glGetActiveUniformsiv	OpenGL removed
+46ba619a54cc	2026-11-28	skip	-	game: Cuphead adds prewarm seeds	another game's prewarm seed list
+4fbe83b099e5	2026-11-28	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+564e31941e90	2026-11-28	skip	-	game: FINAL FANTASY RESONANCE adds prewarm seeds	another game's prewarm seed list
+5b4f2c97b23a	2026-11-28	skip	-	game: The Binding of Isaac: Rebirth adds prewarm seeds	another game's prewarm seed list
+64bf81854a0a	2026-11-28	skip	-	game: OCTOPATH TRAVELER II adds prewarm seeds	another game's prewarm seed list
+6b0295f04d68	2026-11-28	skip	-	game: Outer Wilds adds prewarm seeds	another game's prewarm seed list
+7a5c0c93aa7b	2026-11-28	skip	-	game: The Legend of Zelda: Echoes of Wisdom adds prewarm seeds	another game's prewarm seed list
+7ba2b149e060	2026-11-28	skip	-	game: Splatoon 2 adds prewarm seeds	another game's prewarm seed list
+7d398f7a9636	2026-11-28	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+8222e18257dc	2026-11-28	skip	-	game: The Legend of Zelda: Breath of the Wild adds prewarm seeds	another game's prewarm seed list
+85a76536a65b	2026-11-28	skip	-	game: DARK SOULS: REMASTERED adds prewarm seeds	another game's prewarm seed list
+89da762cc14c	2026-11-28	skip	-	game: Mario Tennis Fever adds prewarm seeds	another game's prewarm seed list
+9067f3ba110c	2026-11-28	skip	-	game: Pokémon Legends: Arceus adds prewarm seeds	another game's prewarm seed list
+93ffd8af0419	2026-11-28	skip	-	game: Super Smash Bros. Ultimate adds prewarm seeds	another game's prewarm seed list
+9657b82c7dfd	2026-11-28	skip	-	game: Pokémon Scarlet adds prewarm seeds	another game's prewarm seed list
+99796d09f379	2026-11-28	skip	-	game: The Legend of Zelda: Tears of the Kingdom adds prewarm seeds	another game's prewarm seed list
+a181de9bb9d8	2026-11-28	skip	-	game: Nintendo Switch Sports Resort adds prewarm seeds	another game's prewarm seed list
+a29058b61a1e	2026-11-28	skip	-	game: PRAGMATA adds prewarm seeds	another game's prewarm seed list
+a4e520da65f7	2026-11-28	partial	af5570e	tools/prewarm: select shader maps by capture version	the per-version shader map check of the local tool
+a6f301d5bd72	2026-11-28	skip	-	game: Pokémon Legends: Z-A adds prewarm seeds	another game's prewarm seed list
+a83895425046	2026-11-28	skip	-	opengl/shaders: drop empty file-scope declarations in GLSL (PR #3415)	OpenGL removed
+b020ebe5ed1a	2026-11-28	skip	-	game/0100FE701475A000: add prewarm seeds	another game's prewarm seed list
+b366830b5387	2026-11-28	skip	-	game: The Legend of Zelda: Tears of the Kingdom adds prewarm seeds	another game's prewarm seed list
+be422808173e	2026-11-28	skip	-	game: The Legend of Zelda: Breath of the Wild adds prewarm seeds	another game's prewarm seed list
+c3a3739eb1eb	2026-11-28	skip	-	game: Metroid Dread adds prewarm seeds	another game's prewarm seed list
+c4c63f588e95	2026-11-28	ported	62292c9,c0b7c9a	gfx/shaders: cache raw global memory range and delta in shared registers	neutral on the M2 Pro: -0.2 ms of a 21 ms frame, +0.35 ms of a 31 ms one (Spirit Temple, 1.0.0); kept for newer GPUs (upstream -17 % on an M6, Cyberpunk)
+c79fb4d17e17	2026-11-28	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+cdf8a1352f10	2026-11-28	skip	-	game: DARK SOULS: REMASTERED adds prewarm seeds	another game's prewarm seed list
+d377dc9b3bd3	2026-11-28	skip	-	game: Pokémon Violet adds prewarm seeds	another game's prewarm seed list
+db1599731739	2026-11-28	skip	-	game: Super Mario Bros. Wonder adds prewarm seeds	another game's prewarm seed list
+dcc9085799b0	2026-11-28	skip	-	game: Kirby and the Forgotten Land adds prewarm seeds	another game's prewarm seed list
+e168b5e1b744	2026-11-28	skip	-	game: Donkey Kong Bananza adds prewarm seeds	another game's prewarm seed list
+eaa89abcf786	2026-11-28	skip	-	game/0400453019AA8001: add prewarm seeds	another game's prewarm seed list
+eb3a5732e311	2026-11-28	skip	-	game: The Legend of Zelda: Breath of the Wild adds prewarm seeds	another game's prewarm seed list
+ebd6449845a2	2026-11-28	partial	df1df00	game: The Legend of Zelda: Ocarina of Time adds prewarm seeds	R and M rows only, with 8c7660df
+ed07c3d6eabb	2026-11-28	skip	-	game: Castlevania: Belmont's Curse adds prewarm seeds	another game's prewarm seed list
+f36fa59becd8	2026-11-28	skip	-	game: Captain Toad: Treasure Tracker adds prewarm seeds	another game's prewarm seed list
+f437fe7e4f9d	2026-11-28	skip	-	game: Mario Kart World adds prewarm seeds	another game's prewarm seed list
+fa07c09f1624	2026-11-28	skip	-	games/profiles: generate shader split tables at build time instead of committing them	the fork derives 1.0.0's tables in <build>/profile and keeps 1.1.1's committed (pso_carry's source map, shader_programs.tsv, bfsha)
+fee528277185	2026-11-28	skip	-	game: Super Mario 3D World + Bowser's Fury adds prewarm seeds	another game's prewarm seed list
