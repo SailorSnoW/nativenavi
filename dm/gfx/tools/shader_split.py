@@ -9,6 +9,7 @@
 # Record: 'BTCDBTCD' + header (+0x08 key, +0x28 control length, +0x2c code length) padded to 0x38 + code area + control section, one per key.
 # Usage: shader_split.py <RomFS dir> <ExeFS main> <output package dir> <output map> <output answer table> [<output pair table> [<pso_pairs.tsv> [<DLC RomFS dirs, comma-separated>]]]
 #   RomFS and main take comma-separated lists for an update (base first); J=concurrency (default 8)
+#   --json-paths first: the RomFS, main and DLC lists are JSON arrays, for paths with a comma (build_app.py passes them so)
 import collections, concurrent.futures as cf, hashlib, json, os, re, struct, sys, time
 from typing import NoReturn
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../tools'))
@@ -462,12 +463,16 @@ def pooled(ex, jobs, total, start=0, chunk=1):
 
 
 def main():
-    romfs_l, main_l, pkg, mapout, factsout = sys.argv[1:6]
-    pairsout = sys.argv[6] if len(sys.argv) > 6 else None
-    psopairsout = sys.argv[7] if len(sys.argv) > 7 else None
-    dlc_v = sys.argv[8].split(',') if len(sys.argv) > 8 and sys.argv[8] else []
+    args = sys.argv[1:]
+    as_json = args[:1] == ['--json-paths']
+    if as_json: args = args[1:]
+    def paths(arg): return json.loads(arg) if as_json else arg.split(',')
+    romfs_l, main_l, pkg, mapout, factsout = args[:5]
+    pairsout = args[5] if len(args) > 5 else None
+    psopairsout = args[6] if len(args) > 6 else None
+    dlc_v = paths(args[7]) if len(args) > 7 and args[7] else []
     # Base + update, paired one to one: later versions' sources are prefixed with their folder name (/v327680/...) and sort after, so rows keep their package indices.
-    romfs_v, main_v = romfs_l.split(','), main_l.split(',')
+    romfs_v, main_v = paths(romfs_l), paths(main_l)
     if len(romfs_v) != len(main_v): red(f'{len(romfs_v)} RomFS and {len(main_v)} main: they must pair one to one')
     files, results = [], []
     for i, (romfs, mainnso) in enumerate(zip(romfs_v, main_v)):

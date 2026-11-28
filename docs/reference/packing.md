@@ -119,6 +119,13 @@ The packing script (`scripts/build_app.py`, `scripts/pack_nup.py`): the NUP, the
 - **Further rollout (2026-11-17 to 2026-11-19, issues [#2924](https://github.com/seedds/nxnative/issues/2924), [#2927](https://github.com/seedds/nxnative/issues/2927), [#2946](https://github.com/seedds/nxnative/issues/2946), [#2964](https://github.com/seedds/nxnative/issues/2964) and [#2950](https://github.com/seedds/nxnative/issues/2950)):** Odyssey, Breath of the Wild, Wonder, Mario Tennis Fever, Orbitals, Fire Emblem Fortune's Weave, Pokémon Legends: Z-A, Super Smash Bros. Ultimate, Mario Kart World and Final Fantasy XII The Zodiac Age have verified representative refreshes. Their notes in nxnative record the checks and limits; none of those profiles is in this fork.
 - **Found on:** Splatoon Raiders ([issue #1263](https://github.com/seedds/nxnative/issues/1263)): [NVN2 task and mesh shaders](shaders.md#nvn2-task-and-mesh-shaders) moved one row from vertex to mesh. Donkey Kong Bananza, Pokemon Pokopia and Hyrule Warriors: Age of Imprisonment were checked and hold no such shader; Fire Emblem Fortune's Weave was not checked, as no dump was at hand.
 
+### A comma in the build path stops the shader split
+
+- **Symptom:** `shader_split.py` stops with `FileNotFoundError` naming the part of a RomFS or `main` path before a comma: a NUP in a folder whose name has a comma, with the default build folder beside it.
+- **Cause:** `build_app.py` `split_shaders` joined the RomFS, `main` and DLC paths with commas, the character the splitter takes to separate the versions of a list (base game and update).
+- **Fix:** `build_app.py` passes each list as a JSON array after `--json-paths`, which `shader_split.py` reads; without it the splitter takes comma-separated lists as before. `test_split_representatives` splits a base game, an update and a DLC under a folder with a comma through `split_shaders`.
+- **Found on:** Pokémon: Let's Go, Pikachu! 1.0.2 in nxnative (upstream nxnative 58c30cd3). The NUPs of this game used here have no comma in their path.
+
 ### The shader package and the shader map come from different splits
 
 - **Symptom:** `dmsh_build.py` stops with `[RED] <package> holds no record of shader <key>, which the shader map names: the package and the map come from different shader_split.py runs`, with `(its records carry no keys: it was split before they did)` for a package from before chain `3df44a5a4e0c`. Before that chain: wrong shaders wherever the game drew, such as a black screen with sound.

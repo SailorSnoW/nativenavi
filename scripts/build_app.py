@@ -1066,7 +1066,8 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, own=False, dlc_roms=
     tmp = pkg.with_name(pkg.name + '.partial'); rmtree(tmp); (tmp / 'tables').mkdir(parents=True)
     def counted(ln):
         if m := re.fullmatch(r'progress: (\d+)/(\d+)', ln): PROG.set(done=int(m[1]), total=int(m[2]), unit='files')
-    run([py, repo / 'dm/gfx/tools/shader_split.py', ','.join(map(str, roms)), ','.join(map(str, mains)), tmp / 'pkg'] + [tmp / 'tables' / n for n in names + ('pso_pairs.tsv',)] + ([','.join(map(str, dlc_roms))] if dlc_roms else []),
+    def paths(ps): return json.dumps([str(x) for x in ps])   # a folder may hold a comma
+    run([py, repo / 'dm/gfx/tools/shader_split.py', '--json-paths', paths(roms), paths(mains), tmp / 'pkg'] + [tmp / 'tables' / n for n in names + ('pso_pairs.tsv',)] + ([paths(dlc_roms)] if dlc_roms else []),
         logs / 'shader_split.log', env=env, on_line=counted)
     text = (logs / 'shader_split.log').read_text(errors='replace')
     m = re.search(r'shaders: (\d+) \(', text)
