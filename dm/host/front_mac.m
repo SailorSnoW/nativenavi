@@ -333,6 +333,7 @@ static home_quit g_hq;
 static int g_press_to_join;
 static int pad_join(const void *owner, const char *name);
 static const char *pad_name(GCController *c);
+static void pad_lights(GCController *c, int p);
 static void pads_motion_changed(GCController *gone);
 // read from their HID reports instead (pad_hid_mac.h, pad_jc1_mac.h)
 static int pad_gc_unread(GCController *c) { return hidpad_gc_unread(c) || jc1_gc_unread(c); }
@@ -366,6 +367,7 @@ static void pad_read(GCExtendedGamepad *g) {
         p = pad_join((__bridge const void *)c, pad_name(c));
         if (p < 0) return;
         g_held[p] = c;
+        pad_lights(c, p);
         dm_motion_attach(c, p);
         pads_motion_changed(nil);
     }
@@ -390,6 +392,10 @@ static void pad_keep_system_buttons(GCController *c) {
     c.extendedGamepad.buttonHome.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL down) { (void)b; (void)v; (void)down; if (g_input_on) hq_poll(); };
 }
 static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
+static void pad_lights(GCController *c, int p) {
+    if (dm_pad_lights(c, p)) LOG("controller '%s': player lights %d", pad_name(c), p + 1);
+    else if (p >= 0) LOG("controller '%s': player lights off (only players 1-4 have them)", pad_name(c));
+}
 static void npad_name(int p, char *out, size_t cap) {
     uint32_t id = dm_player_npad(p);
     if (id == 0x20) snprintf(out, cap, "handheld");
@@ -458,11 +464,15 @@ static void pads_changed(GCController *gone) {
             }
             any = 1;
             pad_keep_system_buttons(c);
+            if (!c.extendedGamepad.valueChangedHandler) pad_lights(c, 0);   // once per connect
             pad_listen(c);
             dm_motion_attach(c, 0);
             pad_read(c.extendedGamepad);
         }
-        if (gone) dm_motion_detach(gone, 0);
+        if (gone) {
+            if (!jc1_gc_unread(gone)) pad_lights(gone, -1);
+            dm_motion_detach(gone, 0);
+        }
         if (!any) {
             if (!g_hidpads && !g_gippads && !g_jc1_pads && !dm_switch2_pads()) dm_pad_set(0, 0, 0, 0, 0);
             dm_haptics_apple_controller(0, nil);
@@ -479,6 +489,7 @@ static void pads_changed(GCController *gone) {
         npad_name(p, nb, sizeof nb);
         LOG("controller '%s' disconnected: player %d (npad %s) is free", pad_name(g_held[p]), p + 1, nb);
         g_held[p].extendedGamepad.valueChangedHandler = nil;
+        if (!jc1_gc_unread(g_held[p])) pad_lights(g_held[p], -1);   // pad_jc1_mac.h drives an original Joy-Con's lights over HID
         dm_motion_detach(g_held[p], p);
         dm_haptics_apple_controller(p, nil);
         pad_slot_free(&g_slots, (__bridge const void *)g_held[p]);
@@ -493,17 +504,22 @@ static void pads_changed(GCController *gone) {
         }
         if (g_press_to_join) {
             pad_keep_system_buttons(c);
-            if (!c.extendedGamepad.valueChangedHandler) LOG("controller '%s' connected: press a button to play (DM_PAD_PRESS_TO_JOIN)", pad_name(c));
+            if (!c.extendedGamepad.valueChangedHandler) {
+                if (c.playerIndex != GCControllerPlayerIndexUnset) pad_lights(c, -1);
+                LOG("controller '%s' connected: press a button to play (DM_PAD_PRESS_TO_JOIN)", pad_name(c));
+            }
             pad_listen(c);
             continue;
         }
         int p = pad_slot_take(&g_slots, (__bridge const void *)c, pad_name(c));
         if (p < 0) {
+            if (c.playerIndex != GCControllerPlayerIndexUnset) pad_lights(c, -1);
             LOG("controller '%s' connected: all %d players are taken, not used", pad_name(c), DM_PLAYERS);
             continue;
         }
         g_held[p] = c;
         pad_keep_system_buttons(c);
+        pad_lights(c, p);
         pad_listen(c);
         dm_motion_attach(c, p);
         npad_name(p, nb, sizeof nb);
