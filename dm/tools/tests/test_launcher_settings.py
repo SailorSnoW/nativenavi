@@ -93,7 +93,7 @@ class LauncherSettingsTests(unittest.TestCase):
             listed = settings.build(OOT, tmp, Path(tmp) / 'control.nacp')
         rows = {s['env']: s for s in listed['settings']}
         self.assertEqual(listed['schema'], 1)
-        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_OPMODE', 'DM_LANG', 'DM_FULLSCREEN', 'DM_RUMBLE', 'DM_PAD_DEADZONE'])
+        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_OPMODE', 'DM_LANG', 'DM_FULLSCREEN', 'DM_DISCORD', 'DM_RUMBLE', 'DM_PAD_DEADZONE'])
         self.assertEqual(rows['DM_RUMBLE_GAIN']['needs'], 'DM_RUMBLE=1')
         self.assertFalse({'level', 'needs', 'test'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
 

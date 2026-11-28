@@ -3,7 +3,7 @@
 The Mac app shows the game's settings in a [window](#the-mac-settings-window) before the game starts. A setting that only matters while another is on appears under it and disappears when that one is turned off. Click **Play** to start; the app remembers your choices for the next start. The settings are grouped under **Game**, **Controls** and **Performance**, and **Practice** in an app that carries the practice tools.
 
 - [Tested defaults](#tested-defaults)
-- [Game](#game): [Frame rate](#frame-rate), [Dynamic resolution](#dynamic-resolution), [Render scale](#render-scale), [Console mode](#console-mode), [Screen upscaling](#screen-upscaling), [3D upscaler](#3d-upscaler), [3D upscaler sharpness](#3d-upscaler-sharpness), [Game language](#game-language), [Display mode](#display-mode)
+- [Game](#game): [Frame rate](#frame-rate), [Dynamic resolution](#dynamic-resolution), [Render scale](#render-scale), [Console mode](#console-mode), [Screen upscaling](#screen-upscaling), [3D upscaler](#3d-upscaler), [3D upscaler sharpness](#3d-upscaler-sharpness), [Game language](#game-language), [Display mode](#display-mode), [Discord status](#discord-status)
 - [Controls](#controls): [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join), [Stick dead zone](#stick-dead-zone), [Switch 2 controllers](#switch-2-controllers), [Microphone](#microphone), [Microphone gain](#microphone-gain)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [Practice](#practice): [Practice tools](#practice-tools)
@@ -84,6 +84,10 @@ The game's own languages. The app was packed with one of them; pick another here
 ### Display mode
 
 **Window** (the default) or **Fullscreen**: how the game's window opens. ⌃⌘F or the green button changes it while you play. In an `env.txt`: `DM_FULLSCREEN=1` or `0`.
+
+### Discord status
+
+**On** by default. While the Discord app runs on the Mac, your Discord profile shows the game as what you are playing (under the game's name, with its picture): where Link is, in the game's language (Kokiri Forest, Lake Hylia), then his age, hearts and rupees and "Paused" on the pause screen, and the file's play time counting on. At the title screen it says so, with the time since the game started. The app's settings show the row only when the game's profile names the Discord application the activity appears under. Off, the game does not talk to Discord. Discord's own **Activity Privacy** settings decide who sees it. In an `env.txt`: `DM_DISCORD=0` or `1` ([the game's note](../dm/games/0400486024DEC000/README.md#discord-presence)).
 
 ## Controls
 
@@ -230,7 +234,7 @@ Shown in an app that carries the practice tools: the packing script puts them in
 
 ## The Mac settings window
 
-The Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts. The window shows the most used ones first: **Frame rate**, **Console mode**, **Game language**, **Display mode**, **Game rumble**, **Stick dead zone**, **Microphone** and, in an app that has them, **Practice tools**. The others are under **Advanced settings**, in the usual sections, with **Reset to tested defaults**. The window remembers whether Advanced settings is open.
+The Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts. The window shows the most used ones first: **Frame rate**, **Console mode**, **Game language**, **Display mode**, **Discord status**, **Game rumble**, **Stick dead zone**, **Microphone** and, in an app that has them, **Practice tools**. The others are under **Advanced settings**, in the usual sections, with **Reset to tested defaults**. The window remembers whether Advanced settings is open.
 
 Click **Play** (or press Return) to start the game. **Quit**, ⌘Q or closing the window ends the app without the game. The app remembers your choices, and a game started without the window, from a front end or with the window turned off, uses them too ([Saved choices](frontends.md#saved-choices)). A setting fixed by an `env.txt` or by the program that started the app is shown greyed out.
 
@@ -251,6 +255,7 @@ A line like `DM_PRESENT_SNAP=1` in the app's `env.txt` (`~/Library/Application S
 | 3D upscaler sharpness | `DM_UPSCALER_SHARPNESS` | `0.0` to `1.0` |
 | Game language | `DM_LANG` | a language code, such as `ja` |
 | Display mode | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
+| Discord status | `DM_DISCORD` | `1`, `0` |
 | Game rumble | `DM_RUMBLE` | `1`, `0` |
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |

@@ -1,6 +1,7 @@
 // Boot: load the modules, initialize the SDK runtime in nn::init::Start's order, enter nnMain.
 #include "dm.h"
 #include "front.h"
+#include "presence.h"
 #include "../gfx/nvn/dmsh_chain.h"
 #include <CoreFoundation/CoreFoundation.h>
 #include <stdatomic.h>
@@ -168,6 +169,7 @@ static void host_load(int argc, char **argv) {
     dm_practice_check();
     dm_mods_report_unmatched();
     dm_mods_check_done();
+    dm_presence_start(argv[1]);
     dm_sdk_major();
     if (!dm_sdk_ounce()) LOG("[RED] sdk: the sdk module was not built for the Switch 2 (no \"spec: Ounce\"): this host has only the Switch 2's side (NVN2's API and counter reports, the 31.25 MHz system counter)");
     uint64_t ta = now_ns();

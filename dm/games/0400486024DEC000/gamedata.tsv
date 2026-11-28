@@ -1,0 +1,36 @@
+# The game's GameDataMgr, which the host reads for the Discord presence (dm/host/gamedata.c, dm/host/presence.c; the game's note, "Discord presence").
+# Mapped by sloperinaGZ on both builds (its docs/FINDINGS.md, sections 4 and 9.17, and z64hd_builds.h); checked by this host on 1.0.0 (the note).
+# game.py header writes it into game_profile.h (DM_GAME_GD_BUILDS, DM_GAME_GD_TYPES, DM_GAME_GD_FIELDS, DM_GAME_GD_MENUS). Rows, tab-separated:
+#   build    <main build ID> <slot> <vtable>     main + slot holds a pointer to the holder of the manager; main + vtable is the vtable of its first type entry
+#   entries  <first> <step> <vtable step>        type entry n at manager + first + step * n, n the save file's type number (0 Bool, 2 Int, ...), its vtable
+#                                                vtable step * n past the first's. An entry: vtable +0, field count (u32) +0x08, objects +0x10, hash table +0x18
+#                                                ((hash, index) pairs, probed from hash % size; hash 0 is a free slot), the table's size (u32) +0x24
+#   type     <name> <number> <stride> <value>    object i at objects + i * stride, its current value at + value. A text (String64): a pointer to the text
+#                                                and its capacity (u32). A text array (String64Array): a count (u64) and a pointer to the elements, each a text
+#   field    <role> <type> <name or hash>        a field the presence reads: its full name (MurmurHash3, seed 0) or, for a field no name is known for, its hash
+#   menu     <role> <name>                       a value of the menu field, an enum (MurmurHash3 of the value's name)
+build	33fa6c2c23848282a77e8b88a0a93f48	0x4C184D8	0x4BB9538
+build	e0f3ccfaf50065ae4ea01eb5aeb13b1a	0x4C7E180	0x4C1F140
+entries	0x08	0x60	0xA0
+type	Bool	0	0x18	0x16
+type	Int	2	0x28	0x1C
+type	Enum	6	0x38	0x1C
+type	String64	16	0x108	0x68
+type	String64Array	17	0x90	0x70
+type	UInt	20	0x28	0x1C
+# element 0 of this array is the place the Load screen shows (caption.sav's location): KokiriForest, LakeHylia, ...; empty at the title screen
+field	place	String64Array	0xC458F1EB
+field	map	String64	Sequence_CurrentBanc
+field	child	Bool	Sequence_IsChildhood
+# the game's own pause: its pause screen and item menus (the menu field moves through other values during a load too)
+field	paused	Bool	Sequence_IsPause
+# quarter hearts
+field	life	Int	PlayerStatus.Life
+field	max_life	Int	PlayerStatus.MaxLife
+field	rupees	Int	PlayerStatus.CurrentRupee
+# seconds: loaded from the save, it counts on in play; between two saves it grew by the wall-clock time between them
+field	play_time	UInt	0xE573F564
+field	menu	Enum	0x578D41E1
+menu	none	None
+menu	title	Title
+menu	game_over	GameOver

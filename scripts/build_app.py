@@ -1467,6 +1467,27 @@ def practice_tools(py, repo, work, game, patched, host, env, logs, g, on=True):
     return out, None
 
 
+def place_names(repo, game, patched, g):
+    """patched/places.tsv, the game's place names in each of its languages for the host's Discord presence (dm/tools/place_names.py). Without them a red line,
+    and the presence names a place by its ID's words"""
+    import place_names as pn
+    out, kf, src = patched / 'places.tsv', patched / 'places.tsv.key', rfs.source(game)
+    if not g.get('place_messages', ''): rmtree(out); rmtree(kf); return
+    PROG.add(1); PROG.stage('place names', step='the game\'s messages')
+    arcs = pn.archives(src, g.get('msg_archive', ''))
+    key = fingerprint(('files', [repo / 'dm/tools/place_names.py'] + [rfs.Path(src) / p for p in sorted(arcs.values())]),
+                      *(g.get(k, '') for k in ('msg_archive', 'msg_languages', 'place_messages')))
+    if out.is_file() and (note := reused(kf, key)) is not None: PROG.end(f'{note}, reused (inputs unchanged)'); return
+    try: cols, names = pn.table(src, g)
+    except (pn.Error, pn.bfsha.Unread) as e:
+        rmtree(out); rmtree(kf); PROG.end('none', warn=True)
+        say(f'[RED] place names: {e}: the Discord presence names places by their IDs'); return
+    pn.write(out, cols, names, f'{g.get("msg_archive")} / {g.get("place_messages")}')
+    note = f'{len(names)} places in {len(cols)} languages'
+    kf.write_text(f'{key}\n{note}\n')
+    PROG.end(note)
+
+
 def mac_run(work, game, patched, host, font, msl, aoc, lang, env, logs, g, env_file='', partial=False):
     """A host outside dm/host does not find the shader map beside itself."""
     rd = work / 'run'
@@ -1869,6 +1890,7 @@ def main(args=None):
 
     patched = work / f'patched_{pkg_ver}'
     rewrite(py, repo, game / 'ExeFS', patched, env, logs, g)
+    place_names(repo, game, patched, g)
     chain_header(py, repo, env, logs)
     if derived: empty_tables(g)
     sh = work / 'shader'

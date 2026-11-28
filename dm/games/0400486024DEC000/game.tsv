@@ -56,3 +56,14 @@ enc_thread	on
 replay_ahead	on
 # The player compared MetalFX's picture with the network's in 2x crops and found it too crisp; with 30 % of a bilinear picture blended in it came closest (2026-11-11)
 upscaler_sharpness	0.7
+
+# ---- Discord presence (dm/host/presence.c; the game's note, "Discord presence") ----
+# The Discord application the activity is shown under ("Playing NativeNavi"); empty: no presence unless DM_DISCORD_APP names one
+discord_app	1575978722199080980
+# The application's art asset shown as the activity's large image, with the game's name on hover; empty: no image
+discord_image	oot
+# The game's message archives, one per language ({code}), the archive for each language code the host reports (DM_LANG), and the messages in them that name
+# the places by their IDs: the packing script takes the presence's place names from them (dm/tools/place_names.py)
+msg_archive	Mals/{code}.Product.*.sarc.zs
+place_messages	LocationMsg/Location.msbt
+msg_languages	ja=JPja en-US=USen en-GB=EUen fr=EUfr fr-CA=USfr de=EUde it=EUit es=EUes es-419=USes zh-CN=CNzh zh-Hans=CNzh zh-TW=TWzh zh-Hant=TWzh ko=KRko nl=EUnl ru=EUru pl=EUpl pt=USpt pt-BR=USpt

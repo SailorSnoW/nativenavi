@@ -15,7 +15,7 @@ HOST = ['dm/host', 'dm/gfx', 'dm/mac']   # tracked files only: build output is g
 HOST_EXT = ('.c', '.m', '.mm', '.h', '.inc', '.swift', '.rs')
 TABLES = {}   # none in this host: a build-keyed table added to it is named here
 # per-game data, not something the host does differently
-NOT_SWITCHES = {'depth_mode', 'mem_used', 'sys_resource'}
+NOT_SWITCHES = {'depth_mode', 'mem_used', 'sys_resource', 'discord_app', 'discord_image'}   # values, not behaviour a patch or the host could take over
 
 # Binding: what a patch's correctness is anchored to, from the loosest; the gap to its goal is the work list. BINDING entries: {'what', 'now', 'goal',
 # 'purpose', 'why'} [+ 'blocked' | 'kept'] [+ 'checked']. Every patch must be classified. Only a game's own patch may have goal 'unreviewed'.

@@ -277,6 +277,11 @@ def copy_msl(msl, msls, dst, clone):
     dst.mkdir(parents=True); copy(msls, dst, clone)
 
 
+def places(a):   # the packing script's place names beside the modules, for the Discord presence; not in DMModuleFiles, as the game runs without them
+    p = Path(a.patched) / 'places.tsv'
+    return [p] if p.is_file() else []
+
+
 def selected_inputs(a):
     """Resolved once: the same lists make the reuse key and the copies"""
     for name in ('patched', 'romfs', 'msl', 'tables', 'font', 'aoc', 'pso', 'practice'):
@@ -300,7 +305,7 @@ def selected_inputs(a):
     tables = [Path(a.tables) / n for n in TABLES if (Path(a.tables) / n).is_file()]
     pairs = Path(a.pso_pairs) if a.pso_pairs and not any(p.name == 'pso_pairs.tsv' for p in tables) else None
     fonts = sorted(p for p in Path(a.font).glob('*.ttf') if not detritus(p.name))
-    files = [Path(a.host)] + mods + practice + msls + pso + tables + fonts + ([pairs] if pairs else [])
+    files = [Path(a.host)] + mods + practice + msls + pso + tables + fonts + ([pairs] if pairs else []) + places(a)
     files += [Path(p) for p in (a.env_file, a.settings, a.icon) if p]
     for p in files:
         if not p.is_file(): raise SystemExit(f'no input file at {p}')
@@ -423,6 +428,7 @@ def pack(a):
     if practice: (dm / 'practice').mkdir(); copy(practice, dm / 'practice', clone['practice'])
     if tables: copy(tables, dm, False)
     if pairs: shutil.copyfile(pairs, dm / 'pso_pairs.tsv')
+    for p in places(a): shutil.copyfile(p, dm / p.name)
     if fonts: copy(fonts, dm / 'font', False)
     if a.env_file: shutil.copyfile(a.env_file, dm / 'env.txt')
     if a.settings: shutil.copyfile(a.settings, dm / 'launcher.json')
