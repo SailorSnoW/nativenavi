@@ -89,6 +89,11 @@ endif
 # whole-second times cannot tell two builds made in one second apart)
 dmhost: $(HOST_BIN) FORCE
 	@cmp -s $(HOST_BIN) $@ || { rm -rf $@ $@.dSYM && cp $(HOST_BIN) $@ && cp -R $(HOST_BIN).dSYM $@.dSYM; }
+# A host that counts the lines a run of the game executes, in objects and a binary of their own (gen/<id>/dmhost-cov); run it with LLVM_PROFILE_FILE and export
+# with llvm-cov (docs/development.md#what-the-game-runs-that-no-test-does)
+include ../sanitizers/coverage.mk
+cov-host:
+	$(MAKE) CFLAGS='$(CFLAGS) $(COV_FLAGS)' OBJ_DIR=gen/$(GAME)/obj-cov HOST_BIN=gen/$(GAME)/dmhost-cov gen/$(GAME)/dmhost-cov
 clean:   # everything make generates for the host
 	rm -rf gen dmhost dmhost_* *.dSYM
-.PHONY: clean
+.PHONY: clean cov-host

@@ -147,6 +147,21 @@ The graphics tests (`dm/gfx/tests/Makefile`) link the sources they share, compil
 
 `--coverage` measures instead of a plain run (`host`, `tex`, `gfx`, `python`; in `nix develop .#coverage`): each suite's coverage build, then `dm/tools/coverage_report.py`'s summary with the 15 files that have the most lines no test runs (`--holes`). The graphics tests' GPU run is measured only here (`make -C dm/gfx/tests coverage`, into `coverage.lcov` there): CI has no GPU.
 
+### What the game runs that no test does
+
+Line coverage of the tests says what they run, not what matters: a line the game executes at every start and no test does is where a regression has nothing to catch it. A host built for coverage answers that:
+
+```sh
+make -C dm/host cov-host                         # dm/host/gen/<id>/dmhost-cov, with objects of its own
+LLVM_PROFILE_FILE='<run folder>/prof/%c%p.profraw' … dm/host/gen/<id>/dmhost-cov <modules>   # a run of the game; %c: counters are kept in the file as it runs, so a run that ends by a signal keeps them
+xcrun llvm-profdata merge -sparse -o <run folder>/cov.profdata <run folder>/prof/*.profraw
+xcrun llvm-cov export -format=lcov -skip-functions -instr-profile=<run folder>/cov.profdata dm/host/gen/<id>/dmhost-cov > <run folder>/game.lcov
+python3 dm/tools/coverage_report.py --host dm/host/tests/build/cov/coverage.lcov --textures dm/gfx/tex/tests/cov/coverage.lcov \
+    --gfx dm/gfx/tests/coverage.lcov --game <run folder>/game.lcov --holes 30
+```
+
+The report's last table lists, file by file, the lines the run executed that none of the tests' reports runs, the most first (a file no test compiles is named as such). The run's profile and lcov name source lines only, but they come from the game's run and stay in its build folder. The instrumented host is slower to its first frame (36 s against 8 s on an M2 Pro with cold files), so a route keyed in seconds (`DM_KEYS`) needs its presses later. What the first run found is in the game's note ([Tests and coverage](../dm/games/0400486024DEC000/README.md#tests-and-coverage)).
+
 ## Continuous integration
 
 `.github/workflows/tests.yml` runs on pushes to `main`, on pull requests and by
