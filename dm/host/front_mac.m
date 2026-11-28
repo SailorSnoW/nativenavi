@@ -377,8 +377,9 @@ static void pad_read(GCExtendedGamepad *g) {
     int32_t st[4];
     dm_stick_apply(gc_dead, g.leftThumbstick.xAxis.value, g.leftThumbstick.yAxis.value, &st[0], &st[1]);
     dm_stick_apply(gc_dead, g.rightThumbstick.xAxis.value, g.rightThumbstick.yAxis.value, &st[2], &st[3]);
-    if ([g.controller.productCategory isEqualToString:@"Switch Pro Controller"] && !pad_gc_unread(g.controller)) {
-        int nz[2] = {pro_gc_stick_nonzero(g.controller, 0), pro_gc_stick_nonzero(g.controller, 1)};
+    if (g_pro_sticks && [g.controller.productCategory isEqualToString:@"Switch Pro Controller"] && !pad_gc_unread(g.controller)) {
+        int nz[2] = {g.leftThumbstick.xAxis.value != 0.f || g.leftThumbstick.yAxis.value != 0.f,
+                     g.rightThumbstick.xAxis.value != 0.f || g.rightThumbstick.yAxis.value != 0.f};
         dm_pro_sticks(p, nz, st);
     }
     pad_set(p, m, st[0], st[1], st[2], st[3]);

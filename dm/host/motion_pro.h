@@ -6,7 +6,7 @@
 #include <math.h>
 
 enum { PRO_MOTION_PERIOD_NS = 5000000, PRO_MOTION_STALE_NS = 300000000 };
-typedef struct { int live, seen; uint8_t counter; uint64_t received; } pro_motion;
+typedef struct { int seen; uint8_t counter; uint64_t received; } pro_motion;
 typedef struct { float acc[3], rot[3]; uint64_t ns; } pro_motion_sample;
 // Pads stream even at rest: an entry silent this long is a dead IOKit twin.
 enum { PRO_SILENT_NS = 1000000000 };
@@ -29,8 +29,7 @@ static inline int pro_motion_decode(pro_motion *s, const uint8_t *r, size_t len,
     s->seen = 1;
     s->counter = r[1];
     s->received = now;
-    if (!s->live && !data) return 0;   // empty stream: no motion source
-    s->live = 1;
+    if (!data) return 0;   // sensor off, also mid-session: dropped so the stream expires (pad_jc1.h does the same)
     const float g = 1.f / 4096.f, rad = 0.070f * (float)M_PI / 180.f;
     for (int k = 0; k < 3; k++) {
         // Raw: x toward shoulders, y left, z out of face; specific force. Switch: x right, y forward, gravity down.
@@ -52,8 +51,7 @@ static inline int ds4_motion_decode(pro_motion *s, const uint8_t *r, size_t len,
     }
     s->seen = 1;
     s->received = now;
-    if (!s->live && !data) return 0;   // empty stream: no motion source
-    s->live = 1;
+    if (!data) return 0;   // sensor off, also mid-session
     const float g = 1.f / 8192.f, rad = 2000.f / 32767.f * (float)M_PI / 180.f;
     out[0] = (pro_motion_sample){{-v[3] * g, v[5] * g, -v[4] * g}, {v[0] * rad, -v[2] * rad, v[1] * rad}, now};
     return 1;
@@ -71,8 +69,7 @@ static inline int abitdo_motion_decode(pro_motion *s, const uint8_t *r, size_t l
     }
     s->seen = 1;
     s->received = now;
-    if (!s->live && !data) return 0;   // empty stream: no motion source
-    s->live = 1;
+    if (!data) return 0;   // sensor off, also mid-session
     const float g = 1.f / 4096.f, rad = 2000.f / 32767.f * (float)M_PI / 180.f;
     out[0] = (pro_motion_sample){{v[1] * g, -v[0] * g, -v[2] * g}, {-v[4] * rad, v[3] * rad, v[5] * rad}, now};
     return 1;
