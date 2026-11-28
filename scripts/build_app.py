@@ -1630,7 +1630,7 @@ def mac_prebake(py, repo, work, msl, g, host, pso, env, logs):
                         DM_MSL_DIR=str(msl), DM_NVN_SHMAP=str(g.table('shader_map.tsv')))
             if zero: renv['DM_PSO_PREBUILD_DEPTH'] = 'zero'
             if not g.table('pso_pairs.tsv').is_file() and (work / 'shader/pso_pairs.tsv').is_file(): renv['DM_PSO_PAIRS'] = str(work / 'shader/pso_pairs.tsv')
-            for k in ('DM_WINDOW', 'DM_GPU_CAPTURE', 'MTL_CAPTURE_ENABLED', 'DM_SAVE', 'DM_PSO_USER', 'DM_PSO_PREBUILD_WARM', 'DM_NVN_METALWA'): renv.pop(k, None)   # the profile's list alone, not a player's; KK3 by this macOS, as the archive's
+            for k in ('DM_WINDOW', 'DM_GPU_CAPTURE', 'MTL_CAPTURE_ENABLED', 'DM_SAVE', 'DM_PSO_USER', 'DM_PSO_PREBUILD_WARM', 'DM_NVN_METALWA'): renv.pop(k, None)   # the profile's list alone, not a player's; KK3 as the archive has it
             if run([host], logs / 'pso_prewarm_mac.log', env=renv, fatal=False) or not list(out.glob(f'{arch}-prewarm-*.mtl4a')):
                 shutil.rmtree(out, ignore_errors=True)
                 PROG.end('failed, the app is packed without them', warn=True)

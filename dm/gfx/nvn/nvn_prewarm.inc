@@ -62,7 +62,7 @@ static NSDictionary<NSString *, NSString *> *pre_fail_load(NSString *path, NSStr
     if ([head isEqualToString:pre_fail_head(want)]) return pairs;
     *other = 1; return @{};
 }
-static MTL4FunctionDescriptor *pre_fn(id<MTLLibrary> lib, NSString *name) {   // border corrections off, blend fix-up on (false) so one base serves every blend state, KK3 by the OS (pso_offline.py host_constants)
+static MTL4FunctionDescriptor *pre_fn(id<MTLLibrary> lib, NSString *name) {   // border corrections off, blend fix-up on (false) so one base serves every blend state, KK3 as mwa_on gives it (pso_offline.py HOST_CONSTANTS)
     id<MTLFunction> f = [lib newFunctionWithName:name]; if (!f) return nil;
     MTL4LibraryFunctionDescriptor *ld = [MTL4LibraryFunctionDescriptor new]; ld.library = lib; ld.name = name;
     NSDictionary *fc = f.functionConstantsDictionary;

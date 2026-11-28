@@ -348,15 +348,15 @@ static os_unfair_lock g_fn_dev_lock = OS_UNFAIR_LOCK_INIT;
 @interface FnDev : NSObject { @public id<MTLFunction> fn; } @end
 @implementation FnDev @end
 static NSMapTable *g_fn_dev;
-// KosmicKrisp's KK_WORKAROUND_3 (dmsh_metalwa.py, dm_mwa3_fc): the GPU compiler below macOS 27 speculates simd_ballot out of divergent branches (Apple FB20113490).
-// It follows the running OS, as pso_offline.py host_constants does for the archive's macOS (docs/reference/shaders.md, A ballot under divergent control flow sees every lane)
+// KosmicKrisp's KK_WORKAROUND_3 (dmsh_metalwa.py, dm_mwa3_fc), for the GPU compiler below macOS 27 that speculates simd_ballot out of divergent branches (Apple FB20113490).
+// Off unless DM_NVN_METALWA=1: on, it corrupted this game on macOS 26.7.3 (issue #3405). pso_offline.py host_constants matches (docs/reference/shaders.md,
+// A ballot under divergent control flow sees every lane)
 static int mwa_on(void) {
     static int v; static dispatch_once_t once;
     dispatch_once(&once, ^{
         const char *e = getenv("DM_NVN_METALWA");
-        int on = ![[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){27, 0, 0}];
-        if (e && *e) on = strcmp(e, "0") != 0;
-        if (!on || (e && *e)) MLOG("Metal compiler workaround KK3: %s (%s)", on ? "on" : "off", e && *e ? "DM_NVN_METALWA" : "macOS 27 or later");
+        int on = (e && *e) ? strcmp(e, "0") != 0 : 0;
+        if (e && *e) MLOG("Metal compiler workaround KK3: %s (DM_NVN_METALWA)", on ? "on" : "off");
         v = on;
     });
     return v;
