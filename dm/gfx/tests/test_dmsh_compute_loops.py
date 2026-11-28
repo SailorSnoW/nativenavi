@@ -154,7 +154,7 @@ class ComputeLoops(unittest.TestCase):
                 subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', str(air), '-o', str(lib)], check=True, capture_output=True)
                 return lib
             spin, healthy, barrier = build('spin', SPIN, 1 << 14), build('healthy', HEALTHY, rewrite.LOOP_CAP), build('barrier', BARRIER, 2048)
-            subprocess.run(['make', '-C', str(TOOLS.parent / 'tests'), 'GAME=040041E0212AE000', 't_compute_loops'], check=True, capture_output=True)
+            subprocess.run(['make', '-C', str(TOOLS.parent / 'tests'), 't_compute_loops'], check=True, capture_output=True)
             for thread in ('0', '1'):
                 env = dict(os.environ, DM_NVN_ENC_THREAD=thread, DM_NVN_DISPATCH_BARRIER='full', MTL_DEBUG_LAYER='1')
                 run = subprocess.run([str(TOOLS.parent / 'tests/t_compute_loops'), str(spin), str(healthy), str(barrier)], env=env, capture_output=True, text=True, timeout=60)

@@ -30,7 +30,9 @@ static void *reader(void *arg) {
     return NULL;
 }
 
-int main(void) { @autoreleasepool {
+// An argument gives the rounds: the ThreadSanitizer build judges the order of the accesses, which a few rounds show, and takes a quarter of a second for each
+int main(int argc, char **argv) { @autoreleasepool {
+    int rounds = argc > 1 ? atoi(argv[1]) : ROUNDS;
     setenv("DM_NVN_RT_RECYCLE", "0", 1);
     mtl_init();
     g_pool_spare_cap = 0;   // no spares: each table built again lets its earlier buffer go once the submission that used it completes
@@ -45,7 +47,7 @@ int main(void) { @autoreleasepool {
 
     pthread_t th; if (pthread_create(&th, NULL, reader, NULL)) abort();
     uint64_t builds = g_stat_pool_builds;
-    for (int i = 0; i < ROUNDS; i++) { @autoreleasepool {
+    for (int i = 0; i < rounds; i++) { @autoreleasepool {
         mtl_reg_tex(2 + (i & 1), (const tex_t *)&t1, NULL); mtl_reg_tex(2 + !(i & 1), NULL, NULL);
         atomic_fetch_add(&g_reg_gen, 1);   // a change without a note: the next walk builds the table whole, into a new buffer
         mtl_sub_begin();
@@ -55,7 +57,7 @@ int main(void) { @autoreleasepool {
         CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "the submission completed");
     } }
     atomic_store(&t_stop, 1); pthread_join(th, NULL);
-    CHECK(g_stat_pool_builds - builds >= ROUNDS, "each round built the table whole");
+    CHECK(g_stat_pool_builds - builds >= (uint64_t)rounds, "each round built the table whole");
     CHECK(atomic_load(&t_reads) > 0, "the reader read the counts while the tables were rebuilt");
     CHECK(atomic_load(&t_bad) == 0, "each read of the bytes in tables is none or the one table's 64 KB");
     uint64_t s[POOL_STATS]; mtl_pool_stats(s);

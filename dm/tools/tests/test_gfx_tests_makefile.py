@@ -63,5 +63,24 @@ class Ignore(unittest.TestCase):
         self.assertEqual(sorted(ignored(tracked)), [], 'tracked files that dm/gfx/tests/.gitignore would ignore')
 
 
+class SharedObjects(unittest.TestCase):
+    def test_a_rule_that_links_shared_objects_names_them_as_prerequisites(self):
+        # or a change of OPT / EXTRA links a test with the objects of the build before it (a coverage object into a plain test: an undefined ___llvm_profile_runtime)
+        lines, bad = makefile().split('\n'), []
+        for i, line in enumerate(lines):
+            m = re.match(r'^([A-Za-z0-9_%.-]+):(?!=)(.*)', line)
+            if not m: continue
+            recipe = []
+            for nxt in lines[i + 1:]:
+                if not nxt.startswith('\t'): break
+                recipe.append(nxt)
+            deps = m.group(2)
+            for obj in ('$(MTL_T_OBJ_NOHLE)', '$(MTL_T_OBJ)', '$(OBJ)/nvn_mtl.m.o'):
+                named = obj in deps or '$(MTL_T_DEP)' in deps or (obj == '$(MTL_T_OBJ_NOHLE)' and '$(MTL_T_OBJ)' in deps)
+                if any(obj in r for r in recipe) and not named: bad.append(f'{m.group(1)}: {obj}')
+        self.assertEqual(bad, [])
+        self.assertRegex(makefile(), r'(?m)^MTL_T_DEP=\$\(MTL_T_OBJ\) \$\(OBJ\)/nvn_mtl\.m\.o ')
+
+
 if __name__ == '__main__':
     unittest.main()

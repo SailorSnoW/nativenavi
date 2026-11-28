@@ -5,3 +5,7 @@ t_*
 *.dSYM/
 # Tools built here that are not tests
 nvn_replay
+obj/
+prof/
+cov.profdata
+coverage.lcov
