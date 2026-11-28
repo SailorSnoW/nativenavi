@@ -51,15 +51,15 @@ fragment main0_out main0(main0_in in [[stage_in]], constant spvDescriptorSetBuff
 
 class Regress(unittest.TestCase):
     def test_game_commands_require_machine_paths(self):
-        env = dict(regress.os.environ, REGRESS_ROOT='', REGRESS_GAMES='')
+        env = dict(regress.os.environ, REGRESS_ROOT='', REGRESS_GAMES='', REGRESS_BUILD='')
         with tempfile.TemporaryDirectory() as td:
             command = [regress.sys.executable, REPO / 'scripts/regress.py']
             for cmd in ('baseline', 'check', 'chain', 'list'):
                 with self.subTest(cmd=cmd):
                     result = regress.sh([*command, cmd], cwd=td, env=env)
                     self.assertEqual(result.returncode, 2)
-                    self.assertIn('set --root (REGRESS_ROOT) and --games-dir (REGRESS_GAMES)', result.stderr)
-            for option, missing in (('--root', '--games-dir (REGRESS_GAMES)'), ('--games-dir', '--root (REGRESS_ROOT)')):
+                    self.assertIn('set --root (REGRESS_ROOT) and --games-dir (REGRESS_GAMES) or --build (REGRESS_BUILD):', result.stderr)
+            for option, missing in (('--root', '--games-dir (REGRESS_GAMES) or --build (REGRESS_BUILD)'), ('--games-dir', '--root (REGRESS_ROOT)'), ('--build', '--root (REGRESS_ROOT)')):
                 with self.subTest(option=option):
                     result = regress.sh([*command, option, td, 'check'], cwd=td, env=env)
                     self.assertEqual(result.returncode, 2)
@@ -583,6 +583,30 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
             with patch.object(regress, 'REPO', root / 'repo'), patch.object(regress, 'GAMES', root / 'games'), patch.dict(os.environ, {'REGRESS_SKIP': ''}):
                 self.assertEqual([g.id for g in regress.find_games()], [mine])
                 with self.assertRaises(regress.HarnessError): regress.find_games([other])
+
+    def test_a_build_folder_of_any_name_is_the_build_of_the_one_profile(self):   # --build: the launcher's build folder is not named <id>_build
+        with tempfile.TemporaryDirectory() as td:
+            root, mine = Path(td), '0123456789ABCDEF'
+            build = root / 'Build'
+            for d in ('tools', 'patched_v0', 'shader/pkg'): (build / d).mkdir(parents=True)
+            (root / 'repo/dm/games' / mine).mkdir(parents=True); (root / 'repo/dm/games' / mine / 'game.tsv').write_text('title_id\t' + mine + '\n')
+            with patch.object(regress, 'REPO', root / 'repo'), patch.object(regress, 'BUILD', build), patch.dict(os.environ, {'REGRESS_SKIP': ''}):
+                with self.assertRaisesRegex(regress.HarnessError, 'is not a Mac build'): regress.find_games()
+                (build / 'tools/dmhost').touch()
+                g, = regress.find_games()
+                self.assertEqual((g.id, g.build, g.ver), (mine, build, 'v0'))
+                self.assertEqual(regress.game_root(g), build / f'{mine}-work/regress')   # game-derived files stay in the build folder
+                self.assertEqual(regress.save_source(g, {'save': 'saves/kokiri'}), build / 'saves/kokiri')
+                self.assertEqual([x.id for x in regress.find_games([mine.lower()])], [mine])
+                (root / 'repo/dm/games/FEDCBA9876543210').mkdir(); (root / 'repo/dm/games/FEDCBA9876543210/game.tsv').touch()
+                with self.assertRaisesRegex(regress.HarnessError, 'the one profile'): regress.find_games()
+            # the newest rewritten version that is still unpacked: a trimmed build folder keeps patched_v131072 without extract/v131072
+            (build / 'patched_v131072').mkdir(); self.assertEqual(regress.Game(build, build, mine).ver, 'v131072')
+            (build / 'extract/v0').mkdir(parents=True); self.assertEqual(regress.Game(build, build, mine).ver, 'v0')
+            (build / 'extract/v131072').mkdir(); self.assertEqual(regress.Game(build, build, mine).ver, 'v131072')
+            g = regress.Game(root / 'games/Zelda [0123456789abcdef]', root / 'games/Zelda [0123456789abcdef]/0123456789abcdef_build')
+            self.assertEqual((g.id, g.name), (mine, 'Zelda'))
+            self.assertEqual(regress.game_root(g), g.folder / f'{mine}-work/regress')
 
     def test_chain_key_tracks_shader_package_and_split_pairs(self):
         with tempfile.TemporaryDirectory() as td:

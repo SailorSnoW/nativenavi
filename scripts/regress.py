@@ -12,7 +12,9 @@
 #   baseline: --rev main. Each revision is checked out once into <root>/trees/<id> (git worktree); its chain, host and rewriter are used.
 #   --root (REGRESS_ROOT; required): trees and public reports; game-derived files stay in <game folder>/<id>-work/regress/.
 #   --games-dir (REGRESS_GAMES; required): the folder of the game folders, each with its <id>_build (build_app.py --platform mac). A build takes part when dm/games
-#   has its profile and, for runs, a route dm/games/<id>/smoke.tsv. REGRESS_SKIP=ID,...: left out unless --games names them. --lock FILE (DM_MEASURE_LOCK): bench.py's lock.
+#   has its profile and, for runs, a route dm/games/<id>/smoke.tsv. --build (REGRESS_BUILD), in its place: the game's build folder under any name (the launcher's
+#   ~/Library/Developer/NativeNavi/Build, a --work-dir); it is the build of the one profile in dm/games, and its harness files go in <that folder>/<id>-work/regress/.
+#   REGRESS_SKIP=ID,...: left out unless --games names them. --lock FILE (DM_MEASURE_LOCK): bench.py's lock.
 #   --record (check / baseline): a profile with PASS or CHANGED and boot runs without failures gets its row per mode in dm/games/<id>/validated.tsv:
 #     quick <TAB> chain=157e1b96c8da commit=4f2a9c01d3+dirty date=2026-10-27 machine=Mac14,6 macos=26.1
 #   A red game keeps its row; no route, --no-smoke or a derived profile writes nothing.
@@ -57,6 +59,7 @@ shader_lib = load_module('shader_lib', REPO / 'dm/tools/shader_lib.py')
 rfs = shader_lib.romfs
 ROOT = Path(os.environ.get('REGRESS_ROOT', ''))
 GAMES = Path(os.environ.get('REGRESS_GAMES', ''))
+BUILD: Path | None = None   # --build
 REWRITER = ('dm/tools/patch_nso.py', 'dm/tools/jump_solver.py', 'dm/tools/nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_syms.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py')
 HEAVY_EXE = {'clang', 'make', 'xcodebuild', 'ld', 'ld64', 'swift-frontend', 'dotnet', 'metal', 'metal-tt', 'air-tt', 'applegpu-nt', 'dmsh_xlate', 'spirv-cross', 'cargo', 'rustc'}   # jobs that skew a measurement
 HEAVY_PY = r'(dmsh_build|shader_split|own_compilers|patch_nso)\.py'
@@ -206,10 +209,12 @@ def game_root(g):
 
 
 class Game:
-    def __init__(self, folder, build):
-        self.folder, self.build, self.id = folder, build, build.name[:16].upper()
+    def __init__(self, folder, build, gid=None):   # gid: a build folder not named after its title (--build), which is then its own game folder
+        self.folder, self.build, self.id = folder, build, (gid or build.name[:16]).upper()
         self.name = re.sub(r'\s*\[[0-9A-Fa-f]{16}\]\s*$', '', folder.name)
-        self.patched = bench.newest(build.glob('patched_v*'))
+        # a version whose unpacked files were removed (a build folder trimmed to one version keeps the other's patched_v<N> tables) cannot run
+        rewritten = list(build.glob('patched_v*'))
+        self.patched = bench.newest([p for p in rewritten if (build / 'extract' / p.name.removeprefix('patched_')).is_dir()] or rewritten)
         self.ver = self.patched.name.removeprefix('patched_') if self.patched else None
         self.split = (build / 'shader/pkg').is_dir()
         # the build's own profile only when the packing script derived it
@@ -258,9 +263,26 @@ def read_route(f):
     return r
 
 
+def own_build():
+    """--build: the folder is the build of the one profile this checkout has"""
+    assert BUILD is not None
+    ids = sorted(p.parent.name for p in (REPO / 'dm/games').glob('*/game.tsv') if re.fullmatch(r'[0-9A-Fa-f]{16}', p.parent.name))
+    if len(ids) != 1: raise HarnessError(f'--build takes the build of the one profile in dm/games, which has {len(ids)}: name the builds with --games-dir')
+    g = Game(BUILD, BUILD, ids[0])
+    if not ((BUILD / 'tools/dmhost').is_file() and g.patched and g.split):
+        raise HarnessError(f'{BUILD} is not a Mac build of {g.id}: no tools/dmhost, patched_v* or shader/pkg in it (scripts/build_app.py --platform mac)')
+    return g
+
+
+def where():
+    return BUILD if BUILD is not None else GAMES
+
+
 def find_games(want=None):
     found = {}
-    for folder in sorted(GAMES.iterdir()) if GAMES.is_dir() else []:
+    if BUILD is not None:
+        g = own_build(); found[g.id] = g
+    for folder in sorted(GAMES.iterdir()) if BUILD is None and GAMES.is_dir() else []:
         if not folder.is_dir(): continue
         for b in folder.glob('*_build'):
             if re.fullmatch(r'[0-9A-Fa-f]{16}_build', b.name) and (b / 'tools/dmhost').is_file():
@@ -271,7 +293,7 @@ def find_games(want=None):
         if not want or s not in [w.upper() for w in want]: found.pop(s, None)
     if want:
         missing = [w for w in want if w.upper() not in found]
-        if missing: raise HarnessError(f'no Mac build of {", ".join(missing)} under {GAMES} (found: {", ".join(found) or "none"})')
+        if missing: raise HarnessError(f'no Mac build of {", ".join(missing)} under {where()} (found: {", ".join(found) or "none"})')
         return [found[w.upper()] for w in want]
     return list(found.values())
 
@@ -1419,7 +1441,7 @@ def cmd_replay(a):
 
 def select(a, smoke):
     games = find_games(a.games.split(',') if a.games else None)
-    if not games: raise HarnessError(f'no game with a Mac build under {GAMES}')
+    if not games: raise HarnessError(f'no game with a Mac build under {where()}')
     say('games: ' + ', '.join(f"{g.id} ({g.name}{', route' if g.route() else ''}{', the build profile' if g.derived else ''})" for g in games))
     return games
 
@@ -1522,10 +1544,11 @@ def cmd_list(a):
 
 
 def main():
-    global ROOT, GAMES
+    global ROOT, GAMES, BUILD
     ap = argparse.ArgumentParser(description='Regression harness: chain diff, interface check and boot smoke on this Mac\'s build of the game (see the comment at the top of this file).')
     ap.add_argument('--root', default=os.environ.get('REGRESS_ROOT', ''), help='source trees and reports (REGRESS_ROOT); before the command')
     ap.add_argument('--games-dir', default=os.environ.get('REGRESS_GAMES', ''), help='the folder of the game folders, each with its Mac build <id>_build (REGRESS_GAMES); before the command')
+    ap.add_argument('--build', default=os.environ.get('REGRESS_BUILD', ''), help='in place of --games-dir: the game\'s build folder under any name (REGRESS_BUILD); before the command')
     sub = ap.add_subparsers(dest='cmd', required=True)
     def common(p, smoke=True):
         p.add_argument('--games', help='title IDs, comma-separated (default: every title of dm/games with a Mac build, and for the runs a smoke route)')
@@ -1556,10 +1579,12 @@ def main():
     p.add_argument('--wait-idle', type=float, default=900, help='seconds to wait for other builds to end before replaying (default 900)'); common(p, smoke=False)
     sub.add_parser('list', help='the games, routes and baselines')
     a = ap.parse_args()
-    missing = [o for o, v in (('--root (REGRESS_ROOT)', a.root), ('--games-dir (REGRESS_GAMES)', a.games_dir)) if not v]
-    if missing: ap.error(f'set {" and ".join(missing)}: where the harness keeps its trees and reports, and the folder that holds the game folder with its <id>_build, for example '
-                         f'regress.py --root <drive>/harness --games-dir <drive>/games {a.cmd} ... (the options go before the command)')
-    ROOT, GAMES = Path(a.root), Path(a.games_dir)
+    missing = [o for o, v in (('--root (REGRESS_ROOT)', a.root), ('--games-dir (REGRESS_GAMES) or --build (REGRESS_BUILD)', a.games_dir or a.build)) if not v]
+    if missing: ap.error(f'set {" and ".join(missing)}: where the harness keeps its trees and reports, and the folder that holds the game folder with its <id>_build '
+                         f'or the build folder itself, for example regress.py --root <drive>/harness --build ~/Library/Developer/NativeNavi/Build {a.cmd} ... '
+                         f'(the options go before the command)')
+    if a.games_dir and a.build: ap.error('--games-dir and --build both name where the game is: give one')
+    ROOT, GAMES, BUILD = Path(a.root).expanduser(), Path(a.games_dir).expanduser(), Path(a.build).expanduser().resolve() if a.build else None
     # the finally blocks stop games and builds in their own sessions, which a closed terminal's SIGHUP does not reach
     for sig in (signal.SIGTERM, signal.SIGHUP): signal.signal(sig, lambda s, _: sys.exit(128 + s))
     try:

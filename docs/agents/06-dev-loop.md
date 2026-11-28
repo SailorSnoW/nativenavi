@@ -38,6 +38,7 @@ Two locations have no default and go before the command, or in the environment:
 
 - `--root` (`REGRESS_ROOT`): the source trees (`<root>/trees/`) and the reports (`<root>/reports/`).
 - `--games-dir` (`REGRESS_GAMES`): the folder that holds the game's folder, the one with `0400486024DEC000_build` in it. What the harness derives from the game (chain builds, baselines, captures, its copy of the save) goes to `0400486024DEC000-work/regress/` in the game's folder.
+- or `--build` (`REGRESS_BUILD`) in its place: the build folder itself under any name, as the launcher's `~/Library/Developer/NativeNavi/Build` or a `--work-dir`; the harness's files then go to `0400486024DEC000-work/regress/` inside it. Of the versions rewritten there, the newest whose game files are still unpacked (`extract/v<N>`) is the one that runs.
 
 | Command | What runs | Cost |
 |---|---|---|

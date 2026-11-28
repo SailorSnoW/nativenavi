@@ -458,6 +458,7 @@ python3 scripts/regress.py check              # the same with the whole route an
 python3 scripts/regress.py chain              # the static checks only, no game runs
 python3 scripts/regress.py baseline --rev main --runs 2   # record a baseline (check records a missing one itself)
 python3 scripts/regress.py list               # the builds found, their routes and stored baselines
+python3 scripts/regress.py --root <folder> --build ~/Library/Developer/NativeNavi/Build list   # the launcher's build folder, which is not named <id>_build
 python3 scripts/regress.py capture --rev main  # capture the route's capture frame and measure its replay noise
 python3 scripts/regress.py replay              # replay those captures against the merge base and this checkout
 ```
