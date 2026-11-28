@@ -120,6 +120,27 @@ class Markdown(unittest.TestCase):
         self.assertIn('| `dm/a.c` | 1 | 1 | 50.0% | 2 |', md)
         self.assertIn('Changed sources no test measures: `dm/c.m`.', md)
 
+    def test_holes_lists_the_files_with_the_most_lines_not_run(self):
+        areas = [('Graphics, GPU run', 'dm/gfx/tests', {'dm/gfx/nvn/a.inc': {n: n > 6 for n in range(1, 11)}, 'dm/gfx/nvn/b.m': {1: True, 2: False}, 'dm/gfx/nvn/c.c': {1: True}})]
+        md = cr.markdown(areas, holes=2)
+        self.assertIn('### The 2 files with the most lines not run', md)
+        table = md.split('most lines not run')[1]
+        self.assertLess(table.index('| `dm/gfx/nvn/a.inc` | Graphics, GPU run | 10 | 6 | 40.0% |'), table.index('| `dm/gfx/nvn/b.m` | Graphics, GPU run | 2 | 1 | 50.0% |'))
+        self.assertNotIn('c.c', table)
+        self.assertNotIn('most lines not run', cr.markdown(areas))
+
+    def test_game_gap_lists_what_the_game_ran_and_no_test_runs(self):
+        game = {'dm/a.c': {1: True, 2: True, 3: True, 4: False}, 'dm/b.m': {1: True, 2: True}, 'dm/c.c': {1: True}, 'dm/idle.c': {1: False}}
+        tested = {'dm/a.c': {1: True, 2: False}, 'dm/c.c': {1: True}}   # a.c line 3: not a line the tests' build maps; b.m: no test compiles it
+        rows = cr.game_gap(game, tested)
+        self.assertEqual(rows, [('dm/a.c', 3, [2, 3], True), ('dm/b.m', 2, [1, 2], False), ('dm/c.c', 1, [], True)])
+        md = cr.markdown([('Host', 'dm/host/tests', tested)], game=rows)
+        self.assertIn('The run executed 6 lines of 3 files; the tests run 2 of them (33.3%) and not 4.', md)
+        self.assertIn('| `dm/a.c` | 3 | 2 | 33.3% | 2-3 |', md)
+        self.assertIn('| `dm/b.m` | 2 | 2 | 0.0% | no test compiles this file |', md)
+        self.assertNotIn('`dm/c.c` | 1 | 0', md)
+        self.assertEqual(cr.ranges([1, 3, 5, 7], 2), '1, 3, … (2 more)')
+
     def test_no_diff_section_without_a_base_and_an_empty_diff(self):
         areas = [('Host', 'dm/host/tests', {})]
         self.assertNotIn('Diff coverage', cr.markdown(areas))
